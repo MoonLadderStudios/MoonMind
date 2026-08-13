@@ -34,9 +34,11 @@ WebSocket handler).
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import quote
 
 from moonmind.omnigent.workflow_chat_facade import (
     CAP_READ_RESOURCES,
@@ -89,6 +91,7 @@ CLASS_TASK = "task_todo"
 CAP_CREATE_TERMINAL = "createTerminal"
 CAP_ATTACH_TERMINAL = "attachTerminal"
 CAP_WRITE_TERMINAL = "writeTerminal"
+CAP_RESIZE_TERMINAL = "resizeTerminal"
 CAP_VIEW_TERMINAL = "viewTerminal"
 CAP_CLOSE_TERMINAL = "closeTerminal"
 CAP_MUTATE_WORKSPACE = "mutateWorkspace"
@@ -103,6 +106,7 @@ CAP_RECONNECT_SESSION = "reconnectSession"
 CODE_COMPAT_REVIEW_REQUIRED = "omnigent_chat_compat_review_required"
 CODE_TRANSPORT_UNSUPPORTED = "omnigent_chat_transport_unsupported"
 CODE_WS_SUBPROTOCOL_REJECTED = "omnigent_chat_ws_subprotocol_rejected"
+CODE_TERMINAL_FRAME_INVALID = "omnigent_chat_terminal_frame_invalid"
 
 # The only WebSocket subprotocol the native chat surface may negotiate. An
 # offered subprotocol outside this allowlist is rejected before upgrade so the
@@ -151,6 +155,9 @@ class NativeUiRoute:
     # Distinct operations multiplexed as frames on this transport. Terminal
     # input and resize are WebSocket frames in the pinned UI, not HTTP routes.
     frame_operations: tuple[str, ...] = ()
+    # Per-frame capability gates. A writable terminal attach does not confer
+    # authority for every frame carried over the socket.
+    frame_capabilities: tuple[tuple[str, str], ...] = ()
     # Compiled path matcher; ``None`` for the served entries whose matching is
     # owned by ``workflow_chat_facade.match_facade_operation``.
     pattern: re.Pattern[str] | None = None
@@ -228,6 +235,7 @@ def _reviewed_http(
     operation_class: str,
     capability: str | None = CAP_VIEW_TRANSCRIPT,
     mutation: bool = False,
+    disposition: str = DISPOSITION_SERVED,
 ) -> NativeUiRoute:
     """Inventory a reviewed pinned stock route served by the facade.
 
@@ -240,7 +248,7 @@ def _reviewed_http(
         transport=TRANSPORT_HTTP,
         methods=methods,
         operation_class=operation_class,
-        disposition=DISPOSITION_SERVED,
+        disposition=disposition,
         capability=capability,
         mutation=mutation,
         pattern=re.compile("^" + path + "$"),
@@ -256,7 +264,7 @@ _PINNED_HTTP_ROUTES: tuple[NativeUiRoute, ...] = (
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_create", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_status", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_VIEW_TERMINAL),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_close", methods=("DELETE",), operation_class=CLASS_TERMINAL_CLOSE, capability=CAP_CLOSE_TERMINAL, mutation=True),
-    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/shell", name="terminal_shell", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True),
+    _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/shell", name="terminal_shell", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True, disposition=DISPOSITION_COMPAT_REVIEW),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}/logs", name="execution_logs", methods=("GET",), operation_class=CLASS_EXEC_LOG, capability=CAP_READ_RESOURCES),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/(?P<res_path>.+)", name="workspace_edit", methods=("PUT", "PATCH"), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/environments/default/filesystem/(?P<res_path>.+)", name="workspace_delete", methods=("DELETE",), operation_class=CLASS_RESOURCE_MUTATE, capability=CAP_MUTATE_WORKSPACE, mutation=True),
@@ -294,6 +302,10 @@ _WEBSOCKET_ROUTES: tuple[NativeUiRoute, ...] = (
         capability=CAP_ATTACH_TERMINAL,
         mutation=True,
         frame_operations=(CLASS_TERMINAL_INPUT, CLASS_TERMINAL_RESIZE),
+        frame_capabilities=(
+            (CLASS_TERMINAL_INPUT, CAP_WRITE_TERMINAL),
+            (CLASS_TERMINAL_RESIZE, CAP_RESIZE_TERMINAL),
+        ),
     ),
     # Dictation is binary input and needs a separately reviewed audio policy.
     _ws(
@@ -354,8 +366,13 @@ def classify_native_ui_http(method: str, path: str) -> NativeUiRouteMatch | None
     return None
 
 
-def upstream_http_path(match: NativeUiRouteMatch, provider_session_id: str) -> str:
-    """Build an allowlisted upstream path with the binding alias replaced."""
+def upstream_http_path(
+    match: NativeUiRouteMatch,
+    provider_session_id: str,
+    *,
+    path_parameter_overrides: dict[str, str] | None = None,
+) -> str:
+    """Build an allowlisted upstream path with browser aliases replaced."""
 
     browser_path = str(match.params.get("_browser_path") or "")
     if not browser_path:
@@ -367,6 +384,18 @@ def upstream_http_path(match: NativeUiRouteMatch, provider_session_id: str) -> s
             parts[parts.index(browser_session)] = provider_session_id
         except ValueError as exc:
             raise ValueError("classified HTTP session is not in path") from exc
+        browser_path = "/".join(parts)
+    for name, replacement in (path_parameter_overrides or {}).items():
+        browser_value = str(match.params.get(name) or "")
+        if not browser_value:
+            raise ValueError(f"classified HTTP path has no {name!r} parameter")
+        parts = browser_path.split("/")
+        try:
+            parts[parts.index(browser_value)] = quote(str(replacement), safe="")
+        except ValueError as exc:
+            raise ValueError(
+                f"classified HTTP {name!r} parameter is not in path"
+            ) from exc
         browser_path = "/".join(parts)
     return "/" + browser_path.lstrip("/")
 
@@ -424,6 +453,75 @@ def negotiate_ws_subprotocol(
     )
 
 
+def terminal_frame_operation(payload: str | bytes, *, is_binary: bool) -> str:
+    """Classify one browser-to-terminal frame against the pinned wire contract.
+
+    Binary frames are raw PTY input. Text frames must be the exact bounded
+    resize control shape used by the pinned UI. Unknown text controls fail
+    closed so a future upstream frame cannot inherit resize or input authority
+    until the compatibility profile is reviewed.
+    """
+
+    if is_binary:
+        if not isinstance(payload, bytes):
+            raise NativeUiCompatibilityError(
+                "The terminal frame does not match the supported wire contract.",
+                failure_class="user_error",
+                status_code=400,
+                code=CODE_TERMINAL_FRAME_INVALID,
+            )
+        return CLASS_TERMINAL_INPUT
+    if not isinstance(payload, str):
+        raise NativeUiCompatibilityError(
+            "The terminal frame does not match the supported wire contract.",
+            failure_class="user_error",
+            status_code=400,
+            code=CODE_TERMINAL_FRAME_INVALID,
+        )
+    try:
+        value = json.loads(payload)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise NativeUiCompatibilityError(
+            "The terminal frame does not match the supported wire contract.",
+            failure_class="user_error",
+            status_code=400,
+            code=CODE_TERMINAL_FRAME_INVALID,
+        ) from exc
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"type", "cols", "rows"}
+        or value.get("type") != "resize"
+        or isinstance(value.get("cols"), bool)
+        or isinstance(value.get("rows"), bool)
+        or not isinstance(value.get("cols"), int)
+        or not isinstance(value.get("rows"), int)
+        or not 1 <= value["cols"] <= 1000
+        or not 1 <= value["rows"] <= 1000
+    ):
+        raise NativeUiCompatibilityError(
+            "The terminal frame does not match the supported wire contract.",
+            failure_class="user_error",
+            status_code=400,
+            code=CODE_TERMINAL_FRAME_INVALID,
+        )
+    return CLASS_TERMINAL_RESIZE
+
+
+def terminal_frame_capability(route: NativeUiRoute, operation: str) -> str:
+    """Return the independently declared capability for a terminal frame."""
+
+    capabilities = dict(route.frame_capabilities)
+    try:
+        return capabilities[operation]
+    except KeyError as exc:
+        raise NativeUiCompatibilityError(
+            "The terminal frame operation requires compatibility review.",
+            failure_class="user_error",
+            status_code=403,
+            code=CODE_COMPAT_REVIEW_REQUIRED,
+        ) from exc
+
+
 def compatibility_map() -> dict[str, Any]:
     """Return the versioned native-UI compatibility map for diagnostics/tests.
 
@@ -451,6 +549,7 @@ def compatibility_map() -> dict[str, Any]:
                 "pathPattern": route.pattern.pattern if route.pattern else None,
                 "subprotocols": list(route.subprotocols),
                 "frameOperations": list(route.frame_operations),
+                "frameCapabilities": dict(route.frame_capabilities),
             }
             for route in NATIVE_UI_ROUTES
         ],
@@ -466,6 +565,7 @@ __all__ = [
     "CAP_MUTATE_WORKSPACE",
     "CAP_OPEN_BROWSER",
     "CAP_RECONNECT_SESSION",
+    "CAP_RESIZE_TERMINAL",
     "CAP_UPLOAD_FILES",
     "CAP_VIEW_SUBAGENTS",
     "CAP_VIEW_TERMINAL",
@@ -488,6 +588,7 @@ __all__ = [
     "CLASS_TERMINAL_RESIZE",
     "CLASS_TERMINAL_VIEW",
     "CODE_COMPAT_REVIEW_REQUIRED",
+    "CODE_TERMINAL_FRAME_INVALID",
     "CODE_TRANSPORT_UNSUPPORTED",
     "CODE_WS_SUBPROTOCOL_REJECTED",
     "DISPOSITION_COMPAT_REVIEW",
@@ -505,6 +606,8 @@ __all__ = [
     "classify_native_ui_http",
     "compatibility_map",
     "negotiate_ws_subprotocol",
+    "terminal_frame_capability",
+    "terminal_frame_operation",
     "upstream_websocket_path",
     "upstream_http_path",
 ]

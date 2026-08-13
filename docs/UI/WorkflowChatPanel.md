@@ -136,7 +136,11 @@ type WorkflowChatBinding = {
     resolveElicitation: boolean;
     readResources: boolean;
     createTerminal: boolean;
+    attachTerminal: boolean;
+    viewTerminal: boolean;
     writeTerminal: boolean;
+    resizeTerminal: boolean;
+    closeTerminal: boolean;
     mutateWorkspace: boolean;
     changeModel: boolean;
     changeEffort: boolean;

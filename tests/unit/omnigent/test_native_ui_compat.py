@@ -112,7 +112,6 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
         "terminal_create",
         "terminal_status",
         "terminal_close",
-        "terminal_shell",
         "execution_logs",
         "workspace_edit",
         "workspace_delete",
@@ -131,6 +130,10 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
         "terminal_attach",
         "dictation_stream",
     }
+    terminal_shell = next(
+        route for route in compat.NATIVE_UI_ROUTES if route.name == "terminal_shell"
+    )
+    assert terminal_shell.disposition == compat.DISPOSITION_COMPAT_REVIEW
 
 
 @pytest.mark.parametrize(
@@ -258,6 +261,48 @@ def test_terminal_write_operations_require_ungranted_capabilities() -> None:
         compat.CLASS_TERMINAL_INPUT,
         compat.CLASS_TERMINAL_RESIZE,
     )
+    assert dict(by_name["terminal_attach"].frame_capabilities) == {
+        compat.CLASS_TERMINAL_INPUT: compat.CAP_WRITE_TERMINAL,
+        compat.CLASS_TERMINAL_RESIZE: compat.CAP_RESIZE_TERMINAL,
+    }
+
+
+def test_terminal_frames_have_separate_bounded_wire_contracts() -> None:
+    route = next(
+        route for route in compat.NATIVE_UI_ROUTES if route.name == "terminal_attach"
+    )
+    assert (
+        compat.terminal_frame_operation(b"echo hello\n", is_binary=True)
+        == compat.CLASS_TERMINAL_INPUT
+    )
+    resize = '{"type":"resize","cols":120,"rows":40}'
+    assert (
+        compat.terminal_frame_operation(resize, is_binary=False)
+        == compat.CLASS_TERMINAL_RESIZE
+    )
+    assert (
+        compat.terminal_frame_capability(route, compat.CLASS_TERMINAL_INPUT)
+        == compat.CAP_WRITE_TERMINAL
+    )
+    assert (
+        compat.terminal_frame_capability(route, compat.CLASS_TERMINAL_RESIZE)
+        == compat.CAP_RESIZE_TERMINAL
+    )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "echo hello",
+        '{"type":"input","data":"echo hello"}',
+        '{"type":"resize","cols":0,"rows":40}',
+        '{"type":"resize","cols":80,"rows":40,"command":"id"}',
+    ],
+)
+def test_unknown_or_malformed_terminal_text_frames_fail_closed(payload: str) -> None:
+    with pytest.raises(compat.NativeUiCompatibilityError) as exc:
+        compat.terminal_frame_operation(payload, is_binary=False)
+    assert exc.value.code == compat.CODE_TERMINAL_FRAME_INVALID
 
 
 def test_subprotocol_negotiation_allowlists_one_protocol() -> None:

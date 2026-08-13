@@ -15,16 +15,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from email.message import Message
 from hashlib import sha256
 import json
 import logging
 import os
+from pathlib import Path
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
 
 import aiohttp
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import (
     APIRouter,
     Depends,
@@ -47,6 +51,7 @@ from api_service.api.execution_principal import (
 from api_service.api.routers.executions import _get_service as _get_execution_service
 from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
+from api_service.core.encryption import get_encryption_key
 from api_service.db.base import async_session_maker, get_async_session
 from api_service.db.models import User
 from api_service.retrieval_capabilities import RetrievalCapabilityRegistry
@@ -111,11 +116,14 @@ from moonmind.omnigent.native_ui_compat import (
     CODE_COMPAT_REVIEW_REQUIRED,
     CODE_TRANSPORT_UNSUPPORTED,
     CODE_WS_SUBPROTOCOL_REJECTED,
+    CLASS_TERMINAL_INPUT,
     NativeUiCompatibilityError,
     DISPOSITION_SERVED,
     classify_native_ui_http,
     classify_native_ui_websocket,
     negotiate_ws_subprotocol,
+    terminal_frame_capability,
+    terminal_frame_operation,
     upstream_http_path,
     upstream_websocket_path,
 )
@@ -2934,6 +2942,12 @@ WORKFLOW_CHAT_BINDINGS_MOUNT_PATH = "/api/workflow-chat-bindings"
 workflow_chat_router = APIRouter(tags=["Omnigent Workflow Chat"])
 
 _FACADE_MAX_BODY_BYTES = 1 * 1024 * 1024
+_NATIVE_FILE_ALIAS_PREFIX = "mmfile_"
+_NATIVE_TERMINAL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_NATIVE_TERMINAL_SESSION_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+CODE_WORKSPACE_CONTAINMENT_UNAVAILABLE = (
+    "omnigent_chat_workspace_containment_unavailable"
+)
 # Full caller reauthorization cadence while a stream is open. Each new SSE
 # connection (including every EventSource reconnect) is fully authorized by the
 # route dependencies; a long-lived open stream additionally re-verifies binding
@@ -3994,7 +4008,7 @@ async def _read_bounded_facade_body(request: Request) -> bytes:
     return b"".join(chunks)
 
 
-def _validate_native_resource_path(value: str | None) -> None:
+def _validate_native_resource_path(value: str | None) -> str:
     """Reject encoded traversal, absolute, drive/UNC, and NUL-bearing paths."""
 
     from urllib.parse import unquote
@@ -4020,6 +4034,263 @@ def _validate_native_resource_path(value: str | None) -> None:
             status_code=403,
             code=CODE_OPERATION_DENIED,
         )
+    return normalized
+
+
+def _validate_native_workspace_containment(row: Any, value: str | None) -> None:
+    """Resolve a workspace path under the server-owned binding root.
+
+    The API service has a read-only view of normal managed workspaces. Resolving
+    both the durable root and the requested path here follows existing symlinks,
+    so a link that leaves the bound workspace is rejected before the upstream
+    resource route is contacted. Deployments whose host workspace is not
+    visible at this authority boundary fail closed with an actionable state;
+    they must expose the bound root read-only rather than trusting upstream path
+    handling as the only containment layer.
+    """
+
+    normalized = _validate_native_resource_path(value)
+    root_value = str(getattr(row, "workspace", "") or "").strip()
+    root = Path(root_value)
+    if not root_value or not root.is_absolute() or not root.is_dir():
+        raise WorkflowChatFacadeError(
+            "The bound workspace cannot be verified at the Workflow Chat boundary.",
+            failure_class="integration_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_WORKSPACE_CONTAINMENT_UNAVAILABLE,
+        )
+    try:
+        resolved_root = root.resolve(strict=True)
+        resolved_path = (resolved_root / normalized).resolve(strict=False)
+        resolved_path.relative_to(resolved_root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise WorkflowChatFacadeError(
+            "The requested resource path is not permitted.",
+            failure_class="user_error",
+            status_code=status.HTTP_403_FORBIDDEN,
+            code=CODE_OPERATION_DENIED,
+        ) from exc
+
+
+def _native_file_alias(
+    chat_binding_id: str,
+    provider_session_id: str,
+    provider_file_id: str,
+) -> str:
+    """Encrypt one provider file id into a binding-scoped browser alias."""
+
+    file_id = str(provider_file_id or "").strip()
+    if not file_id or len(file_id) > 512:
+        raise WorkflowChatFacadeError(
+            "The upstream file identity is invalid.",
+            failure_class="integration_error",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            code="omnigent_chat_upstream_resource_invalid",
+        )
+    payload = json.dumps(
+        {
+            "v": 1,
+            "binding": chat_binding_id,
+            "session": provider_session_id,
+            "file": file_id,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    token = Fernet(get_encryption_key().encode()).encrypt(payload).decode()
+    return _NATIVE_FILE_ALIAS_PREFIX + token
+
+
+def _provider_file_id_from_alias(
+    chat_binding_id: str,
+    provider_session_id: str,
+    alias: str | None,
+) -> str:
+    """Resolve a binding-scoped file alias and reject raw provider ids."""
+
+    value = str(alias or "").strip()
+    if not value.startswith(_NATIVE_FILE_ALIAS_PREFIX) or len(value) > 4096:
+        raise WorkflowChatFacadeError(
+            "The requested file identity is not permitted for this binding.",
+            failure_class="user_error",
+            status_code=status.HTTP_403_FORBIDDEN,
+            code=CODE_OPERATION_DENIED,
+        )
+    try:
+        plaintext = Fernet(get_encryption_key().encode()).decrypt(
+            value.removeprefix(_NATIVE_FILE_ALIAS_PREFIX).encode()
+        )
+        payload = json.loads(plaintext)
+        if (
+            not isinstance(payload, dict)
+            or payload.get("v") != 1
+            or payload.get("binding") != chat_binding_id
+            or payload.get("session") != provider_session_id
+            or not isinstance(payload.get("file"), str)
+            or not payload["file"]
+            or len(payload["file"]) > 512
+        ):
+            raise ValueError("file alias authority mismatch")
+        return payload["file"]
+    except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise WorkflowChatFacadeError(
+            "The requested file identity is not permitted for this binding.",
+            failure_class="user_error",
+            status_code=status.HTTP_403_FORBIDDEN,
+            code=CODE_OPERATION_DENIED,
+        ) from exc
+
+
+def _virtualize_native_file_payload(
+    value: Any,
+    *,
+    chat_binding_id: str,
+    provider_session_id: str,
+    force_file_records: bool = False,
+    _aliases: dict[str, str] | None = None,
+) -> Any:
+    """Replace provider file identities in a file-route response with aliases."""
+
+    aliases = _aliases if _aliases is not None else {}
+
+    def alias_for(provider_file_id: str) -> str:
+        alias = aliases.get(provider_file_id)
+        if alias is None:
+            alias = _native_file_alias(
+                chat_binding_id, provider_session_id, provider_file_id
+            )
+            aliases[provider_file_id] = alias
+        return alias
+
+    if isinstance(value, list):
+        return [
+            _virtualize_native_file_payload(
+                item,
+                chat_binding_id=chat_binding_id,
+                provider_session_id=provider_session_id,
+                force_file_records=force_file_records,
+                _aliases=aliases,
+            )
+            for item in value
+        ]
+    if not isinstance(value, dict):
+        return value
+    projected = {
+        key: _virtualize_native_file_payload(
+            item,
+            chat_binding_id=chat_binding_id,
+            provider_session_id=provider_session_id,
+            force_file_records=force_file_records,
+            _aliases=aliases,
+        )
+        for key, item in value.items()
+    }
+    file_record = (
+        force_file_records
+        or str(value.get("type") or "").lower() == "file"
+        or "file" in str(value.get("object") or "").lower()
+        or any(key in value for key in ("fileId", "file_id"))
+    )
+    for key in ("fileId", "file_id"):
+        if isinstance(value.get(key), str) and value[key]:
+            projected[key] = alias_for(value[key])
+    if file_record and isinstance(value.get("id"), str) and value["id"]:
+        projected["id"] = alias_for(value["id"])
+    return projected
+
+
+def _safe_content_disposition(value: str) -> str | None:
+    """Return a bounded attachment header with a path-free ASCII filename."""
+
+    raw = str(value or "")
+    if not raw or "\r" in raw or "\n" in raw:
+        return None
+    message = Message()
+    message["Content-Disposition"] = raw
+    filename = str(message.get_filename() or "download")
+    filename = filename.replace("\\", "/").rsplit("/", 1)[-1]
+    filename = "".join(
+        char if 32 <= ord(char) < 127 and char not in {'"', ";"} else "_"
+        for char in filename
+    )
+    filename = re.sub(r"\s+", " ", filename).strip(" .")[:180]
+    if filename in {"", ".", ".."}:
+        filename = "download"
+    return f'attachment; filename="{filename}"'
+
+
+def _validate_terminal_create_payload(value: Any) -> tuple[str, str]:
+    """Accept only the pinned native UI's declared-terminal create shape."""
+
+    if not isinstance(value, Mapping) or set(value) != {"terminal", "session_key"}:
+        raise WorkflowChatFacadeError(
+            "The terminal create request does not match the supported contract.",
+            failure_class="user_error",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code=CODE_MALFORMED_PAYLOAD,
+        )
+    terminal = value.get("terminal")
+    session_key = value.get("session_key")
+    if (
+        not isinstance(terminal, str)
+        or not _NATIVE_TERMINAL_NAME.fullmatch(terminal)
+        or not isinstance(session_key, str)
+        or not _NATIVE_TERMINAL_SESSION_KEY.fullmatch(session_key)
+    ):
+        raise WorkflowChatFacadeError(
+            "The terminal create request does not match the supported contract.",
+            failure_class="user_error",
+            status_code=status.HTTP_400_BAD_REQUEST,
+            code=CODE_MALFORMED_PAYLOAD,
+        )
+    return terminal, session_key
+
+
+async def _declared_native_terminal_names(provider_session_id: str) -> set[str]:
+    """Read the bound session agent's terminal allowlist server-side."""
+
+    from urllib.parse import quote, urlsplit
+
+    base = urlsplit(resolved_server_url())
+    url = (
+        f"{base.scheme}://{base.netloc}/v1/sessions/"
+        f"{quote(provider_session_id, safe='')}/agent"
+    )
+    headers = {"Accept": "application/json"}
+    token = resolved_api_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        async with aiohttp.ClientSession(headers=headers) as client:
+            async with client.request(
+                "GET",
+                url,
+                allow_redirects=False,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as upstream:
+                payload = await upstream.content.read(_FACADE_MAX_BODY_BYTES + 1)
+                if upstream.status != 200 or len(payload) > _FACADE_MAX_BODY_BYTES:
+                    raise ValueError("session agent allowlist unavailable")
+                value = json.loads(payload)
+    except (aiohttp.ClientError, asyncio.TimeoutError, json.JSONDecodeError, ValueError) as exc:
+        raise WorkflowChatFacadeError(
+            "The declared terminal allowlist is unavailable.",
+            failure_class="integration_error",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            code="omnigent_chat_terminal_allowlist_unavailable",
+        ) from exc
+    terminals = value.get("terminals") if isinstance(value, dict) else None
+    if not isinstance(terminals, list) or any(
+        not isinstance(item, str) or not _NATIVE_TERMINAL_NAME.fullmatch(item)
+        for item in terminals
+    ):
+        raise WorkflowChatFacadeError(
+            "The declared terminal allowlist is unavailable.",
+            failure_class="integration_error",
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            code="omnigent_chat_terminal_allowlist_unavailable",
+        )
+    return set(terminals)
 
 
 def _validate_native_match_paths(match: Any) -> None:
@@ -4038,7 +4309,11 @@ def _identity_query_values(query_params: Any) -> list[dict[str, str]]:
 
 
 def _rewrite_native_facade_location(
-    location: str, *, chat_binding_id: str, provider_session_id: str
+    location: str,
+    *,
+    chat_binding_id: str,
+    provider_session_id: str,
+    provider_file_aliases: Mapping[str, str] | None = None,
 ) -> str:
     """Keep an upstream native API redirect inside the binding-scoped facade."""
 
@@ -4056,7 +4331,11 @@ def _rewrite_native_facade_location(
         f"#{split.fragment}" if split.fragment else ""
     )
     path_segments = [
-        chat_binding_id if segment == provider_session_id else segment
+        (
+            chat_binding_id
+            if segment == provider_session_id
+            else str((provider_file_aliases or {}).get(segment) or segment)
+        )
         for segment in split.path.split("/")
     ]
     scoped_path = "/".join(path_segments)
@@ -4112,6 +4391,13 @@ async def _dispatch_native_ui_http(
     """Relay one explicitly inventoried HTTP operation through its binding."""
 
     route = match.route
+    if route.disposition != DISPOSITION_SERVED:
+        raise NativeUiCompatibilityError(
+            "The requested native route requires compatibility review.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_COMPAT_REVIEW_REQUIRED,
+        )
     provider_session_id = str(getattr(row, "omnigent_session_id", "") or "").strip()
     session_status = str(getattr(row, "status", "") or "")
     body = b""
@@ -4145,6 +4431,8 @@ async def _dispatch_native_ui_http(
             code=CODE_OPERATION_DENIED,
         )
     _validate_native_match_paths(match)
+    if route.name in {"workspace_edit", "workspace_delete"}:
+        _validate_native_workspace_containment(row, match.params.get("res_path"))
 
     if config.host_protocol_mode != HOST_PROTOCOL_MODE_PROXY:
         raise WorkflowChatFacadeError(
@@ -4190,6 +4478,27 @@ async def _dispatch_native_ui_http(
             status_code=409,
             code=CODE_SESSION_NOT_READY,
         )
+
+    path_parameter_overrides: dict[str, str] = {}
+    provider_file_aliases: dict[str, str] = {}
+    if route.name in {"resource_download", "resource_attach"}:
+        provider_file_id = _provider_file_id_from_alias(
+            chat_binding_id,
+            provider_session_id,
+            match.params.get("file_id"),
+        )
+        path_parameter_overrides["file_id"] = provider_file_id
+        provider_file_aliases[provider_file_id] = str(match.params["file_id"])
+    if route.name == "terminal_create":
+        terminal, _session_key = _validate_terminal_create_payload(parsed_body)
+        declared = await _declared_native_terminal_names(provider_session_id)
+        if terminal not in declared:
+            raise WorkflowChatFacadeError(
+                "The requested shell type is not declared for this binding.",
+                failure_class="user_error",
+                status_code=status.HTTP_403_FORBIDDEN,
+                code=CODE_OPERATION_DENIED,
+            )
 
     fresh_row = row
     scan_evidence: NativeScanEvidence | None = None
@@ -4270,7 +4579,11 @@ async def _dispatch_native_ui_http(
 
     from urllib.parse import urlencode, urlsplit
 
-    upstream_path = upstream_http_path(match, provider_session_id)
+    upstream_path = upstream_http_path(
+        match,
+        provider_session_id,
+        path_parameter_overrides=path_parameter_overrides,
+    )
     query = urlencode(list(request.query_params.multi_items()))
     base = urlsplit(resolved_server_url())
     upstream_url = f"{base.scheme}://{base.netloc}{upstream_path}"
@@ -4321,18 +4634,31 @@ async def _dispatch_native_ui_http(
                             provider_session_id=provider_session_id,
                             chat_binding_id=chat_binding_id,
                         )
+                        if route.name in {
+                            "resource_upload",
+                            "resource_download",
+                            "resource_attach",
+                        }:
+                            value = _virtualize_native_file_payload(
+                                value,
+                                chat_binding_id=chat_binding_id,
+                                provider_session_id=provider_session_id,
+                                force_file_records=True,
+                            )
                         normalized_json = value
                         payload = json.dumps(value, separators=(",", ":")).encode()
                 response_headers: dict[str, str] = {}
                 disposition = str(upstream.headers.get("content-disposition") or "")
-                if disposition and "\r" not in disposition and "\n" not in disposition:
-                    response_headers["Content-Disposition"] = disposition[:512]
+                safe_disposition = _safe_content_disposition(disposition)
+                if safe_disposition:
+                    response_headers["Content-Disposition"] = safe_disposition
                 location = str(upstream.headers.get("location") or "")
                 if location and "\r" not in location and "\n" not in location:
                     response_headers["Location"] = _rewrite_native_facade_location(
                         location,
                         chat_binding_id=chat_binding_id,
                         provider_session_id=provider_session_id,
+                        provider_file_aliases=provider_file_aliases,
                     )
                 result = Response(
                     content=payload,
@@ -4973,6 +5299,14 @@ async def _dispatch_workflow_chat_facade(
 
     # 12. Read-only resource indexes and content.
     resource_value = params.get("res_path") or params.get("file_id")
+    if operation.name in {"workspace_file", "workspace_diff"}:
+        _validate_native_workspace_containment(row, resource_value)
+    if operation.name == "session_file":
+        resource_value = _provider_file_id_from_alias(
+            chat_binding_id,
+            provider_session_id,
+            params.get("file_id"),
+        )
     result = await facade.get_resource(
         operation.name, provider_session_id, resource_value
     )
@@ -4982,12 +5316,29 @@ async def _dispatch_workflow_chat_facade(
             if operation.name == "workspace_diff"
             else "application/octet-stream"
         )
-        return Response(content=result, media_type=media_type)
-    return _virtualize_facade_payload(
+        response_headers = (
+            {"Content-Disposition": 'attachment; filename="download"'}
+            if operation.name == "session_file"
+            else None
+        )
+        return Response(
+            content=result,
+            media_type=media_type,
+            headers=response_headers,
+        )
+    projected = _virtualize_facade_payload(
         result,
         provider_session_id=provider_session_id,
         chat_binding_id=chat_binding_id,
     )
+    if operation.name == "session_files":
+        projected = _virtualize_native_file_payload(
+            projected,
+            chat_binding_id=chat_binding_id,
+            provider_session_id=provider_session_id,
+            force_file_records=True,
+        )
+    return projected
 
 
 def _strict_query_cursor(value: Any, field: str) -> int | None:
@@ -5473,7 +5824,7 @@ async def workflow_chat_binding_facade_ws(
         required_capabilities = (
             ("viewTerminal",)
             if terminal_read_only
-            else ("attachTerminal", "writeTerminal")
+            else ("attachTerminal",)
         )
     if any(
         not capabilities.get(capability, False) for capability in required_capabilities
@@ -5596,6 +5947,24 @@ async def workflow_chat_binding_facade_ws(
         async def browser_frame_guard(
             payload: str | bytes, is_binary: bool
         ) -> tuple[str | bytes, dict[str, Any]]:
+            frame_operation = f"{operation}_frame"
+            frame_capabilities = required_capabilities
+            if operation == "terminal_attach":
+                terminal_operation = terminal_frame_operation(
+                    payload, is_binary=is_binary
+                )
+                if terminal_read_only and terminal_operation == CLASS_TERMINAL_INPUT:
+                    raise WorkflowChatFacadeError(
+                        "A read-only terminal attachment cannot send PTY input.",
+                        failure_class="user_error",
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        code=CODE_OPERATION_DENIED,
+                    )
+                frame_operation = terminal_operation
+                frame_capabilities = (
+                    *required_capabilities,
+                    terminal_frame_capability(route, terminal_operation),
+                )
             refreshed = await _resolve_and_authorize_chat_binding(
                 chat_binding_id=chat_binding_id,
                 operation=operation,
@@ -5612,7 +5981,7 @@ async def workflow_chat_binding_facade_ws(
                 != provider_session_id
                 or any(
                     not refreshed_capabilities.get(capability, False)
-                    for capability in required_capabilities
+                    for capability in frame_capabilities
                 )
             ):
                 raise WorkflowChatFacadeError(
@@ -5621,7 +5990,23 @@ async def workflow_chat_binding_facade_ws(
                     status_code=status.HTTP_403_FORBIDDEN,
                     code=CODE_OPERATION_DENIED,
                 )
-            scan_payload: Any = payload if is_binary else {"frame": payload}
+            if is_binary:
+                try:
+                    inspectable_frame = payload.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise WorkflowChatFacadeError(
+                        "The security scan required for this frame is unavailable.",
+                        failure_class="system_error",
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        code=CODE_ENFORCEMENT_UNAVAILABLE,
+                    ) from exc
+            else:
+                inspectable_frame = payload
+            # The pinned PTY contract carries UTF-8 input in binary WebSocket
+            # frames. Scan a mapping-shaped, inspectable projection while
+            # forwarding the original frame unchanged; durable evidence retains
+            # only its digest and bounded scanner outcome, never terminal input.
+            scan_payload: Any = {"frame": inspectable_frame}
             frame_key = f"ws-{uuid4().hex}"
             evidence = _enforce_native_outbound_scan(
                 surface=NativeScanSurface.WEBSOCKET_FRAME,
@@ -5629,7 +6014,7 @@ async def workflow_chat_binding_facade_ws(
                 idempotency_key=frame_key,
                 chat_binding_id=chat_binding_id,
                 user=user,
-                operation=f"{operation}:frame",
+                operation=frame_operation,
             )
             if canonical_payload_digest(scan_payload) != evidence.payload_digest:
                 raise WorkflowChatFacadeError(
@@ -5642,7 +6027,7 @@ async def workflow_chat_binding_facade_ws(
             claimed = await _claim_facade_message(
                 store=store,
                 row=refreshed,
-                event_type=f"{operation}_frame",
+                event_type=frame_operation,
                 actor=str(user.id),
                 idempotency_key=frame_key,
                 payload_digest=evidence.payload_digest,
@@ -5662,13 +6047,14 @@ async def workflow_chat_binding_facade_ws(
                 "evidence": evidence,
                 "requestTime": request_time,
                 "dispatchTime": datetime.now(tz=UTC).isoformat(),
+                "controlType": frame_operation,
             }
 
         async def browser_frame_audit(receipt: Mapping[str, Any], outcome: str) -> None:
             await _record_facade_mutation_audit(
                 store=store,
                 row=receipt["row"],
-                control_type=f"{operation}_frame",
+                control_type=str(receipt["controlType"]),
                 outcome=outcome,
                 actor=str(user.id),
                 idempotency_key=str(receipt["key"]),

@@ -45,6 +45,7 @@ from api_service.api.routers.omnigent_bridge import (
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_PROXY
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+from moonmind.omnigent.workflow_chat_facade import WorkflowChatFacadeError
 
 _USER_ID = uuid4()
 _UNSET = object()
@@ -350,8 +351,7 @@ def test_unknown_ws_transport_fails_closed_with_diagnostic() -> None:
 
 
 def test_terminal_attach_is_denied_by_capability() -> None:
-    # Terminal input requires writeTerminal, which the facade never grants, so
-    # even the workflow owner cannot write to a PTY (acceptance criteria 4-5).
+    # A writable attach is distinct from the read-only terminal-view transport.
     client = _build()
     disconnect = _connect_expect_close(
         client, _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach")
@@ -417,15 +417,103 @@ def test_terminal_input_frame_is_scanned_and_durably_receipted(
 
     guard = captured["browser_frame_guard"]
     audit = captured["browser_frame_audit"]
-    payload, receipt = asyncio.run(guard("echo hello", False))
+    payload, receipt = asyncio.run(guard(b"echo hello", True))
     asyncio.run(audit(receipt, "posted"))
 
-    assert payload == "echo hello"
+    assert payload == b"echo hello"
+    assert receipt["controlType"] == "terminal_input"
     claim = next(entry for entry in store.lifecycle if entry["kind"] == "claim")
     assert claim["metadata"]["controlOutcome"] == "pending"
     assert claim["metadata"]["scanSurface"] == "websocket_frame"
     posted = next(entry for entry in store.lifecycle if entry["kind"] == "record")
     assert posted["metadata"]["controlOutcome"] == "posted"
+    with pytest.raises(WorkflowChatFacadeError) as exc:
+        asyncio.run(guard(b"\xff", True))
+    assert exc.value.code == "omnigent_chat_enforcement_unavailable"
+
+
+def test_terminal_resize_has_an_independent_capability_gate(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "moonmind.omnigent.native_outbound_scan.resolve_high_security_mode",
+        lambda *args, **kwargs: True,
+    )
+    captured: dict[str, Any] = {}
+
+    async def relay(*, browser: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+        await browser.accept()
+        await browser.close(code=1000)
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge._relay_native_websocket", relay
+    )
+    grants = dict(_row().metadata_["callerAuthorities"][str(_USER_ID)])
+    grants.update(
+        {"attachTerminal": True, "resizeTerminal": True, "writeTerminal": False}
+    )
+    metadata = {
+        **_row().metadata_,
+        "callerAuthorities": {str(_USER_ID): grants},
+    }
+    store = _FakeStore(row=_row(metadata_=metadata))
+    client = _build(store=store)
+
+    disconnect = _connect_expect_close(
+        client,
+        _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach"),
+    )
+    assert disconnect.code == 1000
+
+    guard = captured["browser_frame_guard"]
+    resize = '{"type":"resize","cols":120,"rows":40}'
+    payload, receipt = asyncio.run(guard(resize, False))
+    assert payload == resize
+    assert receipt["controlType"] == "terminal_resize"
+
+    with pytest.raises(WorkflowChatFacadeError) as exc:
+        asyncio.run(guard(b"whoami", True))
+    assert getattr(exc.value, "code", None) == "omnigent_chat_operation_denied"
+
+
+def test_terminal_input_does_not_inherit_resize_authority(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "moonmind.omnigent.native_outbound_scan.resolve_high_security_mode",
+        lambda *args, **kwargs: True,
+    )
+    captured: dict[str, Any] = {}
+
+    async def relay(*, browser: Any, **kwargs: Any) -> None:
+        captured.update(kwargs)
+        await browser.accept()
+        await browser.close(code=1000)
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge._relay_native_websocket", relay
+    )
+    grants = dict(_row().metadata_["callerAuthorities"][str(_USER_ID)])
+    grants.update(
+        {"attachTerminal": True, "writeTerminal": True, "resizeTerminal": False}
+    )
+    metadata = {
+        **_row().metadata_,
+        "callerAuthorities": {str(_USER_ID): grants},
+    }
+    client = _build(store=_FakeStore(row=_row(metadata_=metadata)))
+    disconnect = _connect_expect_close(
+        client,
+        _ws_path("v1/sessions/chatb-1/resources/terminals/t1/attach"),
+    )
+    assert disconnect.code == 1000
+
+    guard = captured["browser_frame_guard"]
+    payload, receipt = asyncio.run(guard(b"whoami", True))
+    assert payload == b"whoami"
+    assert receipt["controlType"] == "terminal_input"
+    with pytest.raises(WorkflowChatFacadeError) as exc:
+        asyncio.run(
+            guard('{"type":"resize","cols":120,"rows":40}', False)
+        )
+    assert getattr(exc.value, "code", None) == "omnigent_chat_operation_denied"
 
 
 def test_unknown_terminal_create_websocket_is_not_proxied() -> None:

@@ -177,12 +177,12 @@ def test_bootstrap_projects_versioned_stable_capability_decisions() -> None:
         read_only=False,
         capabilities={"sendMessage": False},
         state="available",
-        capability_schema_version="moonmind.omnigent.effective-capabilities.v1",
+        capability_schema_version="moonmind.omnigent.effective-capabilities.v2",
         capability_authority_digest="a" * 64,
         disabled_reasons={"sendMessage": "provider_generation_stale"},
     )
     assert bootstrap["disabledReasons"]["sendMessage"] == "provider_generation_stale"
-    assert bootstrap["capabilitySchemaVersion"].endswith("v1")
+    assert bootstrap["capabilitySchemaVersion"].endswith("v2")
     assert bootstrap["capabilityAuthorityDigest"] == "a" * 64
 
 

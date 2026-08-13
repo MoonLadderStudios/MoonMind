@@ -111,6 +111,7 @@ CAP_READ_RESOURCES = "readResources"
 _EXPLICIT_POLICY_CAPABILITIES: tuple[str, ...] = (
     "createTerminal",
     "writeTerminal",
+    "resizeTerminal",
     "mutateWorkspace",
     "changeModel",
     "changeEffort",

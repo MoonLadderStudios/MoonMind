@@ -61,6 +61,7 @@ def _resolve(**overrides):
 def test_versioned_resolver_covers_complete_operation_matrix():
     result = _resolve()
     assert result.schema_version == CAPABILITY_SCHEMA_VERSION
+    assert CAPABILITY_SCHEMA_VERSION.endswith(".v2")
     assert tuple(result.decisions) == CAPABILITY_NAMES
     assert all(result.capabilities.values())
     assert len(result.authority_digest) == 64
@@ -174,6 +175,7 @@ def test_caller_authority_separates_owner_from_approver_and_viewer():
     assert viewer_grants["viewTranscript"] is True
     assert viewer_grants["sendMessage"] is False
     assert viewer_grants["writeTerminal"] is False
+    assert viewer_grants["resizeTerminal"] is False
 
     approver_grants = caller_capabilities_for_bridge(
         SimpleNamespace(metadata_={}),

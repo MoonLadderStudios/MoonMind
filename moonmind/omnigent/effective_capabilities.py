@@ -12,7 +12,7 @@ from hashlib import sha256
 import json
 from typing import Any, Mapping
 
-CAPABILITY_SCHEMA_VERSION = "moonmind.omnigent.effective-capabilities.v1"
+CAPABILITY_SCHEMA_VERSION = "moonmind.omnigent.effective-capabilities.v2"
 
 CAPABILITY_NAMES: tuple[str, ...] = (
     "viewTranscript",
@@ -29,6 +29,7 @@ CAPABILITY_NAMES: tuple[str, ...] = (
     "attachTerminal",
     "viewTerminal",
     "writeTerminal",
+    "resizeTerminal",
     "closeTerminal",
     "openBrowser",
     "viewSubagents",

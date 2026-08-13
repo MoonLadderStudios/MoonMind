@@ -11,12 +11,14 @@ credentials, and forwards only to the server-resolved provider session.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -27,7 +29,9 @@ from api_service.api.routers.omnigent_bridge import (
     _get_bridge_store,
     _get_create_embedded_facade,
     _get_execution_service,
+    _provider_file_id_from_alias,
     _require_bridge_enabled,
+    _safe_content_disposition,
     _validate_native_resource_path,
     workflow_chat_router,
 )
@@ -122,6 +126,7 @@ def _row(**overrides: Any) -> SimpleNamespace:
         step_execution_id="step-1",
         idempotency_key="idem-1",
         status="active",
+        workspace=str(Path.cwd()),
         omnigent_session_id=_PROVIDER_SESSION_ID,
         omnigent_host_id="host-1",
         compatibility_profile="omnigent.server.v1",
@@ -309,6 +314,17 @@ class _FakeProxy:
         self.resources.append((operation, session_id, value))
         if operation in {"workspace_file", "workspace_diff", "session_file"}:
             return b"RAW-BYTES"
+        if operation == "session_files":
+            return {
+                "files": [
+                    {
+                        "type": "file",
+                        "id": "provider-file-1",
+                        "fileId": "provider-file-1",
+                        "name": "report.txt",
+                    }
+                ]
+            }
         return {"files": [{"path": "src/main.py", "session": session_id}]}
 
     async def post_event(self, *, session_id: str, event, actor=None):
@@ -332,6 +348,50 @@ class _FakeProxy:
             }
         )
         return {"ok": True, "elicitationId": elicitation_id, "session_id": session_id}
+
+
+class _StubHttpContent:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    async def read(self, _limit: int) -> bytes:
+        return self._payload
+
+
+class _StubHttpResponse:
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        payload: Any,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+        self.status = status_code
+        self.headers = headers or {"content-type": "application/json"}
+        self.content = _StubHttpContent(raw)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+
+class _QueuedNativeClient:
+    def __init__(self, responses: list[_StubHttpResponse]) -> None:
+        self._responses = list(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    def request(self, method: str, url: str, **kwargs):
+        self.calls.append({"method": method, "url": url, **kwargs})
+        return self._responses.pop(0)
 
 
 class _FakeEmbeddedFacade:
@@ -604,6 +664,105 @@ def test_native_http_mutation_is_scanned_receipted_and_replay_safe(
         if entry["metadata"].get("controlOutcome") == "posted"
     )
     assert posted["metadata"]["normalizedResult"]["statusCode"] == 307
+
+
+def test_terminal_create_uses_only_the_bound_agent_shell_allowlist(
+    monkeypatch,
+) -> None:
+    _force_high_security(monkeypatch)
+    upstream = _QueuedNativeClient(
+        [
+            _StubHttpResponse(
+                status_code=200,
+                payload={"terminals": ["bash", "python"]},
+            ),
+            _StubHttpResponse(
+                status_code=201,
+                payload={"id": "terminal-1", "session_id": _PROVIDER_SESSION_ID},
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession",
+        lambda **_kwargs: upstream,
+    )
+    client, _proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/terminals"),
+        json={"terminal": "bash", "session_key": "ui-terminal-1"},
+        headers={"Idempotency-Key": "terminal-create-1"},
+    )
+
+    assert response.status_code == 201
+    assert [call["method"] for call in upstream.calls] == ["GET", "POST"]
+    assert upstream.calls[0]["url"].endswith(
+        f"/v1/sessions/{_PROVIDER_SESSION_ID}/agent"
+    )
+    assert upstream.calls[1]["url"].endswith(
+        f"/v1/sessions/{_PROVIDER_SESSION_ID}/resources/terminals"
+    )
+    forwarded = json.loads(upstream.calls[1]["data"])
+    assert forwarded == {"terminal": "bash", "session_key": "ui-terminal-1"}
+
+
+def test_terminal_create_rejects_arbitrary_command_fields() -> None:
+    client, _proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/terminals"),
+        json={
+            "terminal": "bash",
+            "session_key": "ui-terminal-1",
+            "command": "curl attacker.invalid",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "omnigent_chat_malformed_payload"
+
+
+def test_terminal_create_rejects_an_undeclared_shell(monkeypatch) -> None:
+    upstream = _QueuedNativeClient(
+        [
+            _StubHttpResponse(
+                status_code=200,
+                payload={"terminals": ["bash"]},
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession",
+        lambda **_kwargs: upstream,
+    )
+    client, _proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/terminals"),
+        json={"terminal": "powershell", "session_key": "ui-terminal-2"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
+    assert [call["method"] for call in upstream.calls] == ["GET"]
+
+
+def test_generic_shell_command_route_requires_compatibility_review() -> None:
+    client, _proxy, _store = _build()
+
+    response = client.post(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/environments/default/shell"
+        ),
+        json={"command": "whoami"},
+    )
+
+    assert response.status_code == 409
+    assert (
+        response.json()["detail"]["code"]
+        == "omnigent_chat_compat_review_required"
+    )
 
 
 def test_delete_method_not_allowlisted() -> None:
@@ -987,6 +1146,101 @@ def test_workspace_diff_media_type() -> None:
     assert response.headers["content-type"].startswith("text/x-diff")
 
 
+def test_workspace_resource_rejects_symlink_escape(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    (workspace / "escape.txt").symlink_to(outside)
+    client, proxy, _store = _build(
+        store=_FakeStore(row=_row(workspace=str(workspace)))
+    )
+
+    response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/environments/default/filesystem/escape.txt"
+        )
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
+    assert proxy.resources == []
+
+
+def test_session_file_ids_are_opaque_and_binding_scoped(monkeypatch) -> None:
+    encryption_key = Fernet.generate_key().decode()
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.get_encryption_key",
+        lambda: encryption_key,
+    )
+    client, proxy, _store = _build()
+
+    listing = client.get(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/files")
+    )
+
+    assert listing.status_code == 200
+    file_record = listing.json()["files"][0]
+    alias = file_record["id"]
+    assert alias.startswith("mmfile_")
+    assert file_record["fileId"] == alias
+    assert "provider-file-1" not in listing.text
+    assert (
+        _provider_file_id_from_alias(
+            _CHAT_BINDING_ID, _PROVIDER_SESSION_ID, alias
+        )
+        == "provider-file-1"
+    )
+    with pytest.raises(WorkflowChatFacadeError):
+        _provider_file_id_from_alias(
+            "another-binding", _PROVIDER_SESSION_ID, alias
+        )
+    with pytest.raises(WorkflowChatFacadeError):
+        _provider_file_id_from_alias(
+            _CHAT_BINDING_ID, "replacement-session", alias
+        )
+
+    download = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}/resources/files/{alias}/content"
+        )
+    )
+    assert download.status_code == 200
+    assert download.content == b"RAW-BYTES"
+    assert download.headers["content-disposition"] == (
+        'attachment; filename="download"'
+    )
+    assert proxy.resources[-1] == (
+        "session_file",
+        _PROVIDER_SESSION_ID,
+        "provider-file-1",
+    )
+
+
+def test_session_file_route_rejects_raw_provider_id() -> None:
+    client, proxy, _store = _build()
+
+    response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/files/provider-file-1/content"
+        )
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
+    assert proxy.resources == []
+
+
+def test_content_disposition_strips_upstream_path_authority() -> None:
+    assert (
+        _safe_content_disposition('attachment; filename="../../etc/passwd"')
+        == 'attachment; filename="passwd"'
+    )
+    assert _safe_content_disposition("attachment; filename=x\r\nX-Evil: yes") is None
+
+
 def test_list_agents_metadata() -> None:
     client, _proxy, _store = _build()
 
@@ -1007,6 +1261,88 @@ def test_liveness_probe_is_local() -> None:
     assert body["state"] == "available"
     assert body["readOnly"] is False
     assert proxy.resources == []  # never touched upstream
+
+
+def test_browser_journey_stays_on_one_binding_across_native_surfaces(
+    monkeypatch,
+) -> None:
+    """Exercise transcript, file, PTY, sub-agent/task, and reconnect together."""
+
+    _force_high_security(monkeypatch)
+    upstream = _QueuedNativeClient(
+        [
+            _StubHttpResponse(
+                status_code=200,
+                payload={"subagents": [], "session_id": _PROVIDER_SESSION_ID},
+            ),
+            _StubHttpResponse(
+                status_code=200,
+                payload={"tasks": [], "session_id": _PROVIDER_SESSION_ID},
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession",
+        lambda **_kwargs: upstream,
+    )
+    relayed: list[str] = []
+
+    async def relay(*, browser: Any, upstream_url: str, **_kwargs: Any) -> None:
+        relayed.append(upstream_url)
+        await browser.accept()
+        await browser.close(code=1000)
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge._relay_native_websocket", relay
+    )
+    client, _proxy, _store = _build()
+    scoped = f"v1/sessions/{_CHAT_BINDING_ID}"
+
+    transcript = client.get(_path(scoped))
+    file_response = client.get(
+        _path(
+            scoped
+            + "/resources/environments/default/filesystem/README.md"
+        )
+    )
+    subagents = client.get(_path(scoped + "/subagents"))
+    tasks = client.get(_path(scoped + "/tasks"))
+    reconnect = client.post(
+        _path(scoped + "/reconnect"),
+        json={},
+        headers={"Idempotency-Key": "browser-reconnect-1"},
+    )
+    with pytest.raises(WebSocketDisconnect) as disconnect:
+        with client.websocket_connect(
+            _path(
+                scoped
+                + "/resources/terminals/terminal-1/attach?read_only=true"
+            ),
+            headers={"origin": "http://testserver"},
+        ) as websocket:
+            websocket.receive_text()
+
+    assert [
+        transcript.status_code,
+        file_response.status_code,
+        subagents.status_code,
+        tasks.status_code,
+        reconnect.status_code,
+    ] == [200, 200, 200, 200, 200]
+    assert disconnect.value.code == 1000
+    assert len(relayed) == 1
+    assert relayed[0].endswith(
+        f"/v1/sessions/{_PROVIDER_SESSION_ID}"
+        "/resources/terminals/terminal-1/attach?read_only=true"
+    )
+    assert all(_PROVIDER_SESSION_ID not in response.text for response in (
+        transcript,
+        subagents,
+        tasks,
+        reconnect,
+    ))
+    assert len(upstream.calls) == 2
+    assert all(_PROVIDER_SESSION_ID in call["url"] for call in upstream.calls)
 
 
 # --- SSE/WebSocket replay, reconnect, and revocation -------------------------
