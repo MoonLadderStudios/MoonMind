@@ -54,26 +54,22 @@ def test_managed_capture_contract_and_catalog_reject_other_authorities() -> None
 
 
 @pytest.mark.asyncio
-async def test_managed_checkpoint_artifact_uses_mode_aware_payload_writer() -> None:
-    calls: list[tuple[str, bytes]] = []
+async def test_managed_checkpoint_artifact_uses_content_addressed_writer() -> None:
+    calls: list[tuple[str, bytes, str]] = []
 
     class ArtifactService:
-        async def create(self, **_kwargs: object) -> tuple[object, object]:
-            return SimpleNamespace(artifact_id="art-checkpoint"), SimpleNamespace(
-                mode="multipart"
-            )
-
-        async def write_payload_complete(
-            self, *, artifact_id: str, payload: bytes, **_kwargs: object
-        ) -> object:
-            calls.append((artifact_id, payload))
-            return SimpleNamespace(
-                artifact_id=artifact_id,
+        async def put_content_addressed_payload_complete(
+            self, *, payload: bytes, scope: str, **_kwargs: object
+        ) -> tuple[object, bool]:
+            calls.append(("art-checkpoint", payload, scope))
+            artifact = SimpleNamespace(
+                artifact_id="art-checkpoint",
                 sha256=hashlib.sha256(payload).hexdigest(),
                 size_bytes=len(payload),
                 content_type="application/vnd.moonmind.worktree-archive",
                 encryption=SimpleNamespace(value="none"),
             )
+            return artifact, False
 
     activities = TemporalAgentRuntimeActivities(
         run_store=object(),
@@ -89,7 +85,7 @@ async def test_managed_checkpoint_artifact_uses_mode_aware_payload_writer() -> N
     )
 
     assert artifact_ref == "art-checkpoint"
-    assert calls == [("art-checkpoint", payload)]
+    assert calls == [("art-checkpoint", payload, "checkpoint_archive")]
 
 
 @pytest.mark.asyncio

@@ -1109,7 +1109,6 @@ async def test_sandbox_checkpoint_writes_use_artifact_service_when_available(
     tmp_path: Path,
 ) -> None:
     service = AsyncMock()
-    created = SimpleNamespace(artifact_id="artifact-created")
     completed = SimpleNamespace(
         artifact_id="artifact-completed",
         sha256="sha256:payload",
@@ -1117,8 +1116,7 @@ async def test_sandbox_checkpoint_writes_use_artifact_service_when_available(
         content_type="application/json",
         encryption=SimpleNamespace(value="none"),
     )
-    service.create.return_value = (created, None)
-    service.write_complete.return_value = completed
+    service.put_content_addressed_payload_complete.return_value = (completed, False)
     root = _workspace_root(tmp_path)
     repo = _repo(root)
     sandbox = TemporalSandboxActivities(workspace_root=root, artifact_service=service)
@@ -1137,8 +1135,12 @@ async def test_sandbox_checkpoint_writes_use_artifact_service_when_available(
 
     assert capture["workspace"]["workspaceArtifactRef"] == "artifact-completed"
     assert "workspaceRef" not in capture["workspace"]
-    service.create.assert_awaited_once()
-    service.write_complete.assert_awaited_once()
+    service.put_content_addressed_payload_complete.assert_awaited_once()
+    call = service.put_content_addressed_payload_complete.await_args.kwargs
+    assert call["scope"] == "checkpoint_workspace_ref"
+    assert call["metadata_json"] == {
+        "artifact_kind": "checkpoint_workspace_ref"
+    }
 
 
 async def test_workspace_apply_policy_rejects_artifact_backed_ephemeral_ref_as_path(

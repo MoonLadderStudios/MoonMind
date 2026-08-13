@@ -282,6 +282,18 @@ Example:
 moonmind/artifacts/2026/03/30/art_01J9Z9F7QZK2K0YQ3B1T2N0R4P
 ```
 
+Immutable checkpoint payloads use a content-addressed blob key:
+
+```text
+<namespace>/blobs/<checkpoint-scope>/sha256/<prefix>/<sha256>
+```
+
+Each checkpoint boundary still receives its own logical `artifact_id`, owner,
+links, retention class, expiry, and pin state. Logical artifact rows may share
+the same storage key only when the trusted publisher computed identical bytes
+for the same checkpoint scope. Lifecycle deletion locks all rows for the shared
+key and removes the blob only after the final logical reference is hard-deleted.
+
 ## 7.3 Integrity
 
 Store and validate:
@@ -298,6 +310,8 @@ Artifacts are immutable after completion:
 * no overwrite
 * no in-place mutation
 * any content change creates a new artifact ID
+* equal checkpoint content may reuse an immutable storage blob without reusing
+  or weakening the logical artifact record
 
 ---
 

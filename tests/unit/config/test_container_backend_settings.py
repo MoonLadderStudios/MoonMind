@@ -114,7 +114,7 @@ def test_prebuilt_python_test_image_replaces_local_recipe() -> None:
     assert source.pull_policy == "if-missing"
 
 
-def test_tactics_image_reuses_operator_provisioned_host_image() -> None:
+def test_tactics_image_pulls_on_first_use_and_reuses_host_cache() -> None:
     settings = resolve_container_backend_settings(
         {
             "MOONMIND_UNREAL_ENGINE_IMAGE": (
@@ -128,7 +128,7 @@ def test_tactics_image_reuses_operator_provisioned_host_image() -> None:
     source = settings.image_source(TACTICS_UNREAL_IMAGE_SOURCE_REF)
     assert isinstance(source, RegistryImageSource)
     assert source.image == "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
-    assert source.pull_policy == "never"
+    assert source.pull_policy == "if-missing"
     assert settings.cache_source(UNREAL_CCACHE_CACHE_REF).volume_name == (
         "shared-ccache"
     )
@@ -140,7 +140,13 @@ def test_default_tactics_source_and_invalid_cache_volume_fail_closed() -> None:
     source = settings.image_source(TACTICS_UNREAL_IMAGE_SOURCE_REF)
     assert isinstance(source, RegistryImageSource)
     assert source.image == "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
-    assert source.pull_policy == "never"
+    assert source.pull_policy == "if-missing"
+
+    prewarmed = resolve_container_backend_settings(
+        {"MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY": "never"}
+    ).image_source(TACTICS_UNREAL_IMAGE_SOURCE_REF)
+    assert isinstance(prewarmed, RegistryImageSource)
+    assert prewarmed.pull_policy == "never"
 
     with pytest.raises(ContainerBackendConfigError, match="named volume"):
         resolve_container_backend_settings(

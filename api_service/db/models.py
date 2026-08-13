@@ -2158,6 +2158,7 @@ class TemporalArtifact(Base):
         Index("ix_temporal_artifacts_expires_at", "expires_at"),
         Index("ix_temporal_artifacts_deleted_at", "deleted_at"),
         Index("ix_temporal_artifacts_hard_deleted_at", "hard_deleted_at"),
+        Index("ix_temporal_artifacts_storage_key", "storage_key"),
     )
 
     artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -2185,7 +2186,7 @@ class TemporalArtifact(Base):
         default=TemporalArtifactStorageBackend.S3,
         server_default=TemporalArtifactStorageBackend.S3.value,
     )
-    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False, unique=True)
+    storage_key: Mapped[str] = mapped_column(String(1024), nullable=False)
     encryption: Mapped[TemporalArtifactEncryption] = mapped_column(
         Enum(
             TemporalArtifactEncryption,

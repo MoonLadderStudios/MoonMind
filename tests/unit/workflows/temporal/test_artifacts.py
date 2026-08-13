@@ -1536,6 +1536,74 @@ async def test_write_payload_complete_persists_trusted_multipart_bytes(
             assert completed.sha256 == hashlib.sha256(payload).hexdigest()
             assert stored_payload == payload
 
+
+async def test_content_addressed_checkpoint_blobs_keep_logical_retention_authority(
+    tmp_path: Path,
+) -> None:
+    """Equivalent checkpoints share bytes until the final logical ref is gone."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            repo = TemporalArtifactRepository(session)
+            service = TemporalArtifactService(repo, store=store)
+            payload = b"deterministic checkpoint archive"
+
+            first, first_reused = (
+                await service.put_content_addressed_payload_complete(
+                    principal="system",
+                    payload=payload,
+                    content_type="application/vnd.moonmind.worktree-archive",
+                    scope="checkpoint_archive",
+                    retention_class=TemporalArtifactRetentionClass.EPHEMERAL,
+                    metadata_json={"artifact_kind": "checkpoint_archive"},
+                )
+            )
+            second, second_reused = (
+                await service.put_content_addressed_payload_complete(
+                    principal="system",
+                    payload=payload,
+                    content_type="application/vnd.moonmind.worktree-archive",
+                    scope="checkpoint_archive",
+                    retention_class=TemporalArtifactRetentionClass.LONG,
+                    metadata_json={"artifact_kind": "checkpoint_archive"},
+                )
+            )
+
+            assert first.artifact_id != second.artifact_id
+            assert first.storage_key == second.storage_key
+            assert not first_reused
+            assert second_reused
+            assert first.retention_class is TemporalArtifactRetentionClass.EPHEMERAL
+            assert second.retention_class is TemporalArtifactRetentionClass.LONG
+            blob_path = store.resolve_storage_key(first.storage_key)
+            assert blob_path.read_bytes() == payload
+
+            await service.soft_delete(
+                artifact_id=first.artifact_id,
+                principal="system",
+            )
+            await service.hard_delete(
+                artifact_id=first.artifact_id,
+                principal="system",
+            )
+            assert blob_path.read_bytes() == payload
+            _metadata, restored = await service.read(
+                artifact_id=second.artifact_id,
+                principal="system",
+            )
+            assert restored == payload
+
+            await service.soft_delete(
+                artifact_id=second.artifact_id,
+                principal="system",
+            )
+            await service.hard_delete(
+                artifact_id=second.artifact_id,
+                principal="system",
+            )
+            assert not blob_path.exists()
+
 async def test_write_integration_event_artifact_creates_restricted_preview(
     tmp_path: Path,
 ) -> None:

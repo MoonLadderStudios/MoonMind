@@ -284,7 +284,7 @@ dockerBackendService:
       kind: registry
       imageFrom: MOONMIND_UNREAL_ENGINE_IMAGE
       defaultImage: ghcr.io/moonladderstudios/tactics-ue-base:5.8
-      pullPolicy: never
+      pullPolicy: if-missing
 
   cacheSources:
     unreal-ccache:
@@ -875,10 +875,12 @@ The validated runtime profile remains authoritative for workload capability.
 backend exists. Workflow text and runtime environment overrides cannot elevate
 that profile decision.
 
-The `tactics-unreal` source selects the operator-provisioned Unreal image in the
-deployment daemon. Its default `pullPolicy=never` deliberately treats a missing
-private image as an actionable provisioning error rather than attempting an
-anonymous pull. The `unreal-ccache` and `unreal-ubt` cache refs resolve to exact
+The `tactics-unreal` source selects the deployment-approved Unreal image. Its
+default `pullPolicy=if-missing` makes the first admitted job provision a cold
+daemon cache through the existing coalesced registry acquisition path. Registry
+authorization or reachability failures remain actionable provisioning errors,
+and an operator may explicitly set `never` when prewarming is required by
+deployment policy. The `unreal-ccache` and `unreal-ubt` cache refs resolve to exact
 deployment-owned targets and owner-scoped host volumes derived from the
 configured base names. Jobs owned by the same authorized principal reuse their
 cache; another user or service identity receives a different writable volume.

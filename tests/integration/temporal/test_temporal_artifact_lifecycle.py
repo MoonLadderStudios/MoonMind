@@ -67,6 +67,61 @@ async def test_lifecycle_soft_then_hard_delete(tmp_path: Path) -> None:
             assert refreshed.hard_deleted_at is not None
 
 
+async def test_lifecycle_keeps_shared_checkpoint_blob_until_last_ref_expires(
+    tmp_path: Path,
+) -> None:
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            store = LocalTemporalArtifactStore(tmp_path / "shared-artifacts")
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=store,
+                lifecycle_hard_delete_after_seconds=1,
+            )
+            payload = b"same checkpoint bytes"
+            first, _ = await service.put_content_addressed_payload_complete(
+                principal="system",
+                payload=payload,
+                content_type="application/vnd.moonmind.worktree-archive",
+                scope="checkpoint_archive",
+            )
+            second, reused = await service.put_content_addressed_payload_complete(
+                principal="system",
+                payload=payload,
+                content_type="application/vnd.moonmind.worktree-archive",
+                scope="checkpoint_archive",
+            )
+            assert reused
+            assert first.storage_key == second.storage_key
+            blob_path = store.resolve_storage_key(first.storage_key)
+
+            first.expires_at = datetime.now(UTC) - timedelta(days=1)
+            await service._repository.commit()
+            sweep_started = datetime.now(UTC)
+            await service.sweep_lifecycle(
+                principal="service:lifecycle",
+                now=sweep_started,
+            )
+            await service.sweep_lifecycle(
+                principal="service:lifecycle",
+                now=sweep_started + timedelta(seconds=3),
+            )
+            assert blob_path.read_bytes() == payload
+            assert second.status is TemporalArtifactStatus.COMPLETE
+
+            second.expires_at = sweep_started - timedelta(days=1)
+            await service._repository.commit()
+            await service.sweep_lifecycle(
+                principal="service:lifecycle",
+                now=sweep_started + timedelta(seconds=4),
+            )
+            await service.sweep_lifecycle(
+                principal="service:lifecycle",
+                now=sweep_started + timedelta(seconds=7),
+            )
+            assert not blob_path.exists()
+
+
 async def test_trusted_multipart_payload_round_trips_through_configured_store(
     tmp_path: Path,
 ) -> None:

@@ -501,7 +501,7 @@ Defaults:
 
 | Resource | Default retention | Reason |
 |---|---:|---|
-| Workspace/session roots | 30 days | Main disk-pressure target while keeping recent debugging state. |
+| Workspace/session roots | 10 days | Bounds duplicated checkout/build state while keeping recent debugging state. |
 | Artifact directories | 90 days | Logs, diagnostics, summaries, and continuity artifacts are more operator-visible than checkouts. |
 | Run/session JSON records | Disabled | Records are small and useful for audit/debugging; deletion is opt-in. |
 | Grace window | 1 hour | Avoid racing newly completed runs or just-written records. |
@@ -516,7 +516,7 @@ Environment variables:
 |---|---:|---|
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED` | `true` | Enables both the retained-state activity and recurring schedule. `false` disables the activity and pauses the schedule. |
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN` | `false` | When `true`, leaves the schedule active and reports eligible deletes without deleting. |
-| `MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS` | `30` | Workspace/session-root retention. |
+| `MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS` | `10` | Workspace/session-root retention. |
 | `MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS` | `90` | Local managed-runtime artifact retention. |
 | `MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS` | unset | Optional run/session JSON record retention; unset means no record deletion. |
 | `MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS` | `3600` | Minimum delay after newest owner activity before deletion. |
@@ -528,7 +528,7 @@ Environment variables:
 
 An installation without explicit janitor settings adopts enabled, non-dry-run cleanup on upgrade. Startup also enables a schedule that was created paused solely under the former default. The first and every later pass remain bounded by the path and optional byte budgets.
 
-Before upgrading, operators may set `MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=true` to inspect candidates. Operators requiring indefinite local retention must set `MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=false`. Otherwise, terminal workspaces older than 30 days and eligible unreferenced local artifact directories older than 90 days may be deleted after startup. There is no implicit first-run dry run.
+Before upgrading, operators may set `MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=true` to inspect candidates. Operators requiring indefinite local retention must set `MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=false`. Otherwise, terminal workspaces older than 10 days and eligible unreferenced local artifact directories older than 90 days may be deleted after startup. There is no implicit first-run dry run.
 
 ### 8.8 Safety gates
 
