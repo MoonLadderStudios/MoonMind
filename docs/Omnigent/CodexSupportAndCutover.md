@@ -228,7 +228,15 @@ delivery/repair separation, carrying a prohibited UI-journey authority or an
 over-limit threshold, carrying a self-asserted or incomplete secret scan, or not
 observed with the required disposition. When the release declares more than one
 architecture, each owned row must carry its own observation for every released
-architecture. `evaluate_remediation_release` (mounted via
+architecture. Every source-record type has one exact v1 schema and repeats the
+target/remediation workflow, run, Step Execution, attempt, branch, Agent
+Profile, Provider Profile, lease, host, bridge, and session identity. Lineage
+`*Ref` values must equal a resolved record in the same manifest. The row result
+is derived from the typed browser, request, input, workflow, context,
+profile/policy, egress, approval, action, verification, publication, cleanup,
+Temporal-history, side-effect-audit, and retained-scan records; the
+`scenarioObservation` summary is cross-checked and has no independent authority.
+`evaluate_remediation_release` (mounted via
 `MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF`, published on
 `/api/omnigent/codex-catalog-readiness` as `remediationRelease`) re-resolves every
 manifest ref, binds its bytes to the recorded digest, re-validates each artifact,
@@ -254,16 +262,20 @@ bundle, re-validates complete catalog coverage, and derives telemetry,
 thresholds, manifest digests, and the combined release document; callers cannot
 supply passed rows or ownership.
 
-The derived telemetry groups separately expose creation, context build,
-evidence availability, approval outcomes, action outcomes by kind/risk,
-lock/cooldown/duplicate/escalation, branch lifecycle latency, verification
-outcomes, repeated failure/attempt exhaustion, egress outcomes, operator
-cancellation/takeover, and autonomous/manual origin. The release projection
-turns every blocker into an operator alert and reports whether manual promotion
-is allowed or rollback is required. Each row threshold uses the objective rule
-“at least one sample and every sample passed”; missing telemetry, missing or
-failed threshold samples, stale evidence, or any non-autonomous blocker forces
-manual promotion off and rollback on.
+The versioned derived telemetry schema separately exposes creation and context
+success rates; evidence degradation/unavailability; approval denial, expiration,
+and stale-rejection rates; exact action outcome buckets by catalog action kind
+and risk; lock, cooldown, duplicate, nested-denial, and escalation counts/rates;
+branch-launch, host/session, first-message, terminal, publication, and cleanup
+latencies; verification distributions and unverified mutations; repeated
+failure and attempt exhaustion; egress decisions and attestation failures;
+operator cancellation/takeover; and autonomous/manual origin. The release
+evaluator re-derives that projection and its versioned objective threshold set
+from the validated row records; a missing dimension, wrong kind/risk bucket,
+missing phase latency, or telemetry/threshold divergence blocks promotion. The
+Create UI exposes manual diagnosis/mutation qualification, manual promotion,
+rollback, evidence expiry, telemetry version, and every operator alert in
+addition to the autonomous authorization state.
 
 **Autonomous rollout stays disabled.** A fully passing manual matrix never
 authorizes autonomous mutating remediation: `autonomousRolloutAuthorized` is

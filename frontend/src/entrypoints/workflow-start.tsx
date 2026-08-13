@@ -628,7 +628,25 @@ interface OmnigentCodexCatalogReadiness {
   gateReasons: OmnigentCatalogGateReason[];
   supportGateReasons: OmnigentCatalogGateReason[];
   remediationRelease: {
+    policyVersion?: string;
+    matrixVersion?: string;
+    manualDiagnosisSupported?: boolean;
+    manualMutationSupported?: boolean;
     autonomousRolloutAuthorized: boolean;
+    promotionAllowed?: boolean;
+    manualPromotionAllowed?: boolean;
+    rollbackRequired?: boolean;
+    generatedAt?: string | null;
+    expiresAt?: string | null;
+    telemetry?: {
+      schemaVersion?: string;
+      groups?: Record<string, unknown>;
+    };
+    alerts?: Array<{
+      code?: string;
+      severity?: string;
+      operatorAction?: string;
+    }>;
     blockers: string[];
   };
 }
@@ -11803,6 +11821,56 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                     remediation release matrix passes.
                   </p>
                 ) : null}
+              {omnigentCatalogQuery.data?.remediationRelease ? (
+                <details className="small" data-testid="remediation-release-status">
+                  <summary>Operator remediation release status</summary>
+                  <dl>
+                    <dt>Manual diagnosis</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.manualDiagnosisSupported
+                        ? "Supported"
+                        : "Not qualified"}
+                    </dd>
+                    <dt>Manual mutation</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.manualMutationSupported
+                        ? "Supported"
+                        : "Not qualified"}
+                    </dd>
+                    <dt>Manual promotion</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.manualPromotionAllowed
+                        ? "Allowed"
+                        : "Blocked"}
+                    </dd>
+                    <dt>Rollback</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.rollbackRequired
+                        ? "Required"
+                        : "Not required"}
+                    </dd>
+                    <dt>Evidence expiry</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.expiresAt || "No qualifying evidence"}
+                    </dd>
+                    <dt>Telemetry</dt>
+                    <dd>
+                      {omnigentCatalogQuery.data.remediationRelease.telemetry?.schemaVersion
+                        || "Unavailable"}
+                    </dd>
+                  </dl>
+                  {(omnigentCatalogQuery.data.remediationRelease.alerts || []).length > 0 ? (
+                    <ul aria-label="Remediation release alerts">
+                      {(omnigentCatalogQuery.data.remediationRelease.alerts || []).map((alert) => (
+                        <li key={alert.code || alert.operatorAction}>
+                          {alert.severity || "warning"}: {alert.code || "release_gate_alert"}
+                          {alert.operatorAction ? ` — ${alert.operatorAction}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </details>
+              ) : null}
               <label>
                 Action policy
                 <select

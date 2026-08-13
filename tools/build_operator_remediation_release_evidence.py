@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
-import shutil
 import sys
 from urllib.parse import unquote, urlparse
 
@@ -49,17 +49,43 @@ def main() -> int:
         for row_index, row in enumerate(payload["rows"]):
             if not isinstance(row, dict):
                 raise ValueError(f"invalid remediation evidence row: {artifact}")
+            ref_rewrites: dict[str, str] = {}
+            staged_records: list[tuple[dict[str, object], Path, bytes]] = []
             for record_index, record in enumerate(row.get("evidenceManifest", [])):
                 if not isinstance(record, dict) or not isinstance(record.get("ref"), str):
                     raise ValueError(f"invalid source evidence record: {artifact}")
-                source = _local_ref(record["ref"], base=artifact.resolve().parent)
+                old_ref = record["ref"]
+                source = _local_ref(old_ref, base=artifact.resolve().parent)
                 record_dir = evidence_dir / "source-records"
                 record_dir.mkdir(parents=True, exist_ok=True)
                 destination = record_dir / (
                     f"{index:02d}-{row_index:03d}-{record_index:02d}.json"
                 )
-                shutil.copy2(source, destination)
-                record["ref"] = str(destination.relative_to(evidence_dir))
+                new_ref = str(destination.relative_to(evidence_dir))
+                ref_rewrites[old_ref] = new_ref
+                record["ref"] = new_ref
+                staged_records.append((record, destination, source.read_bytes()))
+            lineage = row.get("lineage")
+            if not isinstance(lineage, dict):
+                raise ValueError(f"invalid remediation evidence lineage: {artifact}")
+            for field, value in list(lineage.items()):
+                if isinstance(value, str) and value in ref_rewrites:
+                    lineage[field] = ref_rewrites[value]
+            for record, destination, raw in staged_records:
+                source_payload = json.loads(raw)
+                if not isinstance(source_payload, dict):
+                    raise ValueError(f"invalid source evidence payload: {artifact}")
+                source_lineage = source_payload.get("lineage")
+                if isinstance(source_lineage, dict):
+                    for field, value in list(source_lineage.items()):
+                        if isinstance(value, str) and value in ref_rewrites:
+                            source_lineage[field] = ref_rewrites[value]
+                content = (
+                    json.dumps(source_payload, indent=2, sort_keys=True) + "\n"
+                ).encode()
+                destination.write_bytes(content)
+                record["sha256"] = hashlib.sha256(content).hexdigest()
+                record["sizeBytes"] = len(content)
             secret_scan = row.get("secretScan")
             if isinstance(secret_scan, dict):
                 for channel, scan in secret_scan.items():
@@ -73,7 +99,7 @@ def main() -> int:
                     scan_dir = evidence_dir / "secret-scans"
                     scan_dir.mkdir(parents=True, exist_ok=True)
                     destination = scan_dir / f"{index:02d}-{row_index:03d}-{channel}.json"
-                    shutil.copy2(source, destination)
+                    destination.write_bytes(source.read_bytes())
                     scan["evidenceRef"] = str(destination.relative_to(evidence_dir))
         target.write_text(
             json.dumps(payload, indent=2, sort_keys=True) + "\n",

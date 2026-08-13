@@ -646,7 +646,25 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     compatibilityDiagnostics: {},
     cutover: {},
     remediationRelease: {
+      policyVersion: "moonmind.operator-remediation-release/v1",
+      matrixVersion: "operator-remediation-support-matrix/v1",
+      manualDiagnosisSupported: true,
+      manualMutationSupported: true,
       autonomousRolloutAuthorized: false,
+      promotionAllowed: false,
+      manualPromotionAllowed: true,
+      rollbackRequired: false,
+      generatedAt: "2026-08-13T00:00:00Z",
+      expiresAt: "2026-08-20T00:00:00Z",
+      telemetry: {
+        schemaVersion: "moonmind.operator-remediation-telemetry/v1",
+        groups: {},
+      },
+      alerts: [{
+        code: "autonomous_rollout_gate_closed",
+        severity: "warning",
+        operatorAction: "keep_autonomous_mutation_disabled",
+      }],
       blockers: ["autonomous_rollout_gate_closed"],
     },
   } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
@@ -1028,6 +1046,12 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     renderWorkflowStartPage(omnigentPayload());
 
     expect(await screen.findByText("Remediation Draft")).toBeTruthy();
+    fireEvent.click(await screen.findByText("Operator remediation release status"));
+    expect(screen.getAllByText("Supported")).toHaveLength(2);
+    expect(screen.getByText("Allowed")).toBeTruthy();
+    expect(screen.getByText("Not required")).toBeTruthy();
+    expect(screen.getByText("moonmind.operator-remediation-telemetry/v1")).toBeTruthy();
+    expect(screen.getByText(/warning: autonomous_rollout_gate_closed/)).toBeTruthy();
     const start = screen.getByRole("button", { name: "Start Workflow" });
     await waitFor(() => expect((start as HTMLButtonElement).disabled).toBe(false));
     fireEvent.click(start);

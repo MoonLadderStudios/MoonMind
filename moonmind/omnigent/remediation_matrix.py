@@ -190,6 +190,74 @@ REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES = frozenset(
 REMEDIATION_SOURCE_RECORD_CONTENT_TYPE = "application/json"
 MAX_REMEDIATION_SOURCE_RECORD_BYTES = 2 * 1024 * 1024
 
+# Every retained source record has one exact versioned schema.  Accepting an
+# arbitrary non-empty schema string made a digest-bound but semantically empty
+# document sufficient release evidence.  These schemas are intentionally
+# record-specific so producers and post-cleanup validators share one contract.
+REMEDIATION_SOURCE_RECORD_SCHEMAS: Mapping[str, str] = {
+    record_type: f"moonmind.operator-remediation-{record_type}/v1"
+    for record_type in REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES
+}
+REMEDIATION_SOURCE_RECORD_SCHEMAS = {
+    **REMEDIATION_SOURCE_RECORD_SCHEMAS,
+    "scenarioObservation": "moonmind.operator-remediation-scenario-observation/v1",
+}
+
+# Cross-record identity is repeated in every independently retained source
+# record.  This is deliberate: it prevents a valid approval, action, or cleanup
+# record from a different run/session being spliced into a row after resources
+# have been removed.
+REMEDIATION_EVIDENCE_IDENTITY_FIELDS = (
+    "targetWorkflowId",
+    "targetRunId",
+    "targetStepId",
+    "targetAttemptId",
+    "targetBranch",
+    "remediationWorkflowId",
+    "remediationRunId",
+    "remediationStepId",
+    "remediationAttemptId",
+    "remediationBranch",
+    "agentProfileId",
+    "providerProfileId",
+    "leaseId",
+    "hostId",
+    "bridgeId",
+    "sessionId",
+)
+
+REMEDIATION_TELEMETRY_SCHEMA_VERSION = (
+    "moonmind.operator-remediation-telemetry/v1"
+)
+REMEDIATION_RELEASE_THRESHOLD_SCHEMA_VERSION = (
+    "moonmind.operator-remediation-release-thresholds/v1"
+)
+REQUIRED_REMEDIATION_PHASE_LATENCIES = (
+    "branchLaunch",
+    "hostSession",
+    "firstMessage",
+    "terminal",
+    "publication",
+    "cleanup",
+)
+REMEDIATION_ACTION_RISKS = ("not_applicable", "low", "medium", "high")
+REMEDIATION_ACTION_OUTCOMES = (
+    "delivered",
+    "no_op",
+    "failure",
+    "unknown",
+    "denied",
+)
+REMEDIATION_APPROVAL_OUTCOMES = (
+    "approved",
+    "denied",
+    "expired",
+    "consumed",
+    "unauthorized",
+    "stale",
+    "not_required",
+)
+
 # Durable identities and refs called out by #3626 section 4.  Rows may use an
 # explicit not-applicable artifact, but they may not silently omit a field.
 REQUIRED_REMEDIATION_LINEAGE_FIELDS = (
@@ -235,6 +303,43 @@ REQUIRED_REMEDIATION_LINEAGE_FIELDS = (
     "lockReleaseRef",
     "capacityReleaseRef",
 )
+
+# Every lineage *Ref is the ref of a typed record in the same manifest.  A
+# record may own several related lineage facts, but no opaque or non-resolving
+# artifact:// value can qualify support.
+REMEDIATION_LINEAGE_REF_RECORD_TYPES: Mapping[str, str] = {
+    "authoredRequestRef": "authoredRequest",
+    "immutableInputSnapshotRef": "immutableInputSnapshot",
+    "contextRef": "contextEvidence",
+    "evidenceAvailabilityRef": "contextEvidence",
+    "agentProfileRef": "profilePolicyAuthority",
+    "providerProfileRef": "profilePolicyAuthority",
+    "policyRef": "profilePolicyAuthority",
+    "approvalRef": "approvalDecision",
+    "egressRef": "egressAttestation",
+    "leaseRef": "profilePolicyAuthority",
+    "hostRef": "workflowLineage",
+    "bridgeRef": "workflowLineage",
+    "sessionRef": "workflowLineage",
+    "firstMessageRef": "sideEffectAudit",
+    "eventCursorRef": "temporalHistory",
+    "workspaceRef": "workflowLineage",
+    "checkpointRef": "workflowLineage",
+    "actionRequestRef": "actionResult",
+    "actionResultRef": "actionResult",
+    "beforeStateRef": "actionResult",
+    "afterStateRef": "actionResult",
+    "verificationResultRef": "verificationResult",
+    "stabilizedTargetRef": "verificationResult",
+    "immediateRepairOutcomeRef": "verificationResult",
+    "preventionOutcomeRef": "verificationResult",
+    "publicationRef": "publicationOutcome",
+    "terminalHarvestRef": "cleanupOutcome",
+    "cleanupRef": "cleanupOutcome",
+    "janitorRef": "cleanupOutcome",
+    "lockReleaseRef": "cleanupOutcome",
+    "capacityReleaseRef": "cleanupOutcome",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +417,16 @@ class RemediationMatrixRow:
         """Rows that gate mutation or autonomous rollout carry a repair phase."""
 
         return self.gate in (GATE_MANUAL_MUTATION, GATE_AUTONOMOUS_ROLLOUT)
+
+    @property
+    def action_risk(self) -> str:
+        """Return the catalog-owned risk bucket used by action telemetry."""
+
+        if not self.is_mutation:
+            return "not_applicable"
+        if self.action_capability == "action.high-risk" or self.gate == GATE_AUTONOMOUS_ROLLOUT:
+            return "high"
+        return "medium"
 
 
 # Historical targets may have been launched on the legacy direct-Codex path even
@@ -847,12 +962,19 @@ def remediation_catalog_document() -> dict[str, Any]:
         "retainedEvidenceChannels": list(REQUIRED_REMEDIATION_RETAINED_CHANNELS),
         "sourceRecordContract": {
             "requiredTypes": sorted(REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES),
+            "schemas": dict(REMEDIATION_SOURCE_RECORD_SCHEMAS),
+            "lineageRefOwners": dict(REMEDIATION_LINEAGE_REF_RECORD_TYPES),
             "contentType": REMEDIATION_SOURCE_RECORD_CONTENT_TYPE,
             "maxBytes": MAX_REMEDIATION_SOURCE_RECORD_BYTES,
             "digest": "sha256",
             "freshnessSeconds": MAX_EVIDENCE_AGE_SECONDS,
         },
-        "telemetryGroups": list(REQUIRED_REMEDIATION_TELEMETRY_GROUPS),
+        "telemetryContract": {
+            "schemaVersion": REMEDIATION_TELEMETRY_SCHEMA_VERSION,
+            "groups": list(REQUIRED_REMEDIATION_TELEMETRY_GROUPS),
+            "phaseLatencies": list(REQUIRED_REMEDIATION_PHASE_LATENCIES),
+            "actionRisks": list(REMEDIATION_ACTION_RISKS),
+        },
         "rows": [
             {
                 "rowId": row.row_id,
@@ -862,6 +984,7 @@ def remediation_catalog_document() -> dict[str, Any]:
                 "hostModes": list(row.host_modes),
                 "architectures": list(row.architectures),
                 "actionCapability": row.action_capability,
+                "actionRisk": row.action_risk,
                 "verificationCapability": row.verification_capability,
                 "authorityMode": row.authority_mode,
                 "egressAuthority": row.egress,
@@ -1181,18 +1304,186 @@ def _validate_timings(timings: Any, *, row: RemediationMatrixRow) -> None:
         ) from exc
 
 
-def _validate_lineage_and_source_manifest(
-    entry: Mapping[str, Any],
+def _required_source_mapping(
+    source: Mapping[str, Any], key: str, *, row_id: str, record_type: str
+) -> Mapping[str, Any]:
+    value = source.get(key)
+    if not isinstance(value, Mapping):
+        raise RemediationMatrixError(
+            f"row {row_id!r} {record_type!r} source record lacks {key!r}"
+        )
+    return value
+
+
+def _required_source_string(
+    source: Mapping[str, Any], key: str, *, row_id: str, record_type: str
+) -> str:
+    value = source.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise RemediationMatrixError(
+            f"row {row_id!r} {record_type!r} source record lacks {key!r}"
+        )
+    return value
+
+
+def _required_source_bool(
+    source: Mapping[str, Any], key: str, *, row_id: str, record_type: str
+) -> bool:
+    value = source.get(key)
+    if not isinstance(value, bool):
+        raise RemediationMatrixError(
+            f"row {row_id!r} {record_type!r} source record lacks boolean {key!r}"
+        )
+    return value
+
+
+def _required_nonnegative_int(
+    source: Mapping[str, Any], key: str, *, row_id: str, record_type: str
+) -> int:
+    value = source.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise RemediationMatrixError(
+            f"row {row_id!r} {record_type!r} source record has invalid {key!r}"
+        )
+    return value
+
+
+def derive_remediation_observation_from_source_records(
     *,
     row: RemediationMatrixRow,
-    evidence_document_path: Path | None,
-    evidence_time: datetime | None,
-) -> None:
-    """Validate complete lineage plus bounded, digest-bound source records."""
+    manifest_by_type: Mapping[str, Mapping[str, Any]],
+    sources: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Derive one row exclusively from typed, cross-bound source records.
 
-    lineage = entry.get("lineage")
-    if not isinstance(lineage, Mapping):
-        raise RemediationMatrixError(f"row {row.row_id!r} lacks durable lineage")
+    ``scenarioObservation`` remains a useful producer summary, but it is not an
+    authority: every claim in it is compared with facts owned by the browser,
+    workflow, approval, action, verification, egress, cleanup, history, and
+    audit records below.
+    """
+
+    row_id = row.row_id
+    identities: list[Mapping[str, Any]] = []
+    for record_type in sorted(REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES):
+        source = sources[record_type]
+        if source.get("row") != row_id:
+            raise RemediationMatrixError(
+                f"row {row_id!r} {record_type!r} source record has mismatched row identity"
+            )
+        identity = _required_source_mapping(
+            source, "identity", row_id=row_id, record_type=record_type
+        )
+        missing_identity = [
+            field
+            for field in REMEDIATION_EVIDENCE_IDENTITY_FIELDS
+            if not isinstance(identity.get(field), str) or not identity[field].strip()
+        ]
+        if missing_identity:
+            raise RemediationMatrixError(
+                f"row {row_id!r} {record_type!r} source record lacks identities: "
+                f"{missing_identity}"
+            )
+        identities.append(identity)
+    identity = dict(identities[0])
+    if any(dict(candidate) != identity for candidate in identities[1:]):
+        raise RemediationMatrixError(
+            f"row {row_id!r} source records have mismatched workflow/run/session identities"
+        )
+
+    browser = sources["browserTrace"]
+    authored = sources["authoredRequest"]
+    immutable_input = sources["immutableInputSnapshot"]
+    workflow = sources["workflowLineage"]
+    context = sources["contextEvidence"]
+    profile = sources["profilePolicyAuthority"]
+    egress = sources["egressAttestation"]
+    approval = sources["approvalDecision"]
+    action = sources["actionResult"]
+    verification = sources["verificationResult"]
+    publication = sources["publicationOutcome"]
+    cleanup = sources["cleanupOutcome"]
+    temporal = sources["temporalHistory"]
+    audit = sources["sideEffectAudit"]
+    retained_scan = sources["retainedEvidenceScan"]
+    scenario = sources["scenarioObservation"]
+
+    ui_journey = dict(
+        _required_source_mapping(
+            browser, "uiJourney", row_id=row_id, record_type="browserTrace"
+        )
+    )
+    host_mode = _required_source_string(
+        browser, "hostMode", row_id=row_id, record_type="browserTrace"
+    )
+    architecture = _required_source_string(
+        browser, "architecture", row_id=row_id, record_type="browserTrace"
+    )
+    remediation_created = _required_source_bool(
+        browser, "remediationCreated", row_id=row_id, record_type="browserTrace"
+    )
+
+    authority_mode = _required_source_string(
+        authored, "authorityMode", row_id=row_id, record_type="authoredRequest"
+    )
+    action_capability = _required_source_string(
+        authored, "actionCapability", row_id=row_id, record_type="authoredRequest"
+    )
+    verification_capability = _required_source_string(
+        authored,
+        "verificationCapability",
+        row_id=row_id,
+        record_type="authoredRequest",
+    )
+    origin = _required_source_string(
+        authored, "origin", row_id=row_id, record_type="authoredRequest"
+    )
+    action_risk = _required_source_string(
+        authored, "actionRisk", row_id=row_id, record_type="authoredRequest"
+    )
+    expected_origin = "autonomous" if row.authority_mode == "admin_auto" else "manual"
+    if (
+        authority_mode != row.authority_mode
+        or action_capability != row.action_capability
+        or verification_capability != row.verification_capability
+        or origin != expected_origin
+        or action_risk != row.action_risk
+    ):
+        raise RemediationMatrixError(
+            f"row {row_id!r} authored request conflicts with catalog authority"
+        )
+
+    target_provenance = _required_source_string(
+        immutable_input,
+        "targetProvenance",
+        row_id=row_id,
+        record_type="immutableInputSnapshot",
+    )
+    input_digest = _required_source_string(
+        immutable_input,
+        "inputDigest",
+        row_id=row_id,
+        record_type="immutableInputSnapshot",
+    )
+    if (
+        immutable_input.get("immutable") is not True
+        or len(input_digest) != 64
+        or any(character not in "0123456789abcdef" for character in input_digest)
+    ):
+        raise RemediationMatrixError(
+            f"row {row_id!r} immutable input snapshot is not digest-bound"
+        )
+
+    remediation_provenance = _required_source_string(
+        workflow,
+        "remediationProvenance",
+        row_id=row_id,
+        record_type="workflowLineage",
+    )
+    lineage = dict(
+        _required_source_mapping(
+            workflow, "lineage", row_id=row_id, record_type="workflowLineage"
+        )
+    )
     missing_lineage = [
         field
         for field in REQUIRED_REMEDIATION_LINEAGE_FIELDS
@@ -1200,15 +1491,369 @@ def _validate_lineage_and_source_manifest(
     ]
     if missing_lineage:
         raise RemediationMatrixError(
-            f"row {row.row_id!r} lacks durable lineage fields: {missing_lineage}"
+            f"row {row_id!r} lacks durable lineage fields: {missing_lineage}"
+        )
+    for field in REMEDIATION_EVIDENCE_IDENTITY_FIELDS[:10]:
+        if lineage.get(field) != identity[field]:
+            raise RemediationMatrixError(
+                f"row {row_id!r} lineage identity {field!r} does not match source records"
+            )
+    for field, record_type in REMEDIATION_LINEAGE_REF_RECORD_TYPES.items():
+        if lineage.get(field) != manifest_by_type[record_type].get("ref"):
+            raise RemediationMatrixError(
+                f"row {row_id!r} lineage ref {field!r} is not bound to its typed source record"
+            )
+
+    timings = dict(
+        _required_source_mapping(
+            workflow, "timings", row_id=row_id, record_type="workflowLineage"
+        )
+    )
+    phase_latencies = _required_source_mapping(
+        timings,
+        "phaseLatenciesMs",
+        row_id=row_id,
+        record_type="workflowLineage",
+    )
+    if set(phase_latencies) != set(REQUIRED_REMEDIATION_PHASE_LATENCIES):
+        raise RemediationMatrixError(
+            f"row {row_id!r} phase latency dimensions are incomplete"
         )
 
+    context_build_outcome = _required_source_string(
+        context, "contextBuildOutcome", row_id=row_id, record_type="contextEvidence"
+    )
+    evidence_outcome = _required_source_string(
+        context, "evidenceOutcome", row_id=row_id, record_type="contextEvidence"
+    )
+    if context_build_outcome not in {"success", "degraded", "unavailable", "denied"}:
+        raise RemediationMatrixError(f"row {row_id!r} context build outcome is invalid")
+    if evidence_outcome not in {"available", "degraded", "unavailable", "denied"}:
+        raise RemediationMatrixError(f"row {row_id!r} evidence outcome is invalid")
+
+    if (
+        profile.get("authorityMode") != authority_mode
+        or profile.get("actionCapability") != action_capability
+        or profile.get("verificationCapability") != verification_capability
+        or profile.get("actionRisk") != action_risk
+        or profile.get("agentProfileId") != identity["agentProfileId"]
+        or profile.get("providerProfileId") != identity["providerProfileId"]
+        or profile.get("leaseId") != identity["leaseId"]
+        or profile.get("profileValidated") is not True
+        or profile.get("policyValidated") is not True
+        or profile.get("credentialGenerationFresh") is not True
+    ):
+        raise RemediationMatrixError(
+            f"row {row_id!r} profile/policy authority does not match the authored request"
+        )
+
+    egress_authority = _required_source_string(
+        egress, "authority", row_id=row_id, record_type="egressAttestation"
+    )
+    egress_decision = _required_source_string(
+        egress, "decision", row_id=row_id, record_type="egressAttestation"
+    )
+    egress_attestation = _required_source_string(
+        egress,
+        "attestationOutcome",
+        row_id=row_id,
+        record_type="egressAttestation",
+    )
+    expected_egress_decision = {
+        EGRESS_NOT_APPLICABLE: "not_applicable",
+        EGRESS_RESTRICTED_ALLOWED: "allowed",
+        EGRESS_RESTRICTED_DENIED: "denied",
+    }[row.egress]
+    if egress_authority != row.egress or egress_decision != expected_egress_decision:
+        raise RemediationMatrixError(f"row {row_id!r} egress authority is mismatched")
+    if egress_attestation not in {"passed", "failed"}:
+        raise RemediationMatrixError(f"row {row_id!r} egress attestation is invalid")
+
+    approval_requested = _required_source_bool(
+        approval, "requested", row_id=row_id, record_type="approvalDecision"
+    )
+    approval_outcome = _required_source_string(
+        approval, "outcome", row_id=row_id, record_type="approvalDecision"
+    )
+    if approval_outcome not in REMEDIATION_APPROVAL_OUTCOMES:
+        raise RemediationMatrixError(f"row {row_id!r} approval outcome is invalid")
+
+    delivery_status = _required_source_string(
+        action, "deliveryStatus", row_id=row_id, record_type="actionResult"
+    )
+    action_outcome = _required_source_string(
+        action, "outcome", row_id=row_id, record_type="actionResult"
+    )
+    if (
+        delivery_status not in REMEDIATION_DELIVERY_STATUSES
+        or action_outcome not in REMEDIATION_ACTION_OUTCOMES
+        or action.get("actionKind") != action_capability
+        or action.get("risk") != action_risk
+    ):
+        raise RemediationMatrixError(f"row {row_id!r} action result is invalid")
+    expected_action_outcomes = {
+        "delivered": {"delivered", "no_op"},
+        "denied": {"denied"},
+        "suppressed_idempotent": {"no_op"},
+        "not_delivered": {"failure", "unknown"},
+        "not_applicable": {"no_op"},
+    }
+    if action_outcome not in expected_action_outcomes[delivery_status]:
+        raise RemediationMatrixError(
+            f"row {row_id!r} action delivery and outcome disagree"
+        )
+    action_flags = {
+        key: _required_source_bool(action, key, row_id=row_id, record_type="actionResult")
+        for key in (
+            "lockConflict",
+            "cooldown",
+            "duplicateSuppressed",
+            "nestedRemediationDenied",
+            "noProgressEscalated",
+        )
+    }
+    action_requested = _required_source_bool(
+        action, "requested", row_id=row_id, record_type="actionResult"
+    )
+
+    repair_outcome = _required_source_string(
+        verification,
+        "outcome",
+        row_id=row_id,
+        record_type="verificationResult",
+    )
+    if (
+        repair_outcome not in REMEDIATION_REPAIR_OUTCOMES
+        or verification.get("verificationCapability") != verification_capability
+    ):
+        raise RemediationMatrixError(f"row {row_id!r} verification result is invalid")
+    unverified_mutation = _required_source_bool(
+        verification,
+        "unverifiedMutation",
+        row_id=row_id,
+        record_type="verificationResult",
+    )
+    repeated_failure = _required_source_bool(
+        verification,
+        "repeatedFailure",
+        row_id=row_id,
+        record_type="verificationResult",
+    )
+    attempts_exhausted = _required_source_bool(
+        verification,
+        "attemptsExhausted",
+        row_id=row_id,
+        record_type="verificationResult",
+    )
+    _required_source_string(
+        verification,
+        "preventionOutcome",
+        row_id=row_id,
+        record_type="verificationResult",
+    )
+    _required_source_string(
+        publication, "outcome", row_id=row_id, record_type="publicationOutcome"
+    )
+
+    cleanup_outcome = _required_source_string(
+        cleanup, "outcome", row_id=row_id, record_type="cleanupOutcome"
+    )
+    remaining_live_resources = _required_nonnegative_int(
+        cleanup,
+        "remainingLiveResources",
+        row_id=row_id,
+        record_type="cleanupOutcome",
+    )
+    for key in (
+        "terminalHarvested",
+        "janitorVerified",
+        "lockReleased",
+        "capacityReleased",
+        "providerProfileReleasedLast",
+    ):
+        _required_source_bool(cleanup, key, row_id=row_id, record_type="cleanupOutcome")
+    operator_cancelled = _required_source_bool(
+        cleanup, "operatorCancelled", row_id=row_id, record_type="cleanupOutcome"
+    )
+    operator_takeover = _required_source_bool(
+        cleanup, "operatorTakeover", row_id=row_id, record_type="cleanupOutcome"
+    )
+
+    replay_count = _required_nonnegative_int(
+        temporal, "replayCount", row_id=row_id, record_type="temporalHistory"
+    )
+    _required_source_string(
+        temporal, "replayOutcome", row_id=row_id, record_type="temporalHistory"
+    )
+    _required_source_string(
+        temporal, "cancellationPhase", row_id=row_id, record_type="temporalHistory"
+    )
+
+    observed_disposition = _required_source_string(
+        audit, "observedDisposition", row_id=row_id, record_type="sideEffectAudit"
+    )
+    observations = dict(
+        _required_source_mapping(
+            audit, "observations", row_id=row_id, record_type="sideEffectAudit"
+        )
+    )
+    threshold_samples = dict(
+        _required_source_mapping(
+            audit,
+            "thresholdSamples",
+            row_id=row_id,
+            record_type="sideEffectAudit",
+        )
+    )
+    first_message_count = _required_nonnegative_int(
+        audit, "firstMessageCount", row_id=row_id, record_type="sideEffectAudit"
+    )
+    duplicate_suppression_count = _required_nonnegative_int(
+        audit,
+        "duplicateSuppressionCount",
+        row_id=row_id,
+        record_type="sideEffectAudit",
+    )
+    secret_findings = _required_nonnegative_int(
+        retained_scan,
+        "secretFindings",
+        row_id=row_id,
+        record_type="retainedEvidenceScan",
+    )
+    prohibited_authority_findings = _required_nonnegative_int(
+        retained_scan,
+        "prohibitedAuthorityFindings",
+        row_id=row_id,
+        record_type="retainedEvidenceScan",
+    )
+    channels = retained_scan.get("channels")
+    if not isinstance(channels, list) or set(channels) != set(
+        REQUIRED_REMEDIATION_RETAINED_CHANNELS
+    ):
+        raise RemediationMatrixError(
+            f"row {row_id!r} retained evidence scan has incomplete channels"
+        )
+
+    thresholds: dict[str, dict[str, Any]] = {}
+    for threshold in row.thresholds:
+        sample = threshold_samples.get(threshold)
+        if not isinstance(sample, Mapping):
+            raise RemediationMatrixError(
+                f"row {row_id!r} lacks typed threshold sample {threshold!r}"
+            )
+        passed = sample.get("passed")
+        total = sample.get("total")
+        if (
+            not isinstance(passed, int)
+            or isinstance(passed, bool)
+            or not isinstance(total, int)
+            or isinstance(total, bool)
+            or total < 1
+        ):
+            raise RemediationMatrixError(
+                f"row {row_id!r} typed threshold sample {threshold!r} is invalid"
+            )
+        thresholds[threshold] = {
+            "within": passed == total,
+            "passed": passed,
+            "total": total,
+        }
+
+    derived: dict[str, Any] = {
+        "observedDisposition": observed_disposition,
+        "hostMode": host_mode,
+        "architecture": architecture,
+        "targetProvenance": target_provenance,
+        "remediationProvenance": remediation_provenance,
+        "authorityMode": authority_mode,
+        "egress": egress_authority,
+        "actionCapability": action_capability,
+        "verificationCapability": verification_capability,
+        "uiJourney": ui_journey,
+        "actionDelivery": {"status": delivery_status},
+        "repairVerification": {"outcome": repair_outcome},
+        "timings": timings,
+        "observations": observations,
+        "lineage": lineage,
+        "thresholds": thresholds,
+        "telemetryFacts": {
+            "remediationCreated": remediation_created,
+            "contextBuildOutcome": context_build_outcome,
+            "evidenceOutcome": evidence_outcome,
+            "approvalRequested": approval_requested,
+            "approvalOutcome": approval_outcome,
+            "actionRequested": action_requested,
+            "actionOutcome": action_outcome,
+            "actionKind": action_capability,
+            "actionRisk": action_risk,
+            **action_flags,
+            "phaseLatenciesMs": dict(phase_latencies),
+            "verificationOutcome": repair_outcome,
+            "unverifiedMutation": unverified_mutation,
+            "repeatedFailure": repeated_failure,
+            "attemptsExhausted": attempts_exhausted,
+            "egressDecision": egress_decision,
+            "egressAttestationOutcome": egress_attestation,
+            "operatorCancelled": operator_cancelled,
+            "operatorTakeover": operator_takeover,
+            "origin": origin,
+            "cleanupOutcome": cleanup_outcome,
+            "remainingLiveResources": remaining_live_resources,
+            "replayCount": replay_count,
+            "firstMessageCount": first_message_count,
+            "duplicateSuppressionCount": duplicate_suppression_count,
+            "secretFindings": secret_findings,
+            "prohibitedAuthorityFindings": prohibited_authority_findings,
+        },
+    }
+
+    scenario_claims = {
+        "row": row_id,
+        "observed": True,
+        "observedDisposition": observed_disposition,
+        "hostMode": host_mode,
+        "architecture": architecture,
+        "targetProvenance": target_provenance,
+        "remediationProvenance": remediation_provenance,
+        "remainingLiveResources": remaining_live_resources,
+        "timings": timings,
+        "thresholdSamples": threshold_samples,
+        "observations": observations,
+        "lineage": lineage,
+    }
+    if row.is_mutation:
+        scenario_claims["actionDelivery"] = derived["actionDelivery"]
+        scenario_claims["repairVerification"] = derived["repairVerification"]
+    if any(scenario.get(key) != value for key, value in scenario_claims.items()):
+        raise RemediationMatrixError(
+            f"row {row_id!r} scenario observation conflicts with authoritative source records"
+        )
+    return derived
+
+
+def _validate_lineage_and_source_manifest(
+    entry: Mapping[str, Any],
+    *,
+    row: RemediationMatrixRow,
+    evidence_document_path: Path | None,
+    evidence_time: datetime | None,
+) -> dict[str, Any]:
+    """Resolve, type-check, cross-bind, and derive all source evidence."""
+
+    if evidence_document_path is None:
+        raise RemediationMatrixError(
+            f"row {row.row_id!r} source evidence requires a document path"
+        )
     manifest = entry.get("evidenceManifest")
     if not isinstance(manifest, list):
         raise RemediationMatrixError(
             f"row {row.row_id!r} lacks a source evidence manifest"
         )
     observed_types: set[str] = set()
+    observed_refs: set[str] = set()
+    manifest_by_type: dict[str, Mapping[str, Any]] = {}
+    sources: dict[str, Mapping[str, Any]] = {}
+    base = evidence_document_path.resolve().parent
     for record in manifest:
         if not isinstance(record, Mapping):
             raise RemediationMatrixError(
@@ -1225,11 +1870,11 @@ def _validate_lineage_and_source_manifest(
             or record_type in observed_types
             or not isinstance(ref, str)
             or not ref.strip()
+            or ref in observed_refs
             or not isinstance(digest, str)
             or len(digest) != 64
             or any(character not in "0123456789abcdef" for character in digest)
-            or not isinstance(schema_version, str)
-            or not schema_version.strip()
+            or schema_version != REMEDIATION_SOURCE_RECORD_SCHEMAS.get(record_type)
             or record.get("contentType") != REMEDIATION_SOURCE_RECORD_CONTENT_TYPE
             or not isinstance(size_bytes, int)
             or isinstance(size_bytes, bool)
@@ -1254,11 +1899,6 @@ def _validate_lineage_and_source_manifest(
                 raise RemediationMatrixError(
                     f"row {row.row_id!r} source evidence is stale"
                 )
-        observed_types.add(str(record_type))
-
-        if evidence_document_path is None:
-            continue
-        base = evidence_document_path.resolve().parent
         try:
             record_path = _evidence_path(ref)
             if not record_path.is_absolute():
@@ -1281,9 +1921,13 @@ def _validate_lineage_and_source_manifest(
             raise RemediationMatrixError(
                 f"row {row.row_id!r} source evidence is not JSON"
             ) from exc
-        if not isinstance(source, Mapping) or source.get("schemaVersion") != schema_version:
+        if (
+            not isinstance(source, Mapping)
+            or source.get("schemaVersion") != schema_version
+            or source.get("generatedAt") != generated_at
+        ):
             raise RemediationMatrixError(
-                f"row {row.row_id!r} source evidence schema mismatch"
+                f"row {row.row_id!r} source evidence schema/freshness mismatch"
             )
         try:
             assert_secret_free(content.decode("utf-8"))
@@ -1291,12 +1935,69 @@ def _validate_lineage_and_source_manifest(
             raise RemediationMatrixError(
                 f"row {row.row_id!r} source evidence contains secret-like material"
             ) from exc
+        observed_types.add(str(record_type))
+        observed_refs.add(ref)
+        manifest_by_type[str(record_type)] = record
+        sources[str(record_type)] = source
 
     missing_types = REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES - observed_types
     if missing_types:
         raise RemediationMatrixError(
             f"row {row.row_id!r} lacks source evidence types: {sorted(missing_types)}"
         )
+    derived = derive_remediation_observation_from_source_records(
+        row=row,
+        manifest_by_type=manifest_by_type,
+        sources=sources,
+    )
+    lineage = entry.get("lineage")
+    if not isinstance(lineage, Mapping) or dict(lineage) != derived["lineage"]:
+        raise RemediationMatrixError(
+            f"row {row.row_id!r} outer lineage conflicts with typed source evidence"
+        )
+    for key in (
+        "observedDisposition",
+        "hostMode",
+        "architecture",
+        "targetProvenance",
+        "remediationProvenance",
+        "authorityMode",
+        "egress",
+        "actionCapability",
+        "verificationCapability",
+        "uiJourney",
+        "timings",
+        "observations",
+        "thresholds",
+    ):
+        if entry.get(key) != derived[key]:
+            raise RemediationMatrixError(
+                f"row {row.row_id!r} field {key!r} conflicts with typed source evidence"
+            )
+    if row.is_mutation:
+        for key in ("actionDelivery", "repairVerification"):
+            if entry.get(key) != derived[key]:
+                raise RemediationMatrixError(
+                    f"row {row.row_id!r} field {key!r} conflicts with typed source evidence"
+                )
+    return derived
+
+
+def derive_remediation_row_evidence(
+    entry: Mapping[str, Any],
+    *,
+    row: RemediationMatrixRow,
+    evidence_document_path: Path,
+    evidence_time: datetime | None = None,
+) -> dict[str, Any]:
+    """Public shared boundary for live assembly and post-cleanup replay."""
+
+    return _validate_lineage_and_source_manifest(
+        entry,
+        row=row,
+        evidence_document_path=evidence_document_path,
+        evidence_time=evidence_time,
+    )
 
 
 def validate_remediation_evidence_artifact(
@@ -1495,6 +2196,407 @@ def _evidence_path(ref: str) -> Path:
     return Path(ref)
 
 
+def _telemetry_rate(numerator: int, denominator: int) -> float:
+    return round(numerator / denominator, 6) if denominator else 0.0
+
+
+def _latency_distribution(values: list[int]) -> dict[str, int]:
+    ordered = sorted(values)
+    if not ordered:
+        return {"sampleCount": 0, "maxMs": 0, "p95Ms": 0}
+    index = max(0, ((len(ordered) * 95 + 99) // 100) - 1)
+    return {
+        "sampleCount": len(ordered),
+        "maxMs": ordered[-1],
+        "p95Ms": ordered[index],
+    }
+
+
+def derive_remediation_telemetry(
+    rows: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Build the complete v1 operator projection from validated row facts."""
+
+    facts = {
+        row_id: entry["telemetryFacts"]
+        for row_id, entry in rows.items()
+    }
+    total = len(facts)
+    created = sum(1 for item in facts.values() if item["remediationCreated"])
+    context_success = sum(
+        1 for item in facts.values() if item["contextBuildOutcome"] == "success"
+    )
+    evidence_degraded = sum(
+        1 for item in facts.values() if item["evidenceOutcome"] == "degraded"
+    )
+    evidence_unavailable = sum(
+        1
+        for item in facts.values()
+        if item["evidenceOutcome"] in {"unavailable", "denied"}
+    )
+
+    approval_requests = sum(1 for item in facts.values() if item["approvalRequested"])
+    approval_counts = {
+        outcome: sum(
+            1 for item in facts.values() if item["approvalOutcome"] == outcome
+        )
+        for outcome in REMEDIATION_APPROVAL_OUTCOMES
+    }
+
+    expected_buckets = {
+        f"{row.action_capability}|{row.action_risk}"
+        for row in REMEDIATION_ROW_CATALOG
+    }
+    action_buckets: dict[str, dict[str, int]] = {
+        key: {
+            "sampleCount": 0,
+            "requestCount": 0,
+            "deliveryCount": 0,
+            "noOpCount": 0,
+            "failureCount": 0,
+            "unknownCount": 0,
+            "denialCount": 0,
+        }
+        for key in sorted(expected_buckets)
+    }
+    for item in facts.values():
+        bucket = action_buckets[f"{item['actionKind']}|{item['actionRisk']}"]
+        bucket["sampleCount"] += 1
+        bucket["requestCount"] += int(item["actionRequested"])
+        bucket[
+            {
+                "delivered": "deliveryCount",
+                "no_op": "noOpCount",
+                "failure": "failureCount",
+                "unknown": "unknownCount",
+                "denied": "denialCount",
+            }[item["actionOutcome"]]
+        ] += 1
+    by_risk = {
+        risk: {
+            "sampleCount": sum(
+                bucket["sampleCount"]
+                for key, bucket in action_buckets.items()
+                if key.endswith(f"|{risk}")
+            ),
+            "requestCount": sum(
+                bucket["requestCount"]
+                for key, bucket in action_buckets.items()
+                if key.endswith(f"|{risk}")
+            ),
+            "deliveryCount": sum(
+                bucket["deliveryCount"]
+                for key, bucket in action_buckets.items()
+                if key.endswith(f"|{risk}")
+            ),
+            "noOpCount": sum(
+                bucket["noOpCount"]
+                for key, bucket in action_buckets.items()
+                if key.endswith(f"|{risk}")
+            ),
+            "failureCount": sum(
+                bucket["failureCount"]
+                for key, bucket in action_buckets.items()
+                if key.endswith(f"|{risk}")
+            ),
+            "unknownCount": sum(
+                bucket["unknownCount"]
+                for key, bucket in action_buckets.items()
+                if key.endswith(f"|{risk}")
+            ),
+            "denialCount": sum(
+                bucket["denialCount"]
+                for key, bucket in action_buckets.items()
+                if key.endswith(f"|{risk}")
+            ),
+        }
+        for risk in REMEDIATION_ACTION_RISKS
+    }
+
+    phase_latencies = {
+        phase: _latency_distribution(
+            [int(item["phaseLatenciesMs"][phase]) for item in facts.values()]
+        )
+        for phase in REQUIRED_REMEDIATION_PHASE_LATENCIES
+    }
+    verification_rows = [
+        facts[row_id]
+        for row_id in rows
+        if REMEDIATION_ROW_CATALOG_BY_ID[row_id].is_mutation
+    ]
+    verification_distribution = {
+        outcome: sum(
+            1 for item in verification_rows if item["verificationOutcome"] == outcome
+        )
+        for outcome in sorted(REMEDIATION_REPAIR_OUTCOMES)
+    }
+    lock_conflicts = sum(1 for item in facts.values() if item["lockConflict"])
+    cooldowns = sum(1 for item in facts.values() if item["cooldown"])
+    duplicate_suppressions = sum(
+        int(item["duplicateSuppressed"]) + int(item["duplicateSuppressionCount"])
+        for item in facts.values()
+    )
+    nested_denials = sum(
+        1 for item in facts.values() if item["nestedRemediationDenied"]
+    )
+    escalations = sum(1 for item in facts.values() if item["noProgressEscalated"])
+    egress_failures = sum(
+        1
+        for item in facts.values()
+        if item["egressAttestationOutcome"] == "failed"
+    )
+    manual_count = sum(1 for item in facts.values() if item["origin"] == "manual")
+    autonomous_count = total - manual_count
+
+    groups = {
+        "remediationCreation": {
+            "sampleCount": total,
+            "successCount": created,
+            "successRate": _telemetry_rate(created, total),
+        },
+        "contextBuild": {
+            "sampleCount": total,
+            "successCount": context_success,
+            "successRate": _telemetry_rate(context_success, total),
+        },
+        "evidenceAvailability": {
+            "sampleCount": total,
+            "degradedCount": evidence_degraded,
+            "unavailableOrDeniedCount": evidence_unavailable,
+            "degradedOrUnavailableRate": _telemetry_rate(
+                evidence_degraded + evidence_unavailable, total
+            ),
+        },
+        "approvalOutcomes": {
+            "requestCount": approval_requests,
+            "distribution": approval_counts,
+            "denialRate": _telemetry_rate(approval_counts["denied"], approval_requests),
+            "expirationRate": _telemetry_rate(
+                approval_counts["expired"], approval_requests
+            ),
+            "staleRejectionRate": _telemetry_rate(
+                approval_counts["stale"], approval_requests
+            ),
+        },
+        "actionOutcomesByKindAndRisk": {
+            "sampleCount": total,
+            "buckets": action_buckets,
+            "byRisk": by_risk,
+        },
+        "lockCooldownDuplicateAndEscalation": {
+            "sampleCount": total,
+            "lockConflictCount": lock_conflicts,
+            "cooldownCount": cooldowns,
+            "duplicateSuppressionCount": duplicate_suppressions,
+            "nestedRemediationDenialCount": nested_denials,
+            "noProgressEscalationCount": escalations,
+            "lockConflictRate": _telemetry_rate(lock_conflicts, total),
+            "cooldownRate": _telemetry_rate(cooldowns, total),
+            "duplicateSuppressionRate": _telemetry_rate(duplicate_suppressions, total),
+            "noProgressEscalationRate": _telemetry_rate(escalations, total),
+        },
+        "branchLifecycleLatency": {
+            "sampleCount": total,
+            "phaseLatenciesMs": phase_latencies,
+        },
+        "verificationOutcomes": {
+            "sampleCount": len(verification_rows),
+            "distribution": verification_distribution,
+            "unverifiedMutationCount": sum(
+                1 for item in verification_rows if item["unverifiedMutation"]
+            ),
+        },
+        "repeatedFailureAndAttemptExhaustion": {
+            "sampleCount": len(verification_rows),
+            "repeatedFailureCount": sum(
+                1 for item in verification_rows if item["repeatedFailure"]
+            ),
+            "attemptExhaustionCount": sum(
+                1 for item in verification_rows if item["attemptsExhausted"]
+            ),
+        },
+        "egressOutcomes": {
+            "sampleCount": total,
+            "allowedCount": sum(
+                1 for item in facts.values() if item["egressDecision"] == "allowed"
+            ),
+            "deniedCount": sum(
+                1 for item in facts.values() if item["egressDecision"] == "denied"
+            ),
+            "attestationFailureCount": egress_failures,
+            "attestationFailureRate": _telemetry_rate(egress_failures, total),
+        },
+        "operatorCancellationAndTakeover": {
+            "sampleCount": total,
+            "cancellationCount": sum(
+                1 for item in facts.values() if item["operatorCancelled"]
+            ),
+            "takeoverCount": sum(
+                1 for item in facts.values() if item["operatorTakeover"]
+            ),
+        },
+        "autonomousAndManualOrigin": {
+            "sampleCount": total,
+            "manualCount": manual_count,
+            "autonomousCount": autonomous_count,
+            "autonomousDeniedCount": sum(
+                1
+                for row_id, item in facts.items()
+                if item["origin"] == "autonomous"
+                and rows[row_id]["observedDisposition"] == OUTCOME_DENIED
+            ),
+        },
+    }
+    return {
+        "schemaVersion": REMEDIATION_TELEMETRY_SCHEMA_VERSION,
+        "groups": groups,
+    }
+
+
+def validate_remediation_telemetry_schema(telemetry: Any) -> None:
+    """Reject missing dimensions and incorrect kind/risk/phase buckets."""
+
+    if (
+        not isinstance(telemetry, Mapping)
+        or telemetry.get("schemaVersion") != REMEDIATION_TELEMETRY_SCHEMA_VERSION
+        or not isinstance(telemetry.get("groups"), Mapping)
+        or set(telemetry["groups"]) != set(REQUIRED_REMEDIATION_TELEMETRY_GROUPS)
+    ):
+        raise RemediationMatrixError("remediation telemetry schema is incomplete")
+    groups = telemetry["groups"]
+    required_fields = {
+        "remediationCreation": {"sampleCount", "successCount", "successRate"},
+        "contextBuild": {"sampleCount", "successCount", "successRate"},
+        "evidenceAvailability": {
+            "sampleCount",
+            "degradedCount",
+            "unavailableOrDeniedCount",
+            "degradedOrUnavailableRate",
+        },
+        "approvalOutcomes": {
+            "requestCount",
+            "distribution",
+            "denialRate",
+            "expirationRate",
+            "staleRejectionRate",
+        },
+        "actionOutcomesByKindAndRisk": {"sampleCount", "buckets", "byRisk"},
+        "lockCooldownDuplicateAndEscalation": {
+            "sampleCount",
+            "lockConflictCount",
+            "cooldownCount",
+            "duplicateSuppressionCount",
+            "nestedRemediationDenialCount",
+            "noProgressEscalationCount",
+            "lockConflictRate",
+            "cooldownRate",
+            "duplicateSuppressionRate",
+            "noProgressEscalationRate",
+        },
+        "branchLifecycleLatency": {"sampleCount", "phaseLatenciesMs"},
+        "verificationOutcomes": {
+            "sampleCount",
+            "distribution",
+            "unverifiedMutationCount",
+        },
+        "repeatedFailureAndAttemptExhaustion": {
+            "sampleCount",
+            "repeatedFailureCount",
+            "attemptExhaustionCount",
+        },
+        "egressOutcomes": {
+            "sampleCount",
+            "allowedCount",
+            "deniedCount",
+            "attestationFailureCount",
+            "attestationFailureRate",
+        },
+        "operatorCancellationAndTakeover": {
+            "sampleCount",
+            "cancellationCount",
+            "takeoverCount",
+        },
+        "autonomousAndManualOrigin": {
+            "sampleCount",
+            "manualCount",
+            "autonomousCount",
+            "autonomousDeniedCount",
+        },
+    }
+    for group, fields in required_fields.items():
+        value = groups.get(group)
+        if not isinstance(value, Mapping) or set(value) != fields:
+            raise RemediationMatrixError(
+                f"remediation telemetry group {group!r} has incorrect dimensions"
+            )
+    approval_distribution = groups["approvalOutcomes"]["distribution"]
+    if not isinstance(approval_distribution, Mapping) or set(
+        approval_distribution
+    ) != set(REMEDIATION_APPROVAL_OUTCOMES):
+        raise RemediationMatrixError("approval telemetry buckets are incomplete")
+    action_group = groups["actionOutcomesByKindAndRisk"]
+    expected_action_buckets = {
+        f"{row.action_capability}|{row.action_risk}"
+        for row in REMEDIATION_ROW_CATALOG
+    }
+    if (
+        not isinstance(action_group["buckets"], Mapping)
+        or set(action_group["buckets"]) != expected_action_buckets
+        or not isinstance(action_group["byRisk"], Mapping)
+        or set(action_group["byRisk"]) != set(REMEDIATION_ACTION_RISKS)
+    ):
+        raise RemediationMatrixError("action telemetry kind/risk buckets are incomplete")
+    phase_latencies = groups["branchLifecycleLatency"]["phaseLatenciesMs"]
+    if not isinstance(phase_latencies, Mapping) or set(phase_latencies) != set(
+        REQUIRED_REMEDIATION_PHASE_LATENCIES
+    ):
+        raise RemediationMatrixError("remediation phase latency dimensions are incomplete")
+    verification_distribution = groups["verificationOutcomes"]["distribution"]
+    if not isinstance(verification_distribution, Mapping) or set(
+        verification_distribution
+    ) != set(REMEDIATION_REPAIR_OUTCOMES):
+        raise RemediationMatrixError("verification telemetry buckets are incomplete")
+
+
+def derive_remediation_release_thresholds(
+    rows: Mapping[str, Mapping[str, Any]], telemetry: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Derive objective promotion/rollback results from validated evidence."""
+
+    facts = [entry["telemetryFacts"] for entry in rows.values()]
+    row_thresholds_pass = all(
+        result.get("within") is True
+        for entry in rows.values()
+        for result in entry["thresholds"].values()
+    )
+    results = {
+        "allRowThresholdSamplesPassed": row_thresholds_pass,
+        "semanticSourceRecordsValid": len(rows) == len(REQUIRED_REMEDIATION_MATRIX_ROWS),
+        "secretAndAuthorityFindingsZero": all(
+            item["secretFindings"] == 0
+            and item["prohibitedAuthorityFindings"] == 0
+            for item in facts
+        ),
+        "egressAttestationFailuresZero": all(
+            item["egressAttestationOutcome"] == "passed" for item in facts
+        ),
+        "unknownActionOutcomesZero": all(
+            item["actionOutcome"] != "unknown" for item in facts
+        ),
+        "cleanupFailuresZero": all(
+            item["cleanupOutcome"] == "completed"
+            and item["remainingLiveResources"] == 0
+            for item in facts
+        ),
+    }
+    validate_remediation_telemetry_schema(telemetry)
+    return {
+        "schemaVersion": REMEDIATION_RELEASE_THRESHOLD_SCHEMA_VERSION,
+        "withinLimits": all(results.values()),
+        "results": results,
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class RemediationReleaseStatus:
     """Authoritative, fail-closed operator-remediation release status.
@@ -1638,30 +2740,35 @@ def evaluate_remediation_release(
         blockers.append("tested_architectures_required")
 
     telemetry = evidence.get("telemetry")
-    if not isinstance(telemetry, Mapping) or any(
-        not isinstance(telemetry.get(group), Mapping) or not telemetry[group]
-        for group in REQUIRED_REMEDIATION_TELEMETRY_GROUPS
-    ):
-        blockers.append("remediation_telemetry_required")
+    try:
+        validate_remediation_telemetry_schema(telemetry)
+    except RemediationMatrixError:
+        blockers.append("remediation_telemetry_required_or_invalid")
 
     thresholds = evidence.get("thresholds")
-    threshold_results = (
-        thresholds.get("results") if isinstance(thresholds, Mapping) else None
-    )
-    if (
-        not isinstance(thresholds, Mapping)
-        or thresholds.get("withinLimits") is not True
-        or not isinstance(threshold_results, Mapping)
-        or not threshold_results
-        or any(result is not True for result in threshold_results.values())
-    ):
-        blockers.append("rollback_threshold_exceeded_or_missing")
-
-    covered_rows = _verify_remediation_manifest(
+    covered_rows, derived_rows = _verify_remediation_manifest(
         evidence,
         evidence_document_path=evidence_document_path,
         blockers=blockers,
     )
+    derived_telemetry: Mapping[str, Any] | None = None
+    derived_thresholds: Mapping[str, Any] | None = None
+    if set(derived_rows) == set(REQUIRED_REMEDIATION_MATRIX_ROWS):
+        try:
+            derived_telemetry = derive_remediation_telemetry(derived_rows)
+            if telemetry != derived_telemetry:
+                blockers.append("remediation_telemetry_diverges_from_evidence")
+            derived_thresholds = derive_remediation_release_thresholds(
+                derived_rows, derived_telemetry
+            )
+            if thresholds != derived_thresholds:
+                blockers.append("release_thresholds_diverge_from_telemetry")
+            if derived_thresholds.get("withinLimits") is not True:
+                blockers.append("rollback_threshold_exceeded_or_missing")
+        except (KeyError, TypeError, RemediationMatrixError):
+            blockers.append("remediation_telemetry_derivation_failed")
+    else:
+        blockers.append("rollback_threshold_exceeded_or_missing")
 
     manual_diagnosis_ok = (
         not blockers and _MANUAL_DIAGNOSIS_ROWS <= covered_rows
@@ -1685,8 +2792,16 @@ def evaluate_remediation_release(
         evidence_ref=evidence_ref,
         generated_at=generated_at if isinstance(generated_at, str) else None,
         expires_at=expires_at,
-        telemetry=telemetry if isinstance(telemetry, Mapping) else None,
-        thresholds=thresholds if isinstance(thresholds, Mapping) else None,
+        telemetry=(
+            derived_telemetry
+            if isinstance(derived_telemetry, Mapping)
+            else telemetry if isinstance(telemetry, Mapping) else None
+        ),
+        thresholds=(
+            derived_thresholds
+            if isinstance(derived_thresholds, Mapping)
+            else thresholds if isinstance(thresholds, Mapping) else None
+        ),
     )
 
 
@@ -1695,7 +2810,7 @@ def _verify_remediation_manifest(
     *,
     evidence_document_path: Path | None,
     blockers: list[str],
-) -> frozenset[str]:
+) -> tuple[frozenset[str], dict[str, Mapping[str, Any]]]:
     """Resolve every manifest ref locally, bind its bytes to its digest, and
     re-validate the observed per-row evidence it carries.
 
@@ -1709,10 +2824,10 @@ def _verify_remediation_manifest(
     manifest = evidence.get("evidenceManifest")
     if not isinstance(manifest, list) or not manifest:
         blockers.append("provenance_bound_evidence_manifest_required")
-        return frozenset()
+        return frozenset(), {}
     if evidence_document_path is None:
         blockers.append("remediation_evidence_document_path_required")
-        return frozenset()
+        return frozenset(), {}
 
     base = evidence_document_path.resolve().parent
     images = evidence.get("images")
@@ -1732,6 +2847,7 @@ def _verify_remediation_manifest(
         evidence_time = None
 
     observed_rows: set[str] = set()
+    derived_rows: dict[str, Mapping[str, Any]] = {}
     seen_kinds: set[str] = set()
     ownership_conflict = False
     split_kind = False
@@ -1786,6 +2902,18 @@ def _verify_remediation_manifest(
         if observed_rows & rows:
             ownership_conflict = True
         observed_rows |= rows
+        entries = {
+            str(entry.get("row")): entry
+            for entry in payload.get("rows", [])
+            if isinstance(entry, Mapping) and isinstance(entry.get("row"), str)
+        }
+        for row_id in rows:
+            derived_rows[row_id] = derive_remediation_row_evidence(
+                entries[row_id],
+                row=REMEDIATION_ROW_CATALOG_BY_ID[row_id],
+                evidence_document_path=artifact_path,
+                evidence_time=evidence_time,
+            )
 
     if split_kind:
         blockers.append("split_evidence_kind_rejected")
@@ -1796,7 +2924,7 @@ def _verify_remediation_manifest(
         blockers.append("complete_evidence_kind_coverage_required")
     if observed_rows != set(REQUIRED_REMEDIATION_MATRIX_ROWS):
         blockers.append("matrix_row_coverage_incomplete")
-    return frozenset(observed_rows)
+    return frozenset(observed_rows), derived_rows
 
 
 REMEDIATION_RELEASE_EVIDENCE_ENV = (
@@ -1875,15 +3003,27 @@ __all__ = [
     "REQUIRED_UI_JOURNEY_ASSERTIONS",
     "PROHIBITED_UI_JOURNEY_MARKERS",
     "REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES",
+    "REMEDIATION_SOURCE_RECORD_SCHEMAS",
+    "REMEDIATION_EVIDENCE_IDENTITY_FIELDS",
     "REMEDIATION_SOURCE_RECORD_CONTENT_TYPE",
     "MAX_REMEDIATION_SOURCE_RECORD_BYTES",
     "REQUIRED_REMEDIATION_LINEAGE_FIELDS",
+    "REMEDIATION_LINEAGE_REF_RECORD_TYPES",
+    "REMEDIATION_TELEMETRY_SCHEMA_VERSION",
+    "REMEDIATION_RELEASE_THRESHOLD_SCHEMA_VERSION",
+    "REQUIRED_REMEDIATION_PHASE_LATENCIES",
+    "REMEDIATION_ACTION_RISKS",
     "RemediationMatrixRow",
     "REMEDIATION_ROW_CATALOG",
     "REQUIRED_REMEDIATION_MATRIX_ROWS",
     "REMEDIATION_ROW_CATALOG_BY_ID",
     "remediation_catalog_document",
     "RemediationMatrixError",
+    "derive_remediation_observation_from_source_records",
+    "derive_remediation_row_evidence",
+    "derive_remediation_telemetry",
+    "validate_remediation_telemetry_schema",
+    "derive_remediation_release_thresholds",
     "validate_remediation_evidence_artifact",
     "RemediationReleaseStatus",
     "evaluate_remediation_release",

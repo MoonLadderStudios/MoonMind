@@ -17,6 +17,15 @@ def _module():
     return module
 
 
+def _matrix_fixtures():
+    path = Path(__file__).parents[1] / "omnigent" / "test_remediation_matrix.py"
+    spec = importlib.util.spec_from_file_location("remediation_matrix_fixtures", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_compose_is_isolated_and_cleanup_preserves_volumes(tmp_path, monkeypatch):
     module = _module()
     calls = []
@@ -304,6 +313,7 @@ def test_remediation_derives_every_catalog_row_from_observed_records(
     tmp_path, monkeypatch
 ):
     module = _module()
+    fixtures = _matrix_fixtures()
     runner = module.LiveRunner(
         output_dir=tmp_path,
         env={
@@ -320,77 +330,37 @@ def test_remediation_derives_every_catalog_row_from_observed_records(
 
     def action(scenario, name, **inputs):
         if scenario == "browser-setup":
+            identity = fixtures._identity(name)
             return {
-                "targetWorkflowId": f"target-{name}",
-                "targetRunId": f"run-{name}",
+                "targetWorkflowId": identity["targetWorkflowId"],
+                "targetRunId": identity["targetRunId"],
                 "evidenceRefs": [f"artifact://setup/{name}"],
             }
-        row = row_by_id[name]
-        delivery = {
-            "status": "denied" if row.expected_outcome == "denied" else "delivered"
-        }
-        repair = {
-            "outcome": (
-                "approval_required"
-                if row.expected_outcome == "denied"
-                else "verified_resolved"
-            )
-        }
-        facts = {
-            "schemaVersion": "moonmind.operator-remediation-scenario-observation/v1",
-            "generatedAt": "2026-08-13T00:00:00+00:00",
-            "row": name,
-            "observed": True,
-            "observedDisposition": row.expected_outcome,
-            "hostMode": row.host_modes[0],
-            "architecture": row.architectures[0],
-            "targetProvenance": row.target_provenance[0],
-            "remediationProvenance": row.remediation_provenance[0],
-            "remainingLiveResources": 0,
-            "timings": {
-                "startedAt": "2026-08-12T23:59:59+00:00",
-                "completedAt": "2026-08-13T00:00:00+00:00",
-                "durationMs": 1000,
-                "phaseLatenciesMs": {"scenario": 1000},
-            },
-            "thresholdSamples": {
-                threshold: {"passed": 1, "total": 1}
-                for threshold in row.thresholds
-            },
-            "observations": {
-                observation: True for observation in row.required_observations
-            },
-            "lineage": {
-                key: f"artifact://{name}/{key}"
-                for key in module.REQUIRED_REMEDIATION_LINEAGE_FIELDS
-            },
-            "actionDelivery": delivery,
-            "repairVerification": repair,
-        }
-        facts["lineage"].update(
-            {
-                "targetWorkflowId": f"target-{name}",
-                "targetRunId": f"run-{name}",
-                "remediationWorkflowId": f"remediation-{name}",
-            }
-        )
-        records = [
-            {
-                "type": record_type,
-                "ref": f"artifact://{name}/{record_type}",
-                "sha256": "a" * 64,
-                "_resolved": (
-                    facts
-                    if record_type == "scenarioObservation"
-                    else {
-                        "schemaVersion": f"moonmind.{record_type}/v1",
-                        "generatedAt": "2026-08-13T00:00:00+00:00",
-                    }
-                ),
-                "_sizeBytes": 2,
-            }
-            for record_type in module.REMEDIATION_RECORD_TYPES
-        ]
+        entry = fixtures._observed_row(name)
+        records = []
+        for manifest_record in entry["evidenceManifest"]:
+            payload = fixtures._source_payload(entry, manifest_record["type"])
+            path = tmp_path / manifest_record["ref"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            raw = json.dumps(payload, sort_keys=True).encode()
+            path.write_bytes(raw)
+            records.append({
+                "type": manifest_record["type"],
+                "ref": path.resolve().as_uri(),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "_resolved": payload,
+                "_sizeBytes": len(raw),
+            })
+        ref_by_type = {record["type"]: record["ref"] for record in records}
+        for record in records:
+            lineage = record["_resolved"].get("lineage")
+            if isinstance(lineage, dict):
+                for field, owner in module.REMEDIATION_LINEAGE_REF_RECORD_TYPES.items():
+                    lineage[field] = ref_by_type[owner]
+                raw = json.dumps(record["_resolved"], sort_keys=True).encode()
+                Path(record["ref"].removeprefix("file://")).write_bytes(raw)
+                record["sha256"] = hashlib.sha256(raw).hexdigest()
+                record["_sizeBytes"] = len(raw)
         return {
             "_sourceRecords": records,
             "evidenceRefs": [f"artifact://row/{name}"],
@@ -398,6 +368,7 @@ def test_remediation_derives_every_catalog_row_from_observed_records(
 
     def browser(row_id, **kwargs):
         row = row_by_id[row_id]
+        identity = fixtures._identity(row_id)
         denied = row_id == "remediation.autonomous.rollout-gate-closed"
         return {
             "schemaVersion": "moonmind.operator-remediation-browser-observation/v1",
@@ -409,9 +380,9 @@ def test_remediation_derives_every_catalog_row_from_observed_records(
                     else "on_demand_docker"
                 )
             },
-            "workflowId": None if denied else f"remediation-{row_id}",
-            "targetWorkflowId": f"target-{row_id}",
-            "targetRunId": f"run-{row_id}",
+            "workflowId": None if denied else identity["remediationWorkflowId"],
+            "targetWorkflowId": identity["targetWorkflowId"],
+            "targetRunId": identity["targetRunId"],
             **{
                 assertion: assertion != "normalCreateRequest" or not denied
                 for assertion in module.REQUIRED_UI_JOURNEY_ASSERTIONS
@@ -426,22 +397,37 @@ def test_remediation_derives_every_catalog_row_from_observed_records(
 
     monkeypatch.setattr(runner, "action", action)
     monkeypatch.setattr(runner, "browser_observation", browser)
-    monkeypatch.setattr(
-        runner,
-        "scan",
-        lambda **kwargs: {
+    def scan(**kwargs):
+        result = {
             channel: {
                 "status": "passed",
-                "evidenceRef": f"artifact://scan/{channel}",
-                "sha256": "b" * 64,
+                "evidenceRef": "",
+                "sha256": "",
                 "schemaVersion": "moonmind.retained-evidence-secret-scan/v1",
                 "contentType": "application/json",
-                "sizeBytes": 2,
+                "sizeBytes": 0,
                 "generatedAt": "2026-08-13T00:00:00+00:00",
             }
             for channel in module.REQUIRED_REMEDIATION_RETAINED_CHANNELS
-        },
-    )
+        }
+        for channel, item in result.items():
+            path = tmp_path / "secret-scans" / f"{channel}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            raw = json.dumps({
+                "schemaVersion": item["schemaVersion"],
+                "generatedAt": item["generatedAt"],
+                "channel": channel,
+                "status": "passed",
+                "secretFindings": 0,
+                "prohibitedAuthorityFindings": 0,
+            }, sort_keys=True).encode()
+            path.write_bytes(raw)
+            item["evidenceRef"] = path.resolve().as_uri()
+            item["sha256"] = hashlib.sha256(raw).hexdigest()
+            item["sizeBytes"] = len(raw)
+        return result
+
+    monkeypatch.setattr(runner, "scan", scan)
     monkeypatch.setattr(runner, "scenario", lambda *args, **kwargs: None)
 
     runner.remediation(images)

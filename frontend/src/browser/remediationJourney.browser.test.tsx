@@ -208,7 +208,21 @@ const readyOmnigentCatalog = {
   hostModes: ['on_demand_docker'],
   gateReasons: [],
   remediationRelease: {
+    policyVersion: 'moonmind.operator-remediation-release/v1',
+    matrixVersion: 'operator-remediation-support-matrix/v1',
+    manualDiagnosisSupported: false,
+    manualMutationSupported: false,
     autonomousRolloutAuthorized: false,
+    promotionAllowed: false,
+    manualPromotionAllowed: false,
+    rollbackRequired: true,
+    expiresAt: null,
+    telemetry: {},
+    alerts: [{
+      code: 'remediation_release_evidence_missing',
+      severity: 'critical',
+      operatorAction: 'block_or_rollback_manual_promotion',
+    }],
     blockers: ['autonomous_rollout_gate_closed'],
   },
 };
@@ -448,6 +462,11 @@ describe('routed remediation operator journey', () => {
       expect(
         screen.getByText(/Autonomous mutation remains disabled until the operator remediation release matrix passes/i),
       ).toBeTruthy();
+      await userEvent.click(screen.getByText('Operator remediation release status'));
+      expect(screen.getByText('Manual diagnosis')).toBeTruthy();
+      expect(screen.getAllByText('Not qualified')).toHaveLength(2);
+      expect(screen.getByText('Required')).toBeTruthy();
+      expect(screen.getByText(/critical: remediation_release_evidence_missing/)).toBeTruthy();
       await userEvent.selectOptions(screen.getByLabelText('Publish Mode'), 'branch');
 
       const createButton = screen.getByRole('button', { name: 'Start Workflow' });

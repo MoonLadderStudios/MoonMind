@@ -19,8 +19,10 @@ from moonmind.omnigent.remediation_matrix import (
     REMEDIATION_ROW_CATALOG_BY_ID,
     REQUIRED_REMEDIATION_EVIDENCE_KINDS,
     REQUIRED_REMEDIATION_MATRIX_ROWS,
-    REQUIRED_REMEDIATION_TELEMETRY_GROUPS,
     RemediationMatrixError,
+    derive_remediation_release_thresholds,
+    derive_remediation_row_evidence,
+    derive_remediation_telemetry,
     validate_remediation_evidence_artifact,
 )
 
@@ -40,109 +42,6 @@ _REQUIRED_RELEASE_INPUTS = (
 )
 
 
-def _telemetry(rows: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
-    by_kind: dict[str, int] = {
-        kind: sum(
-            1
-            for row_id in rows
-            if REMEDIATION_ROW_CATALOG_BY_ID[row_id].evidence_kind == kind
-        )
-        for kind in REQUIRED_REMEDIATION_EVIDENCE_KINDS
-    }
-    durations = {
-        row_id: int(entry["timings"]["durationMs"])
-        for row_id, entry in rows.items()
-    }
-    denied_rows = sum(
-        1 for entry in rows.values() if entry.get("observedDisposition") == "denied"
-    )
-    delivered_rows = sum(
-        1
-        for entry in rows.values()
-        if isinstance(entry.get("actionDelivery"), Mapping)
-        and entry["actionDelivery"].get("status") == "delivered"
-    )
-    return {
-        "remediationCreation": {
-            "sampleCount": len(rows),
-            "qualifiedCount": len(rows),
-        },
-        "contextBuild": {
-            "sampleCount": by_kind["diagnosisEvidence"],
-            "successCount": by_kind["diagnosisEvidence"],
-        },
-        "evidenceAvailability": {
-            "sampleCount": by_kind["diagnosisEvidence"],
-            "degradedOrDeniedCount": sum(
-                1
-                for row_id in rows
-                if "degraded" in row_id or "unauthorized" in row_id
-            ),
-        },
-        "approvalOutcomes": {
-            "sampleCount": by_kind["actionApprovalEvidence"],
-            "deniedCount": denied_rows,
-        },
-        "actionOutcomesByKindAndRisk": {
-            "sampleCount": by_kind["actionApprovalEvidence"],
-            "deliveredCount": delivered_rows,
-            "deniedOrSuppressedCount": denied_rows,
-        },
-        "lockCooldownDuplicateAndEscalation": {
-            "sampleCount": by_kind["actionApprovalEvidence"]
-        },
-        "branchLifecycleLatency": {
-            "sampleCount": by_kind["recoveryBranchEvidence"],
-            "maxDurationMs": max(
-                durations[row_id]
-                for row_id in rows
-                if REMEDIATION_ROW_CATALOG_BY_ID[row_id].evidence_kind
-                == "recoveryBranchEvidence"
-            ),
-        },
-        "verificationOutcomes": {
-            "sampleCount": by_kind["verificationPreventionEvidence"],
-            "unverifiedMutationCount": sum(
-                1
-                for entry in rows.values()
-                if isinstance(entry.get("repairVerification"), Mapping)
-                and entry["repairVerification"].get("outcome")
-                in {"evidence_unavailable", "verification_failed"}
-            ),
-        },
-        "repeatedFailureAndAttemptExhaustion": {
-            "sampleCount": by_kind["recoveryBranchEvidence"]
-        },
-        "egressOutcomes": {
-            "sampleCount": by_kind["reliabilitySecurityEvidence"],
-            "denialCount": sum(
-                1
-                for row_id in rows
-                if REMEDIATION_ROW_CATALOG_BY_ID[row_id].egress
-                == "restricted_denied"
-            ),
-        },
-        "operatorCancellationAndTakeover": {
-            "sampleCount": by_kind["reliabilitySecurityEvidence"]
-        },
-        "autonomousAndManualOrigin": {
-            "sampleCount": len(rows),
-            "manualCount": sum(
-                1
-                for row_id in rows
-                if REMEDIATION_ROW_CATALOG_BY_ID[row_id].authority_mode
-                != "admin_auto"
-            ),
-            "autonomousDeniedCount": sum(
-                1
-                for row_id in rows
-                if REMEDIATION_ROW_CATALOG_BY_ID[row_id].authority_mode
-                == "admin_auto"
-            ),
-        },
-    }
-
-
 def build_remediation_release_evidence(
     *,
     release: Mapping[str, Any],
@@ -160,8 +59,8 @@ def build_remediation_release_evidence(
 
     seen_kinds: set[str] = set()
     observed_rows: dict[str, Mapping[str, Any]] = {}
+    derived_rows: dict[str, Mapping[str, Any]] = {}
     manifest: list[dict[str, str]] = []
-    threshold_results: dict[str, bool] = {}
     try:
         for supplied_path in artifact_paths:
             path = supplied_path.resolve()
@@ -200,10 +99,12 @@ def build_remediation_release_evidence(
                         f"duplicate observed remediation row: {row_id}"
                     )
                 observed_rows[row_id] = entries[row_id]
-                for threshold, result in entries[row_id].get("thresholds", {}).items():
-                    threshold_results[f"{row_id}:{threshold}"] = bool(
-                        isinstance(result, Mapping) and result.get("within") is True
-                    )
+                derived_rows[row_id] = derive_remediation_row_evidence(
+                    entries[row_id],
+                    row=REMEDIATION_ROW_CATALOG_BY_ID[row_id],
+                    evidence_document_path=path,
+                    evidence_time=observation_time,
+                )
             manifest.append(
                 {
                     "kind": kind,
@@ -221,11 +122,9 @@ def build_remediation_release_evidence(
             "incomplete operator-remediation evidence; "
             f"missingKinds={missing_kinds}, missingRows={missing_rows}"
         )
-    telemetry = _telemetry(observed_rows)
-    if set(telemetry) != set(REQUIRED_REMEDIATION_TELEMETRY_GROUPS):
-        raise RemediationEvidenceBuildError("remediation telemetry derivation is incomplete")
-    within_limits = bool(threshold_results) and all(threshold_results.values())
-    if not within_limits:
+    telemetry = derive_remediation_telemetry(derived_rows)
+    thresholds = derive_remediation_release_thresholds(derived_rows, telemetry)
+    if thresholds["withinLimits"] is not True:
         raise RemediationEvidenceBuildError("one or more remediation thresholds failed")
 
     return {
@@ -236,10 +135,7 @@ def build_remediation_release_evidence(
         **{key: release[key] for key in _REQUIRED_RELEASE_INPUTS},
         "matrixRows": list(REQUIRED_REMEDIATION_MATRIX_ROWS),
         "telemetry": telemetry,
-        "thresholds": {
-            "withinLimits": within_limits,
-            "results": threshold_results,
-        },
+        "thresholds": thresholds,
         "evidenceRefs": [item["ref"] for item in manifest],
         "evidenceManifest": manifest,
     }

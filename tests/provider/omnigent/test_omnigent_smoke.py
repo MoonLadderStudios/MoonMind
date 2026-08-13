@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import pytest
 import pytest_asyncio
@@ -27,7 +28,9 @@ from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.settings import is_omnigent_enabled
 from moonmind.omnigent.remediation_matrix import (
     REMEDIATION_MATRIX_VERSION,
+    REMEDIATION_EVIDENCE_IDENTITY_FIELDS,
     REMEDIATION_ROW_CATALOG,
+    REMEDIATION_SOURCE_RECORD_SCHEMAS,
     REQUIRED_REMEDIATION_EVIDENCE_KINDS,
     validate_remediation_evidence_artifact,
 )
@@ -368,6 +371,23 @@ async def test_live_operator_remediation_release_matrix(bridge_store) -> None:
         assert isinstance(ref, str) and ref.startswith("file://")
         artifact_path = Path(ref.removeprefix("file://"))
         payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        for observed_row in payload["rows"]:
+            for record in observed_row["evidenceManifest"]:
+                parsed = urlparse(record["ref"])
+                source_path = (
+                    Path(unquote(parsed.path))
+                    if parsed.scheme == "file"
+                    else artifact_path.parent / record["ref"]
+                )
+                source = json.loads(source_path.read_text(encoding="utf-8"))
+                assert source["schemaVersion"] == REMEDIATION_SOURCE_RECORD_SCHEMAS[
+                    record["type"]
+                ]
+                assert source["row"] == observed_row["row"]
+                assert all(
+                    source["identity"].get(field)
+                    for field in REMEDIATION_EVIDENCE_IDENTITY_FIELDS
+                )
         first = payload["rows"][0]
         kind, artifact_rows = validate_remediation_evidence_artifact(
             payload,

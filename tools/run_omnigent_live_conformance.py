@@ -41,13 +41,17 @@ from moonmind.omnigent.conformance import (  # noqa: E402
 from moonmind.omnigent.remediation_matrix import (  # noqa: E402
     PROHIBITED_UI_JOURNEY_MARKERS,
     REMEDIATION_ARTIFACT_SCHEMA_VERSION,
+    REMEDIATION_LINEAGE_REF_RECORD_TYPES,
     REMEDIATION_MATRIX_VERSION,
     REMEDIATION_ROW_CATALOG,
+    REMEDIATION_SOURCE_RECORD_SCHEMAS,
+    RemediationMatrixError,
     REQUIRED_REMEDIATION_LINEAGE_FIELDS,
     REQUIRED_REMEDIATION_EVIDENCE_KINDS,
     REQUIRED_REMEDIATION_RETAINED_CHANNELS,
     REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES,
     REQUIRED_UI_JOURNEY_ASSERTIONS,
+    derive_remediation_observation_from_source_records,
     validate_remediation_evidence_artifact,
 )
 
@@ -452,8 +456,8 @@ class LiveRunner:
                     resolved_record = record["_resolved"]
                     if (
                         not isinstance(resolved_record, dict)
-                        or not isinstance(resolved_record.get("schemaVersion"), str)
-                        or not resolved_record["schemaVersion"].strip()
+                        or resolved_record.get("schemaVersion")
+                        != REMEDIATION_SOURCE_RECORD_SCHEMAS.get(record["type"])
                         or not isinstance(resolved_record.get("generatedAt"), str)
                         or not resolved_record["generatedAt"].strip()
                     ):
@@ -922,22 +926,24 @@ class LiveRunner:
                 raise ConformanceContractError(
                     f"remediation/{row.row_id} requires one scenario observation"
                 )
-            facts = scenario_records[0].get("_resolved")
-            if (
-                not isinstance(facts, dict)
-                or facts.get("schemaVersion")
-                != "moonmind.operator-remediation-scenario-observation/v1"
-                or facts.get("row") != row.row_id
-                or facts.get("observed") is not True
-            ):
-                raise ConformanceContractError(
-                    f"remediation/{row.row_id} scenario observation is malformed"
+            try:
+                facts = derive_remediation_observation_from_source_records(
+                    row=row,
+                    manifest_by_type={str(record["type"]): record for record in records},
+                    sources={
+                        str(record["type"]): record["_resolved"]
+                        for record in records
+                    },
                 )
-            if facts.get("observedDisposition") != row.expected_outcome:
+            except RemediationMatrixError as exc:
+                raise ConformanceContractError(
+                    f"remediation/{row.row_id} source records are semantically invalid"
+                ) from exc
+            if facts["observedDisposition"] != row.expected_outcome:
                 raise ConformanceContractError(
                     f"remediation/{row.row_id} did not observe its required disposition"
                 )
-            if facts.get("hostMode") not in row.host_modes:
+            if facts["hostMode"] not in row.host_modes:
                 raise ConformanceContractError(
                     f"remediation/{row.row_id} used an unsupported host mode"
                 )
@@ -948,11 +954,11 @@ class LiveRunner:
                 and selected.get("hostMode") == "static_compose"
                 else "on_demand"
             )
-            if selected_host_mode != facts.get("hostMode"):
+            if selected_host_mode != facts["hostMode"]:
                 raise ConformanceContractError(
                     f"remediation/{row.row_id} browser and host evidence disagree"
                 )
-            lineage = facts.get("lineage")
+            lineage = facts["lineage"]
             _validate_remediation_browser_lineage(
                 row_id=row.row_id,
                 browser_observation=browser_observation,
@@ -961,20 +967,20 @@ class LiveRunner:
                 target_run_id=target_run_id,
             )
             if (
-                facts.get("architecture") not in row.architectures
-                or facts.get("targetProvenance") not in row.target_provenance
-                or facts.get("remediationProvenance")
+                facts["architecture"] not in row.architectures
+                or facts["targetProvenance"] not in row.target_provenance
+                or facts["remediationProvenance"]
                 not in row.remediation_provenance
             ):
                 raise ConformanceContractError(
                     f"remediation/{row.row_id} runtime provenance is unsupported"
                 )
-            if facts.get("remainingLiveResources") != 0:
+            if facts["telemetryFacts"]["remainingLiveResources"] != 0:
                 raise ConformanceContractError(
                     f"remediation/{row.row_id} retained live resources after cleanup"
                 )
 
-            threshold_samples = facts.get("thresholdSamples")
+            threshold_samples = facts["thresholds"]
             if not isinstance(threshold_samples, dict):
                 raise ConformanceContractError(
                     f"remediation/{row.row_id} lacks threshold samples"
@@ -983,6 +989,7 @@ class LiveRunner:
                 sample = threshold_samples.get(threshold)
                 if (
                     not isinstance(sample, dict)
+                    or sample.get("within") is not True
                     or not isinstance(sample.get("passed"), int)
                     or not isinstance(sample.get("total"), int)
                     or sample["total"] < 1
@@ -991,7 +998,7 @@ class LiveRunner:
                     raise ConformanceContractError(
                         f"remediation/{row.row_id} exceeded threshold {threshold}"
                     )
-            required_observations = facts.get("observations")
+            required_observations = facts["observations"]
             if not isinstance(required_observations, dict) or any(
                 required_observations.get(name) is not True
                 for name in row.required_observations
@@ -1042,20 +1049,20 @@ class LiveRunner:
             entry = {
                 "row": row.row_id,
                 "gate": row.gate,
-                "observedDisposition": row.expected_outcome,
+                "observedDisposition": facts["observedDisposition"],
                 "hostMode": facts["hostMode"],
                 "architecture": facts["architecture"],
                 "images": dict(images),
                 "targetProvenance": facts["targetProvenance"],
                 "remediationProvenance": facts["remediationProvenance"],
-                "authorityMode": row.authority_mode,
-                "egress": row.egress,
-                "actionCapability": row.action_capability,
-                "verificationCapability": row.verification_capability,
+                "authorityMode": facts["authorityMode"],
+                "egress": facts["egress"],
+                "actionCapability": facts["actionCapability"],
+                "verificationCapability": facts["verificationCapability"],
                 "uiJourney": ui_journey,
-                "actionDelivery": facts.get("actionDelivery"),
-                "repairVerification": facts.get("repairVerification"),
-                "timings": facts.get("timings"),
+                "actionDelivery": facts["actionDelivery"],
+                "repairVerification": facts["repairVerification"],
+                "timings": facts["timings"],
                 "observations": {
                     name: facts["observations"][name]
                     for name in row.required_observations
@@ -1076,8 +1083,8 @@ class LiveRunner:
                 "thresholds": {
                     threshold: {
                         "within": True,
-                        "passed": facts["thresholdSamples"][threshold]["passed"],
-                        "total": facts["thresholdSamples"][threshold]["total"],
+                        "passed": facts["thresholds"][threshold]["passed"],
+                        "total": facts["thresholds"][threshold]["total"],
                     }
                     for threshold in row.thresholds
                 },
@@ -1098,6 +1105,7 @@ class LiveRunner:
 
         artifact_refs = []
         for kind, artifact in artifacts.items():
+            path = self.output_dir / f"operator-remediation-{kind}.json"
             validate_remediation_evidence_artifact(
                 artifact,
                 expected_kind=kind,
@@ -1108,8 +1116,8 @@ class LiveRunner:
                 policy_version=policy_version,
                 agent_profile_version=agent_profile_version,
                 remediation_policy_version=remediation_policy_version,
+                evidence_document_path=path,
             )
-            path = self.output_dir / f"operator-remediation-{kind}.json"
             path.write_text(json.dumps(artifact, indent=2) + "\n", encoding="utf-8")
             artifact_refs.append(path.resolve().as_uri())
 
