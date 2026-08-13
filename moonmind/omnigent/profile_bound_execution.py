@@ -1229,6 +1229,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             authority_bridge_session_id = str(
                 getattr(bridge, "bridge_session_id", "") or ""
             ) or None
+            canonical_chat_bridge_session_id = authority_bridge_session_id
             if host_lease.status == "allocating":
                 host_lease = await self._hosts.transition_host_lease(
                     host_lease.lease_id,
@@ -1683,11 +1684,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                             host_lease_ref=host_lease.lease_id,
                             omnigent_host_id=host_id,
                             effective_launch_snapshot=effective_launch,
+                            canonical_bridge_session_id=canonical_chat_bridge_session_id,
                         )
                     )
-                    authority_bridge_session_id = str(
-                        continuation_bridge.bridge_session_id
-                    )
+                    # The child row owns this continuation attempt's journal,
+                    # but checkpoints and terminal authority continue to name
+                    # the original provider-session authority. The attempt's
+                    # own idempotency key remains in the checkpoint as evidence.
                     authority_idempotency_key = continuation_request.idempotency_key
                     continuation_result = await self._execute_with_host_lease_heartbeat(
                         self._execute(
@@ -2079,15 +2082,36 @@ class OmnigentProfileBoundExecutionCoordinator:
                         )
             for deferred_terminal in deferred_bridge_terminals:
                 try:
+                    if deferred_terminal["idempotencyKey"] == request.idempotency_key:
+                        continue
                     await self._run_store.mark_terminal(
                         deferred_terminal["idempotencyKey"],
                         status=deferred_terminal["status"],
                         terminal_refs=deferred_terminal["terminalRefs"],
+                        terminal_scope="attempt",
                     )
                 except Exception as terminal_exc:
                     authority_reasons.append(
                         {
                             "stage": "terminal_evidence_commit",
+                            "code": type(terminal_exc).__name__,
+                            "failureClass": "system_error",
+                            "remediationAction": "inspect_cleanup_diagnostics",
+                        }
+                    )
+            if deferred_bridge_terminals:
+                authoritative_terminal = deferred_bridge_terminals[-1]
+                try:
+                    await self._run_store.mark_terminal(
+                        request.idempotency_key,
+                        status=terminal_status,
+                        terminal_refs=authoritative_terminal["terminalRefs"],
+                        terminal_scope="provider_session",
+                    )
+                except Exception as terminal_exc:
+                    authority_reasons.append(
+                        {
+                            "stage": "canonical_terminal_evidence_commit",
                             "code": type(terminal_exc).__name__,
                             "failureClass": "system_error",
                             "remediationAction": "inspect_cleanup_diagnostics",

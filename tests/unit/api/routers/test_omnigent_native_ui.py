@@ -30,12 +30,20 @@ from api_service.api.routers.omnigent_native_ui import (
     NativeUiUpstreamError,
     NativeUiUpstreamResponse,
     _rewrite_upstream_location,
+    get_native_ui_compatibility,
     get_native_ui_upstream,
     native_ui_router,
 )
 from api_service.auth_providers import get_current_user
-from moonmind.omnigent.native_ui import scoped_ui_base
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
+from moonmind.omnigent.native_ui import (
+    NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
+    NATIVE_UI_ROUTE_TRANSPORT_MANIFEST_DIGEST,
+    SUPPORTED_NATIVE_UI_BUILD_IDENTITIES,
+    evaluate_deployed_native_ui_manifest,
+    scoped_ui_base,
+)
 
 _USER_ID = uuid4()
 _CHAT_BINDING_ID = "chatb_opaque123"
@@ -84,8 +92,10 @@ def _row(**overrides: Any) -> SimpleNamespace:
         metadata_={
             "callerAuthorities": {str(_USER_ID): grants},
             "capabilityAuthority": {
+                "schemaVersion": "moonmind.omnigent.capability-authority.v1",
                 "fresh": True,
                 "providerProfileGeneration": 4,
+                "providerSessionId": _PROVIDER_SESSION_ID,
                 "upstream": grants,
                 "agentProfile": grants,
                 "launchPolicy": grants,
@@ -154,6 +164,39 @@ def _build(
     app.dependency_overrides[_get_bridge_store] = lambda: store
     app.dependency_overrides[_require_bridge_enabled] = lambda: config
     app.dependency_overrides[get_native_ui_upstream] = lambda: upstream
+    version = (
+        "not-a-supported-build"
+        if __import__("os").environ.get("OMNIGENT_NATIVE_UI_VERSION")
+        == "not-a-supported-build"
+        else PINNED_OMNIGENT_COMMIT
+    )
+    server_build_id, ui_build_id = SUPPORTED_NATIVE_UI_BUILD_IDENTITIES[
+        PINNED_OMNIGENT_COMMIT
+    ]
+    app.dependency_overrides[get_native_ui_compatibility] = lambda: (
+        evaluate_deployed_native_ui_manifest(
+            {
+                "sourceCommit": version,
+                "serverBuildId": server_build_id,
+                "uiBuildId": ui_build_id,
+                "hostedBootstrapContractVersion": (
+                    NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION
+                ),
+                "routeTransportManifestDigest": (
+                    NATIVE_UI_ROUTE_TRANSPORT_MANIFEST_DIGEST
+                ),
+                "compiledBundleConformant": True,
+            },
+            expected_version=version,
+            enabled=(
+                enabled
+                and __import__("os").environ.get(
+                    "OMNIGENT_NATIVE_UI_ENABLED", "true"
+                )
+                != "false"
+            ),
+        )
+    )
     return TestClient(app), upstream
 
 
@@ -222,7 +265,7 @@ def test_full_page_document_refuses_framing() -> None:
     response = client.get(_url())  # no embedded=1 -> full page
 
     assert response.status_code == 200
-    assert '"mode":"full_page"' in response.text
+    assert '"mode":"full-page"' in response.text
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert response.headers["x-frame-options"] == "DENY"
 
@@ -281,6 +324,18 @@ def test_unknown_binding_is_non_enumerating() -> None:
     assert body["detail"]["code"] == "omnigent_native_chat_unavailable"
 
 
+def test_incomplete_canonical_capability_authority_fails_before_upstream() -> None:
+    metadata = dict(_row().metadata_)
+    metadata.pop("capabilityAuthority")
+    client, upstream = _build(store=_FakeStore(row=_row(metadata_=metadata)))
+
+    response = client.get(_url(), params={"embedded": "1"})
+
+    assert response.status_code == 503
+    assert 'data-reason="capability_authority_missing"' in response.text
+    assert upstream.paths == []
+
+
 # --- Version compatibility gate ----------------------------------------------
 
 
@@ -293,7 +348,7 @@ def test_unsupported_native_ui_version_fails_closed(
     response = client.get(_url(), params={"embedded": "1"})
 
     assert response.status_code == 503
-    assert 'data-reason="native_ui_version_unsupported"' in response.text
+    assert 'data-reason="native_ui_deployed_version_mismatch"' in response.text
 
 
 def test_serving_disabled_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:

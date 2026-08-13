@@ -1771,7 +1771,11 @@ async def run_omnigent_execution(
                 if normalized_events:
                     # Refs are switched before the matching index commit. Reconcile
                     # any durable artifact tail first so a retry cannot lose it.
-                    await run_store.append_events(bridge_session_id, normalized_events)
+                    await run_store.append_events(
+                        bridge_session_id,
+                        normalized_events,
+                        defer_provider_terminal=defer_bridge_terminal,
+                    )
                 previous_rows = await run_store.list_events(bridge_session_id)
                 durable_cursor = max(
                     (
@@ -1815,7 +1819,11 @@ async def run_omnigent_execution(
                     await run_store.attach_active_journal_refs(
                         bridge_session_id, raw_ref=raw_ref, normalized_ref=normalized_ref
                     )
-                    await run_store.append_events(bridge_session_id, [gap_event])
+                    await run_store.append_events(
+                        bridge_session_id,
+                        [gap_event],
+                        defer_provider_terminal=defer_bridge_terminal,
+                    )
                     durable_cursor += 1
 
             event_count = {"value": durable_cursor}
@@ -1875,7 +1883,9 @@ async def run_omnigent_execution(
                             normalized_ref=normalized_ref,
                         )
                         await run_store.append_events(
-                            bridge_session_id, [normalized_bridge_event.event]
+                            bridge_session_id,
+                            [normalized_bridge_event.event],
+                            defer_provider_terminal=defer_bridge_terminal,
                         )
                     normalized = normalized_bridge_event.event["normalizedStatus"]
                     _safe_heartbeat(
@@ -1996,6 +2006,7 @@ async def run_omnigent_execution(
                                 await run_store.append_events(
                                     bridge_session_id,
                                     [normalized_bridge_event.event],
+                                    defer_provider_terminal=defer_bridge_terminal,
                                 )
                         heartbeat_status["value"] = terminal_status
                         break
@@ -2077,7 +2088,9 @@ async def run_omnigent_execution(
                             normalized_ref=normalized_ref,
                         )
                         await run_store.append_events(
-                            bridge_session_id, [normalized_bridge_event.event]
+                            bridge_session_id,
+                            [normalized_bridge_event.event],
+                            defer_provider_terminal=defer_bridge_terminal,
                         )
                 elif normalized_snapshot in _NON_TERMINAL_STATUSES:
                     raise OmnigentSessionStillRunningError(
@@ -2212,6 +2225,9 @@ async def run_omnigent_execution(
                     request.idempotency_key,
                     status="failed",
                     events=normalized_events,
+                    terminal_scope=(
+                        "attempt" if defer_bridge_terminal else "provider_session"
+                    ),
                 )
         failure_class = classify_omnigent_failure(
             OmnigentFailureReason.REQUIRED_ARTIFACT_PERSISTENCE_FAILED

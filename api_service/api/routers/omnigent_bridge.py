@@ -54,6 +54,7 @@ from api_service.services.omnigent_agent_profile_service import (
     record_upstream_sync_failure,
     synchronize_upstream_inventory,
 )
+from api_service.services.omnigent_native_ui_build import verify_deployed_native_ui
 from api_service.services.omnigent_policies import (
     OmnigentPolicyService,
     PolicyConflict,
@@ -82,6 +83,7 @@ from moonmind.omnigent.bridge_proxy import (
 from moonmind.omnigent.bridge_store import (
     BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
+    canonical_capability_authority_is_complete,
     OmnigentIdempotencyError,
 )
 from moonmind.omnigent.embedded_evidence import (
@@ -104,7 +106,7 @@ from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 from moonmind.omnigent.native_ui import (
     NATIVE_UI_MOUNT_PREFIX,
     NATIVE_UI_ROUTE_FEATURE_VERSION,
-    evaluate_native_ui_compatibility,
+    evaluate_deployed_native_ui_manifest,
     scoped_api_base,
 )
 from moonmind.omnigent.native_ui_compat import (
@@ -167,13 +169,13 @@ from moonmind.utils.build_info import resolve_moonmind_build_id
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentAgentSelection,
 )
+from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
 
 logger = logging.getLogger(__name__)
-from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 # The bridge is exposed at the operator-declared mount path (OB-§6, §21.1). The
 # route table and enablement are read from the operator-declared declarative
@@ -332,10 +334,17 @@ def _require_bridge_enabled() -> OmnigentBridgeConfig:
     return _BRIDGE_CONFIG
 
 
+def _get_bridge_store(
+    _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+) -> OmnigentBridgeSessionStore:
+    return OmnigentBridgeSessionStore(async_session_maker)
+
+
 @router.get("/readiness", response_model=dict)
 async def get_omnigent_bridge_readiness(
     config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
     _user: User = Depends(get_current_user()),
+    store: OmnigentBridgeSessionStore = Depends(_get_bridge_store),
 ) -> dict[str, Any]:
     """Expose selected protocol and conformance gates without secret material."""
 
@@ -369,6 +378,14 @@ async def get_omnigent_bridge_readiness(
         readiness=readiness,
         auth=auth,
         policy_authority=policy_authority,
+    )
+    authority_diagnostics = await store.canonical_chat_authority_diagnostics()
+    readiness["compatibilityDiagnostics"]["nativeUi"] = _native_ui_diagnostics(
+        config=config,
+        compatibility=await verify_deployed_native_ui(
+            enabled=bool(config.enabled) and resolved_native_ui_serving_enabled()
+        ),
+        authority_diagnostics=authority_diagnostics,
     )
     return readiness
 
@@ -483,7 +500,12 @@ def _compatibility_diagnostics(
     return projection
 
 
-def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
+def _native_ui_diagnostics(
+    *,
+    config: OmnigentBridgeConfig,
+    compatibility: Any | None = None,
+    authority_diagnostics: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Report native Omnigent UI serving readiness (MoonLadderStudios/MoonMind#3638).
 
     Operators need a bounded, non-secret projection of whether the native
@@ -494,8 +516,9 @@ def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
     """
 
     serving_enabled = resolved_native_ui_serving_enabled()
-    compatibility = evaluate_native_ui_compatibility(
-        resolved_native_ui_version(),
+    compatibility = compatibility or evaluate_deployed_native_ui_manifest(
+        None,
+        expected_version=resolved_native_ui_version(),
         enabled=bool(config.enabled) and serving_enabled,
     )
     scoped_api = scoped_api_base("{chatBindingId}")
@@ -505,8 +528,14 @@ def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
         "reason": compatibility.reason,
         "assetsServedThroughMoonMind": serving_enabled,
         "compatibilityVersion": NATIVE_UI_ROUTE_FEATURE_VERSION,
+        "expectedVersion": compatibility.expected_version,
         "reportedVersion": compatibility.reported_version,
         "supportedVersions": list(compatibility.supported_versions),
+        "serverBuildId": compatibility.server_build_id,
+        "uiBuildId": compatibility.ui_build_id,
+        "actualContractVersion": compatibility.actual_contract_version,
+        "actualRouteManifestDigest": compatibility.actual_route_manifest_digest,
+        "compiledBundleConformant": compatibility.compiled_bundle_conformant,
         "scopedRoutes": {
             "uiMountPath": f"{NATIVE_UI_MOUNT_PREFIX}/{{chatBindingId}}",
             "apiBase": scoped_api,
@@ -514,6 +543,12 @@ def _native_ui_diagnostics(*, config: OmnigentBridgeConfig) -> dict[str, Any]:
             "sse": f"{scoped_api}/v1/sessions/{{chatBindingId}}/stream",
             "websocket": f"{scoped_api}/v1/sessions/{{chatBindingId}}/stream",
         },
+        "scopedTransportReady": {
+            "http": compatibility.ready,
+            "sse": compatibility.ready,
+            "websocket": compatibility.ready,
+        },
+        "canonicalBindings": dict(authority_diagnostics or {}),
         # MoonMind strips its own credentials before forwarding upstream and
         # virtualizes the provider session id, so neither the upstream credential
         # nor the raw provider session id reaches the browser.
@@ -728,12 +763,6 @@ def _get_bridge_proxy(
         config=_config,
         default_agent_name=resolved_default_agent_name(),
     )
-
-
-def _get_bridge_store(
-    _config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
-) -> OmnigentBridgeSessionStore:
-    return OmnigentBridgeSessionStore(async_session_maker)
 
 
 async def _require_mode_transition_safe(
@@ -3205,6 +3234,8 @@ def _facade_liveness_state(row: Any) -> str:
     status_value = str(getattr(row, "status", "") or "").strip().lower()
     if is_read_only(status_value):
         return "ended"
+    if not canonical_capability_authority_is_complete(row):
+        return "starting"
     if not str(getattr(row, "omnigent_session_id", "") or "").strip():
         return "starting"
     return "available"
@@ -4514,7 +4545,10 @@ async def _dispatch_workflow_chat_facade(
         return {
             "chatBindingId": chat_binding_id,
             "state": _facade_liveness_state(row),
-            "readOnly": is_read_only(session_status),
+            "readOnly": (
+                is_read_only(session_status)
+                or capabilities.get("sendMessage") is not True
+            ),
             "capabilities": capabilities,
             "disabledReasons": capability_set.disabled_reasons,
             "capabilitySchemaVersion": capability_set.schema_version,
@@ -4619,7 +4653,10 @@ async def _dispatch_workflow_chat_facade(
         )
         if isinstance(virtualized, dict):
             virtualized["capabilities"] = capabilities
-            virtualized["readOnly"] = is_read_only(session_status)
+            virtualized["readOnly"] = (
+                is_read_only(session_status)
+                or capabilities.get("sendMessage") is not True
+            )
         return virtualized
 
     # 10. Message / control events — routed through the shared control path.

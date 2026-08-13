@@ -3,7 +3,7 @@
 **Compatibility declaration:** `omnigent.server.v1` with embedded runner
 authentication profile `omnigent.runner_tunnel.983c93c6`, verified against
 upstream Omnigent source commit
-`e51dcb647bf101a1be27b77ac9da24331e9d20ee`.
+`510969b0ab60b94f1ce5f5ac49eda89295eff99c`.
 
 This is an Omnigent-compatible adapter boundary, not a MoonMind host protocol.
 Only an unchanged stock host speaking the declared profiles may connect.
@@ -11,7 +11,7 @@ Unknown protocol or authentication profiles fail closed.
 
 MoonMind embedded compatibility mode delegates runner authentication to the
 Omnigent submodule pinned at commit
-`e51dcb647bf101a1be27b77ac9da24331e9d20ee`. The supported protocol profile
+`510969b0ab60b94f1ce5f5ac49eda89295eff99c`. The supported protocol profile
 identifier remains `omnigent.runner_tunnel.983c93c6`; the source-pin boundary
 test proves that this profile's verifier entrypoints remain available at the
 new revision.

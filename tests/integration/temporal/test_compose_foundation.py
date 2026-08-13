@@ -13,6 +13,7 @@ MOUNTED_TOOL_PATH = (
     "${OMNIGENT_HOST_BASE_PATH:-/opt/venv/bin:/usr/local/bin:/usr/local/sbin:"
     "/usr/bin:/usr/sbin:/bin:/sbin}"
 )
+_PINNED_OMNIGENT_COMMIT = "510969b0ab60b94f1ce5f5ac49eda89295eff99c"
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -259,7 +260,12 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     assert api_env["OMNIGENT_IMAGE"] == (
         "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}"
     )
-    assert api_env["OMNIGENT_IMAGE_TAG"] == "${OMNIGENT_IMAGE_TAG:-latest}"
+    assert api_env["OMNIGENT_IMAGE_TAG"] == (
+        f"${{OMNIGENT_IMAGE_TAG:-{_PINNED_OMNIGENT_COMMIT}}}"
+    )
+    assert api_env["OMNIGENT_NATIVE_UI_VERSION"] == (
+        f"${{OMNIGENT_NATIVE_UI_VERSION:-{_PINNED_OMNIGENT_COMMIT}}}"
+    )
     assert api_env["OMNIGENT_HOST_IMAGE"] == (
         "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}"
     )
@@ -936,7 +942,11 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     worker_env = _env_map(worker["environment"])
     api_env = _env_map(services["api"]["environment"])
 
-    assert all("build" not in service for service in services.values())
+    assert all(
+        "build" not in service
+        for name, service in services.items()
+        if name != "omnigent"
+    )
     assert "python-test-runtime-ready" not in services
     assert "python-test-runtime-ready" not in worker["depends_on"]
     assert worker_env["MOONMIND_CONTAINER_BACKEND_ENABLED"] == (
@@ -1043,9 +1053,13 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
 
     omnigent_env = _env_map(omnigent_service["environment"])
     assert omnigent_service["image"] == (
-        "${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
-        "${OMNIGENT_IMAGE_TAG:-latest}}"
+        f"${{OMNIGENT_IMAGE_REF:-moonmind/omnigent-server:{_PINNED_OMNIGENT_COMMIT}}}"
     )
+    assert omnigent_service["build"] == {
+        "context": "./omnigent",
+        "dockerfile": "deploy/docker/Dockerfile",
+        "args": {"OMNIGENT_SOURCE_COMMIT": _PINNED_OMNIGENT_COMMIT},
+    }
     assert omnigent_env["DATABASE_URL"] == (
         "postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:"
         "${OMNIGENT_POSTGRES_PASSWORD:-omnigent}@postgres:5432/"
@@ -1085,6 +1099,8 @@ def test_omnigent_env_template_and_example_config_for_mm_970():
         "OMNIGENT_IMAGE_REF",
         "OMNIGENT_IMAGE",
         "OMNIGENT_IMAGE_TAG",
+        "OMNIGENT_NATIVE_UI_ENABLED",
+        "OMNIGENT_NATIVE_UI_VERSION",
         "OMNIGENT_PORT",
         "OMNIGENT_POSTGRES_USER",
         "OMNIGENT_POSTGRES_PASSWORD",

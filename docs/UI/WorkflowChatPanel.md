@@ -3,7 +3,7 @@
 **Document Class:** Canonical declarative  
 **Status:** Accepted target  
 **Owner:** MoonMind Dashboard / Platform  
-**Last updated:** 2026-08-07  
+**Last updated:** 2026-08-13
 **Audience:** dashboard, backend, Omnigent integration, workflow authors
 
 **Authority:** This document owns the Workflow Detail **Chat** product surface. Omnigent owns the native session presentation and interaction model. MoonMind owns the workflow/session binding, request authorization, effective capabilities, security policy, durable evidence, and linked continuation.
@@ -85,7 +85,7 @@ The workflow context bar is intentionally small. It may show:
 
 MoonMind must not add a second composer, transcript toolbar, approval tray, file rail, or session-control panel around the native UI.
 
-In embedded mode, Omnigent may hide application-global chrome that MoonMind already supplies, such as the global conversation sidebar. Session-specific controls and the native workspace rail remain visible only when the effective capability projection permits them.
+Embedded and scoped full-page modes are both session-scoped. They hide application-global chrome such as the conversation catalog, New Session navigation, server selection, sharing, and global search. Session-specific controls and the native workspace rail remain visible only when the effective capability projection permits them.
 
 On mobile, the native chat application fills the Workflow Detail content region and uses its own responsive behavior.
 
@@ -111,6 +111,8 @@ The integration must provide:
 - a binding-scoped API base used by the native application,
 - bounded loading, unavailable, disconnected, and terminal states,
 - an authorized full-page escape hatch when embedding is unavailable.
+
+The injected `window.__MOONMIND_OMNIGENT_CHAT__` bootstrap is validated and its transport is installed at the production entry point before telemetry, identity discovery, capability probes, queries, WebSocket construction, or route rendering can start. Hosted HTTP, SSE, and WebSocket calls are derived from its exact binding-scoped bases; an invalid hosted bootstrap renders a bounded unavailable state and does not start the application. Standalone Omnigent startup remains unchanged when the bootstrap is absent.
 
 ## 5. Workflow chat binding
 
@@ -157,6 +159,8 @@ Binding rules:
 5. A stale, missing, or unauthorized binding fails closed and never falls back to an arbitrary provider session.
 6. The browser uses only the server-generated `chatUrl` and binding-scoped API base.
 7. Possession of a binding id or URL is not authorization; every subsequent request is independently checked.
+8. Repository publication continuations that resume the same provider session are attempt evidence under the original canonical chat authority. They reuse its `chatBindingId`; attempt completion cannot end that authority, and only provider-session termination makes the canonical binding terminal.
+9. The browser projection and every facade decision derive from the same complete immutable capability authority on the canonical row. Missing or conflicting authority fails closed.
 
 ## 6. Per-request proxy authorization
 

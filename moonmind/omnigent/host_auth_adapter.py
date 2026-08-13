@@ -13,7 +13,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from typing import Any, Mapping
 
-PINNED_OMNIGENT_COMMIT = "e51dcb647bf101a1be27b77ac9da24331e9d20ee"
+PINNED_OMNIGENT_COMMIT = "510969b0ab60b94f1ce5f5ac49eda89295eff99c"
 PINNED_PROTOCOL_PROFILE = "omnigent.runner_tunnel.983c93c6"
 
 

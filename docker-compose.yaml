@@ -61,10 +61,10 @@ services:
       # the upstream build MoonMind is verified against and must pass conformance
       # before an operator advances it.
       - OMNIGENT_NATIVE_UI_ENABLED=${OMNIGENT_NATIVE_UI_ENABLED:-true}
-      - OMNIGENT_NATIVE_UI_VERSION=${OMNIGENT_NATIVE_UI_VERSION:-}
+      - OMNIGENT_NATIVE_UI_VERSION=${OMNIGENT_NATIVE_UI_VERSION:-510969b0ab60b94f1ce5f5ac49eda89295eff99c}
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
       - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
-      - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
+      - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-510969b0ab60b94f1ce5f5ac49eda89295eff99c}
       - OMNIGENT_HOST_IMAGE_REF=${OMNIGENT_HOST_IMAGE_REF:-}
       - OMNIGENT_HOST_IMAGE=${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}
       - OMNIGENT_HOST_IMAGE_TAG=${OMNIGENT_HOST_IMAGE_TAG:-latest}
@@ -1192,7 +1192,12 @@ services:
     restart: "no"
 
   omnigent:
-    image: ${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:${OMNIGENT_IMAGE_TAG:-latest}}
+    build:
+      context: ./omnigent
+      dockerfile: deploy/docker/Dockerfile
+      args:
+        OMNIGENT_SOURCE_COMMIT: "510969b0ab60b94f1ce5f5ac49eda89295eff99c"
+    image: ${OMNIGENT_IMAGE_REF:-moonmind/omnigent-server:510969b0ab60b94f1ce5f5ac49eda89295eff99c}
     env_file:
       - path: .env
         required: false

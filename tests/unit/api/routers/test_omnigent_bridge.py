@@ -55,6 +55,15 @@ _EVENTS_PATH = f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/events"
 _ELICITATION_RESOLVE_PATH = (
     f"{OMNIGENT_BRIDGE_MOUNT_PATH}/v1/sessions/sess-77/elicitations/el-1/resolve"
 )
+_CANONICAL_BINDING_DIAGNOSTICS = {
+    "duplicateProviderSessionGroups": 0,
+    "capabilityAuthority": {
+        "scannedCanonicalRows": 2,
+        "completeCanonicalRows": 2,
+        "incompleteCanonicalRows": 0,
+        "scanTruncated": False,
+    },
+}
 
 # Sentinel so ``_FakeProxy(session_owner=None)`` can distinguish "no owner
 # bound" from "use the default mm:w1 owner".
@@ -155,6 +164,11 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     app.dependency_overrides[get_current_user()] = _mock_user
+    app.dependency_overrides[_get_bridge_store] = lambda: SimpleNamespace(
+        canonical_chat_authority_diagnostics=AsyncMock(
+            return_value=_CANONICAL_BINDING_DIAGNOSTICS
+        )
+    )
     client = TestClient(app)
 
     response = client.get(_READINESS_PATH)
@@ -180,7 +194,16 @@ def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> N
     # Native Omnigent UI serving readiness (MoonLadderStudios/MoonMind#3638).
     native_ui = diagnostics["nativeUi"]
     assert native_ui["servingEnabled"] is True
-    assert native_ui["ready"] is True
+    assert native_ui["ready"] is False
+    assert native_ui["reason"] == "native_ui_expected_version_unknown"
+    assert native_ui["compiledBundleConformant"] is None
+    assert native_ui["expectedVersion"] is None
+    assert native_ui["scopedTransportReady"] == {
+        "http": False,
+        "sse": False,
+        "websocket": False,
+    }
+    assert native_ui["canonicalBindings"] == _CANONICAL_BINDING_DIAGNOSTICS
     assert native_ui["credentialSeparation"] is True
     assert native_ui["directUpstreamBrowserExposure"] is False
     assert native_ui["scopedRoutes"]["uiMountPath"] == (
@@ -260,6 +283,11 @@ def test_embedded_readiness_stays_gated_when_artifacts_are_invalid(monkeypatch) 
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     app.dependency_overrides[get_current_user()] = _mock_user
     app.dependency_overrides[_require_bridge_enabled] = lambda: config
+    app.dependency_overrides[_get_bridge_store] = lambda: SimpleNamespace(
+        canonical_chat_authority_diagnostics=AsyncMock(
+            return_value=_CANONICAL_BINDING_DIAGNOSTICS
+        )
+    )
 
     response = TestClient(app).get(_READINESS_PATH)
 

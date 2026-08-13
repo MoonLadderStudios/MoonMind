@@ -48,13 +48,17 @@ from api_service.api.routers.omnigent_bridge import (
 )
 from api_service.auth_providers import get_current_user
 from api_service.db.models import User
+from api_service.services.omnigent_native_ui_build import verify_deployed_native_ui
 from moonmind.omnigent.bridge_config import OmnigentBridgeConfig
-from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.bridge_store import (
+    OmnigentBridgeSessionStore,
+    canonical_capability_authority_is_complete,
+)
 from moonmind.omnigent.native_ui import (
     CODE_NATIVE_CHAT_UNAVAILABLE,
     NATIVE_UI_MOUNT_PREFIX,
+    NativeUiCompatibility,
     build_chat_bootstrap,
-    evaluate_native_ui_compatibility,
     is_document_request,
     native_ui_security_headers,
     presentation_mode_from_query,
@@ -65,7 +69,6 @@ from moonmind.omnigent.native_ui import (
 from moonmind.omnigent.settings import (
     resolved_api_token,
     resolved_native_ui_serving_enabled,
-    resolved_native_ui_version,
     resolved_server_url,
 )
 from moonmind.omnigent.workflow_chat_facade import WorkflowChatFacadeError, is_read_only
@@ -201,6 +204,14 @@ def get_native_ui_upstream(
     )
 
 
+async def get_native_ui_compatibility(
+    config: OmnigentBridgeConfig = Depends(_require_bridge_enabled),
+) -> NativeUiCompatibility:
+    return await verify_deployed_native_ui(
+        enabled=bool(config.enabled) and resolved_native_ui_serving_enabled()
+    )
+
+
 def _native_chat_unavailable(
     *, mode: str, is_document: bool, reason: str, status_code: int = 503
 ) -> Response:
@@ -286,6 +297,7 @@ async def _serve_native_ui(
     service: Any,
     store: OmnigentBridgeSessionStore,
     upstream: NativeUiUpstream,
+    compatibility: NativeUiCompatibility,
 ) -> Response:
     mode = presentation_mode_from_query(embedded)
     document = is_document_request(ui_path)
@@ -311,12 +323,8 @@ async def _serve_native_ui(
         )
 
     # 2. Gate on native-UI serving being enabled and a known-compatible version.
-    serving_enabled = resolved_native_ui_serving_enabled()
-    compatibility = evaluate_native_ui_compatibility(
-        resolved_native_ui_version(),
-        enabled=bool(config.enabled) and serving_enabled,
-    )
     if not compatibility.ready:
+        serving_enabled = resolved_native_ui_serving_enabled()
         reason = (
             "native_ui_serving_disabled"
             if config.enabled and not serving_enabled
@@ -324,6 +332,14 @@ async def _serve_native_ui(
         )
         return _native_chat_unavailable(
             mode=mode, is_document=document, reason=reason
+        )
+
+    if not canonical_capability_authority_is_complete(row):
+        logger.info("omnigent.native_ui capability authority unavailable")
+        return _native_chat_unavailable(
+            mode=mode,
+            is_document=document,
+            reason="capability_authority_missing",
         )
 
     # 3. Reverse-proxy the upstream asset or SPA document.
@@ -372,7 +388,10 @@ async def _serve_native_ui(
     bootstrap = build_chat_bootstrap(
         chat_binding_id=chat_binding_id,
         mode=mode,
-        read_only=is_read_only(session_status),
+        read_only=(
+            is_read_only(session_status)
+            or capability_set.capabilities.get("sendMessage") is not True
+        ),
         capabilities=capability_set.capabilities,
         state=_facade_liveness_state(row),
         capability_schema_version=capability_set.schema_version,
@@ -400,6 +419,7 @@ async def serve_native_workflow_chat_ui_root(
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store_dep),
     upstream: NativeUiUpstream = Depends(get_native_ui_upstream),
+    compatibility: NativeUiCompatibility = Depends(get_native_ui_compatibility),
 ) -> Response:
     """Serve the native Omnigent SPA document for a binding (root route)."""
 
@@ -412,6 +432,7 @@ async def serve_native_workflow_chat_ui_root(
         service=service,
         store=store,
         upstream=upstream,
+        compatibility=compatibility,
     )
 
 
@@ -429,6 +450,7 @@ async def serve_native_workflow_chat_ui_asset(
     service: Any = Depends(_get_execution_service),
     store: OmnigentBridgeSessionStore = Depends(_get_bridge_store_dep),
     upstream: NativeUiUpstream = Depends(get_native_ui_upstream),
+    compatibility: NativeUiCompatibility = Depends(get_native_ui_compatibility),
 ) -> Response:
     """Serve a scoped native UI asset or an SPA deep-link/refresh document."""
 
@@ -441,6 +463,7 @@ async def serve_native_workflow_chat_ui_asset(
         service=service,
         store=store,
         upstream=upstream,
+        compatibility=compatibility,
     )
 
 
@@ -450,5 +473,6 @@ __all__ = [
     "NativeUiUpstreamError",
     "NativeUiUpstreamResponse",
     "get_native_ui_upstream",
+    "get_native_ui_compatibility",
     "native_ui_router",
 ]

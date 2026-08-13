@@ -20,7 +20,7 @@ semantics stay in one place:
 
 * the browser-safe bootstrap contract (:func:`build_chat_bootstrap`);
 * the native UI/server version compatibility gate
-  (:func:`evaluate_native_ui_compatibility`);
+  (:func:`evaluate_deployed_native_ui_manifest`);
 * the embedded vs full-page security-header policy
   (:func:`native_ui_security_headers`);
 * SPA-document vs hashed-asset request classification
@@ -38,6 +38,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
 from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
@@ -57,18 +58,29 @@ NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION = "moonmind.omnigent_native_ui.bootstrap.v1"
 # or the bootstrap features the native UI depends on change in a way that
 # requires a matching native UI build.
 NATIVE_UI_ROUTE_FEATURE_VERSION = "1"
+NATIVE_UI_ROUTE_TRANSPORT_MANIFEST_DIGEST = (
+    "sha256:a7c98e3180c79bbd3907f603cf6ad22ebc3fa1fe63fb41fe3531939dfa8add73"
+)
 
 # The single upstream source pin MoonMind's native UI serving is verified
 # against. Reuses the one upstream commit pin (host_auth_adapter) so there is no
 # parallel native-UI version authority (Simplicity Gate / Compatibility Policy).
 SUPPORTED_NATIVE_UI_VERSIONS: frozenset[str] = frozenset({PINNED_OMNIGENT_COMMIT})
+SUPPORTED_NATIVE_UI_BUILD_IDENTITIES: Mapping[str, tuple[str, str]] = MappingProxyType(
+    {
+        PINNED_OMNIGENT_COMMIT: (
+            "sha256:fe86f397c3c522e89c9c83de04c3c540f3c3e34c4841f78783768f61c74aa556",
+            "sha256:d3cd1f67f9045fb2dc85d8556ef3c9a6e4be383c6b1350fc5d86480fbac1ad6b",
+        )
+    }
+)
 
 # Stable, actionable failure code for an unknown/incompatible native UI version.
 # The serving router returns this instead of partially bypassing the scoped
 # facade (issue #3638 requirement 6).
 CODE_NATIVE_CHAT_UNAVAILABLE = "omnigent_native_chat_unavailable"
 
-PresentationMode = Literal["embedded", "full_page"]
+PresentationMode = Literal["embedded", "full-page"]
 
 _TRUE_QUERY_VALUES = {"1", "true", "yes", "on"}
 
@@ -99,7 +111,7 @@ def presentation_mode_from_query(value: Any) -> PresentationMode:
     """
 
     token = str(value if value is not None else "").strip().lower()
-    return "embedded" if token in _TRUE_QUERY_VALUES else "full_page"
+    return "embedded" if token in _TRUE_QUERY_VALUES else "full-page"
 
 
 # --- Version compatibility gate ----------------------------------------------
@@ -113,6 +125,12 @@ class NativeUiCompatibility:
     reported_version: str | None
     supported_versions: tuple[str, ...]
     reason: str | None = None
+    expected_version: str | None = None
+    server_build_id: str | None = None
+    ui_build_id: str | None = None
+    actual_contract_version: str | None = None
+    actual_route_manifest_digest: str | None = None
+    compiled_bundle_conformant: bool | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -120,53 +138,109 @@ class NativeUiCompatibility:
             "reportedVersion": self.reported_version,
             "supportedVersions": list(self.supported_versions),
             "reason": self.reason,
+            "expectedVersion": self.expected_version,
+            "serverBuildId": self.server_build_id,
+            "uiBuildId": self.ui_build_id,
+            "actualContractVersion": self.actual_contract_version,
+            "actualRouteManifestDigest": self.actual_route_manifest_digest,
+            "compiledBundleConformant": self.compiled_bundle_conformant,
         }
 
 
-def evaluate_native_ui_compatibility(
-    reported_version: str | None,
+def evaluate_deployed_native_ui_manifest(
+    manifest: Mapping[str, Any] | None,
     *,
+    expected_version: str | None,
     enabled: bool = True,
-    supported_versions: frozenset[str] = SUPPORTED_NATIVE_UI_VERSIONS,
 ) -> NativeUiCompatibility:
-    """Gate serving on a known-compatible native UI/server version.
+    """Fail closed unless the running server and compiled SPA prove identity."""
 
-    An unknown, blank, or unsupported version fails closed with an actionable
-    ``native-chat-unavailable`` reason rather than partially serving a native UI
-    that has not run conformance (issue #3638 requirement 6). Upgrading the
-    upstream image is therefore a deliberate step: the operator pins the new
-    version only after conformance adds it to ``supported_versions``.
-    """
-
-    ordered = tuple(sorted(supported_versions))
+    expected = str(expected_version or "").strip()
     if not enabled:
         return NativeUiCompatibility(
             ready=False,
-            reported_version=reported_version,
-            supported_versions=ordered,
+            reported_version=None,
+            supported_versions=tuple(sorted(SUPPORTED_NATIVE_UI_VERSIONS)),
             reason="omnigent_disabled",
+            expected_version=expected or None,
         )
-    version = str(reported_version or "").strip()
-    if not version:
+    if not expected:
         return NativeUiCompatibility(
             ready=False,
             reported_version=None,
-            supported_versions=ordered,
-            reason="native_ui_version_unknown",
+            supported_versions=tuple(sorted(SUPPORTED_NATIVE_UI_VERSIONS)),
+            reason="native_ui_expected_version_unknown",
+            expected_version=None,
         )
-    if version not in supported_versions:
+    if not isinstance(manifest, Mapping):
         return NativeUiCompatibility(
             ready=False,
-            reported_version=version,
-            supported_versions=ordered,
-            reason="native_ui_version_unsupported",
+            reported_version=None,
+            supported_versions=tuple(sorted(SUPPORTED_NATIVE_UI_VERSIONS)),
+            reason="native_ui_build_manifest_unavailable",
+            expected_version=expected,
         )
-    return NativeUiCompatibility(
-        ready=True,
-        reported_version=version,
-        supported_versions=ordered,
-        reason=None,
+
+    actual = str(manifest.get("sourceCommit") or "").strip() or None
+    server_build_id = str(manifest.get("serverBuildId") or "").strip() or None
+    ui_build_id = str(manifest.get("uiBuildId") or "").strip() or None
+    contract = (
+        str(manifest.get("hostedBootstrapContractVersion") or "").strip() or None
     )
+    route_digest = (
+        str(manifest.get("routeTransportManifestDigest") or "").strip() or None
+    )
+    compiled_bundle_conformant = manifest.get("compiledBundleConformant")
+    if not isinstance(compiled_bundle_conformant, bool):
+        compiled_bundle_conformant = None
+    base = dict(
+        reported_version=actual,
+        supported_versions=tuple(sorted(SUPPORTED_NATIVE_UI_VERSIONS)),
+        server_build_id=server_build_id,
+        ui_build_id=ui_build_id,
+        actual_contract_version=contract,
+        actual_route_manifest_digest=route_digest,
+        compiled_bundle_conformant=compiled_bundle_conformant,
+        expected_version=expected,
+    )
+    if actual != expected or actual not in SUPPORTED_NATIVE_UI_VERSIONS:
+        return NativeUiCompatibility(
+            ready=False,
+            reason="native_ui_deployed_version_mismatch",
+            **base,
+        )
+    if not server_build_id or not ui_build_id:
+        return NativeUiCompatibility(
+            ready=False,
+            reason="native_ui_build_identity_incomplete",
+            **base,
+        )
+    expected_build_ids = SUPPORTED_NATIVE_UI_BUILD_IDENTITIES.get(expected)
+    if expected_build_ids != (server_build_id, ui_build_id):
+        return NativeUiCompatibility(
+            ready=False,
+            reason="native_ui_build_identity_mismatch",
+            **base,
+        )
+    if contract != NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION:
+        return NativeUiCompatibility(
+            ready=False,
+            reason="native_ui_contract_mismatch",
+            **base,
+        )
+    if route_digest != NATIVE_UI_ROUTE_TRANSPORT_MANIFEST_DIGEST:
+        return NativeUiCompatibility(
+            ready=False,
+            reason="native_ui_route_manifest_mismatch",
+            **base,
+        )
+    if compiled_bundle_conformant is not True:
+        return NativeUiCompatibility(
+            ready=False,
+            reason="native_ui_bundle_not_conformant",
+            **base,
+        )
+    return NativeUiCompatibility(ready=True, reason=None, **base)
 
 
 # --- Browser-safe bootstrap contract -----------------------------------------
@@ -215,6 +289,7 @@ def build_chat_bootstrap(
     bootstrap: dict[str, Any] = {
         "schemaVersion": NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
         "chatBindingId": chat_binding_id,
+        "uiBase": scoped_ui_base(chat_binding_id),
         "apiBase": scoped_api_base(chat_binding_id),
         "wsBase": scoped_api_base(chat_binding_id),
         "mode": mode,
@@ -391,11 +466,13 @@ __all__ = [
     "NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION",
     "NATIVE_UI_MOUNT_PREFIX",
     "NATIVE_UI_ROUTE_FEATURE_VERSION",
+    "NATIVE_UI_ROUTE_TRANSPORT_MANIFEST_DIGEST",
     "NativeUiCompatibility",
     "PresentationMode",
     "SUPPORTED_NATIVE_UI_VERSIONS",
+    "SUPPORTED_NATIVE_UI_BUILD_IDENTITIES",
     "build_chat_bootstrap",
-    "evaluate_native_ui_compatibility",
+    "evaluate_deployed_native_ui_manifest",
     "is_document_request",
     "native_ui_security_headers",
     "presentation_mode_from_query",

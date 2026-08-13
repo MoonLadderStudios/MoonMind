@@ -229,17 +229,18 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     _chat_binding_logical_step_id,
 )
+from moonmind.omnigent.effective_capabilities import (
+    caller_capabilities_for_bridge,
+    resolve_bridge_row_capabilities,
+)
 from api_service.services.linked_continuation import (
     LinkedContinuationConflict,
     RELATIONSHIP_TYPE_LINKED_CONTINUATION,
     SqlLinkedContinuationRepository,
     compute_request_digest,
 )
-from moonmind.omnigent.native_ui import evaluate_native_ui_compatibility
-from moonmind.omnigent.settings import (
-    resolved_native_ui_serving_enabled,
-    resolved_native_ui_version,
-)
+from api_service.services.omnigent_native_ui_build import verify_deployed_native_ui
+from moonmind.omnigent.settings import resolved_native_ui_serving_enabled
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
 )
@@ -15959,15 +15960,30 @@ async def resolve_workflow_chat_binding(
     # browser rather than an iframe pointed at the router's 503 page
     # (MoonLadderStudios/MoonMind#3638 requirement 7, WorkflowChatPanel.md §11).
     serving_enabled = resolved_native_ui_serving_enabled()
-    native_ui = evaluate_native_ui_compatibility(
-        resolved_native_ui_version(),
-        enabled=serving_enabled,
-    )
+    native_ui = await verify_deployed_native_ui(enabled=serving_enabled)
 
     chat_url = ""
     api_base = ""
     state = resolution.state
     unavailable_reason = resolution.unavailable_reason
+    effective_capabilities = resolution.capabilities
+    effective_read_only = resolution.read_only
+    if resolution.chat_binding_id:
+        binding_row = await store.get_session_by_chat_binding_id(
+            resolution.chat_binding_id
+        )
+        if binding_row is not None:
+            capability_set = resolve_bridge_row_capabilities(
+                binding_row,
+                caller_capabilities=caller_capabilities_for_bridge(
+                    binding_row, user
+                ),
+            )
+            effective_capabilities = capability_set.capabilities
+            effective_read_only = (
+                resolution.state in {"ended", "unavailable"}
+                or effective_capabilities.get("sendMessage") is not True
+            )
     if resolution.chat_binding_id and native_ui.ready:
         # Server-owned, binding-scoped navigation targets. The browser never
         # substitutes the upstream route (docs/UI/WorkflowChatPanel.md §4).
@@ -15997,8 +16013,8 @@ async def resolve_workflow_chat_binding(
         chat_url=chat_url,
         api_base=api_base,
         state=state,
-        read_only=resolution.read_only,
-        capabilities=resolution.capabilities,
+        read_only=effective_read_only,
+        capabilities=effective_capabilities,
         unavailable_reason=unavailable_reason,
     )
 

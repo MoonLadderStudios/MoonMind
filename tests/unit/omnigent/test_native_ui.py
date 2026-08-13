@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
 from moonmind.omnigent.native_ui import (
     CODE_NATIVE_CHAT_UNAVAILABLE,
     NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
+    SUPPORTED_NATIVE_UI_BUILD_IDENTITIES,
     build_chat_bootstrap,
-    evaluate_native_ui_compatibility,
+    evaluate_deployed_native_ui_manifest,
+    NATIVE_UI_ROUTE_TRANSPORT_MANIFEST_DIGEST,
     is_document_request,
     native_ui_security_headers,
     presentation_mode_from_query,
@@ -39,7 +43,7 @@ def test_embedded_query_selects_embedded_mode() -> None:
 
 def test_missing_or_falsey_query_selects_full_page() -> None:
     for value in (None, "", "0", "false", "no", "off", "embedded"):
-        assert presentation_mode_from_query(value) == "full_page"
+        assert presentation_mode_from_query(value) == "full-page"
 
 
 # --- scoped bases -------------------------------------------------------------
@@ -55,34 +59,99 @@ def test_scoped_bases_are_binding_scoped_and_server_owned() -> None:
 # --- compatibility gate -------------------------------------------------------
 
 
-def test_pinned_version_is_compatible_by_default() -> None:
-    result = evaluate_native_ui_compatibility(PINNED_OMNIGENT_COMMIT)
-
-    assert result.ready is True
-    assert result.reason is None
-    assert result.reported_version == PINNED_OMNIGENT_COMMIT
-
-
-def test_unknown_version_fails_closed() -> None:
-    result = evaluate_native_ui_compatibility(None)
-
-    assert result.ready is False
-    assert result.reason == "native_ui_version_unknown"
-
-
-def test_unsupported_version_fails_closed() -> None:
-    result = evaluate_native_ui_compatibility("deadbeef-not-supported")
-
-    assert result.ready is False
-    assert result.reason == "native_ui_version_unsupported"
-    assert result.reported_version == "deadbeef-not-supported"
-
-
 def test_disabled_bridge_gates_serving() -> None:
-    result = evaluate_native_ui_compatibility(PINNED_OMNIGENT_COMMIT, enabled=False)
+    result = evaluate_deployed_native_ui_manifest(
+        None,
+        expected_version=PINNED_OMNIGENT_COMMIT,
+        enabled=False,
+    )
 
     assert result.ready is False
     assert result.reason == "omnigent_disabled"
+
+
+@pytest.mark.parametrize(
+    ("expected_version", "manifest", "reason"),
+    [
+        (None, None, "native_ui_expected_version_unknown"),
+        ("latest", None, "native_ui_build_manifest_unavailable"),
+    ],
+)
+def test_unverified_expected_or_deployed_build_fails_closed(
+    expected_version, manifest, reason
+) -> None:
+    result = evaluate_deployed_native_ui_manifest(
+        manifest,
+        expected_version=expected_version,
+    )
+
+    assert result.ready is False
+    assert result.reason == reason
+
+
+def test_deployed_manifest_requires_exact_server_and_compiled_ui_identity() -> None:
+    server_build_id, ui_build_id = SUPPORTED_NATIVE_UI_BUILD_IDENTITIES[
+        PINNED_OMNIGENT_COMMIT
+    ]
+    manifest = {
+        "sourceCommit": PINNED_OMNIGENT_COMMIT,
+        "serverBuildId": server_build_id,
+        "uiBuildId": ui_build_id,
+        "hostedBootstrapContractVersion": NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
+        "routeTransportManifestDigest": NATIVE_UI_ROUTE_TRANSPORT_MANIFEST_DIGEST,
+        "compiledBundleConformant": True,
+    }
+
+    result = evaluate_deployed_native_ui_manifest(
+        manifest, expected_version=PINNED_OMNIGENT_COMMIT
+    )
+
+    assert result.ready is True
+    assert result.expected_version == PINNED_OMNIGENT_COMMIT
+    assert result.server_build_id == server_build_id
+    assert result.ui_build_id == ui_build_id
+    assert result.compiled_bundle_conformant is True
+    assert result.as_dict()["compiledBundleConformant"] is True
+    assert result.as_dict()["expectedVersion"] == PINNED_OMNIGENT_COMMIT
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ({"sourceCommit": "f" * 40}, "native_ui_deployed_version_mismatch"),
+        ({"uiBuildId": None}, "native_ui_build_identity_incomplete"),
+        (
+            {"serverBuildId": "sha256:other"},
+            "native_ui_build_identity_mismatch",
+        ),
+        ({"compiledBundleConformant": False}, "native_ui_bundle_not_conformant"),
+        (
+            {"routeTransportManifestDigest": "sha256:other"},
+            "native_ui_route_manifest_mismatch",
+        ),
+    ],
+)
+def test_deployed_manifest_fails_closed_for_unverified_actual_build(
+    change, reason
+) -> None:
+    server_build_id, ui_build_id = SUPPORTED_NATIVE_UI_BUILD_IDENTITIES[
+        PINNED_OMNIGENT_COMMIT
+    ]
+    manifest = {
+        "sourceCommit": PINNED_OMNIGENT_COMMIT,
+        "serverBuildId": server_build_id,
+        "uiBuildId": ui_build_id,
+        "hostedBootstrapContractVersion": NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
+        "routeTransportManifestDigest": NATIVE_UI_ROUTE_TRANSPORT_MANIFEST_DIGEST,
+        "compiledBundleConformant": True,
+        **change,
+    }
+    assert (
+        evaluate_deployed_native_ui_manifest(
+            manifest, expected_version=PINNED_OMNIGENT_COMMIT
+        ).reason
+        == reason
+    )
 
 
 # --- bootstrap contract -------------------------------------------------------
@@ -140,7 +209,7 @@ def test_bootstrap_is_browser_safe_and_scoped() -> None:
 def test_bootstrap_read_only_records_disabled_reasons() -> None:
     bootstrap = build_chat_bootstrap(
         chat_binding_id=_BINDING,
-        mode="full_page",
+        mode="full-page",
         read_only=True,
         capabilities=_capabilities(read_only=True),
         state="ended",
@@ -206,7 +275,7 @@ def test_embedded_document_headers_allow_self_framing_and_no_store() -> None:
 
 
 def test_full_page_document_refuses_framing() -> None:
-    headers = native_ui_security_headers(mode="full_page", is_document=True)
+    headers = native_ui_security_headers(mode="full-page", is_document=True)
 
     assert "frame-ancestors 'none'" in headers["Content-Security-Policy"]
     assert headers["X-Frame-Options"] == "DENY"

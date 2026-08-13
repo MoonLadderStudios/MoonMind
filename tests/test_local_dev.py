@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+_PINNED_OMNIGENT_COMMIT = "510969b0ab60b94f1ce5f5ac49eda89295eff99c"
+
 
 class UniqueKeySafeLoader(yaml.SafeLoader):
     """PyYAML loader that rejects duplicate mapping keys."""
@@ -324,7 +326,7 @@ def test_api_service_runs_with_container_init():
     )
 
 
-def test_api_service_enables_omnigent_with_stock_images_by_default():
+def test_api_service_enables_verified_omnigent_build_by_default():
     compose_data = _load_compose()
     api_env = _env_map(compose_data["services"]["api"]["environment"])
 
@@ -335,7 +337,12 @@ def test_api_service_enables_omnigent_with_stock_images_by_default():
     assert api_env["OMNIGENT_IMAGE"] == (
         "${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}"
     )
-    assert api_env["OMNIGENT_IMAGE_TAG"] == "${OMNIGENT_IMAGE_TAG:-latest}"
+    assert api_env["OMNIGENT_IMAGE_TAG"] == (
+        f"${{OMNIGENT_IMAGE_TAG:-{_PINNED_OMNIGENT_COMMIT}}}"
+    )
+    assert api_env["OMNIGENT_NATIVE_UI_VERSION"] == (
+        f"${{OMNIGENT_NATIVE_UI_VERSION:-{_PINNED_OMNIGENT_COMMIT}}}"
+    )
     assert api_env["OMNIGENT_HOST_IMAGE"] == (
         "${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}"
     )
@@ -536,9 +543,13 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
 
     omnigent_env = _env_map(omnigent_service.get("environment"))
     assert omnigent_service["image"] == (
-        "${OMNIGENT_IMAGE_REF:-${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}:"
-        "${OMNIGENT_IMAGE_TAG:-latest}}"
+        f"${{OMNIGENT_IMAGE_REF:-moonmind/omnigent-server:{_PINNED_OMNIGENT_COMMIT}}}"
     )
+    assert omnigent_service["build"] == {
+        "context": "./omnigent",
+        "dockerfile": "deploy/docker/Dockerfile",
+        "args": {"OMNIGENT_SOURCE_COMMIT": _PINNED_OMNIGENT_COMMIT},
+    }
     assert omnigent_env["DATABASE_URL"] == (
         "postgresql://${OMNIGENT_POSTGRES_USER:-omnigent}:"
         "${OMNIGENT_POSTGRES_PASSWORD:-omnigent}@postgres:5432/"
@@ -576,6 +587,8 @@ def test_omnigent_env_template_and_optional_config_for_mm_970():
         "OMNIGENT_IMAGE_REF",
         "OMNIGENT_IMAGE",
         "OMNIGENT_IMAGE_TAG",
+        "OMNIGENT_NATIVE_UI_ENABLED",
+        "OMNIGENT_NATIVE_UI_VERSION",
         "OMNIGENT_PORT",
         "OMNIGENT_POSTGRES_USER",
         "OMNIGENT_POSTGRES_PASSWORD",

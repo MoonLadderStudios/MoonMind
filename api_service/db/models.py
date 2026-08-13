@@ -407,10 +407,26 @@ class OmnigentBridgeSession(Base):
             "chat_binding_id",
             unique=True,
         ),
+        Index(
+            "uq_omnigent_bridge_sessions_canonical_provider_session",
+            "canonical_provider_session_key",
+            unique=True,
+        ),
+        Index(
+            "ix_omnigent_bridge_sessions_canonical",
+            "canonical_bridge_session_id",
+        ),
     )
 
     bridge_session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     chat_binding_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    canonical_bridge_session_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("omnigent_bridge_sessions.bridge_session_id", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    canonical_provider_session_key: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
     compatibility_profile: Mapped[str] = mapped_column(String(128), nullable=False)
     moonmind_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)

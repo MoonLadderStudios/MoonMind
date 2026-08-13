@@ -16311,12 +16311,24 @@ class _FakeChatBindingStore:
             raise self._error
         return self._resolution
 
+    async def get_session_by_chat_binding_id(self, _chat_binding_id):
+        return None
+
 
 def _install_fake_store(monkeypatch, resolution=None, error=None):
     monkeypatch.setattr(
         executions_module,
         "OmnigentBridgeSessionStore",
         lambda *_a, **_k: _FakeChatBindingStore(resolution=resolution, error=error),
+    )
+    async def verified_native_ui(*, enabled):
+        return SimpleNamespace(
+            ready=enabled,
+            reason=None if enabled else "omnigent_disabled",
+        )
+
+    monkeypatch.setattr(
+        executions_module, "verify_deployed_native_ui", verified_native_ui
     )
 
 

@@ -3330,6 +3330,7 @@ async def _drive_authority_chain_coordinator(
     publication: dict | None = None,
     completion_evidence: list[dict] | None = None,
     request_parameters: dict | None = None,
+    bridge_trace: dict[str, list[dict]] | None = None,
 ) -> tuple[list[str], list[dict], dict, AgentRunResult]:
     """Drive a fully-stubbed on-demand coordinator run with the given runner.
 
@@ -3341,6 +3342,9 @@ async def _drive_authority_chain_coordinator(
     ordered: list[str] = []
     authority_metadata: list[dict] = []
     completion_sequence = list(completion_evidence or [])
+    bridge_trace = bridge_trace if bridge_trace is not None else {}
+    bridge_trace.setdefault("bindings", [])
+    bridge_trace.setdefault("terminal", [])
 
     provider_lease = SimpleNamespace(
         profile_id="codex",
@@ -3478,6 +3482,7 @@ async def _drive_authority_chain_coordinator(
             return SimpleNamespace(bridge_session_id="bridge-1")
 
         async def bind_profile_authorization(self, **kwargs):
+            bridge_trace["bindings"].append(dict(kwargs))
             idempotency_key = kwargs["request"].idempotency_key
             bridge_session_id = self.bindings.setdefault(
                 idempotency_key,
@@ -3494,7 +3499,10 @@ async def _drive_authority_chain_coordinator(
             if "authorityChain" in metadata:
                 authority_metadata.append(metadata["authorityChain"])
 
-        async def mark_terminal(self, *_args, **_kwargs):
+        async def mark_terminal(self, bridge_session_id, **kwargs):
+            bridge_trace["terminal"].append(
+                {"bridge_session_id": bridge_session_id, **dict(kwargs)}
+            )
             return None
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
@@ -3798,12 +3806,20 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
     """A tool-output-only turn is continued before any branch is published."""
 
     runner_calls: list[tuple[str, dict]] = []
+    bridge_trace: dict[str, list[dict]] = {}
 
     async def execute(request, **kwargs):
         runner_calls.append((request.idempotency_key, dict(kwargs)))
+        metadata = {"omnigentSessionId": "session-1"}
+        if kwargs.get("defer_bridge_terminal"):
+            metadata["deferredBridgeTerminal"] = {
+                "idempotencyKey": request.idempotency_key,
+                "status": "completed",
+                "terminalRefs": {"providerSessionId": "session-1"},
+            }
         return AgentRunResult(
             summary="provider turn ended",
-            metadata={"omnigentSessionId": "session-1"},
+            metadata=metadata,
         )
 
     incomplete = {
@@ -3825,6 +3841,7 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
         await _drive_authority_chain_coordinator(
             execute,
             completion_evidence=[incomplete, complete],
+            bridge_trace=bridge_trace,
         )
     )
 
@@ -3838,10 +3855,74 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
     assert runner_calls[1][1]["defer_bridge_terminal"] is True
     assert "repository_continuation_1" in ordered
     checkpoint = metadata["omnigentCheckpointCapture"]
-    assert checkpoint["bridgeSessionId"] == "bridge-2"
+    assert checkpoint["bridgeSessionId"] == "bridge-1"
     assert checkpoint["idempotencyKey"].endswith(
         ":repository-continuation:1"
     )
+    # The canonical request is rebound after the on-demand host starts, then
+    # the actual repository continuation creates the sole child attempt.
+    assert len(bridge_trace["bindings"]) == 3
+    assert all(
+        binding.get("canonical_bridge_session_id") is None
+        for binding in bridge_trace["bindings"][:2]
+    )
+    assert (
+        bridge_trace["bindings"][2]["canonical_bridge_session_id"]
+        == "bridge-1"
+    )
+    assert len(bridge_trace["terminal"]) == 2
+    assert bridge_trace["terminal"][0]["bridge_session_id"].endswith(
+        ":repository-continuation:1"
+    )
+    assert bridge_trace["terminal"][0]["terminal_scope"] == "attempt"
+    assert bridge_trace["terminal"][1]["bridge_session_id"] == "idem-1"
+    assert bridge_trace["terminal"][1]["terminal_scope"] == "provider_session"
+    assert bridge_trace["terminal"][1]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_failed_continuation_sets_canonical_governing_terminal_status() -> None:
+    runner_calls = 0
+    bridge_trace: dict[str, list[dict]] = {}
+
+    async def execute(request, **kwargs):
+        nonlocal runner_calls
+        runner_calls += 1
+        metadata = {"omnigentSessionId": "session-1"}
+        if runner_calls == 1:
+            metadata["deferredBridgeTerminal"] = {
+                "idempotencyKey": request.idempotency_key,
+                "status": "completed",
+                "terminalRefs": {"providerSessionId": "session-1"},
+            }
+            return AgentRunResult(summary="initial turn ended", metadata=metadata)
+        return AgentRunResult(
+            summary="continuation failed",
+            failure_class="system_error",
+            provider_error_code="continuation_failed",
+            metadata=metadata,
+        )
+
+    incomplete = {
+        "sessionStatus": "completed",
+        "itemCount": 5,
+        "assistantMessageCount": 1,
+        "toolResultCount": 1,
+        "terminalAssistantAfterWork": False,
+    }
+    _ordered, _authority, _metadata, result = (
+        await _drive_authority_chain_coordinator(
+            execute,
+            completion_evidence=[incomplete],
+            bridge_trace=bridge_trace,
+        )
+    )
+
+    assert result.failure_class == "system_error"
+    assert len(bridge_trace["terminal"]) == 1
+    assert bridge_trace["terminal"][0]["bridge_session_id"] == "idem-1"
+    assert bridge_trace["terminal"][0]["terminal_scope"] == "provider_session"
+    assert bridge_trace["terminal"][0]["status"] == "failed"
 
 
 @pytest.mark.asyncio

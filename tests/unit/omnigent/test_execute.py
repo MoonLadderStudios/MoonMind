@@ -3369,6 +3369,30 @@ async def test_run_omnigent_execution_required_artifact_persistence_is_system_er
     monkeypatch,
     tmp_path,
 ) -> None:
+    terminal_calls: list[dict[str, object]] = []
+
+    class Row:
+        bridge_session_id = "bridge-continuation"
+        moonmind_workflow_id = "corr-1"
+        moonmind_agent_run_id = "corr-1"
+        omnigent_session_id = "session-1"
+        first_message_state = "prepared"
+        first_message_pending_id = None
+        first_message_item_id = None
+        first_message_posted_at = None
+        metadata_ = {}
+
+    class Store:
+        async def get_binding(self, *_args, **_kwargs):
+            return None
+
+        async def get_or_create(self, **_kwargs):
+            return Row()
+
+        async def mark_terminal(self, _key: str, **kwargs):
+            terminal_calls.append(dict(kwargs))
+            return Row()
+
     class FakeClient:
         def __init__(self, **_: object) -> None:
             pass
@@ -3403,11 +3427,15 @@ async def test_run_omnigent_execution_required_artifact_persistence_is_system_er
             },
         ),
         artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        run_store=Store(),
+        defer_bridge_terminal=True,
     )
 
     # §17: required artifact-persistence/authority failure -> system_error.
     assert result.failure_class == "system_error"
     assert result.provider_error_code == "omnigent_artifact_persistence_failed"
+    assert len(terminal_calls) == 1
+    assert terminal_calls[0]["terminal_scope"] == "attempt"
 
 
 @pytest.mark.asyncio

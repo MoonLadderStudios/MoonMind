@@ -1588,6 +1588,357 @@ async def _seed_chat_session(
         await store.record_provider_session_deleted(session_id)
 
 
+def _canonical_launch_snapshot() -> dict:
+    grants = {
+        "viewTranscript": True,
+        "sendMessage": True,
+        "readResources": True,
+    }
+    return {
+        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
+        "executionProfileRef": "agent-profile://profile-1/versions/1",
+        "executionProfileDigest": "sha256:" + "4" * 64,
+        "launchPolicyRef": "policy-1@1",
+        "agentProfileCapabilities": grants,
+        "capabilities": grants,
+        "sessionStateCapabilities": grants,
+        "policyAuthority": {
+            "policyId": "policy-1",
+            "policyVersion": 1,
+            "policyRef": "policy-1@1",
+            "policyDigest": "sha256:" + "5" * 64,
+            "snapshotRef": "policy:sha256:" + "6" * 64,
+            "validation": {"valid": True},
+        },
+    }
+
+
+async def _bind_continuation_authority(
+    store,
+    key: str,
+    *,
+    canonical_bridge_session_id: str | None = None,
+    launch_snapshot: dict | None = None,
+):
+    return await store.bind_profile_authorization(
+        request=_request(key, with_step=True),
+        endpoint_ref="default",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=4,
+        host_binding_ref="binding-1",
+        host_lease_ref="lease-1",
+        omnigent_host_id="host-1",
+        effective_launch_snapshot=launch_snapshot or _canonical_launch_snapshot(),
+        canonical_bridge_session_id=canonical_bridge_session_id,
+    )
+
+
+async def _seed_canonical_chat_session(
+    store,
+    *,
+    key: str,
+    session_id: str,
+    capabilities: dict,
+    terminal_status: str | None = None,
+    launch_snapshot: dict | None = None,
+):
+    row = await _bind_continuation_authority(
+        store, key, launch_snapshot=launch_snapshot
+    )
+    await store.attach_session(key, session_id)
+    row = await store.record_session_created(
+        key,
+        session_id=session_id,
+        capabilities=capabilities,
+    )
+    if terminal_status is not None:
+        row = await store.mark_terminal(key, status=terminal_status)
+    return row
+
+
+@pytest.mark.asyncio
+async def test_seven_repository_continuations_keep_one_chat_authority(store):
+    canonical = await _bind_continuation_authority(store, "initial")
+    await store.attach_session("initial", "sess-shared")
+    canonical = await store.record_session_created(
+        "initial",
+        session_id="sess-shared",
+        capabilities={"viewTranscript": True, "sendMessage": True, "readResources": True},
+    )
+    binding_id = canonical.chat_binding_id
+    assert binding_id
+
+    children = []
+    for index in range(1, 8):
+        key = f"initial:repository-continuation:{index}"
+        child = await _bind_continuation_authority(
+            store, key, canonical_bridge_session_id=canonical.bridge_session_id
+        )
+        await store.attach_session(key, "sess-shared")
+        child = await store.record_session_created(
+            key,
+            session_id="sess-shared",
+            capabilities={"viewTranscript": True, "sendMessage": True, "readResources": True},
+        )
+        assert child.chat_binding_id is None
+        assert child.canonical_bridge_session_id == canonical.bridge_session_id
+        await store.mark_terminal(key, status="completed", terminal_scope="attempt")
+        children.append(child)
+
+        live = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+        assert live.state == CHAT_BINDING_STATE_AVAILABLE
+        assert live.chat_binding_id == binding_id
+
+    still_live = await store.get_existing("initial")
+    assert still_live.status != "completed"
+    assert await store.ensure_chat_binding_id(children[-1].bridge_session_id) == binding_id
+
+    await store.mark_terminal(
+        "initial", status="completed", terminal_scope="provider_session"
+    )
+    ended = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert ended.state == CHAT_BINDING_STATE_ENDED
+    assert ended.chat_binding_id == binding_id
+
+
+@pytest.mark.asyncio
+async def test_continuation_events_update_state_without_terminalizing_authority(store):
+    canonical = await _bind_continuation_authority(store, "initial")
+    await store.attach_session("initial", "sess-shared")
+    canonical = await store.record_session_created(
+        "initial",
+        session_id="sess-shared",
+        capabilities={
+            "viewTranscript": True,
+            "sendMessage": True,
+            "readResources": True,
+        },
+    )
+    await store.append_events(
+        canonical.bridge_session_id,
+        [{"eventType": "response.completed", "normalizedStatus": "completed"}],
+        defer_provider_terminal=True,
+    )
+    not_terminal = await store.get_existing("initial")
+    assert not_terminal.status != "completed"
+
+    child = await _bind_continuation_authority(
+        store,
+        "initial:repository-continuation:1",
+        canonical_bridge_session_id=canonical.bridge_session_id,
+    )
+    await store.attach_session(child.idempotency_key, "sess-shared")
+    child = await store.record_session_created(
+        child.idempotency_key,
+        session_id="sess-shared",
+        capabilities={
+            "viewTranscript": True,
+            "sendMessage": True,
+            "readResources": True,
+        },
+    )
+    await store.append_events(
+        child.bridge_session_id,
+        [
+            {
+                "eventType": "response.started",
+                "normalizedStatus": "running",
+                "turnId": "turn-2",
+            }
+        ],
+        defer_provider_terminal=True,
+    )
+
+    live = await store.get_existing("initial")
+    assert live.status == STATUS_ACTIVE
+    assert live.metadata_["capabilityAuthority"]["state"]["activeTurnId"] == (
+        "turn-2"
+    )
+
+    await store.append_events(
+        child.bridge_session_id,
+        [
+            {
+                "eventType": "response.completed",
+                "normalizedStatus": "completed",
+            }
+        ],
+        defer_provider_terminal=True,
+    )
+    canonical_after_attempt = await store.get_existing("initial")
+    child_after_attempt = await store.get_existing(child.idempotency_key)
+    assert canonical_after_attempt.status == STATUS_ACTIVE
+    assert child_after_attempt.status == "completed"
+    assert (
+        canonical_after_attempt.metadata_["capabilityAuthority"]["state"][
+            "activeTurnId"
+        ]
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_reconciliation_preserves_old_binding_aliases(store):
+    canonical = await _bind_continuation_authority(store, "initial")
+    await store.attach_session("initial", "sess-shared")
+    canonical = await store.record_session_created(
+        "initial", session_id="sess-shared", capabilities={"sendMessage": True}
+    )
+    duplicate = await _bind_continuation_authority(
+        store,
+        "initial:repository-continuation:1",
+        canonical_bridge_session_id=canonical.bridge_session_id,
+    )
+    await store.attach_session(duplicate.idempotency_key, "sess-shared")
+    duplicate = await store.record_session_created(
+        duplicate.idempotency_key,
+        session_id="sess-shared",
+        capabilities={"sendMessage": True},
+    )
+    await store.record_lifecycle_event(
+        duplicate.idempotency_key,
+        event_type="continuation_evidence",
+        event_identity="continuation-evidence-1",
+        metadata={"durableAuditRef": "artifact://continuation-1"},
+    )
+    old_binding = "chatb_historical_alias"
+    async with store._session_factory() as session:
+        db_duplicate = await session.get(
+            OmnigentBridgeSession, duplicate.bridge_session_id
+        )
+        duplicate_metadata = dict(db_duplicate.metadata_)
+        duplicate_authority = dict(duplicate_metadata["capabilityAuthority"])
+        duplicate_state = dict(duplicate_authority["state"])
+        duplicate_state["sessionEpoch"] = 7
+        duplicate_state["capabilities"] = {
+            **duplicate_state["capabilities"],
+            "sendMessage": False,
+        }
+        duplicate_authority["state"] = duplicate_state
+        duplicate_metadata["capabilityAuthority"] = duplicate_authority
+        db_duplicate.metadata_ = duplicate_metadata
+        db_duplicate.canonical_bridge_session_id = None
+        db_duplicate.chat_binding_id = old_binding
+        await session.commit()
+
+    diagnostics_before = await store.canonical_chat_authority_diagnostics()
+    assert diagnostics_before == {
+        "duplicateProviderSessionGroups": 1,
+        "capabilityAuthority": {
+            "scannedCanonicalRows": 2,
+            "completeCanonicalRows": 2,
+            "incompleteCanonicalRows": 0,
+            "scanTruncated": False,
+        },
+    }
+    preview = await store.reconcile_canonical_chat_authorities(dry_run=True)
+    assert preview["canonicalizedGroups"] == 1
+    assert preview["aliasRows"] == 1
+
+    applied = await store.reconcile_canonical_chat_authorities(dry_run=False)
+    assert applied["canonicalizedGroups"] == 1
+    resolved_alias = await store.get_session_by_chat_binding_id(old_binding)
+    assert resolved_alias.bridge_session_id == canonical.bridge_session_id
+
+    preserved_evidence = await store.get_lifecycle_event_metadata(
+        duplicate.idempotency_key,
+        event_identity="continuation-evidence-1",
+    )
+    assert preserved_evidence == {"durableAuditRef": "artifact://continuation-1"}
+    repeated = await store.reconcile_canonical_chat_authorities(dry_run=False)
+    assert repeated["canonicalizedGroups"] == 0
+    assert repeated["unchangedGroups"] == 1
+    diagnostics_after = await store.canonical_chat_authority_diagnostics()
+    assert diagnostics_after == {
+        "duplicateProviderSessionGroups": 0,
+        "capabilityAuthority": {
+            "scannedCanonicalRows": 1,
+            "completeCanonicalRows": 1,
+            "incompleteCanonicalRows": 0,
+            "scanTruncated": False,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_duplicate_reconciliation_fails_closed_for_conflicting_authority(store):
+    canonical = await _bind_continuation_authority(store, "initial")
+    await store.attach_session("initial", "sess-shared")
+    canonical = await store.record_session_created(
+        "initial", session_id="sess-shared", capabilities={"sendMessage": True}
+    )
+    duplicate = await _bind_continuation_authority(
+        store,
+        "initial:repository-continuation:1",
+        canonical_bridge_session_id=canonical.bridge_session_id,
+    )
+    await store.attach_session(duplicate.idempotency_key, "sess-shared")
+    duplicate = await store.record_session_created(
+        duplicate.idempotency_key,
+        session_id="sess-shared",
+        capabilities={"sendMessage": True},
+    )
+    async with store._session_factory() as session:
+        db_duplicate = await session.get(
+            OmnigentBridgeSession, duplicate.bridge_session_id
+        )
+        launch = dict(db_duplicate.effective_launch_snapshot_json)
+        launch["executionProfileDigest"] = "sha256:" + "9" * 64
+        db_duplicate.effective_launch_snapshot_json = launch
+        db_duplicate.canonical_bridge_session_id = None
+        db_duplicate.chat_binding_id = "chatb_conflicting_alias"
+        await session.commit()
+
+    report = await store.reconcile_canonical_chat_authorities(dry_run=False)
+
+    assert report["ambiguousGroups"] == 1
+    assert report["canonicalizedGroups"] == 0
+    unresolved = await store.get_existing(duplicate.idempotency_key)
+    assert unresolved.canonical_bridge_session_id is None
+
+
+@pytest.mark.asyncio
+async def test_duplicate_reconciliation_rejects_incomplete_keyed_authority(store):
+    canonical = await _seed_canonical_chat_session(
+        store,
+        key="initial",
+        session_id="sess-shared",
+        capabilities={"sendMessage": True},
+    )
+    duplicate = await _bind_continuation_authority(
+        store,
+        "initial:repository-continuation:1",
+        canonical_bridge_session_id=canonical.bridge_session_id,
+    )
+    await store.attach_session(duplicate.idempotency_key, "sess-shared")
+    duplicate = await store.record_session_created(
+        duplicate.idempotency_key,
+        session_id="sess-shared",
+        capabilities={"sendMessage": True},
+    )
+    async with store._session_factory() as session:
+        db_canonical = await session.get(
+            OmnigentBridgeSession, canonical.bridge_session_id
+        )
+        canonical_metadata = dict(db_canonical.metadata_)
+        canonical_metadata.pop("capabilityAuthority")
+        db_canonical.metadata_ = canonical_metadata
+        db_duplicate = await session.get(
+            OmnigentBridgeSession, duplicate.bridge_session_id
+        )
+        db_duplicate.canonical_bridge_session_id = None
+        db_duplicate.chat_binding_id = "chatb_complete_duplicate"
+        await session.commit()
+
+    report = await store.reconcile_canonical_chat_authorities(dry_run=False)
+
+    assert report["ambiguousGroups"] == 1
+    assert report["canonicalizedGroups"] == 0
+    unresolved = await store.get_existing(duplicate.idempotency_key)
+    assert unresolved.canonical_bridge_session_id is None
+
+
 @pytest.mark.asyncio
 async def test_chat_binding_allocated_only_after_provider_binding(store):
     await store.get_or_create(
@@ -1659,11 +2010,9 @@ async def test_ensure_chat_binding_backfills_historical_row(store):
 
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_active_available(store):
-    await _seed_chat_session(
+    await _seed_canonical_chat_session(
         store,
         key="idem-1",
-        workflow_id="mm:wf-1",
-        agent_run_id="ar-1",
         session_id="sess-1",
         capabilities={"viewTranscript": True, "sendMessage": True},
     )
@@ -1671,16 +2020,14 @@ async def test_resolve_chat_binding_active_available(store):
     assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
     assert resolution.read_only is False
     assert resolution.chat_binding_id
-    assert resolution.capabilities == {"viewTranscript": True, "sendMessage": True}
+    assert resolution.capabilities["sendMessage"] is True
 
 
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_read_only_from_capabilities(store):
-    await _seed_chat_session(
+    await _seed_canonical_chat_session(
         store,
         key="idem-1",
-        workflow_id="mm:wf-1",
-        agent_run_id="ar-1",
         session_id="sess-1",
         capabilities={"viewTranscript": True, "sendMessage": False},
     )
@@ -1709,12 +2056,11 @@ async def test_resolve_chat_binding_starting_has_no_binding(store):
 
 @pytest.mark.asyncio
 async def test_resolve_chat_binding_terminal_read_only(store):
-    await _seed_chat_session(
+    await _seed_canonical_chat_session(
         store,
         key="idem-1",
-        workflow_id="mm:wf-1",
-        agent_run_id="ar-1",
         session_id="sess-1",
+        capabilities={"viewTranscript": True, "sendMessage": True},
         terminal_status="completed",
     )
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
@@ -1799,12 +2145,11 @@ async def test_resolve_chat_binding_prefers_active_over_terminal(store):
         session_id="sess-old",
         terminal_status="completed",
     )
-    await _seed_chat_session(
+    await _seed_canonical_chat_session(
         store,
         key="idem-new",
-        workflow_id="mm:wf-1",
-        agent_run_id="ar-new",
         session_id="sess-new",
+        capabilities={"viewTranscript": True, "sendMessage": True},
     )
     active_binding = (await store.get_existing("idem-new")).chat_binding_id
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
@@ -1827,7 +2172,9 @@ async def test_resolve_chat_binding_read_only_without_capability_snapshot(store)
         capabilities=None,
     )
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
-    assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
+    assert resolution.state == CHAT_BINDING_STATE_UNAVAILABLE
+    assert resolution.unavailable_reason == "capability_authority_missing"
+    assert resolution.chat_binding_id is None
     assert resolution.read_only is True
     assert resolution.capabilities == {}
 
@@ -1836,15 +2183,14 @@ async def test_resolve_chat_binding_read_only_without_capability_snapshot(store)
 async def test_resolve_chat_binding_read_only_when_send_capability_absent(store):
     """A partial snapshot without ``sendMessage`` still fails closed."""
 
-    await _seed_chat_session(
+    await _seed_canonical_chat_session(
         store,
         key="idem-1",
-        workflow_id="mm:wf-1",
-        agent_run_id="ar-1",
         session_id="sess-1",
         capabilities={"viewTranscript": True},
     )
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert resolution.state == CHAT_BINDING_STATE_AVAILABLE
     assert resolution.read_only is True
 
 
@@ -1937,12 +2283,11 @@ async def test_resolve_chat_binding_uses_latest_terminal_when_older_cleaned_up(s
         delete_session=True,
     )
     old_row = await store.get_existing("idem-old")
-    await _seed_chat_session(
+    await _seed_canonical_chat_session(
         store,
         key="idem-new",
-        workflow_id="mm:wf-1",
-        agent_run_id="ar-new",
         session_id="sess-new",
+        capabilities={"viewTranscript": True, "sendMessage": True},
         terminal_status="completed",
     )
     new_row = await store.get_existing("idem-new")
@@ -1973,6 +2318,8 @@ async def test_get_or_create_persists_logical_step_id_in_metadata(store):
     await store.attach_session("idem-1", "sess-1")
     await store.record_session_created("idem-1", session_id="sess-1")
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
+    assert resolution.state == CHAT_BINDING_STATE_UNAVAILABLE
+    assert resolution.unavailable_reason == "capability_authority_missing"
     assert resolution.logical_step_id == "implement"
 
 

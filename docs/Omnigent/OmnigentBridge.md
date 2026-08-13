@@ -2,7 +2,7 @@
 
 Status: Proposed design  
 Owners: MoonMind Platform  
-Last updated: 2026-08-07
+Last updated: 2026-08-13
 
 **Implementation tracking:** rollout notes, spikes, and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not as mutable checklists in this canonical design document.
 
@@ -410,6 +410,8 @@ The Session API Facade resolves this document from `OMNIGENT_BRIDGE_CONFIG_PATH`
 omnigent_bridge_sessions
   bridge_session_id text primary key
   chat_binding_id text unique null
+  canonical_bridge_session_id text null references omnigent_bridge_sessions
+  canonical_provider_session_key text unique null
   provider text not null
   compatibility_profile text not null
   moonmind_workflow_id text not null
@@ -457,6 +459,10 @@ omnigent_bridge_sessions
 ```
 
 `chat_binding_id` is an opaque authorization lookup key, not a bearer capability. The provider session id and upstream endpoint remain server-side. Caller permissions and effective capabilities are recomputed per request rather than trusted from mutable browser state.
+
+Exactly one row per Workflow/provider-session pair is the canonical chat authority. It carries the only `chat_binding_id`, the unique non-reversible `canonical_provider_session_key`, and the complete immutable `capabilityAuthority`. Rows created for repository publication continuations point to it through `canonical_bridge_session_id`; they retain attempt-local events and terminal evidence but do not acquire another chat identity or terminalize the provider-session authority. Lookups through historical duplicate binding ids resolve to the canonical row only after their immutable authority is complete and identical.
+
+Historical duplicate rows are reconciled with `python -m api_service.scripts.reconcile_omnigent_chat_bindings`. The command is dry-run by default, reports bounded counts without provider identifiers, and applies changes only with `--apply`. Incomplete or conflicting immutable authority is reported as ambiguous and left unchanged so serving fails closed.
 
 `omnigent_bridge_sessions` is the single canonical Omnigent session and idempotency store. It supersedes the removed `omnigent_external_runs` mapping without a parallel table or compatibility wrapper.
 
@@ -540,6 +546,8 @@ A normalized provider event without this evidence may be displayed diagnosticall
 7. Allocate the opaque `chat_binding_id` only after the durable binding exists.
 8. Emit `session.created` into the bridge journal.
 9. Return an Omnigent-shaped service response or browser-safe binding projection as appropriate.
+10. When an internal continuation resumes the same provider session, bind its attempt row to the original canonical row, preserve the canonical `chat_binding_id`, and update only live session state on that authority.
+11. Mark attempt rows terminal as their work finishes; mark the canonical row terminal once, when the provider-session execution and all continuations have reached their authoritative outcome.
 
 ### 8.3 Managed/external host validation
 
@@ -899,11 +907,11 @@ Terminal captured evidence and linked continuation are Workflow-scoped, owner-au
 
 MoonMind serves the provider-maintained native Omnigent web application through its own origin at the binding-scoped route `GET /omnigent-ui/workflow-chat/{chatBindingId}[?embedded=1]` (and its SPA sub-paths). It reverse-proxies the stock UI assets from the upstream server, serves the SPA document with an injected browser-safe bootstrap, and never copies the native React source or lets the browser connect directly to the upstream server. The same scoped surface backs both the embedded Workflow Detail view and the full-page **Open in Omnigent** view; the full-page view drops only the `embedded` presentation flag and uses the same binding, facade, credentials, and policy.
 
-The served document injects `window.__MOONMIND_OMNIGENT_CHAT__`, a browser-safe bootstrap carrying only: the opaque `chatBindingId`; scoped API and WebSocket bases (`/api/workflow-chat-bindings/{chatBindingId}/omnigent`); the presentation mode (`embedded`/`full_page`); read-only state; the filtered effective capability manifest with disabled reasons; safe display labels; and a stable compatibility version. The WebSocket stream uses the same binding-scoped session-stream path as SSE and repeats binding authorization while connected. The bootstrap never carries a raw provider session id, upstream URL, host/runner id, credential, profile ref, launch policy, or workspace authority. Root-absolute asset URLs are rewritten onto the scoped route and a `connect-src 'self'` policy keeps every asset, API, SSE, and WebSocket request on the MoonMind origin; `worker-src 'none'` prevents the upstream application from installing a service worker outside that scoped lifecycle.
+The served document injects `window.__MOONMIND_OMNIGENT_CHAT__`, a browser-safe bootstrap carrying only: the opaque `chatBindingId`; the scoped UI, API, and WebSocket bases (`/api/workflow-chat-bindings/{chatBindingId}/omnigent`); the presentation mode (`embedded`/`full-page`); read-only state; the filtered effective capability manifest with disabled reasons; safe display labels; and a stable compatibility version. The provider production entry point validates and installs this bootstrap before loading telemetry, identity, capability probes, queries, WebSocket constructors, or the router. Invalid hosted input fails closed without starting the application. Both hosted presentation modes open only the virtual bound session and omit the global session catalog and New Session navigation. The WebSocket stream uses the same binding-scoped session-stream path as SSE and repeats binding authorization while connected. The bootstrap never carries a raw provider session id, upstream URL, host/runner id, credential, profile ref, launch policy, or workspace authority. Root-absolute asset URLs are rewritten onto the scoped route and a `connect-src 'self'` policy keeps every asset, API, SSE, and WebSocket request on the MoonMind origin; `worker-src 'none'` prevents the upstream application from installing a service worker outside that scoped lifecycle.
 
 Security policy for the served responses is explicit: embedded documents allow `frame-ancestors 'self'` (`X-Frame-Options: SAMEORIGIN`); the full-page view refuses framing (`frame-ancestors 'none'` / `DENY`). Documents carry the caller's bootstrap and are never cached (`Cache-Control: no-store` + `Vary: Cookie`), so one binding's bootstrap or private session state cannot leak to another caller; hashed assets carry no binding data and are privately cacheable. Upstream redirects are re-based inside the scoped route and never expose upstream topology.
 
-Serving is gated on a known-compatible native UI/server version. An unknown or unsupported version fails with a stable, actionable `omnigent_native_chat_unavailable` state rather than partially bypassing the scoped facade. Operator configuration is namespaced and safe-by-default: `OMNIGENT_NATIVE_UI_ENABLED` (default enabled) toggles serving, and `OMNIGENT_NATIVE_UI_VERSION` pins the running upstream build (default: the single upstream source pin MoonMind is verified against). Readiness reports native-UI serving, the compatibility version, the scoped HTTP/SSE routes, and credential separation under `compatibilityDiagnostics.nativeUi`.
+Serving is gated on objective evidence from the running server's `/api/hosted-build-manifest`: exact source commit, server build id, hash of the compiled UI bytes, bootstrap contract version, route/transport manifest digest, and compiled-bundle conformance. The expected source version must be an explicit immutable pin; application-level blank configuration, an unavailable manifest, a mutable/unidentified image, a mismatched compiled bundle, or an unsupported version fails with the stable `omnigent_native_chat_unavailable` state before an iframe is selected. `OMNIGENT_NATIVE_UI_ENABLED` (default enabled) toggles serving and `OMNIGENT_NATIVE_UI_VERSION` declares the expected immutable commit; canonical Compose supplies the verified submodule pin to both the image build and MoonMind API. Readiness reports the actual server/UI build identities and conformance fields under `compatibilityDiagnostics.nativeUi`.
 
 ---
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -222,21 +222,17 @@ def _serves_native_chat(row: OmnigentBridgeSession) -> bool:
 
 
 def _chat_binding_capabilities(row: OmnigentBridgeSession) -> dict[str, bool]:
-    """Project the stored effective capabilities as a browser-safe bool map."""
+    """Project the complete immutable authority, never legacy capability maps."""
 
-    metadata = getattr(row, "metadata_", None)
-    if not isinstance(metadata, dict):
-        return {}
-    raw = metadata.get("interventionCapabilities")
-    if not isinstance(raw, dict):
-        raw = metadata.get("capabilities")
-    if not isinstance(raw, dict):
-        return {}
-    return {
-        str(key): value
-        for key, value in raw.items()
-        if isinstance(key, str) and isinstance(value, bool)
-    }
+    from moonmind.omnigent.effective_capabilities import (
+        CAPABILITY_NAMES,
+        resolve_bridge_row_capabilities,
+    )
+
+    return resolve_bridge_row_capabilities(
+        row,
+        caller_capabilities={name: True for name in CAPABILITY_NAMES},
+    ).capabilities
 
 
 def _chat_binding_logical_step_id(row: OmnigentBridgeSession) -> str | None:
@@ -246,6 +242,92 @@ def _chat_binding_logical_step_id(row: OmnigentBridgeSession) -> str | None:
     value = metadata.get("logicalStepId")
     text = str(value or "").strip()
     return text or None
+
+
+def _canonical_provider_session_key(workflow_id: str, session_id: str) -> str:
+    material = f"{workflow_id}\0{session_id}".encode("utf-8")
+    return "sha256:" + hashlib.sha256(material).hexdigest()
+
+
+def _canonical_authority_fingerprint(
+    row: OmnigentBridgeSession,
+) -> str | None:
+    """Return the immutable capability-authority fingerprint or fail closed."""
+
+    launch_value = row.effective_launch_snapshot_json
+    metadata_value = row.metadata_
+    if not isinstance(launch_value, Mapping) or not isinstance(
+        metadata_value, Mapping
+    ):
+        return None
+    launch = dict(launch_value)
+    policy_value = launch.get("policyAuthority")
+    evidence_value = metadata_value.get("capabilityAuthority")
+    if not isinstance(policy_value, Mapping) or not isinstance(
+        evidence_value, Mapping
+    ):
+        return None
+    policy = dict(policy_value)
+    evidence = dict(evidence_value)
+    state_value = evidence.get("state")
+    if not isinstance(state_value, Mapping):
+        return None
+    state = dict(state_value)
+    capability_sources = (
+        evidence.get("upstream"),
+        evidence.get("agentProfile"),
+        evidence.get("launchPolicy"),
+        state.get("capabilities"),
+    )
+    if any(not isinstance(source, Mapping) for source in capability_sources):
+        return None
+    required = (
+        evidence.get("schemaVersion"),
+        launch.get("executionProfileRef"),
+        launch.get("executionProfileDigest"),
+        row.provider_profile_id,
+        row.credential_generation,
+        launch.get("launchPolicyRef"),
+        policy.get("snapshotRef"),
+        policy.get("policyDigest"),
+        launch.get("snapshotRef"),
+        state.get("sessionEpoch"),
+        evidence.get("providerSessionId"),
+    )
+    if (
+        evidence.get("schemaVersion")
+        != "moonmind.omnigent.capability-authority.v1"
+        or evidence.get("fresh") is not True
+        or any(value in {None, ""} for value in required)
+        or str(evidence.get("providerProfileGeneration"))
+        != str(row.credential_generation)
+        or str(evidence.get("providerSessionId"))
+        != str(row.omnigent_session_id or "")
+    ):
+        return None
+    payload = {
+        "executionProfileRef": launch.get("executionProfileRef"),
+        "executionProfileDigest": launch.get("executionProfileDigest"),
+        "providerProfileId": row.provider_profile_id,
+        "providerProfileGeneration": row.credential_generation,
+        "launchPolicyRef": launch.get("launchPolicyRef"),
+        "policySnapshotRef": policy.get("snapshotRef"),
+        "policyDigest": policy.get("policyDigest"),
+        "effectiveLaunchSnapshotRef": launch.get("snapshotRef"),
+        "providerSessionId": evidence.get("providerSessionId"),
+        "upstream": evidence.get("upstream"),
+        "agentProfile": evidence.get("agentProfile"),
+        "launchPolicy": evidence.get("launchPolicy"),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def canonical_capability_authority_is_complete(row: Any) -> bool:
+    """Return whether a row can safely own browser and facade capability policy."""
+
+    return _canonical_authority_fingerprint(row) is not None
 
 
 # Bridge lifecycle states owned by the bridge before the provider reports a
@@ -936,6 +1018,7 @@ class OmnigentBridgeSessionStore:
         host_lease_ref: str,
         omnigent_host_id: str | None,
         effective_launch_snapshot: dict[str, Any] | None = None,
+        canonical_bridge_session_id: str | None = None,
     ) -> OmnigentBridgeSession:
         """Persist lease-authorized routing before provider session creation."""
 
@@ -989,6 +1072,23 @@ class OmnigentBridgeSessionStore:
         )
         async with self._session_factory() as session:
             stored = await self._require(session, request.idempotency_key)
+            canonical_id = str(canonical_bridge_session_id or "").strip() or None
+            if canonical_id:
+                canonical = await session.get(OmnigentBridgeSession, canonical_id)
+                if canonical is None or canonical.canonical_bridge_session_id is not None:
+                    raise OmnigentIdempotencyError(
+                        "continuation canonical chat authority is invalid"
+                    )
+                if canonical.moonmind_workflow_id != stored.moonmind_workflow_id:
+                    raise OmnigentIdempotencyError(
+                        "continuation canonical chat authority belongs to another workflow"
+                    )
+                if stored.canonical_bridge_session_id not in {None, canonical_id}:
+                    raise OmnigentIdempotencyError(
+                        "continuation is already bound to another canonical authority"
+                    )
+                stored.canonical_bridge_session_id = canonical_id
+                stored.chat_binding_id = None
             expected = {
                 "provider_profile_id": provider_profile_id,
                 "provider_lease_id": provider_lease_id,
@@ -1025,6 +1125,29 @@ class OmnigentBridgeSessionStore:
                     )
             elif omnigent_host_id:
                 stored.omnigent_host_id = omnigent_host_id
+            if canonical_id:
+                # A continuation may produce attempt-local evidence, but it
+                # cannot introduce a second immutable authority for the same
+                # provider session.  Reject drift at the binding boundary
+                # before the provider is contacted.
+                canonical_expected = {
+                    "omnigent_endpoint_ref": endpoint_ref,
+                    "provider_profile_id": provider_profile_id,
+                    "provider_lease_id": provider_lease_id,
+                    "credential_generation": credential_generation,
+                    "host_binding_ref": host_binding_ref,
+                    "host_lease_ref": host_lease_ref,
+                    "omnigent_host_id": omnigent_host_id,
+                }
+                for field, value in canonical_expected.items():
+                    if getattr(canonical, field) != value:
+                        raise OmnigentIdempotencyError(
+                            f"continuation canonical authority field {field} does not match"
+                        )
+                if canonical.effective_launch_snapshot_json != effective_launch_snapshot:
+                    raise OmnigentIdempotencyError(
+                        "continuation canonical launch authority does not match"
+                    )
             await session.commit()
             await session.refresh(stored)
             return _detached(session, stored)
@@ -1875,10 +1998,12 @@ class OmnigentBridgeSessionStore:
         async with self._session_factory() as session:
             result = await session.execute(
                 select(OmnigentBridgeSession)
-                .where(OmnigentBridgeSession.omnigent_session_id == key)
-                .limit(1)
+                .where(
+                    OmnigentBridgeSession.omnigent_session_id == key,
+                    OmnigentBridgeSession.canonical_bridge_session_id.is_(None),
+                )
             )
-            row = result.scalars().first()
+            row = result.scalars().one_or_none()
             if row is None:
                 return None
             return BridgeSessionBinding(
@@ -1897,10 +2022,12 @@ class OmnigentBridgeSessionStore:
         async with self._session_factory() as session:
             result = await session.execute(
                 select(OmnigentBridgeSession)
-                .where(OmnigentBridgeSession.omnigent_session_id == key)
-                .limit(1)
+                .where(
+                    OmnigentBridgeSession.omnigent_session_id == key,
+                    OmnigentBridgeSession.canonical_bridge_session_id.is_(None),
+                )
             )
-            row = result.scalars().first()
+            row = result.scalars().one_or_none()
             if row is None:
                 return None
             return _detached(session, row)
@@ -1960,6 +2087,15 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 return None
+            if row.canonical_bridge_session_id:
+                canonical = await session.get(
+                    OmnigentBridgeSession, row.canonical_bridge_session_id
+                )
+                if canonical is None:
+                    raise OmnigentIdempotencyError(
+                        "chat binding alias has no canonical authority"
+                    )
+                row = canonical
             return _detached(session, row)
 
     async def resolve_projection_session(
@@ -2001,6 +2137,7 @@ class OmnigentBridgeSessionStore:
                 (
                     OmnigentBridgeSession.moonmind_workflow_id == workflow,
                     OmnigentBridgeSession.moonmind_run_id == run,
+                    OmnigentBridgeSession.canonical_bridge_session_id.is_(None),
                 )
             )
         if scoped_filters:
@@ -2023,7 +2160,8 @@ class OmnigentBridgeSessionStore:
             return None
         async with self._session_factory() as session:
             statement = select(OmnigentBridgeSession).where(
-                OmnigentBridgeSession.moonmind_workflow_id == workflow
+                OmnigentBridgeSession.moonmind_workflow_id == workflow,
+                OmnigentBridgeSession.canonical_bridge_session_id.is_(None),
             )
             if agent_run:
                 statement = statement.where(
@@ -2059,6 +2197,14 @@ class OmnigentBridgeSessionStore:
             row = await session.get(OmnigentBridgeSession, key)
             if row is None:
                 return None
+            if row.canonical_bridge_session_id:
+                row = await session.get(
+                    OmnigentBridgeSession, row.canonical_bridge_session_id
+                )
+                if row is None:
+                    raise OmnigentIdempotencyError(
+                        "continuation has no canonical chat authority"
+                    )
             if row.chat_binding_id:
                 return row.chat_binding_id
             if not str(row.omnigent_session_id or "").strip():
@@ -2067,7 +2213,8 @@ class OmnigentBridgeSessionStore:
             await session.execute(
                 update(OmnigentBridgeSession)
                 .where(
-                    OmnigentBridgeSession.bridge_session_id == key,
+                    OmnigentBridgeSession.bridge_session_id
+                    == row.bridge_session_id,
                     OmnigentBridgeSession.chat_binding_id.is_(None),
                 )
                 .values(chat_binding_id=candidate)
@@ -2109,7 +2256,8 @@ class OmnigentBridgeSessionStore:
         run = (run_id or "").strip() or None
         async with self._session_factory() as session:
             statement = select(OmnigentBridgeSession).where(
-                OmnigentBridgeSession.moonmind_workflow_id == workflow
+                OmnigentBridgeSession.moonmind_workflow_id == workflow,
+                OmnigentBridgeSession.canonical_bridge_session_id.is_(None),
             )
             if run:
                 statement = statement.where(
@@ -2183,6 +2331,18 @@ class OmnigentBridgeSessionStore:
     ) -> ChatBindingResolution:
         chat_binding_id = await self.ensure_chat_binding_id(row.bridge_session_id)
         capabilities = _chat_binding_capabilities(row)
+        if not canonical_capability_authority_is_complete(row):
+            return ChatBindingResolution(
+                state=CHAT_BINDING_STATE_UNAVAILABLE,
+                read_only=True,
+                chat_binding_id=None,
+                workflow_id=workflow,
+                run_id=row.moonmind_run_id or run,
+                step_execution_id=row.step_execution_id,
+                logical_step_id=_chat_binding_logical_step_id(row),
+                capabilities={},
+                unavailable_reason="capability_authority_missing",
+            )
         # Read-only posture is driven by the bound session and its effective
         # capabilities, never by Workflow terminality alone: a terminal session
         # is always read-only, and a live session is writable only when its
@@ -2310,8 +2470,18 @@ class OmnigentBridgeSessionStore:
             # and reuse paths after the provider session id is attached, so this
             # is the retry-safe, idempotent allocation point: it fires once and a
             # replayed create/attach under the same key reuses the existing id.
-            if session_id and not row.chat_binding_id:
+            if (
+                session_id
+                and row.canonical_bridge_session_id is None
+                and not row.chat_binding_id
+            ):
                 row.chat_binding_id = _generate_chat_binding_id()
+                changed = True
+            if session_id and row.canonical_bridge_session_id is None:
+                canonical_key = _canonical_provider_session_key(
+                    row.moonmind_workflow_id, session_id
+                )
+                row.canonical_provider_session_key = canonical_key
                 changed = True
             previous_authority = dict(metadata.get("capabilityAuthority") or {})
             if capabilities is not None:
@@ -2408,6 +2578,37 @@ class OmnigentBridgeSessionStore:
                 changed = True
             if changed:
                 row.metadata_ = metadata
+                if row.canonical_bridge_session_id:
+                    canonical = await session.get(
+                        OmnigentBridgeSession, row.canonical_bridge_session_id
+                    )
+                    if canonical is None:
+                        raise OmnigentIdempotencyError(
+                            "continuation canonical chat authority is missing"
+                        )
+                    if canonical.omnigent_session_id != session_id:
+                        raise OmnigentIdempotencyError(
+                            "continuation provider session does not match canonical authority"
+                        )
+                    canonical_fingerprint = _canonical_authority_fingerprint(canonical)
+                    continuation_fingerprint = _canonical_authority_fingerprint(row)
+                    if (
+                        canonical_fingerprint is None
+                        or continuation_fingerprint is None
+                        or canonical_fingerprint != continuation_fingerprint
+                    ):
+                        raise OmnigentIdempotencyError(
+                            "continuation capability authority does not match canonical authority"
+                        )
+                    canonical_metadata = dict(canonical.metadata_ or {})
+                    canonical_metadata["capabilityAuthority"] = dict(
+                        metadata["capabilityAuthority"]
+                    )
+                    if capabilities is not None:
+                        canonical_metadata["interventionCapabilities"] = dict(
+                            capabilities
+                        )
+                    canonical.metadata_ = canonical_metadata
                 await session.commit()
                 await session.refresh(row)
             return _detached(session, row)
@@ -2418,7 +2619,8 @@ class OmnigentBridgeSessionStore:
         async with self._session_factory() as session:
             result = await session.execute(
                 select(OmnigentBridgeSession).where(
-                    OmnigentBridgeSession.omnigent_session_id == session_id
+                    OmnigentBridgeSession.omnigent_session_id == session_id,
+                    OmnigentBridgeSession.canonical_bridge_session_id.is_(None),
                 )
             )
             row = result.scalars().one_or_none()
@@ -2438,13 +2640,16 @@ class OmnigentBridgeSessionStore:
                     OmnigentBridgeSession.omnigent_session_id == session_id
                 )
             )
-            row = result.scalars().one_or_none()
-            if row is None:
+            rows = list(result.scalars().all())
+            if not rows:
                 raise OmnigentIdempotencyError("provider session is not bridge-bound")
-            metadata = dict(row.metadata_ or {})
-            metadata[PROVIDER_SESSION_DELETED_KEY] = datetime.now(tz=UTC).isoformat()
-            row.metadata_ = metadata
-            row.omnigent_session_id = None
+            deleted_at = datetime.now(tz=UTC).isoformat()
+            for row in rows:
+                metadata = dict(row.metadata_ or {})
+                metadata[PROVIDER_SESSION_DELETED_KEY] = deleted_at
+                row.metadata_ = metadata
+                row.omnigent_session_id = None
+                row.canonical_provider_session_key = None
             await session.commit()
 
     async def mark_prepared(
@@ -2656,6 +2861,7 @@ class OmnigentBridgeSessionStore:
         status: str,
         terminal_refs: dict[str, Any] | None = None,
         events: Sequence[dict[str, Any]] | None = None,
+        terminal_scope: str = "provider_session",
     ) -> OmnigentBridgeSession:
         async with self._session_factory() as session:
             result = await session.execute(
@@ -2667,6 +2873,21 @@ class OmnigentBridgeSessionStore:
             row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
+            if terminal_scope not in {"attempt", "provider_session"}:
+                raise OmnigentIdempotencyError("invalid terminal authority scope")
+            if terminal_scope == "attempt" and row.canonical_bridge_session_id is None:
+                raise OmnigentIdempotencyError(
+                    "canonical chat authority cannot be terminalized as an attempt"
+                )
+            if terminal_scope == "provider_session" and row.canonical_bridge_session_id:
+                canonical = await session.get(
+                    OmnigentBridgeSession, row.canonical_bridge_session_id
+                )
+                if canonical is None:
+                    raise OmnigentIdempotencyError(
+                        "continuation has no canonical chat authority"
+                    )
+                row = canonical
             row.status = coalesce_bridge_status(status)
             row.first_message_state = FIRST_MESSAGE_TERMINAL
             if row.omnigent_endpoint_ref == "embedded":
@@ -2715,6 +2936,170 @@ class OmnigentBridgeSessionStore:
             await session.commit()
             await session.refresh(row)
             return _detached(session, row)
+
+    async def reconcile_canonical_chat_authorities(
+        self, *, dry_run: bool = True
+    ) -> dict[str, int | bool]:
+        """Canonicalize duplicate provider-session rows without merging evidence.
+
+        Old binding ids remain on alias rows and resolve through
+        ``canonical_bridge_session_id``. Conflicting or incomplete immutable
+        authority is counted as ambiguous and left untouched.
+        """
+
+        report: dict[str, int | bool] = {
+            "dryRun": dry_run,
+            "scannedRows": 0,
+            "duplicateGroups": 0,
+            "canonicalizedGroups": 0,
+            "aliasRows": 0,
+            "ambiguousGroups": 0,
+            "keyedCanonicalRows": 0,
+            "unchangedGroups": 0,
+        }
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession).where(
+                    OmnigentBridgeSession.omnigent_session_id.is_not(None)
+                )
+            )
+            rows = list(result.scalars().all())
+            report["scannedRows"] = len(rows)
+            groups: dict[tuple[str, str], list[OmnigentBridgeSession]] = {}
+            for row in rows:
+                session_id = str(row.omnigent_session_id or "").strip()
+                if not session_id or not _serves_native_chat(row):
+                    continue
+                groups.setdefault((row.moonmind_workflow_id, session_id), []).append(row)
+
+            for (workflow_id, session_id), members in groups.items():
+                if len(members) > 1:
+                    report["duplicateGroups"] += 1
+                fingerprints = {
+                    row.bridge_session_id: _canonical_authority_fingerprint(row)
+                    for row in members
+                }
+                complete = [
+                    row for row in members if fingerprints[row.bridge_session_id]
+                ]
+                distinct = {
+                    fingerprints[row.bridge_session_id] for row in complete
+                }
+                if not complete or len(distinct) != 1:
+                    report["ambiguousGroups"] += 1
+                    continue
+                already_keyed = [
+                    row for row in members if row.canonical_provider_session_key
+                ]
+                if len(already_keyed) > 1 or (
+                    already_keyed
+                    and fingerprints[already_keyed[0].bridge_session_id] is None
+                ):
+                    report["ambiguousGroups"] += 1
+                    continue
+                canonical = (
+                    already_keyed[0]
+                    if already_keyed
+                    else min(
+                        complete,
+                        key=lambda row: (
+                            0 if row.chat_binding_id else 1,
+                            row.created_at,
+                            row.bridge_session_id,
+                        ),
+                    )
+                )
+                if any(
+                    row.canonical_bridge_session_id
+                    not in {None, canonical.bridge_session_id}
+                    for row in members
+                    if row is not canonical
+                ):
+                    report["ambiguousGroups"] += 1
+                    continue
+                key = _canonical_provider_session_key(workflow_id, session_id)
+                aliases = [row for row in members if row is not canonical]
+                changed = canonical.canonical_provider_session_key != key or any(
+                    row.canonical_bridge_session_id != canonical.bridge_session_id
+                    for row in aliases
+                )
+                if not changed:
+                    report["unchangedGroups"] += 1
+                    continue
+                report["canonicalizedGroups"] += 1
+                report["aliasRows"] += len(aliases)
+                if canonical.canonical_provider_session_key != key:
+                    report["keyedCanonicalRows"] += 1
+                if dry_run:
+                    continue
+                canonical.canonical_bridge_session_id = None
+                canonical.canonical_provider_session_key = key
+                for alias in aliases:
+                    alias.canonical_bridge_session_id = canonical.bridge_session_id
+                    alias.canonical_provider_session_key = None
+            if not dry_run:
+                await session.commit()
+        return report
+
+    async def canonical_chat_authority_diagnostics(
+        self, *, scan_limit: int = 1000
+    ) -> dict[str, Any]:
+        """Return bounded readiness counts without disclosing session identity."""
+
+        bounded_limit = min(max(int(scan_limit), 1), 1000)
+        async with self._session_factory() as session:
+            duplicate_groups = (
+                select(
+                    OmnigentBridgeSession.moonmind_workflow_id,
+                    OmnigentBridgeSession.omnigent_session_id,
+                )
+                .where(
+                    OmnigentBridgeSession.provider == BRIDGE_PROVIDER,
+                    OmnigentBridgeSession.compatibility_profile
+                    == BRIDGE_COMPATIBILITY_PROFILE,
+                    OmnigentBridgeSession.omnigent_session_id.is_not(None),
+                    OmnigentBridgeSession.canonical_bridge_session_id.is_(None),
+                )
+                .group_by(
+                    OmnigentBridgeSession.moonmind_workflow_id,
+                    OmnigentBridgeSession.omnigent_session_id,
+                )
+                .having(func.count() > 1)
+                .subquery()
+            )
+            duplicate_result = await session.execute(
+                select(func.count()).select_from(duplicate_groups)
+            )
+            rows_result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(
+                    OmnigentBridgeSession.provider == BRIDGE_PROVIDER,
+                    OmnigentBridgeSession.compatibility_profile
+                    == BRIDGE_COMPATIBILITY_PROFILE,
+                    OmnigentBridgeSession.omnigent_session_id.is_not(None),
+                    OmnigentBridgeSession.canonical_bridge_session_id.is_(None),
+                )
+                .order_by(
+                    OmnigentBridgeSession.created_at.desc(),
+                    OmnigentBridgeSession.bridge_session_id.desc(),
+                )
+                .limit(bounded_limit + 1)
+            )
+            rows = list(rows_result.scalars().all())
+        truncated = len(rows) > bounded_limit
+        sampled = rows[:bounded_limit]
+        complete = sum(
+            1 for row in sampled if canonical_capability_authority_is_complete(row)
+        )
+        return {
+            "duplicateProviderSessionGroups": int(duplicate_result.scalar() or 0),
+            "capabilityAuthority": {
+                "scannedCanonicalRows": len(sampled),
+                "completeCanonicalRows": complete,
+                "incompleteCanonicalRows": len(sampled) - complete,
+                "scanTruncated": truncated,
+            },
+        }
 
     async def list_events(
         self, bridge_session_id: str
@@ -2779,6 +3164,8 @@ class OmnigentBridgeSessionStore:
         self,
         bridge_session_id: str,
         events: Sequence[dict[str, Any]],
+        *,
+        defer_provider_terminal: bool = False,
     ) -> list[OmnigentBridgeSessionEvent]:
         """Append normalized events to one bridge session's event index.
 
@@ -2848,7 +3235,12 @@ class OmnigentBridgeSessionStore:
                 ):
                     continue
                 next_status = coalesced
-            if next_status is not None and not (
+            should_defer_canonical_terminal = (
+                defer_provider_terminal
+                and row.canonical_bridge_session_id is None
+                and next_status in _TERMINAL_STATUSES
+            )
+            if next_status is not None and not should_defer_canonical_terminal and not (
                 row.status in _TERMINAL_STATUSES
                 and next_status not in _TERMINAL_STATUSES
             ):
@@ -2891,6 +3283,38 @@ class OmnigentBridgeSessionStore:
                 capability_authority["state"] = authority_state
                 row_metadata["capabilityAuthority"] = capability_authority
                 row.metadata_ = row_metadata
+            if row.canonical_bridge_session_id:
+                canonical_result = await session.execute(
+                    select(OmnigentBridgeSession)
+                    .where(
+                        OmnigentBridgeSession.bridge_session_id
+                        == row.canonical_bridge_session_id
+                    )
+                    .with_for_update()
+                )
+                canonical = canonical_result.scalar_one_or_none()
+                if canonical is None:
+                    raise OmnigentIdempotencyError(
+                        "continuation canonical chat authority is missing"
+                    )
+                canonical_metadata = dict(canonical.metadata_ or {})
+                canonical_capability_authority = dict(
+                    canonical_metadata.get("capabilityAuthority") or {}
+                )
+                if not canonical_capability_authority:
+                    raise OmnigentIdempotencyError(
+                        "canonical capability authority is incomplete"
+                    )
+                canonical_capability_authority["state"] = dict(authority_state)
+                canonical_metadata["capabilityAuthority"] = (
+                    canonical_capability_authority
+                )
+                canonical.metadata_ = canonical_metadata
+                # Attempt completion never terminates the provider-session
+                # authority. A live continuation may, however, move an
+                # incorrectly stale authority back to active.
+                if next_status is not None and next_status not in _TERMINAL_STATUSES:
+                    canonical.status = next_status
             await session.commit()
             for event_row in rows:
                 await session.refresh(event_row)
