@@ -4,6 +4,7 @@ import json
 import os
 import runpy
 import subprocess
+import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -24,6 +25,7 @@ from api_service.db.models import (
     RuntimeMaterializationMode,
 )
 from moonmind.config.settings import settings
+from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
@@ -98,6 +100,9 @@ from moonmind.security.egress import (
     ENFORCER_IMPLEMENTATION,
     EgressAttestation,
     OMNIGENT_EGRESS_PROFILE,
+)
+from moonmind.security.egress_conformance_evidence import (
+    parse_and_verify_conformance_evidence,
 )
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
@@ -1172,12 +1177,21 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     )
 
     class ArtifactService:
+        def __init__(self) -> None:
+            self.egress = LocalOmnigentArtifactGateway(root=tmp_path / "evidence")
+
         async def read(self, *, artifact_id, **_kwargs):
             if artifact_id == skillset_ref:
                 return object(), skillset.model_dump_json(by_alias=True).encode()
             if artifact_id == content_ref:
                 return object(), payload
             raise AssertionError(f"unexpected artifact read: {artifact_id}")
+
+        async def write_bytes(self, **kwargs):
+            return await self.egress.write_bytes(**kwargs)
+
+        async def read_bytes(self, artifact_ref):
+            return await self.egress.read_bytes(artifact_ref)
 
     class Client:
         async def list_hosts(self):
@@ -1204,6 +1218,14 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     )
     runtime._attest_egress = AsyncMock(  # type: ignore[method-assign]
         return_value=_egress_attestation()
+    )
+    runtime._attest_server_image = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "serverAttachmentIdentity": "omnigent-server-1",
+            "serverImageRefObserved": "server@sha256:" + "8" * 64,
+            "serverImageDigest": "sha256:" + "9" * 64,
+            "serverArchitecture": "amd64",
+        }
     )
     runtime._resolve_workload_attachment_identity = AsyncMock(  # type: ignore[method-assign]
         return_value="mm-host-lease-1"
@@ -1305,6 +1327,26 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     lease = _host_lease().model_copy(
         update={"container_name": "mm-host-lease-1"}
     )
+    artifact_service = ArtifactService()
+
+    class CleanupAuthorityStore:
+        def __init__(self) -> None:
+            self.authority = None
+            self.bind_calls: list[dict] = []
+
+        async def get_egress_cleanup_authority(self, **_kwargs):
+            return self.authority
+
+        async def bind_egress_cleanup_authority(self, **kwargs):
+            self.bind_calls.append(kwargs)
+            self.authority = {
+                "effectiveLaunch": launch,
+                "egressEvidence": kwargs["egress_evidence"],
+                "launchEvidenceRef": kwargs["launch_evidence_ref"],
+                "phase": kwargs["phase"],
+            }
+
+    cleanup_authority_store = CleanupAuthorityStore()
     request = {
         "binding": binding,
         "host_lease": lease,
@@ -1313,7 +1355,9 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         "current_workflow_id": "workflow-1",
         "current_step_execution_id": "step-1",
         "resolved_skillset_ref": skillset_ref,
-        "artifact_gateway": ArtifactService(),
+        "artifact_gateway": artifact_service,
+        "evidence_request": _execution_request(),
+        "cleanup_authority_store": cleanup_authority_store,
         "effective_launch": launch,
     }
 
@@ -1328,6 +1372,24 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         os.close(mount_fd)
 
     assert first["activeSkillsPath"] == retry["activeSkillsPath"]
+    assert first["egressAttestation"]["serverImageDigest"] == (
+        "sha256:" + "9" * 64
+    )
+    assert first["egressAttestation"]["serverArchitecture"] == "amd64"
+    assert first["egressEvidenceRef"].startswith("artifact://")
+    assert retry["egressEvidenceRef"] == first["egressEvidenceRef"]
+    assert [call["phase"] for call in cleanup_authority_store.bind_calls] == [
+        "launched",
+        "attested",
+    ]
+    cleanup_call = cleanup_authority_store.bind_calls[0]
+    assert cleanup_call["host_lease_ref"] == lease.lease_id
+    assert cleanup_call["launch_evidence_ref"].endswith(
+        "egress-launch-pending.json"
+    )
+    assert cleanup_authority_store.bind_calls[1]["launch_evidence_ref"] == first[
+        "egressEvidenceRef"
+    ]
     assert state["launches"] == 1
     assert state["manifest_checks"] == 2
 
@@ -1364,6 +1426,82 @@ async def test_daemon_workspace_root_uses_selected_daemon_volume_mountpoint(
         "agent_workspaces",
         check=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_server_image_attestation_records_live_digest_and_architecture() -> None:
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-static@1",
+        provider_profile_id="codex",
+    )
+    declared_ref = launch["serverImageRef"]
+    image_digest = "sha256:" + "9" * 64
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            (0, "omnigent-container-id\n", ""),
+            (0, json.dumps(declared_ref), ""),
+            (0, json.dumps(image_digest), ""),
+            (0, json.dumps("amd64"), ""),
+        ]
+    )
+
+    evidence = await runtime._attest_server_image(launch)
+
+    assert evidence == {
+        "serverAttachmentIdentity": "omnigent-container-id",
+        "serverImageRefObserved": declared_ref,
+        "serverImageDigest": image_digest,
+        "serverArchitecture": "amd64",
+    }
+
+
+@pytest.mark.asyncio
+async def test_server_image_attestation_rejects_declared_digest_mismatch() -> None:
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-static@1",
+        provider_profile_id="codex",
+    )
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            (0, "omnigent-container-id\n", ""),
+            (0, json.dumps("server@sha256:" + "0" * 64), ""),
+            (0, json.dumps("sha256:" + "9" * 64), ""),
+        ]
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime._attest_server_image(launch)
+
+    assert exc_info.value.code == "OMNIGENT_SERVER_IMAGE_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_server_image_attestation_rejects_unreleased_architecture() -> None:
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-static@1",
+        provider_profile_id="codex",
+    )
+    launch["architectures"] = ["arm64"]
+    image_digest = "sha256:" + "9" * 64
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            (0, "omnigent-container-id\n", ""),
+            (0, json.dumps(launch["serverImageRef"]), ""),
+            (0, json.dumps(image_digest), ""),
+            (0, json.dumps("amd64"), ""),
+        ]
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime._attest_server_image(launch)
+
+    assert exc_info.value.code == "OMNIGENT_SERVER_ARCHITECTURE_MISMATCH"
 
 
 @pytest.mark.asyncio
@@ -1461,6 +1599,12 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert commands[2][commands[2].index("--hostname") + 1] == "mm-host-lease-1"
     runtime._discover_upstream_path.assert_awaited_once_with(snapshot_image)
     assert commands[1][-1] == snapshot_image
+    cap_additions = [
+        commands[1][index + 1]
+        for index, value in enumerate(commands[1][:-1])
+        if value == "--cap-add"
+    ]
+    assert cap_additions == ["CHOWN", "FOWNER"]
     image_index = commands[2].index(snapshot_image)
     assert commands[2][image_index - 2 : image_index] == (
         "--entrypoint",
@@ -1889,6 +2033,74 @@ async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> No
 
 
 @pytest.mark.asyncio
+async def test_stop_host_publishes_resolvable_terminal_egress_and_cleanup_authority(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace(), workspace_root=tmp_path)
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    runtime.container_exists = AsyncMock(return_value=True)
+    runtime._assert_container_owned = AsyncMock()
+    runtime._container_present = AsyncMock(return_value=False)
+    runtime._volume_present = AsyncMock(return_value=False)
+    binding = _binding().model_copy(
+        update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+    )
+    lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-on-demand@1",
+        provider_profile_id="codex",
+    )
+    launch_evidence = {
+        **_egress_attestation().model_dump(by_alias=True, mode="json"),
+        "attachmentIdentity": "mm-host-lease-1",
+        "networkIdentity": "network-id",
+        "endpointIdentity": "endpoint-id",
+        "attachmentAddressDigest": "sha256:" + "c" * 64,
+        "workloadImageDigest": "sha256:" + "d" * 64,
+        "architecture": "amd64",
+        "deniedConnectionCount": 0,
+        "denialDiagnostics": [],
+    }
+    runtime._attest_launched_workload_egress = AsyncMock(
+        return_value={
+            **launch_evidence,
+            "deniedConnectionCount": 3,
+            "denialDiagnostics": ["denied example.com:443 TCP_DENIED/403"],
+        }
+    )
+    request = _execution_request()
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path / "evidence")
+
+    result = await runtime.stop_host(
+        binding=binding,
+        host_lease=lease,
+        effective_launch=launch,
+        egress_evidence=launch_evidence,
+        launch_evidence_ref="artifact://omnigent/launch.json",
+        evidence_request=request,
+        artifact_gateway=gateway,
+    )
+
+    terminal = parse_and_verify_conformance_evidence(
+        await gateway.read_bytes(result["evidenceRef"]),
+        location="omnigent-terminal-egress-test",
+    )
+    assert terminal["conformanceRow"] == "on_demand_docker"
+    assert terminal["state"] == "terminal"
+    assert terminal["terminalValidationResult"] == "passed"
+    assert terminal["deniedConnectionCount"] == 3
+    assert terminal["cleanupResult"] == "succeeded"
+    assert terminal["reconciliationResult"] == "succeeded"
+    assert terminal["resourceCleanup"] == {
+        "containerPresent": False,
+        "mode": "on_demand_remove",
+        "remainingOwnedVolumes": [],
+    }
+    assert terminal["launchEvidenceRef"] == "artifact://omnigent/launch.json"
+
+
+@pytest.mark.asyncio
 async def test_host_preparation_rejects_unmaterialized_workspace_without_mutation(tmp_path) -> None:
     workspace_root = tmp_path / "workspaces"
     runtime = OmnigentOAuthHostRuntime(
@@ -2084,7 +2296,15 @@ async def test_tools_check_uses_host_login_shell_and_manifest(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) -> None:
+async def test_static_host_runtime_uses_only_canonical_compose_file(
+    tmp_path, monkeypatch
+) -> None:
+    deployment_root = tmp_path / "deployment"
+    deployment_root.mkdir()
+    compose_path = deployment_root / "docker-compose.yaml"
+    compose_path.write_text("services: {}\n", encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR", str(deployment_root))
+    monkeypatch.setenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind-live")
     runtime = OmnigentOAuthHostRuntime(
         client=SimpleNamespace(),
         scripts_dir=tmp_path,
@@ -2099,12 +2319,13 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
     )
     workspace = tmp_path / "authorized-workspace"
     skills = tmp_path / "authorized-skills"
-    await runtime._compose_static_check(
+    compose_env = await runtime._compose_static_check(
         workspace_source=workspace,
         skill_projection=skills,
         effective_launch=launch,
         egress_attestation=_egress_attestation(),
     )
+    await runtime._compose_static_exec_check(env=compose_env)
     await runtime.stop_static_host()
 
     commands = [call.args for call in runtime._run.await_args_list]
@@ -2112,8 +2333,10 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         (
             "docker",
             "compose",
+            "--project-name",
+            "moonmind-live",
             "-f",
-            "docker-compose.yaml",
+            str(compose_path),
             "--profile",
             "omnigent-host-codex",
             "up",
@@ -2123,8 +2346,10 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         (
             "docker",
             "compose",
+            "--project-name",
+            "moonmind-live",
             "-f",
-            "docker-compose.yaml",
+            str(compose_path),
             "--profile",
             "omnigent-host-codex",
             "exec",
@@ -2135,8 +2360,10 @@ async def test_static_host_runtime_uses_only_canonical_compose_file(tmp_path) ->
         (
             "docker",
             "compose",
+            "--project-name",
+            "moonmind-live",
             "-f",
-            "docker-compose.yaml",
+            str(compose_path),
             "--profile",
             "omnigent-host-codex",
             "stop",
@@ -2984,7 +3211,12 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     class Runtime:
         async def prepare_host(self, **_kwargs):
             actions.append("preflight")
-            return {"hostId": "host-1", "workspacePath": "/workspaces/run"}
+            return {
+                "hostId": "host-1",
+                "workspacePath": "/workspaces/run",
+                "egressAttestation": {"attachmentIdentity": "host-1"},
+                "egressEvidenceRef": "artifact://launch-egress",
+            }
 
         async def stop_host(self, **_kwargs):
             actions.append("host_cleanup")
@@ -2997,6 +3229,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         async def bind_profile_authorization(self, **_kwargs):
             actions.append("bridge_bound")
             return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def bind_egress_cleanup_authority(self, **_kwargs):
+            actions.append("egress_cleanup_authority_bound")
 
         async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
             actions.append(event_type)
@@ -3192,6 +3427,7 @@ async def _drive_authority_chain_coordinator(
                     "validationState": "attested",
                     "validatedAt": "2026-08-03T00:00:00Z",
                 },
+                "egressEvidenceRef": "artifact://launch-egress",
                 # Bounded, credential-free resolution evidence as produced by the
                 # real runtime; the coordinator folds this into the authority chain.
                 "workspaceResolution": {
@@ -3248,6 +3484,9 @@ async def _drive_authority_chain_coordinator(
                 f"bridge-{len(self.bindings) + 1}",
             )
             return SimpleNamespace(bridge_session_id=bridge_session_id)
+
+        async def bind_egress_cleanup_authority(self, **_kwargs):
+            ordered.append("egress_cleanup_authority_bound")
 
         async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
             ordered.append(event_type)
@@ -4181,7 +4420,24 @@ def _launch_ready_profile():
 
 
 def _injected_launch_error(code: str) -> OmnigentOAuthHostError:
-    error = OmnigentOAuthHostError("deterministic injected failure", code=code)
+    cleanup_evidence = (
+        {
+            "evidenceRef": "artifact://terminal-egress-failure",
+            "launchEvidenceRef": "artifact://launch-egress",
+        }
+        if code in {"host_stop_failed", "host_remove_failed"}
+        else None
+    )
+    error = OmnigentOAuthHostError(
+        "deterministic injected failure",
+        code=code,
+        egress_evidence_ref=(
+            "artifact://terminal-egress-failure"
+            if cleanup_evidence is not None
+            else None
+        ),
+        cleanup_evidence=cleanup_evidence,
+    )
     error.diagnostics_ref = f"artifact://diagnostics/{code}"  # type: ignore[attr-defined]
     return error
 
@@ -4327,7 +4583,17 @@ async def _run_coordinator_failure_case(
     # Egress attestation is an orthogonal trusted-backend gate; this matrix
     # exercises coordinator failure/cleanup evidence, so treat enforcement as
     # already attested and let the intended failure stages surface.
-    runtime._attest_egress = AsyncMock(return_value=_egress_attestation())  # type: ignore[method-assign]
+    runtime._attest_egress = AsyncMock(  # type: ignore[method-assign]
+        return_value=_egress_attestation()
+    )
+    runtime._attest_server_image = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "serverAttachmentIdentity": "omnigent-server-1",
+            "serverImageRefObserved": "server@sha256:" + "8" * 64,
+            "serverImageDigest": "sha256:" + "9" * 64,
+            "serverArchitecture": "amd64",
+        }
+    )
     runtime._resolve_workload_attachment_identity = AsyncMock(  # type: ignore[method-assign]
         return_value="container-1"
     )
@@ -4374,7 +4640,7 @@ async def _run_coordinator_failure_case(
             if fail_at == "host_remove":
                 raise error
             actions.append("host_stopped")
-        elif command == ("docker", "compose", "-f") and "stop" in args:
+        elif args[:2] == ("docker", "compose") and "stop" in args:
             owners.calls.append("host_stop")
             if fail_at == "host_stop":
                 raise error
@@ -4391,6 +4657,11 @@ async def _run_coordinator_failure_case(
         async def bind_profile_authorization(self, **_kwargs):
             return SimpleNamespace(bridge_session_id="bridge-1")
 
+        async def bind_egress_cleanup_authority(self, **_kwargs):
+            actions.append("egress_cleanup_authority_bound")
+            if fail_at == "cleanup_authority_bind":
+                raise error
+
         async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
             events.append((event_type, kwargs))
 
@@ -4404,6 +4675,19 @@ async def _run_coordinator_failure_case(
             await owners.fail(owner)
         return AgentRunResult(summary="done")
 
+    artifact_directory = tempfile.TemporaryDirectory(
+        prefix="moonmind-coordinator-egress-evidence-"
+    )
+
+    class LaunchEvidenceFailureGateway(LocalOmnigentArtifactGateway):
+        writes = 0
+
+        async def write_bytes(self, **kwargs):
+            self.writes += 1
+            if fail_at == "launch_evidence_publication" and self.writes == 1:
+                raise error
+            return await super().write_bytes(**kwargs)
+
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
         lease_client=LeaseClient(),
@@ -4411,7 +4695,9 @@ async def _run_coordinator_failure_case(
         host_runtime=runtime,
         run_store=Store(),
         execution_runner=execute,
-        artifact_gateway=object(),
+        artifact_gateway=LaunchEvidenceFailureGateway(
+            root=artifact_directory.name
+        ),
     )
 
     async def resolve_policy_snapshot(policy_ref: str) -> dict:
@@ -4482,6 +4768,7 @@ async def _run_coordinator_failure_case(
             await coordinator.execute(request)
         if isinstance(error, OmnigentOAuthHostError):
             assert captured.value.code == code
+    artifact_directory.cleanup()
     return events, actions, owners.calls
 
 
@@ -4555,6 +4842,69 @@ async def test_ambiguous_terminal_attempt_preserves_exact_host_for_temporal_retr
         and payload["status"] == "waiting"
         for event_type, payload in events
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fail_at", "code", "expected_launch_ref"),
+    [
+        (
+            "launch_evidence_publication",
+            "OMNIGENT_EGRESS_EVIDENCE_UNAVAILABLE",
+            None,
+        ),
+        (
+            "cleanup_authority_bind",
+            "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_UNBOUND",
+            "artifact://",
+        ),
+    ],
+)
+async def test_post_attachment_evidence_failure_publishes_terminal_cleanup_before_release(
+    fail_at: str,
+    code: str,
+    expected_launch_ref: str | None,
+) -> None:
+    events, actions, _owner_calls = await _run_coordinator_failure_case(
+        fail_at=fail_at,
+        code=code,
+    )
+
+    cleanup = next(
+        payload
+        for event_type, payload in events
+        if event_type == "host_cleanup" and payload["status"] == "completed"
+    )
+    terminal = events[-1][1]["metadata"]
+    assert cleanup["metadata"]["egressEvidenceRef"].startswith("artifact://")
+    assert terminal["egressEvidenceRef"].startswith("artifact://")
+    if expected_launch_ref is None:
+        assert terminal["egressLaunchEvidenceRef"] is None
+    else:
+        assert terminal["egressLaunchEvidenceRef"].startswith(expected_launch_ref)
+    assert actions.index("host_stopped") < actions.index("provider_released")
+    assert terminal["cleanupCompleted"] is True
+    assert terminal["leaseReleased"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fail_at",
+    ["credential_login", "host_registration", "harness_readiness"],
+)
+async def test_post_launch_preflight_failures_bind_cleanup_authority_before_cleanup(
+    fail_at: str,
+) -> None:
+    _events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at=fail_at,
+        code=f"{fail_at}_failed",
+    )
+
+    assert actions.index("egress_cleanup_authority_bound") < actions.index(
+        "host_stopped"
+    )
+    assert actions.index("host_stopped") < actions.index("provider_released")
+    assert any(owner in owner_calls for owner in {fail_at, "host_remove", "host_stop"})
 
 
 @pytest.mark.asyncio
@@ -4667,6 +5017,12 @@ async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_
     assert cleanup["remediation_action"] == "inspect_cleanup_diagnostics"
     assert cleanup["metadata"]["cleanupCompleted"] is False
     assert cleanup["metadata"]["janitorRequired"] is True
+    assert cleanup["metadata"]["egressLaunchEvidenceRef"] == (
+        "artifact://launch-egress"
+    )
+    assert cleanup["metadata"]["egressEvidenceRef"] == (
+        "artifact://terminal-egress-failure"
+    )
     release = next(
         kwargs
         for stage, kwargs in events
@@ -4681,6 +5037,8 @@ async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_
         "cleanupCompleted": False,
         "leaseReleased": False,
         "janitorRequired": True,
+        "egressLaunchEvidenceRef": "artifact://launch-egress",
+        "egressEvidenceRef": "artifact://terminal-egress-failure",
     }
 
 

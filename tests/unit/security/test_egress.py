@@ -272,6 +272,7 @@ async def test_workload_attestation_binds_exact_sole_attachment_image_and_denial
                             "IPAddress": client_address,
                         }
                     },
+                    "imageRef": "image@sha256:" + "b" * 64,
                     "image": "sha256:" + "c" * 64,
                 }
             ).encode(), b""
@@ -288,6 +289,7 @@ async def test_workload_attestation_binds_exact_sole_attachment_image_and_denial
         profile=DEFAULT_EGRESS_PROFILE,
         attestation=attestation,
         attachment_identity="container-id",
+        expected_image_ref="image@sha256:" + "b" * 64,
         started_at=datetime(2026, 8, 11, tzinfo=UTC),
         finished_at=datetime(2026, 8, 13, tzinfo=UTC),
     )
@@ -296,6 +298,7 @@ async def test_workload_attestation_binds_exact_sole_attachment_image_and_denial
     assert evidence["networkIdentity"] == "network-id"
     assert evidence["endpointIdentity"] == "endpoint-id"
     assert evidence["workloadImageDigest"] == "sha256:" + "c" * 64
+    assert evidence["workloadImageRef"] == "image@sha256:" + "b" * 64
     assert evidence["architecture"] == "amd64"
     assert evidence["deniedConnectionCount"] == 1
     assert evidence["denialDiagnostics"] == [
@@ -311,6 +314,7 @@ async def test_workload_attestation_binds_exact_sole_attachment_image_and_denial
         ("secondary_network", "sole approved network"),
         ("stale_label", "labels are unattested"),
         ("mutable_image", "image is unattested"),
+        ("image_ref_mismatch", "does not match launch authority"),
     ],
 )
 async def test_workload_attestation_rejects_bypass_or_unbound_authority(
@@ -330,17 +334,25 @@ async def test_workload_attestation_rejects_bypass_or_unbound_authority(
         }
     }
     image = "sha256:" + "c" * 64
+    image_ref = "image@sha256:" + "b" * 64
     if mutation == "secondary_network":
         networks["bridge"] = {"IPAddress": "172.17.0.2"}
     elif mutation == "stale_label":
         labels["moonmind.egress.applied_rule_digest"] = "sha256:stale"
-    else:
+    elif mutation == "mutable_image":
         image = "mutable:latest"
+    else:
+        image_ref = "image@sha256:" + "0" * 64
 
     async def runner(args):
         assert args[0] == "inspect"
         return 0, json.dumps(
-            {"labels": labels, "networks": networks, "image": image}
+            {
+                "labels": labels,
+                "networks": networks,
+                "imageRef": image_ref,
+                "image": image,
+            }
         ).encode(), b""
 
     with pytest.raises(RuntimeError, match=message):
@@ -349,6 +361,7 @@ async def test_workload_attestation_rejects_bypass_or_unbound_authority(
             profile=DEFAULT_EGRESS_PROFILE,
             attestation=attestation,
             attachment_identity="container-id",
+            expected_image_ref="image@sha256:" + "b" * 64,
         )
 
 

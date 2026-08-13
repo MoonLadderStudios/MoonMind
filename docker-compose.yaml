@@ -988,6 +988,7 @@ services:
       - ALL
     cap_add:
       - CHOWN
+      - FOWNER
     security_opt:
       - no-new-privileges:true
     read_only: true
@@ -1017,6 +1018,7 @@ services:
       - ALL
     cap_add:
       - CHOWN
+      - FOWNER
     security_opt:
       - no-new-privileges:true
     read_only: true
@@ -1028,6 +1030,8 @@ services:
       CODEX_HOME: /home/app/.codex
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
       - codex_auth_volume:/home/app/.codex
       - ./services/omnigent/scripts:/opt/moonmind:ro
     depends_on:

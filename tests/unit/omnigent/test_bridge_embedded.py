@@ -580,6 +580,7 @@ async def test_terminal_cleanup_failure_is_redacted_and_idempotent(store) -> Non
             completed=False,
             code="RuntimeError",
             summary="cleanup failed token=secret-value",
+            lease_released=False,
         )
 
     recovered = await store.get_existing("idem-embedded")
@@ -591,7 +592,7 @@ async def test_terminal_cleanup_failure_is_redacted_and_idempotent(store) -> Non
         )
     ]
     assert recovered.terminal_refs["cleanupState"] == "failed"
-    assert recovered.terminal_refs["leaseReleaseState"] == "failed"
+    assert recovered.terminal_refs["leaseReleaseState"] == "held"
     assert recovered.terminal_refs["cleanupFailureCode"] == "RuntimeError"
     assert await store.cleanup_required_host_lease_refs() == {"host-lease-1"}
     assert len(cleanup_events) == 2

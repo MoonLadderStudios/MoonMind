@@ -24,6 +24,42 @@ _IMMUTABLE_RECOVERY_DIMENSIONS = (
 )
 
 
+class _OnDemandTemporalArtifactService:
+    """Open one DB session per artifact operation at an Activity boundary."""
+
+    def __init__(self, session_factory: Any) -> None:
+        self._session_factory = session_factory
+
+    async def _invoke(self, method: str, **kwargs: Any) -> Any:
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        async with self._session_factory() as artifact_session:
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(artifact_session)
+            )
+            return await getattr(service, method)(**kwargs)
+
+    async def create(self, **kwargs: Any) -> Any:
+        return await self._invoke("create", **kwargs)
+
+    async def read(self, *, artifact_id: str, **kwargs: Any) -> Any:
+        return await self._invoke("read", artifact_id=artifact_id, **kwargs)
+
+    async def get_metadata(self, *, artifact_id: str, **kwargs: Any) -> Any:
+        return await self._invoke("get_metadata", artifact_id=artifact_id, **kwargs)
+
+    async def read_chunks(self, *, artifact_id: str, **kwargs: Any) -> Any:
+        return await self._invoke("read_chunks", artifact_id=artifact_id, **kwargs)
+
+    async def write_complete(self, *, artifact_id: str, **kwargs: Any) -> Any:
+        return await self._invoke(
+            "write_complete", artifact_id=artifact_id, **kwargs
+        )
+
+
 def _checkpoint_recovery_decision(
     recovery: dict[str, Any],
     *,
@@ -320,10 +356,6 @@ async def _omnigent_execute_activity(
     from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
     from moonmind.workflows.temporal.client import TemporalClientAdapter
-    from moonmind.workflows.temporal.artifacts import (
-        TemporalArtifactRepository,
-        TemporalArtifactService,
-    )
 
     artifact_gateway = LocalOmnigentArtifactGateway()
     run_store = OmnigentBridgeSessionStore(async_session_maker)
@@ -341,49 +373,7 @@ async def _omnigent_execute_activity(
             client=http_client,
             upstream_header_allowlist=resolved_proxy_forward_headers(),
         )
-        class OnDemandTemporalArtifactService:
-            async def create(self, **kwargs):
-                async with async_session_maker() as artifact_session:
-                    service = TemporalArtifactService(
-                        TemporalArtifactRepository(artifact_session)
-                    )
-                    return await service.create(**kwargs)
-
-            async def read(self, *, artifact_id: str, **kwargs):
-                async with async_session_maker() as artifact_session:
-                    service = TemporalArtifactService(
-                        TemporalArtifactRepository(artifact_session)
-                    )
-                    return await service.read(artifact_id=artifact_id, **kwargs)
-
-            async def get_metadata(self, *, artifact_id: str, **kwargs):
-                async with async_session_maker() as artifact_session:
-                    service = TemporalArtifactService(
-                        TemporalArtifactRepository(artifact_session)
-                    )
-                    return await service.get_metadata(
-                        artifact_id=artifact_id, **kwargs
-                    )
-
-            async def read_chunks(self, *, artifact_id: str, **kwargs):
-                async with async_session_maker() as artifact_session:
-                    service = TemporalArtifactService(
-                        TemporalArtifactRepository(artifact_session)
-                    )
-                    return await service.read_chunks(
-                        artifact_id=artifact_id, **kwargs
-                    )
-
-            async def write_complete(self, *, artifact_id: str, **kwargs):
-                async with async_session_maker() as artifact_session:
-                    service = TemporalArtifactService(
-                        TemporalArtifactRepository(artifact_session)
-                    )
-                    return await service.write_complete(
-                        artifact_id=artifact_id, **kwargs
-                    )
-
-        artifact_service = OnDemandTemporalArtifactService()
+        artifact_service = _OnDemandTemporalArtifactService(async_session_maker)
         from moonmind.omnigent.remediation_workspace import (
             ArtifactRemediationHeadLoader,
             ManagedServiceRemediationRestorer,
@@ -536,6 +526,7 @@ async def omnigent_oauth_host_janitor_activity(
             client=client,
             run_store=OmnigentBridgeSessionStore(async_session_maker),
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
+            artifact_gateway=_OnDemandTemporalArtifactService(async_session_maker),
         )
         payload = dict(request or {})
         action_kind = str(payload.get("actionKind") or "").strip()

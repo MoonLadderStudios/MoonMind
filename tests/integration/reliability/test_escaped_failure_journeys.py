@@ -185,6 +185,23 @@ pytestmark = [
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def _egress_attestation() -> EgressAttestation:
+    return EgressAttestation(
+        profileRef=OMNIGENT_EGRESS_PROFILE.ref,
+        profileDigest=OMNIGENT_EGRESS_PROFILE.digest,
+        enforcerImplementation=ENFORCER_IMPLEMENTATION,
+        backendRef="replay-test",
+        networkRef=OMNIGENT_EGRESS_PROFILE.network_ref,
+        gatewayRef=OMNIGENT_EGRESS_PROFILE.gateway_ref,
+        appliedRuleDigest="sha256:" + "a" * 64,
+        configDigest=EGRESS_CONFIG_DIGEST,
+        gatewayImageDigest="sha256:" + "b" * 64,
+        healthResult="healthy",
+        validatedAt=datetime(2026, 8, 12, tzinfo=timezone.utc),
+        validationResult="passed",
+    )
+
+
 def _checkpoint_branch_turn_profile_request() -> AgentExecutionRequest:
     policy = checkpoint_branch_policy_snapshot()
     return AgentExecutionRequest(
