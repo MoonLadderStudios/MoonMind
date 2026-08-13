@@ -8,12 +8,14 @@ import { fireEvent, waitFor } from '@testing-library/react';
 import { renderWithClient } from '../utils/test-utils';
 import {
   WorkflowChatNative,
-  capturedEvidenceHref,
   fullPageChatUrl,
-  type CapturedEvidence,
-  type ContinueInNewWorkflowResult,
   type WorkflowChatBinding,
 } from './WorkflowChatNative';
+import {
+  capturedEvidenceHref,
+  type CapturedEvidence,
+  type ContinueInNewWorkflowResult,
+} from '../features/workflow-native-chat/WorkflowTerminalChatActions';
 
 const API_BASE = '/api';
 const WORKFLOW_ID = 'mm:w1';

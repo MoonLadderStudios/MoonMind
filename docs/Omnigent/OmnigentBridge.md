@@ -235,7 +235,7 @@ The full-page **Open in Omnigent** experience uses this same scoped facade. It m
 The native UI is more than an HTTP transcript: it opens WebSockets and drives terminal/PTY, execution-log, browser-pane, sub-agent/task, and reconnect/wake surfaces. Transport and route coverage for that surface is a single **versioned compatibility map** pinned to the `omnigent.server.v1` profile (`moonmind/omnigent/native_ui_compat.py`). Each recognized route/transport declares one of two dispositions:
 
 - **served** — the HTTP + SSE surface the scoped facade actively serves (§4.2 step list), single-sourced from the facade route allowlist so there is no second source of truth;
-- **compatibility_review_required** — a recognized WebSocket/terminal transport class whose upstream rewrite is not yet reviewed. The WebSocket facade authenticates, resolves the durable binding, authorizes the caller, rejects caller-supplied identity, recomputes capabilities, negotiates only an allowlisted subprotocol, and validates binding state **before upgrade**, then fails closed with an explicit compatibility diagnostic instead of bridging the browser to the upstream server. A successful earlier HTTP bootstrap never authorizes a later WebSocket.
+- **compatibility_review_required** — a reserved quarantine disposition for a recognized route whose rewrite has not yet been reviewed. The pinned `omnigent.server.v1` HTTP, SSE, global-session-update WebSocket, terminal-attach WebSocket, and dictation WebSocket routes are reviewed and served. A future recognized-but-unreviewed transport is authenticated and binding-validated before upgrade, then fails closed with an explicit compatibility diagnostic. A successful earlier HTTP bootstrap never authorizes a later WebSocket.
 
 Terminal create/attach/input/resize/close and browser-pane control require capabilities the facade never grants, so a nonowner or read-only viewer is denied before any transport opens; terminal viewing/execution-log inspection is a distinct read capability. Unknown or changed transports fail closed with a non-enumerating diagnostic rather than being generically proxied, and a terminal/revoked binding cannot open a new live transport.
 
@@ -925,6 +925,23 @@ Rules:
 12. MoonMind artifact refs remain the durable evidence boundary.
 13. Embedded mode must pass stock-host auth conformance before production enablement.
 
+Native Workflow Chat rollout evidence uses
+`moonmind.omnigent.workflow-chat-acceptance/v1`. The controlling artifact is
+commit- and immutable-image-bound, covers every required browser-to-stock-host
+row, and contains SHA-256 bindings for independently resolvable case evidence,
+typed source records, conformance reports, and the logs, Temporal history,
+screenshot, and archive secret-scan results. The required source records bind
+browser traces to binding/capability snapshots, facade requests, resource and
+receipt inventories, denial/scan/credential audits, terminal evidence,
+continuation receipts, and replay snapshots. A bare pass flag, repository-only
+test result, unresolved artifact ref, mutable image tag, stale report, or
+self-asserted secret scan is not rollout evidence.
+`tools/build_omnigent_workflow_chat_acceptance.py` builds and validates the
+artifact produced by the protected controller against its required current
+`--expected-commit`; the provider gate independently requires the same commit
+through `MOONMIND_OMNIGENT_SOURCE_COMMIT`. The provider test
+`test_live_native_workflow_chat_release_matrix` is the release gate.
+
 ```text
 MoonMind user -> MoonMind request authorization
 MoonMind scoped facade -> server-side Omnigent credential
@@ -1049,11 +1066,22 @@ Prove that:
 
 Verify host registration, heartbeat/capabilities, session creation, harness launch, message posting, stream capture, final snapshot, resource harvest, credential separation, no duplicate first message, and durable cleanup/audit evidence against a real unchanged host.
 
+### 20.5 Native Workflow Chat rollout gate
+
+The protected browser-to-stock-host matrix covers the live native conversation,
+scoped transports and resources, authority/security denials, and terminal
+evidence/linked continuation. Each row records browser-originated observations
+against an unchanged digest-pinned stock host and resolves its source evidence
+before the `moonmind.omnigent.workflow-chat-acceptance/v1` manifest can pass.
+Every raw evidence channel is secret-scanned, and the manifest is valid only for
+its recorded source commit, compatibility profile, image digests, and freshness
+window.
+
 ---
 
 ## 21. Open questions
 
-1. Which upstream WebSocket paths require explicit rewriting in each compatibility profile? *(Partially resolved by MoonLadderStudios/MoonMind#3635: the native-UI WebSocket/terminal transport classes are now inventoried in the versioned compatibility map (§4.2) and fail closed with a compatibility diagnostic until each profile's upstream rewrite is reviewed.)*
+1. Which upstream WebSocket paths require explicit rewriting in each compatibility profile? *(Resolved for `omnigent.server.v1` by MoonLadderStudios/MoonMind#3635: the global session-update, terminal-attach, and dictation transports are inventoried, identity-scoped, capability-gated, and relayed through the binding facade. Any route absent from a future reviewed profile fails closed.)*
 2. Which upstream host auth modes are supported in embedded mode?
 3. Which binary attachment types are allowed under high-security mode when their content cannot be text-scanned?
 4. What is the minimum stock-host conformance suite before embedded mode is enabled?

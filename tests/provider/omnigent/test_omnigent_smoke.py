@@ -25,6 +25,11 @@ from moonmind.omnigent.bridge_proxy import (
 )
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.settings import is_omnigent_enabled
+from moonmind.omnigent.workflow_chat_acceptance import (
+    REQUIRED_WORKFLOW_CHAT_ROWS,
+    WORKFLOW_CHAT_ACCEPTANCE_ISSUE,
+    validate_workflow_chat_acceptance_manifest,
+)
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
 pytestmark = [
@@ -289,6 +294,35 @@ async def test_live_browser_release_matrix(bridge_store) -> None:
         assert observation.get("schemaVersion") == "moonmind.omnigent.browser-observation/v1"
         assert observation.get("startPath", "/workflows/new") == "/workflows/new"
         assert observation.get("workflowId")
+
+
+async def test_live_native_workflow_chat_release_matrix(bridge_store) -> None:
+    """Validate the protected browser-to-stock-host #3642 rollout artifact."""
+
+    del bridge_store  # provider marker/fixture keep this on the live test lane
+    _require_mode("workflow_chat")
+    raw = os.environ.get("MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE", "").strip()
+    if not raw:
+        pytest.fail(
+            "required scenario evidence is unset: "
+            "MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE"
+        )
+    path = Path(raw).resolve()
+    if not path.is_file():
+        pytest.fail(f"scenario evidence does not exist: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    expected_commit = os.environ.get("MOONMIND_OMNIGENT_SOURCE_COMMIT", "").strip()
+    if not expected_commit:
+        pytest.fail(
+            "MOONMIND_OMNIGENT_SOURCE_COMMIT is required for the release gate"
+        )
+    validate_workflow_chat_acceptance_manifest(
+        payload,
+        evidence_root=path.parent,
+        expected_commit=expected_commit,
+    )
+    assert payload.get("issue") == WORKFLOW_CHAT_ACCEPTANCE_ISSUE
+    assert set(payload.get("rows") or {}) == set(REQUIRED_WORKFLOW_CHAT_ROWS)
 
 
 async def test_live_cumulative_remediation_journey(bridge_store) -> None:

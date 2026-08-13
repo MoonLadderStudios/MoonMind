@@ -16,9 +16,7 @@ interface WorkflowChatContextBarProps {
   evidenceHref: string;
   /** Full-page MoonMind-scoped native surface; null hides the action. */
   fullPageHref?: string | null;
-  /** Terminal-only "Continue in a new workflow" href; null hides the action. */
-  continueHref?: string | null;
-  /** SPA navigation for internal (overview/evidence/continue) links. */
+  /** SPA navigation for internal overview/evidence links. */
   onNavigate: (href: string) => void;
 }
 
@@ -41,7 +39,6 @@ export function WorkflowChatContextBar({
   overviewHref,
   evidenceHref,
   fullPageHref = null,
-  continueHref = null,
   onNavigate,
 }: WorkflowChatContextBarProps) {
   const handleInternal = (href: string) => (event: MouseEvent<HTMLAnchorElement>) => {
@@ -89,15 +86,6 @@ export function WorkflowChatContextBar({
         {fullPageHref ? (
           <a className="button secondary small" href={fullPageHref}>
             Open in Omnigent
-          </a>
-        ) : null}
-        {continueHref ? (
-          <a
-            className="button secondary small"
-            href={continueHref}
-            onClick={handleInternal(continueHref)}
-          >
-            Continue in a new workflow
           </a>
         ) : null}
       </nav>
