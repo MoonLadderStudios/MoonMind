@@ -1068,6 +1068,38 @@ def test_passing_summaries_cannot_override_typed_semantic_contradictions(
         _validate_staged(artifact, tmp_path, kind=row.evidence_kind)
 
 
+@pytest.mark.parametrize(
+    ("row_id", "requested"),
+    (
+        ("remediation.resume.evidence-gated-success", False),
+        ("remediation.action.low-medium-risk-allowed", False),
+        ("remediation.diagnosis.observe-only", True),
+        ("remediation.autonomous.rollout-gate-closed", True),
+    ),
+    ids=(
+        "approval-gated-recovery-without-request",
+        "approval-gated-action-without-request",
+        "observe-only-with-request",
+        "admin-auto-with-request",
+    ),
+)
+def test_passing_artifact_cannot_override_approval_request_authority(
+    tmp_path, row_id, requested
+) -> None:
+    row = REMEDIATION_ROW_CATALOG_BY_ID[row_id]
+    artifact = _artifact(row.evidence_kind, [row_id])
+    _stage_row_dependencies(tmp_path, artifact)
+    _rewrite_source_record(
+        tmp_path,
+        artifact,
+        "approvalDecision",
+        lambda payload: payload.update({"requested": requested}),
+    )
+
+    with pytest.raises(RemediationMatrixError, match="authoritative typed facts"):
+        _validate_staged(artifact, tmp_path, kind=row.evidence_kind)
+
+
 def test_fabricated_audit_and_scenario_threshold_counts_are_rejected(tmp_path) -> None:
     row_id = "remediation.action.approval-gated-approved"
     row = REMEDIATION_ROW_CATALOG_BY_ID[row_id]
@@ -1109,6 +1141,60 @@ def test_combined_release_fails_closed_on_typed_approval_contradiction(tmp_path)
     artifact_path.write_bytes(content)
     manifest_entry = next(
         item for item in release["evidenceManifest"] if item["kind"] == kind
+    )
+    manifest_entry["sha256"] = hashlib.sha256(content).hexdigest()
+    release_path.write_text(json.dumps(release), encoding="utf-8")
+
+    status = evaluate_remediation_release(
+        evidence=release,
+        evidence_document_path=release_path,
+        evidence_ref="release.json",
+        now=NOW,
+    )
+    assert "evidence_row_binding_invalid" in status.blockers
+    assert status.manual_mutation_supported is False
+
+
+@pytest.mark.parametrize(
+    ("row_id", "requested"),
+    (
+        ("remediation.resume.evidence-gated-success", False),
+        ("remediation.action.low-medium-risk-allowed", False),
+        ("remediation.diagnosis.observe-only", True),
+        ("remediation.autonomous.rollout-gate-closed", True),
+    ),
+    ids=(
+        "approval-gated-recovery-without-request",
+        "approval-gated-action-without-request",
+        "observe-only-with-request",
+        "admin-auto-with-request",
+    ),
+)
+def test_combined_release_fails_closed_on_approval_request_authority(
+    tmp_path, row_id, requested
+) -> None:
+    release, release_path = _stage_release(tmp_path)
+    row = REMEDIATION_ROW_CATALOG_BY_ID[row_id]
+    artifact_path = tmp_path / f"{row.evidence_kind}.json"
+    artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
+    row_index = next(
+        index
+        for index, entry in enumerate(artifact["rows"])
+        if entry["row"] == row_id
+    )
+    _rewrite_source_record(
+        tmp_path,
+        artifact,
+        "approvalDecision",
+        lambda payload: payload.update({"requested": requested}),
+        row_index=row_index,
+    )
+    content = _artifact_bytes(artifact)
+    artifact_path.write_bytes(content)
+    manifest_entry = next(
+        item
+        for item in release["evidenceManifest"]
+        if item["kind"] == row.evidence_kind
     )
     manifest_entry["sha256"] = hashlib.sha256(content).hexdigest()
     release_path.write_text(json.dumps(release), encoding="utf-8")

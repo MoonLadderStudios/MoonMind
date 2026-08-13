@@ -1628,6 +1628,9 @@ def _derive_catalog_semantics(
         "remediation.egress.restricted-denied",
         "remediation.security.prohibited-authority-denied",
     }
+    expected_approval_requested = (
+        row.is_mutation and row.authority_mode == "approval_gated"
+    )
     expected_approval_outcome = (
         "not_required"
         if not row.is_mutation or row.authority_mode == "admin_auto"
@@ -1680,7 +1683,8 @@ def _derive_catalog_semantics(
             "approval_required",
         )
     authority_handoff_valid = (
-        facts["approvalOutcome"] == expected_approval_outcome
+        facts["approvalRequested"] == expected_approval_requested
+        and facts["approvalOutcome"] == expected_approval_outcome
         and facts["actionRequested"]
         == (row.is_mutation and row.authority_mode != "admin_auto")
         and facts["remediationCreated"] == (row.authority_mode != "admin_auto")
