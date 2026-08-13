@@ -810,6 +810,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         authority_bridge_session_id: str | None = None
         authority_idempotency_key = request.idempotency_key
         authority_cleanup_mode: str | None = None
+        authority_cleanup_evidence: dict[str, Any] = {}
         preflight: Mapping[str, Any] = {}
         authority_reasons: list[dict[str, Any]] = []
         try:
@@ -1216,6 +1217,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 resolved_skillset_ref=request.resolved_skillset_ref,
                 artifact_gateway=self._artifact_service,
                 evidence_request=request,
+                cleanup_authority_store=self._run_store,
                 target_repository=str(
                     (request.parameters or {}).get("repository") or ""
                 ).strip(),
@@ -1932,6 +1934,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                             evidence_request=request,
                             artifact_gateway=self._artifact_service,
                         )
+                        authority_cleanup_evidence = dict(cleanup_evidence or {})
                         await self._hosts.mark_host_lease_stopped(host_lease.lease_id)
                         safe_to_release_provider = True
                         await emit(
@@ -1957,6 +1960,35 @@ class OmnigentProfileBoundExecutionCoordinator:
                             ignore_errors=True,
                         )
                     except Exception as cleanup_exc:
+                        error_cleanup_evidence = getattr(
+                            cleanup_exc, "cleanup_evidence", None
+                        )
+                        if isinstance(error_cleanup_evidence, Mapping):
+                            authority_cleanup_evidence.update(
+                                dict(error_cleanup_evidence)
+                            )
+                        error_evidence_ref = str(
+                            authority_cleanup_evidence.get("evidenceRef")
+                            or getattr(cleanup_exc, "egress_evidence_ref", None)
+                            or ""
+                        ).strip()
+                        launch_evidence_ref = str(
+                            authority_cleanup_evidence.get("launchEvidenceRef")
+                            or (
+                                preflight.get("egressEvidenceRef")
+                                if isinstance(preflight, Mapping)
+                                else None
+                            )
+                            or ""
+                        ).strip()
+                        if error_evidence_ref:
+                            authority_cleanup_evidence["evidenceRef"] = (
+                                error_evidence_ref
+                            )
+                        if launch_evidence_ref:
+                            authority_cleanup_evidence["launchEvidenceRef"] = (
+                                launch_evidence_ref
+                            )
                         try:
                             await self._hosts.mark_host_lease_failed(
                                 host_lease.lease_id,
@@ -1982,7 +2014,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                             summary=str(cleanup_exc),
                             failure_class="system_error",
                             remediation_action="inspect_cleanup_diagnostics",
-                            metadata={"cleanupCompleted": False, "janitorRequired": True},
+                            metadata={
+                                "cleanupCompleted": False,
+                                "janitorRequired": True,
+                                "egressEvidenceRef": error_evidence_ref or None,
+                                "egressLaunchEvidenceRef": (
+                                    launch_evidence_ref or None
+                                ),
+                            },
                         )
             for deferred_terminal in deferred_bridge_terminals:
                 try:
@@ -2107,6 +2146,20 @@ class OmnigentProfileBoundExecutionCoordinator:
                     authorization_evidence["egressLaunchEvidenceRef"] = str(
                         preflight["egressEvidenceRef"]
                     )
+                cleanup_launch_ref = str(
+                    authority_cleanup_evidence.get("launchEvidenceRef") or ""
+                ).strip()
+                cleanup_terminal_ref = str(
+                    authority_cleanup_evidence.get("evidenceRef") or ""
+                ).strip()
+                if cleanup_launch_ref:
+                    authorization_evidence["egressLaunchEvidenceRef"] = (
+                        cleanup_launch_ref
+                    )
+                if cleanup_terminal_ref:
+                    authorization_evidence["egressTerminalEvidenceRef"] = (
+                        cleanup_terminal_ref
+                    )
                 authority_chain = build_omnigent_authority_chain_evidence(
                     effective_launch=effective_launch,
                     workspace_resolution=authority_workspace_resolution,
@@ -2155,6 +2208,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                 # Bounded evidence is best-effort and must never mask the primary
                 # run outcome or its terminal record.
                 pass
+            terminal_launch_evidence_ref = str(
+                authority_cleanup_evidence.get("launchEvidenceRef")
+                or (
+                    preflight.get("egressEvidenceRef")
+                    if isinstance(preflight, Mapping)
+                    else None
+                )
+                or ""
+            ).strip()
             await emit(
                 "terminal",
                 terminal_status,
@@ -2162,6 +2224,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "cleanupCompleted": safe_to_release_provider,
                     "leaseReleased": lease_released,
                     "janitorRequired": janitor_required,
+                    "egressLaunchEvidenceRef": terminal_launch_evidence_ref or None,
+                    "egressEvidenceRef": str(
+                        authority_cleanup_evidence.get("evidenceRef") or ""
+                    ).strip()
+                    or None,
                 },
                 ignore_errors=True,
             )

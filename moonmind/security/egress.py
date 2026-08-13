@@ -491,6 +491,7 @@ async def attest_docker_workload_egress(
     profile: EgressProfile,
     attestation: EgressAttestation,
     attachment_identity: str,
+    expected_image_ref: str,
     started_at: datetime | None = None,
     finished_at: datetime | None = None,
 ) -> dict[str, object]:
@@ -515,10 +516,14 @@ async def attest_docker_workload_egress(
     identity = str(attachment_identity or "").strip()
     if not identity:
         raise RuntimeError("restricted-egress attachment identity is unavailable")
+    expected_image = str(expected_image_ref or "").strip()
+    if not expected_image:
+        raise RuntimeError("restricted-egress workload image authority is unavailable")
 
     format_value = (
         '{"labels":{{json .Config.Labels}},"networks":'
-        '{{json .NetworkSettings.Networks}},"image":{{json .Image}}}'
+        '{{json .NetworkSettings.Networks}},"imageRef":{{json .Config.Image}},'
+        '"image":{{json .Image}}}'
     )
     code, stdout, _ = await runner(("inspect", "--format", format_value, identity))
     if code or not stdout.strip():
@@ -535,6 +540,9 @@ async def attest_docker_workload_egress(
     image_digest = str(
         observed.get("image") if isinstance(observed, dict) else ""
     ).strip()
+    image_ref = str(
+        observed.get("imageRef") if isinstance(observed, dict) else ""
+    ).strip()
     if not isinstance(labels, dict) or not isinstance(networks, dict):
         raise RuntimeError("restricted-egress attachment evidence is malformed")
     if set(networks) != {profile.network_ref}:
@@ -550,6 +558,10 @@ async def attest_docker_workload_egress(
         raise RuntimeError("restricted-egress workload labels are unattested")
     if not image_digest.startswith("sha256:"):
         raise RuntimeError("restricted-egress workload image is unattested")
+    if image_ref != expected_image:
+        raise RuntimeError(
+            "restricted-egress workload image does not match launch authority"
+        )
 
     attachment = networks.get(profile.network_ref)
     if not isinstance(attachment, dict):
@@ -608,6 +620,7 @@ async def attest_docker_workload_egress(
         "attachmentAddressDigest": "sha256:"
         + hashlib.sha256(client_address.encode()).hexdigest(),
         "workloadImageDigest": image_digest,
+        "workloadImageRef": image_ref,
         "architecture": architecture.strip(),
         "deniedConnectionCount": denied_count,
         "denialDiagnostics": list(denial_diagnostics),

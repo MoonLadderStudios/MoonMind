@@ -56,6 +56,8 @@ PROVIDER_SESSION_DELETED_KEY = "provider_session_deleted_at"
 EMBEDDED_LAUNCH_KEY = "embedded_runner_launch"
 EMBEDDED_LIFECYCLE_KEY = "embedded_runner_lifecycle"
 EMBEDDED_LIFECYCLE_VERSION = 1
+EGRESS_CLEANUP_AUTHORITY_KEY = "egress_cleanup_authority"
+EGRESS_CLEANUP_AUTHORITY_VERSION = 1
 
 EMBEDDED_RUNNER_STATES = frozenset(
     {
@@ -607,6 +609,9 @@ class OmnigentBridgeSessionStore:
         completed: bool,
         code: str | None = None,
         summary: str | None = None,
+        egress_evidence_ref: str | None = None,
+        launch_evidence_ref: str | None = None,
+        lease_released: bool | None = None,
     ) -> OmnigentBridgeSession | None:
         """Persist the authoritative host/Profile lease cleanup outcome.
 
@@ -633,13 +638,23 @@ class OmnigentBridgeSessionStore:
             refs.update(
                 {
                     "cleanupState": "completed" if completed else "failed",
-                    "leaseReleaseState": "released" if completed else "failed",
+                    "leaseReleaseState": (
+                        "released"
+                        if lease_released is True
+                        else "held"
+                        if lease_released is False
+                        else "unknown"
+                    ),
                 }
             )
             if safe_code:
                 refs["cleanupFailureCode"] = safe_code
             else:
                 refs.pop("cleanupFailureCode", None)
+            if egress_evidence_ref:
+                refs["egressEvidenceRef"] = str(egress_evidence_ref)
+            if launch_evidence_ref:
+                refs["egressLaunchEvidenceRef"] = str(launch_evidence_ref)
             row.terminal_refs = refs
             idempotency_key = row.idempotency_key
             await session.commit()
@@ -680,7 +695,9 @@ class OmnigentBridgeSessionStore:
                 **common_metadata,
                 "controlOutcome": "completed" if completed else "failed",
                 "cleanupCompleted": completed,
-                "leaseReleased": completed,
+                "leaseReleased": lease_released,
+                "egressEvidenceRef": egress_evidence_ref,
+                "egressLaunchEvidenceRef": launch_evidence_ref,
             },
         )
         return detached
@@ -1007,6 +1024,99 @@ class OmnigentBridgeSessionStore:
             await session.commit()
             await session.refresh(stored)
             return _detached(session, stored)
+
+    async def bind_egress_cleanup_authority(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        host_lease_ref: str,
+        egress_evidence: Mapping[str, Any],
+        launch_evidence_ref: str,
+    ) -> OmnigentBridgeSession:
+        """Persist the post-launch authority required by a later janitor."""
+
+        safe_evidence = redact_sensitive_payload(dict(egress_evidence))
+        if not isinstance(safe_evidence, dict):
+            raise OmnigentIdempotencyError(
+                "egress cleanup authority evidence is invalid"
+            )
+        safe_launch_ref = str(launch_evidence_ref or "").strip()
+        if not safe_launch_ref:
+            raise OmnigentIdempotencyError(
+                "egress cleanup authority requires protected launch evidence"
+            )
+        async with self._session_factory() as session:
+            row = await self._require(session, request.idempotency_key)
+            if row.host_lease_ref != host_lease_ref:
+                raise OmnigentIdempotencyError(
+                    "egress cleanup authority does not match the bridge host lease"
+                )
+            effective_launch = row.effective_launch_snapshot_json
+            effective_launch_ref = str(
+                (effective_launch or {}).get("snapshotRef") or ""
+            ).strip()
+            if not effective_launch_ref:
+                raise OmnigentIdempotencyError(
+                    "egress cleanup authority requires the bound launch snapshot"
+                )
+            authority = {
+                "schemaVersion": EGRESS_CLEANUP_AUTHORITY_VERSION,
+                "hostLeaseRef": host_lease_ref,
+                "effectiveLaunchRef": effective_launch_ref,
+                "egressEvidence": safe_evidence,
+                "launchEvidenceRef": safe_launch_ref,
+                "evidenceRequest": {
+                    "correlationId": request.correlation_id,
+                    "idempotencyKey": request.idempotency_key,
+                    "remediation": request.remediation_workspace is not None,
+                },
+            }
+            metadata = dict(row.metadata_ or {})
+            existing = metadata.get(EGRESS_CLEANUP_AUTHORITY_KEY)
+            if existing is not None and existing != authority:
+                raise OmnigentIdempotencyError(
+                    "bridge session is already bound to different egress cleanup authority"
+                )
+            metadata[EGRESS_CLEANUP_AUTHORITY_KEY] = authority
+            row.metadata_ = metadata
+            await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
+    async def get_egress_cleanup_authority(
+        self, *, host_lease_ref: str
+    ) -> dict[str, Any] | None:
+        """Resolve the exact durable authority required by ``stop_host``."""
+
+        async with self._session_factory() as session:
+            result = await session.execute(
+                select(OmnigentBridgeSession)
+                .where(OmnigentBridgeSession.host_lease_ref == host_lease_ref)
+                .order_by(OmnigentBridgeSession.updated_at.desc())
+                .limit(1)
+            )
+            row = result.scalars().first()
+            if row is None:
+                return None
+            authority = (row.metadata_ or {}).get(EGRESS_CLEANUP_AUTHORITY_KEY)
+            if not isinstance(authority, dict):
+                return None
+            if (
+                authority.get("schemaVersion")
+                != EGRESS_CLEANUP_AUTHORITY_VERSION
+                or authority.get("hostLeaseRef") != host_lease_ref
+            ):
+                raise OmnigentIdempotencyError(
+                    "durable egress cleanup authority identity is invalid"
+                )
+            effective_launch = dict(row.effective_launch_snapshot_json or {})
+            if authority.get("effectiveLaunchRef") != effective_launch.get(
+                "snapshotRef"
+            ):
+                raise OmnigentIdempotencyError(
+                    "durable egress cleanup authority launch snapshot is stale"
+                )
+            return {**dict(authority), "effectiveLaunch": effective_launch}
 
     async def bind_embedded_runner(
         self, idempotency_key: str, *, host_id: str, runner_id: str

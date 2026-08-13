@@ -46,10 +46,23 @@ HOST_PROFILE_BUSY_ERROR_CODE = "OMNIGENT_OAUTH_HOST_PROFILE_BUSY"
 class OmnigentOAuthHostError(RuntimeError):
     code = "OMNIGENT_OAUTH_HOST_ERROR"
 
-    def __init__(self, message: str, *, code: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        egress_evidence_ref: str | None = None,
+        cleanup_evidence: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(redact_sensitive_text(message)[:512])
         if code:
             self.code = code
+        # Cleanup can fail after protected terminal evidence has already been
+        # published.  Keep that objective evidence attached to the raised
+        # authority error so the coordinator or janitor can durably project it
+        # instead of reducing the outcome to exception prose.
+        self.egress_evidence_ref = str(egress_evidence_ref or "").strip() or None
+        self.cleanup_evidence = dict(cleanup_evidence or {})
 
 
 class HostPreflightFailure(str, Enum):

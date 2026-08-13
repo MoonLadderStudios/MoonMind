@@ -11,6 +11,7 @@ import shutil
 import tarfile
 import tempfile
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -97,6 +98,61 @@ _FORBIDDEN_ENV = (
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
 )
+
+
+@dataclass(frozen=True)
+class OmnigentEgressEvidenceRequestIdentity:
+    """Credential-free request identity sufficient for protected evidence I/O.
+
+    Cleanup may run in a later janitor Activity where the original execution
+    request is intentionally unavailable.  The bridge store persists these
+    three immutable fields at launch so that cleanup can publish against the
+    original evidence chain without reconstructing or inventing a request.
+    """
+
+    correlation_id: str
+    idempotency_key: str
+    remediation_workspace: dict[str, bool] | None = None
+
+    @classmethod
+    def from_request(
+        cls, request: AgentExecutionRequest
+    ) -> "OmnigentEgressEvidenceRequestIdentity":
+        return cls(
+            correlation_id=request.correlation_id,
+            idempotency_key=request.idempotency_key,
+            remediation_workspace=(
+                {"authorized": True}
+                if request.remediation_workspace is not None
+                else None
+            ),
+        )
+
+    @classmethod
+    def from_mapping(
+        cls, value: Mapping[str, Any]
+    ) -> "OmnigentEgressEvidenceRequestIdentity":
+        correlation_id = str(value.get("correlationId") or "").strip()
+        idempotency_key = str(value.get("idempotencyKey") or "").strip()
+        if not correlation_id or not idempotency_key:
+            raise OmnigentOAuthHostError(
+                "durable egress cleanup authority is missing request identity",
+                code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID",
+            )
+        return cls(
+            correlation_id=correlation_id,
+            idempotency_key=idempotency_key,
+            remediation_workspace=(
+                {"authorized": True} if value.get("remediation") is True else None
+            ),
+        )
+
+    def as_mapping(self) -> dict[str, Any]:
+        return {
+            "correlationId": self.correlation_id,
+            "idempotencyKey": self.idempotency_key,
+            "remediation": self.remediation_workspace is not None,
+        }
 
 _TOOLS_PATH = "/opt/moonmind-tools/bin"
 _DEFAULT_HOST_PATH = (
@@ -260,6 +316,7 @@ class OmnigentOAuthHostRuntime:
         resolved_skillset_ref: str | None = None,
         artifact_gateway: Any | None = None,
         evidence_request: AgentExecutionRequest | None = None,
+        cleanup_authority_store: Any | None = None,
         target_repository: str = "",
         required_capabilities: tuple[str, ...] = (),
         github_token: str | None = None,
@@ -318,6 +375,7 @@ class OmnigentOAuthHostRuntime:
                 and "workspace" in set(launch.get("mountClasses") or ())
             ),
         )
+        server_image_evidence = await self._attest_server_image(launch)
         await asyncio.to_thread(
             self._align_workspace_ownership,
             workspace_source,
@@ -392,6 +450,7 @@ class OmnigentOAuthHostRuntime:
         egress_evidence = await self._attest_launched_workload_egress(
             attestation=egress_attestation,
             attachment_identity=attachment_identity,
+            expected_image_ref=str(launch["hostImageRef"]),
         )
         egress_evidence["attachmentRef"] = f"container:{attachment_identity}"
         egress_evidence.update(
@@ -404,6 +463,7 @@ class OmnigentOAuthHostRuntime:
                 "releasedArchitectures": list(launch.get("architectures") or ()),
                 "hostMode": launch.get("hostMode"),
                 "runtimeProvenance": "omnigent",
+                **server_image_evidence,
             }
         )
         # Attachment evidence is an authority gate: do not contact the host,
@@ -456,22 +516,45 @@ class OmnigentOAuthHostRuntime:
         validated["egressAttestation"] = result["egressAttestation"]
         validated["workspaceResolution"] = dict(self._last_workspace_evidence)
         if evidence_request is not None and artifact_gateway is not None:
-            launch_evidence = self._host_egress_evidence_payload(
-                binding=binding,
-                host_lease=host_lease,
-                launch=launch,
-                egress_evidence=egress_evidence,
-                evidence_request=evidence_request,
-                state="launched",
-                cleanup_result="pending",
-                reconciliation_result="not_required",
-            )
-            launch_ref = await self._publish_host_egress_evidence(
-                artifact_gateway=artifact_gateway,
-                evidence_request=evidence_request,
-                name=f"omnigent-{host_lease.lease_id}-egress-launch.json",
-                payload=launch_evidence,
-            )
+            existing_authority = None
+            if cleanup_authority_store is not None and hasattr(
+                cleanup_authority_store, "get_egress_cleanup_authority"
+            ):
+                existing_authority = (
+                    await cleanup_authority_store.get_egress_cleanup_authority(
+                        host_lease_ref=host_lease.lease_id
+                    )
+                )
+            if isinstance(existing_authority, Mapping):
+                launch_ref = self._validate_reused_cleanup_authority(
+                    authority=existing_authority,
+                    launch=launch,
+                    egress_evidence=egress_evidence,
+                )
+            else:
+                launch_evidence = self._host_egress_evidence_payload(
+                    binding=binding,
+                    host_lease=host_lease,
+                    launch=launch,
+                    egress_evidence=egress_evidence,
+                    evidence_request=evidence_request,
+                    state="launched",
+                    cleanup_result="pending",
+                    reconciliation_result="not_required",
+                )
+                launch_ref = await self._publish_host_egress_evidence(
+                    artifact_gateway=artifact_gateway,
+                    evidence_request=evidence_request,
+                    name=f"omnigent-{host_lease.lease_id}-egress-launch.json",
+                    payload=launch_evidence,
+                )
+                if cleanup_authority_store is not None:
+                    await cleanup_authority_store.bind_egress_cleanup_authority(
+                        request=evidence_request,
+                        host_lease_ref=host_lease.lease_id,
+                        egress_evidence=egress_evidence,
+                        launch_evidence_ref=launch_ref,
+                    )
             validated["egressEvidenceRef"] = launch_ref
         return validated
 
@@ -772,6 +855,94 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
             ) from exc
 
+    async def _attest_server_image(
+        self, launch: Mapping[str, Any]
+    ) -> dict[str, str]:
+        """Bind the live Omnigent server container to its immutable image."""
+
+        service = await self._run(
+            "docker",
+            "compose",
+            "-f",
+            "docker-compose.yaml",
+            "ps",
+            "-q",
+            "omnigent",
+            check=False,
+        )
+        container_ids = [item.strip() for item in service[1].splitlines() if item.strip()]
+        if service[0] != 0 or len(container_ids) != 1:
+            raise OmnigentOAuthHostError(
+                "live Omnigent server identity is unavailable",
+                code="OMNIGENT_SERVER_IMAGE_UNATTESTED",
+            )
+        container_id = container_ids[0]
+        configured = await self._run(
+            "docker",
+            "inspect",
+            "--format",
+            "{{json .Config.Image}}",
+            container_id,
+            check=False,
+        )
+        observed = await self._run(
+            "docker",
+            "inspect",
+            "--format",
+            "{{json .Image}}",
+            container_id,
+            check=False,
+        )
+        try:
+            configured_ref = str(json.loads(configured[1])).strip()
+            image_digest = str(json.loads(observed[1])).strip()
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise OmnigentOAuthHostError(
+                "live Omnigent server image metadata is invalid",
+                code="OMNIGENT_SERVER_IMAGE_UNATTESTED",
+            ) from exc
+        declared_ref = str(launch.get("serverImageRef") or "").strip()
+        if configured[0] != 0 or observed[0] != 0 or configured_ref != declared_ref:
+            raise OmnigentOAuthHostError(
+                "live Omnigent server image does not match launch authority",
+                code="OMNIGENT_SERVER_IMAGE_MISMATCH",
+            )
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest):
+            raise OmnigentOAuthHostError(
+                "live Omnigent server digest is unavailable",
+                code="OMNIGENT_SERVER_IMAGE_UNATTESTED",
+            )
+        architecture_result = await self._run(
+            "docker",
+            "image",
+            "inspect",
+            "--format",
+            "{{json .Architecture}}",
+            image_digest,
+            check=False,
+        )
+        try:
+            architecture = str(json.loads(architecture_result[1])).strip()
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise OmnigentOAuthHostError(
+                "live Omnigent server architecture is unavailable",
+                code="OMNIGENT_SERVER_IMAGE_UNATTESTED",
+            ) from exc
+        released_architectures = set(launch.get("architectures") or ())
+        if architecture_result[0] != 0 or (
+            released_architectures and architecture not in released_architectures
+        ):
+            raise OmnigentOAuthHostError(
+                "live Omnigent server architecture is not released",
+                code="OMNIGENT_SERVER_ARCHITECTURE_MISMATCH",
+            )
+        return {
+            "serverAttachmentIdentity": container_id,
+            "serverImageRefObserved": configured_ref,
+            "serverImageDigest": image_digest,
+            "serverArchitecture": architecture,
+        }
+
     @staticmethod
     def _authority_version(ref: object) -> str:
         text = str(ref or "").strip()
@@ -814,6 +985,59 @@ class OmnigentOAuthHostRuntime:
             return None
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
+    @staticmethod
+    def _validate_reused_cleanup_authority(
+        *,
+        authority: Mapping[str, Any],
+        launch: Mapping[str, Any],
+        egress_evidence: Mapping[str, Any],
+    ) -> str:
+        stored_launch = authority.get("effectiveLaunch")
+        stored_evidence = authority.get("egressEvidence")
+        launch_ref = str(authority.get("launchEvidenceRef") or "").strip()
+        if (
+            not isinstance(stored_launch, Mapping)
+            or not isinstance(stored_evidence, Mapping)
+            or stored_launch.get("snapshotRef") != launch.get("snapshotRef")
+            or not launch_ref
+        ):
+            raise OmnigentOAuthHostError(
+                "durable egress cleanup authority does not match the launch",
+                code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID",
+            )
+        immutable_fields = (
+            "profileRef",
+            "profileDigest",
+            "enforcerImplementation",
+            "backendRef",
+            "networkRef",
+            "gatewayRef",
+            "appliedRuleDigest",
+            "configDigest",
+            "gatewayImageDigest",
+            "attachmentIdentity",
+            "networkIdentity",
+            "endpointIdentity",
+            "workloadImageDigest",
+            "workloadImageRef",
+            "architecture",
+            "serverAttachmentIdentity",
+            "serverImageRefObserved",
+            "serverImageDigest",
+            "serverArchitecture",
+            "hostMode",
+            "runtimeProvenance",
+        )
+        if any(
+            stored_evidence.get(field) != egress_evidence.get(field)
+            for field in immutable_fields
+        ):
+            raise OmnigentOAuthHostError(
+                "live host identity changed from durable cleanup authority",
+                code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_MISMATCH",
+            )
+        return launch_ref
+
     @classmethod
     def _host_egress_evidence_payload(
         cls,
@@ -822,7 +1046,7 @@ class OmnigentOAuthHostRuntime:
         host_lease: OmnigentHostLease,
         launch: Mapping[str, Any],
         egress_evidence: Mapping[str, Any],
-        evidence_request: AgentExecutionRequest,
+        evidence_request: AgentExecutionRequest | OmnigentEgressEvidenceRequestIdentity,
         state: str,
         cleanup_result: str,
         reconciliation_result: str,
@@ -875,7 +1099,7 @@ class OmnigentOAuthHostRuntime:
     async def _publish_host_egress_evidence(
         *,
         artifact_gateway: Any,
-        evidence_request: AgentExecutionRequest,
+        evidence_request: AgentExecutionRequest | OmnigentEgressEvidenceRequestIdentity,
         name: str,
         payload: Mapping[str, Any],
     ) -> str:
@@ -951,6 +1175,7 @@ class OmnigentOAuthHostRuntime:
         *,
         attestation: EgressAttestation,
         attachment_identity: str,
+        expected_image_ref: str,
         started_at: datetime | None = None,
         finished_at: datetime | None = None,
     ) -> dict[str, object]:
@@ -964,6 +1189,7 @@ class OmnigentOAuthHostRuntime:
                 profile=OMNIGENT_EGRESS_PROFILE,
                 attestation=attestation,
                 attachment_identity=attachment_identity,
+                expected_image_ref=expected_image_ref,
                 started_at=started_at,
                 finished_at=finished_at,
             )
@@ -1367,7 +1593,11 @@ class OmnigentOAuthHostRuntime:
         effective_launch: Mapping[str, Any] | None = None,
         egress_evidence: Mapping[str, Any] | None = None,
         launch_evidence_ref: str | None = None,
-        evidence_request: AgentExecutionRequest | None = None,
+        evidence_request: (
+            AgentExecutionRequest
+            | OmnigentEgressEvidenceRequestIdentity
+            | None
+        ) = None,
         artifact_gateway: Any | None = None,
     ) -> dict[str, Any]:
         attachment_identity = str(
@@ -1383,6 +1613,11 @@ class OmnigentOAuthHostRuntime:
                             egress_evidence
                         ),
                         attachment_identity=attachment_identity,
+                        expected_image_ref=str(
+                            (effective_launch or {}).get("hostImageRef")
+                            or egress_evidence.get("workloadImageRef")
+                            or ""
+                        ),
                         started_at=self._evidence_time(
                             egress_evidence.get("validatedAt")
                         ),
@@ -1505,11 +1740,15 @@ class OmnigentOAuthHostRuntime:
             raise OmnigentOAuthHostError(
                 "Omnigent host cleanup could not be reconciled",
                 code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+                egress_evidence_ref=str(result.get("evidenceRef") or "") or None,
+                cleanup_evidence=result,
             )
         if terminal_validation_error is not None:
             raise OmnigentOAuthHostError(
                 "Omnigent host terminal egress evidence could not be validated",
                 code="OMNIGENT_TERMINAL_EGRESS_UNATTESTED",
+                egress_evidence_ref=str(result.get("evidenceRef") or "") or None,
+                cleanup_evidence=result,
             ) from terminal_validation_error
         return result
 

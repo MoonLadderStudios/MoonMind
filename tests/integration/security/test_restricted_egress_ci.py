@@ -283,6 +283,7 @@ async def test_launch_and_lifecycle_evidence_is_digest_bound_and_resolvable(
                         "IPAddress": "172.31.0.9",
                     }
                 },
+                "imageRef": "sha256:" + "a" * 64,
                 "image": "sha256:" + "a" * 64,
             }
             return 0, json.dumps(payload).encode(), b""
@@ -332,6 +333,7 @@ async def test_launch_and_lifecycle_evidence_is_digest_bound_and_resolvable(
     assert attestation["networkIdentity"] == "ci-restricted-network-id"
     assert attestation["endpointIdentity"] == "ci-container-job-endpoint-id"
     assert attestation["workloadImageDigest"] == "sha256:" + "a" * 64
+    assert attestation["workloadImageRef"] == "sha256:" + "a" * 64
     assert attestation["architecture"] == "amd64"
     assert lifecycle["cleanupResult"] == "succeeded"
     assert lifecycle["launchAttestationRef"] == started.diagnostics_ref

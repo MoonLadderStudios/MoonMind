@@ -1953,6 +1953,11 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
         )
     if subcommand == "inspect":
         if "health" not in args[3]:
+            image_ref = (
+                "redis:7.2-alpine"
+                if "helper" in str(args[-1])
+                else "python:3.12-slim"
+            )
             return _Process(
                 stdout=json.dumps(
                     {
@@ -1972,6 +1977,7 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
                                 "IPAddress": "172.31.0.7",
                             }
                         },
+                        "imageRef": image_ref,
                         "image": "sha256:" + "c" * 64,
                     }
                 ).encode()
@@ -2199,6 +2205,68 @@ async def test_restricted_helper_cancellation_after_attachment_cleans_and_releas
 
 
 @pytest.mark.asyncio
+async def test_restricted_helper_interrupted_start_cleanup_failure_retains_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace_root = tmp_path / "workspace"
+    artifact_dir = workspace_root / "task-helper" / "artifacts" / "step-service"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    cleanup_started = False
+
+    async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
+        nonlocal cleanup_started
+        if args[1] == "rm":
+            cleanup_started = True
+        if cleanup_started and args[1] == "ps":
+            return _Process(stdout=f"{validated.container_name}\n".encode())
+        return _healthy_egress_run_process(list(args))
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        _fake_create_subprocess_exec,
+    )
+    validated = _validated_helper_request(
+        tmp_path,
+        workspace_root=workspace_root,
+        agentRunId="task-helper",
+        repoDir=str(workspace_root / "task-helper" / "repo"),
+        artifactsDir=str(artifact_dir),
+        profiles=[
+            _helper_profile_payload(
+                workspace_root=workspace_root,
+                network_policy="restricted_egress",
+            )
+        ],
+    )
+    limiter = DockerWorkloadConcurrencyLimiter(fleet_limit=1)
+    launcher = DockerWorkloadLauncher(concurrency_limiter=limiter)
+    monkeypatch.setattr(
+        launcher,
+        "_wait_for_helper_readiness",
+        AsyncMock(side_effect=RuntimeError("readiness interrupted")),
+    )
+
+    with pytest.raises(RuntimeError, match="readiness interrupted"):
+        await launcher.start_helper(validated)
+
+    failure_path = (
+        artifact_dir
+        / "workload"
+        / validated.container_name
+        / "egress-helper-authority-cleanup_failed.json"
+    )
+    failure = parse_and_verify_conformance_evidence(
+        failure_path.read_bytes(),
+        location="restricted-helper-interrupted-cleanup-failure-test",
+    )
+    assert failure["state"] == "cleanup_failed"
+    assert failure["leaseAuthority"]["state"] == "held"
+    assert failure["reconciliationOwner"]["toolName"] == "container.stop_helper"
+    assert limiter._active_total == 1
+
+
+@pytest.mark.asyncio
 async def test_restricted_helper_cancellation_before_attachment_releases_authority(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2284,8 +2352,13 @@ async def test_restricted_helper_stop_recovers_durable_authority_after_worker_re
     )
     assert terminal["cleanupResult"] == "succeeded"
     assert terminal["leaseAuthority"]["releaseResult"] == (
-        "recovered_after_worker_restart"
+        "released_after_reconciliation"
     )
+    assert terminal["runtimeProvenance"] == (
+        "docker_workload_launcher/docker-engine"
+    )
+    assert terminal["hostMode"] == "managed_helper"
+    assert terminal["workloadClass"] == "managed_helper"
 
 
 @pytest.mark.asyncio
@@ -2357,12 +2430,13 @@ async def test_restricted_helper_failed_cleanup_persists_reconciliation_evidence
     artifact_dir = workspace_root / "task-helper" / "artifacts" / "step-service"
     artifact_dir.mkdir(parents=True, exist_ok=True)
     cleanup_started = False
+    cleanup_blocked = True
 
     async def _fake_create_subprocess_exec(*args: str, **_kwargs: Any) -> _Process:
         nonlocal cleanup_started
         if args[1] == "logs":
             cleanup_started = True
-        if cleanup_started and args[1] == "ps":
+        if cleanup_started and cleanup_blocked and args[1] == "ps":
             return _Process(stdout=f"{validated.container_name}\n".encode())
         return _healthy_egress_run_process(list(args))
 
@@ -2400,7 +2474,34 @@ async def test_restricted_helper_failed_cleanup_persists_reconciliation_evidence
     )
     assert failure["cleanupResult"] == "failed"
     assert failure["reconciliationResult"] == "required"
-    assert failure["leaseAuthority"]["state"] == "released"
+    assert failure["leaseAuthority"] == {
+        "owner": validated.container_name,
+        "state": "held",
+        "releaseResult": "held_for_reconciliation",
+    }
+    assert failure["reconciliationOwner"] == {
+        "toolName": "container.stop_helper",
+        "containerName": validated.container_name,
+        "agentRunId": "task-helper",
+        "stepId": "step-service",
+        "attempt": 1,
+    }
+    assert launcher._concurrency_limiter._active_total == 1
+
+    cleanup_blocked = False
+    stopped = await launcher.stop_helper(
+        validated, reason="janitor_reconciliation"
+    )
+    terminal = parse_and_verify_conformance_evidence(
+        Path(stopped.output_refs["security.egress.authority"]).read_bytes(),
+        location="restricted-helper-cleanup-reconciled-test",
+    )
+    assert terminal["cleanupResult"] == "succeeded"
+    assert terminal["leaseAuthority"]["state"] == "released"
+    assert terminal["leaseAuthority"]["releaseResult"] == (
+        "released_after_reconciliation"
+    )
+    assert launcher._concurrency_limiter._active_total == 0
 
 
 @pytest.mark.asyncio

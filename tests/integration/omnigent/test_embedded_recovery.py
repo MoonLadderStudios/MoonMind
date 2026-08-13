@@ -219,7 +219,7 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
 
     assert row.status == "failed"
     assert row.terminal_refs["cleanupState"] == "completed"
-    assert row.terminal_refs["leaseReleaseState"] == "released"
+    assert row.terminal_refs["leaseReleaseState"] == "held"
     assert [event.event_type for event in events] == [
         "lifecycle.terminal", "lifecycle.control", "lifecycle.control",
     ]

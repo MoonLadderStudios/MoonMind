@@ -1177,12 +1177,21 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     )
 
     class ArtifactService:
+        def __init__(self) -> None:
+            self.egress = LocalOmnigentArtifactGateway(root=tmp_path / "evidence")
+
         async def read(self, *, artifact_id, **_kwargs):
             if artifact_id == skillset_ref:
                 return object(), skillset.model_dump_json(by_alias=True).encode()
             if artifact_id == content_ref:
                 return object(), payload
             raise AssertionError(f"unexpected artifact read: {artifact_id}")
+
+        async def write_bytes(self, **kwargs):
+            return await self.egress.write_bytes(**kwargs)
+
+        async def read_bytes(self, artifact_ref):
+            return await self.egress.read_bytes(artifact_ref)
 
     class Client:
         async def list_hosts(self):
@@ -1209,6 +1218,14 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     )
     runtime._attest_egress = AsyncMock(  # type: ignore[method-assign]
         return_value=_egress_attestation()
+    )
+    runtime._attest_server_image = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "serverAttachmentIdentity": "omnigent-server-1",
+            "serverImageRefObserved": "server@sha256:" + "8" * 64,
+            "serverImageDigest": "sha256:" + "9" * 64,
+            "serverArchitecture": "amd64",
+        }
     )
     runtime._resolve_workload_attachment_identity = AsyncMock(  # type: ignore[method-assign]
         return_value="mm-host-lease-1"
@@ -1310,6 +1327,25 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     lease = _host_lease().model_copy(
         update={"container_name": "mm-host-lease-1"}
     )
+    artifact_service = ArtifactService()
+
+    class CleanupAuthorityStore:
+        def __init__(self) -> None:
+            self.authority = None
+            self.bind_calls: list[dict] = []
+
+        async def get_egress_cleanup_authority(self, **_kwargs):
+            return self.authority
+
+        async def bind_egress_cleanup_authority(self, **kwargs):
+            self.bind_calls.append(kwargs)
+            self.authority = {
+                "effectiveLaunch": launch,
+                "egressEvidence": kwargs["egress_evidence"],
+                "launchEvidenceRef": kwargs["launch_evidence_ref"],
+            }
+
+    cleanup_authority_store = CleanupAuthorityStore()
     request = {
         "binding": binding,
         "host_lease": lease,
@@ -1318,7 +1354,9 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         "current_workflow_id": "workflow-1",
         "current_step_execution_id": "step-1",
         "resolved_skillset_ref": skillset_ref,
-        "artifact_gateway": ArtifactService(),
+        "artifact_gateway": artifact_service,
+        "evidence_request": _execution_request(),
+        "cleanup_authority_store": cleanup_authority_store,
         "effective_launch": launch,
     }
 
@@ -1333,6 +1371,16 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
         os.close(mount_fd)
 
     assert first["activeSkillsPath"] == retry["activeSkillsPath"]
+    assert first["egressAttestation"]["serverImageDigest"] == (
+        "sha256:" + "9" * 64
+    )
+    assert first["egressAttestation"]["serverArchitecture"] == "amd64"
+    assert first["egressEvidenceRef"].startswith("artifact://")
+    assert retry["egressEvidenceRef"] == first["egressEvidenceRef"]
+    assert len(cleanup_authority_store.bind_calls) == 1
+    cleanup_call = cleanup_authority_store.bind_calls[0]
+    assert cleanup_call["host_lease_ref"] == lease.lease_id
+    assert cleanup_call["launch_evidence_ref"] == first["egressEvidenceRef"]
     assert state["launches"] == 1
     assert state["manifest_checks"] == 2
 
@@ -1369,6 +1417,82 @@ async def test_daemon_workspace_root_uses_selected_daemon_volume_mountpoint(
         "agent_workspaces",
         check=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_server_image_attestation_records_live_digest_and_architecture() -> None:
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-static@1",
+        provider_profile_id="codex",
+    )
+    declared_ref = launch["serverImageRef"]
+    image_digest = "sha256:" + "9" * 64
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            (0, "omnigent-container-id\n", ""),
+            (0, json.dumps(declared_ref), ""),
+            (0, json.dumps(image_digest), ""),
+            (0, json.dumps("amd64"), ""),
+        ]
+    )
+
+    evidence = await runtime._attest_server_image(launch)
+
+    assert evidence == {
+        "serverAttachmentIdentity": "omnigent-container-id",
+        "serverImageRefObserved": declared_ref,
+        "serverImageDigest": image_digest,
+        "serverArchitecture": "amd64",
+    }
+
+
+@pytest.mark.asyncio
+async def test_server_image_attestation_rejects_declared_digest_mismatch() -> None:
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-static@1",
+        provider_profile_id="codex",
+    )
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            (0, "omnigent-container-id\n", ""),
+            (0, json.dumps("server@sha256:" + "0" * 64), ""),
+            (0, json.dumps("sha256:" + "9" * 64), ""),
+        ]
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime._attest_server_image(launch)
+
+    assert exc_info.value.code == "OMNIGENT_SERVER_IMAGE_MISMATCH"
+
+
+@pytest.mark.asyncio
+async def test_server_image_attestation_rejects_unreleased_architecture() -> None:
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-static@1",
+        provider_profile_id="codex",
+    )
+    launch["architectures"] = ["arm64"]
+    image_digest = "sha256:" + "9" * 64
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            (0, "omnigent-container-id\n", ""),
+            (0, json.dumps(launch["serverImageRef"]), ""),
+            (0, json.dumps(image_digest), ""),
+            (0, json.dumps("amd64"), ""),
+        ]
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime._attest_server_image(launch)
+
+    assert exc_info.value.code == "OMNIGENT_SERVER_ARCHITECTURE_MISMATCH"
 
 
 @pytest.mark.asyncio
@@ -3057,7 +3181,12 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     class Runtime:
         async def prepare_host(self, **_kwargs):
             actions.append("preflight")
-            return {"hostId": "host-1", "workspacePath": "/workspaces/run"}
+            return {
+                "hostId": "host-1",
+                "workspacePath": "/workspaces/run",
+                "egressAttestation": {"attachmentIdentity": "host-1"},
+                "egressEvidenceRef": "artifact://launch-egress",
+            }
 
         async def stop_host(self, **_kwargs):
             actions.append("host_cleanup")
@@ -3070,6 +3199,9 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         async def bind_profile_authorization(self, **_kwargs):
             actions.append("bridge_bound")
             return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def bind_egress_cleanup_authority(self, **_kwargs):
+            actions.append("egress_cleanup_authority_bound")
 
         async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
             actions.append(event_type)
@@ -3265,6 +3397,7 @@ async def _drive_authority_chain_coordinator(
                     "validationState": "attested",
                     "validatedAt": "2026-08-03T00:00:00Z",
                 },
+                "egressEvidenceRef": "artifact://launch-egress",
                 # Bounded, credential-free resolution evidence as produced by the
                 # real runtime; the coordinator folds this into the authority chain.
                 "workspaceResolution": {
@@ -3321,6 +3454,9 @@ async def _drive_authority_chain_coordinator(
                 f"bridge-{len(self.bindings) + 1}",
             )
             return SimpleNamespace(bridge_session_id=bridge_session_id)
+
+        async def bind_egress_cleanup_authority(self, **_kwargs):
+            ordered.append("egress_cleanup_authority_bound")
 
         async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
             ordered.append(event_type)
@@ -4254,7 +4390,24 @@ def _launch_ready_profile():
 
 
 def _injected_launch_error(code: str) -> OmnigentOAuthHostError:
-    error = OmnigentOAuthHostError("deterministic injected failure", code=code)
+    cleanup_evidence = (
+        {
+            "evidenceRef": "artifact://terminal-egress-failure",
+            "launchEvidenceRef": "artifact://launch-egress",
+        }
+        if code in {"host_stop_failed", "host_remove_failed"}
+        else None
+    )
+    error = OmnigentOAuthHostError(
+        "deterministic injected failure",
+        code=code,
+        egress_evidence_ref=(
+            "artifact://terminal-egress-failure"
+            if cleanup_evidence is not None
+            else None
+        ),
+        cleanup_evidence=cleanup_evidence,
+    )
     error.diagnostics_ref = f"artifact://diagnostics/{code}"  # type: ignore[attr-defined]
     return error
 
@@ -4400,7 +4553,17 @@ async def _run_coordinator_failure_case(
     # Egress attestation is an orthogonal trusted-backend gate; this matrix
     # exercises coordinator failure/cleanup evidence, so treat enforcement as
     # already attested and let the intended failure stages surface.
-    runtime._attest_egress = AsyncMock(return_value=_egress_attestation())  # type: ignore[method-assign]
+    runtime._attest_egress = AsyncMock(  # type: ignore[method-assign]
+        return_value=_egress_attestation()
+    )
+    runtime._attest_server_image = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "serverAttachmentIdentity": "omnigent-server-1",
+            "serverImageRefObserved": "server@sha256:" + "8" * 64,
+            "serverImageDigest": "sha256:" + "9" * 64,
+            "serverArchitecture": "amd64",
+        }
+    )
     runtime._resolve_workload_attachment_identity = AsyncMock(  # type: ignore[method-assign]
         return_value="container-1"
     )
@@ -4463,6 +4626,9 @@ async def _run_coordinator_failure_case(
 
         async def bind_profile_authorization(self, **_kwargs):
             return SimpleNamespace(bridge_session_id="bridge-1")
+
+        async def bind_egress_cleanup_authority(self, **_kwargs):
+            actions.append("egress_cleanup_authority_bound")
 
         async def record_lifecycle_event(self, _key, *, event_type, **kwargs):
             events.append((event_type, kwargs))
@@ -4746,6 +4912,12 @@ async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_
     assert cleanup["remediation_action"] == "inspect_cleanup_diagnostics"
     assert cleanup["metadata"]["cleanupCompleted"] is False
     assert cleanup["metadata"]["janitorRequired"] is True
+    assert cleanup["metadata"]["egressLaunchEvidenceRef"] == (
+        "artifact://launch-egress"
+    )
+    assert cleanup["metadata"]["egressEvidenceRef"] == (
+        "artifact://terminal-egress-failure"
+    )
     release = next(
         kwargs
         for stage, kwargs in events
@@ -4760,6 +4932,8 @@ async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_
         "cleanupCompleted": False,
         "leaseReleased": False,
         "janitorRequired": True,
+        "egressLaunchEvidenceRef": "artifact://launch-egress",
+        "egressEvidenceRef": "artifact://terminal-egress-failure",
     }
 
 

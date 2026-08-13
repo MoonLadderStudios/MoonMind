@@ -109,6 +109,73 @@ def _request(idempotency_key: str = "idem-1", *, with_step: bool = False):
 
 
 @pytest.mark.asyncio
+async def test_egress_cleanup_authority_round_trips_and_terminal_refs_persist(
+    store,
+) -> None:
+    request = _request()
+    policy_authority = {
+        "policyId": "codex-static",
+        "policyVersion": 1,
+        "policyRef": "codex-static@1",
+        "policyDigest": "sha256:" + "1" * 64,
+        "snapshotRef": "policy:sha256:" + "2" * 64,
+        "validation": {"valid": True},
+    }
+    effective_launch = {
+        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
+        "launchPolicyRef": "codex-static@1",
+        "policyAuthority": policy_authority,
+        "enforcedEgress": True,
+    }
+    await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=4,
+        host_binding_ref="binding-1",
+        host_lease_ref="lease-1",
+        omnigent_host_id="host-1",
+        effective_launch_snapshot=effective_launch,
+    )
+    await store.bind_egress_cleanup_authority(
+        request=request,
+        host_lease_ref="lease-1",
+        egress_evidence={
+            "attachmentIdentity": "host-container-1",
+            "validationResult": "passed",
+        },
+        launch_evidence_ref="artifact://launch-egress",
+    )
+
+    authority = await store.get_egress_cleanup_authority(
+        host_lease_ref="lease-1"
+    )
+
+    assert authority is not None
+    assert authority["effectiveLaunch"] == effective_launch
+    assert authority["launchEvidenceRef"] == "artifact://launch-egress"
+    assert authority["evidenceRequest"] == {
+        "correlationId": request.correlation_id,
+        "idempotencyKey": request.idempotency_key,
+        "remediation": False,
+    }
+
+    row = await store.record_terminal_cleanup(
+        host_lease_ref="lease-1",
+        completed=True,
+        egress_evidence_ref="artifact://terminal-egress",
+        launch_evidence_ref="artifact://launch-egress",
+        lease_released=True,
+    )
+    assert row is not None
+    assert row.terminal_refs["egressEvidenceRef"] == "artifact://terminal-egress"
+    assert row.terminal_refs["egressLaunchEvidenceRef"] == (
+        "artifact://launch-egress"
+    )
+
+
+@pytest.mark.asyncio
 async def test_initial_retrieval_store_rejects_unbounded_or_unknown_evidence(
     store,
 ) -> None:

@@ -5,7 +5,10 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.oauth_host_runtime import (
+    OmnigentEgressEvidenceRequestIdentity,
+    OmnigentOAuthHostRuntime,
+)
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
 from moonmind.provider_profiles.lease_client import (
     CredentialLease,
@@ -24,6 +27,7 @@ class OmnigentOAuthHostJanitor:
         client: OmnigentHttpClient,
         run_store: Any | None = None,
         lease_client: ProviderProfileLeaseClient | None = None,
+        artifact_gateway: Any | None = None,
         heartbeat_timeout_seconds: int = 90,
     ) -> None:
         self._repository = repository
@@ -31,6 +35,7 @@ class OmnigentOAuthHostJanitor:
         self._client = client
         self._run_store = run_store
         self._lease_client = lease_client
+        self._artifact_gateway = artifact_gateway
         self._heartbeat_timeout = timedelta(
             seconds=max(30, heartbeat_timeout_seconds)
         )
@@ -64,6 +69,88 @@ class OmnigentOAuthHostJanitor:
             )
         )
         return True
+
+    async def _cleanup_authority(self, lease: Any) -> dict[str, Any] | None:
+        authority = None
+        if self._run_store is not None and hasattr(
+            self._run_store, "get_egress_cleanup_authority"
+        ):
+            authority = await self._run_store.get_egress_cleanup_authority(
+                host_lease_ref=lease.lease_id
+            )
+        launch = getattr(lease, "effective_launch_snapshot", None)
+        requires_authority = bool(
+            isinstance(launch, dict) and launch.get("enforcedEgress") is True
+        )
+        if authority is None and requires_authority:
+            raise ValueError(
+                "restricted-egress host cleanup authority is unavailable"
+            )
+        return authority
+
+    async def _stop_host_with_authority(
+        self, *, binding: Any, lease: Any
+    ) -> dict[str, Any]:
+        authority = await self._cleanup_authority(lease)
+        if authority is None:
+            result = await self._runtime.stop_host(
+                binding=binding, host_lease=lease
+            )
+            return dict(result or {})
+        if self._artifact_gateway is None:
+            raise ValueError(
+                "restricted-egress host cleanup evidence publisher is unavailable"
+            )
+        request_identity = authority.get("evidenceRequest")
+        effective_launch = authority.get("effectiveLaunch")
+        egress_evidence = authority.get("egressEvidence")
+        if not isinstance(request_identity, dict) or not isinstance(
+            effective_launch, dict
+        ) or not isinstance(egress_evidence, dict):
+            raise ValueError("restricted-egress host cleanup authority is incomplete")
+        return await self._runtime.stop_host(
+            binding=binding,
+            host_lease=lease,
+            effective_launch=effective_launch,
+            egress_evidence=egress_evidence,
+            launch_evidence_ref=str(authority.get("launchEvidenceRef") or "") or None,
+            evidence_request=OmnigentEgressEvidenceRequestIdentity.from_mapping(
+                request_identity
+            ),
+            artifact_gateway=self._artifact_gateway,
+        )
+
+    async def _record_terminal_cleanup(
+        self,
+        *,
+        lease: Any,
+        completed: bool,
+        cleanup_evidence: dict[str, Any] | None = None,
+        error: Exception | None = None,
+        lease_released: bool | None = None,
+    ) -> None:
+        if self._run_store is None or not hasattr(
+            self._run_store, "record_terminal_cleanup"
+        ):
+            return
+        evidence = dict(cleanup_evidence or {})
+        error_evidence = getattr(error, "cleanup_evidence", None)
+        if isinstance(error_evidence, dict):
+            evidence.update(error_evidence)
+        evidence_ref = str(
+            evidence.get("evidenceRef")
+            or getattr(error, "egress_evidence_ref", None)
+            or ""
+        ).strip() or None
+        await self._run_store.record_terminal_cleanup(
+            host_lease_ref=lease.lease_id,
+            completed=completed,
+            code=type(error).__name__ if error is not None else None,
+            summary=str(error or ""),
+            egress_evidence_ref=evidence_ref,
+            launch_evidence_ref=str(evidence.get("launchEvidenceRef") or "") or None,
+            lease_released=lease_released,
+        )
 
     async def run_action(
         self,
@@ -100,6 +187,7 @@ class OmnigentOAuthHostJanitor:
             lease.expires_at <= now
             or lease.last_heartbeat_at <= now - self._heartbeat_timeout
         )
+        cleanup_evidence: dict[str, Any] = {}
 
         if action_kind == "host.drain":
             if before_state in {"draining", "stopped", "failed"}:
@@ -114,50 +202,65 @@ class OmnigentOAuthHostJanitor:
                 "host.restart is unsupported until the owning launch path can "
                 "return terminal generation evidence"
             )
-        elif action_kind == "host.stop":
-            if before_state not in {"stopped", "failed"}:
-                await self._runtime.stop_host(binding=binding, host_lease=lease)
-                await self._release_provider_lease(binding=binding, lease=lease)
-                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
-        elif action_kind == "host.remove":
-            removed = bool(lease.container_name)
-            if lease.container_name:
-                await self._runtime.remove_container(lease.container_name)
-            if before_state != "stopped":
-                await self._release_provider_lease(binding=binding, lease=lease)
-                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
         elif action_kind == "provider_profile.evict_stale_lease":
             if not stale:
                 raise ValueError("Provider Profile host lease is not stale")
-            if before_state not in {"stopped", "failed"}:
-                await self._runtime.stop_host(binding=binding, host_lease=lease)
-                await self._release_provider_lease(binding=binding, lease=lease)
-                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
         elif action_kind == "host_lease.reconcile_stale":
             if not stale:
                 return self._action_result(
                     action_kind, request_id, profile_id, lease, before_state
                 )
-            missing = bool(
-                lease.container_name
-                and not await self._runtime.container_exists(lease.container_name)
-            )
-            if missing:
-                await self._release_provider_lease(binding=binding, lease=lease)
-                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
-            elif before_state not in {"stopped", "failed"}:
-                await self._runtime.stop_host(binding=binding, host_lease=lease)
-                await self._release_provider_lease(binding=binding, lease=lease)
-                lease = await self._repository.mark_host_lease_stopped(lease.lease_id)
+
+        if action_kind in {
+            "host.stop",
+            "host.remove",
+            "provider_profile.evict_stale_lease",
+            "host_lease.reconcile_stale",
+        }:
+            try:
+                # Even an already-absent attachment crosses ``stop_host``: that
+                # owner publishes independently resolvable terminal evidence
+                # before Provider Profile capacity can be released.
+                cleanup_evidence = await self._stop_host_with_authority(
+                    binding=binding, lease=lease
+                )
+                stopped_lease = await self._repository.mark_host_lease_stopped(
+                    lease.lease_id
+                )
+                if stopped_lease is not None:
+                    lease = stopped_lease
+                provider_released = await self._release_provider_lease(
+                    binding=binding, lease=lease
+                )
+                await self._record_terminal_cleanup(
+                    lease=lease,
+                    completed=True,
+                    cleanup_evidence=cleanup_evidence,
+                    lease_released=provider_released,
+                )
+            except Exception as exc:
+                await self._record_terminal_cleanup(
+                    lease=lease,
+                    completed=False,
+                    cleanup_evidence=cleanup_evidence,
+                    error=exc,
+                    lease_released=False,
+                )
+                raise
 
         result = self._action_result(
             action_kind, request_id, profile_id, lease, before_state
         )
-        if action_kind == "host.remove" and removed:
+        evidence_ref = str(cleanup_evidence.get("evidenceRef") or "").strip()
+        launch_evidence_ref = str(
+            cleanup_evidence.get("launchEvidenceRef") or ""
+        ).strip()
+        if launch_evidence_ref:
+            result["beforeEvidenceRefs"].append(launch_evidence_ref)
+        if evidence_ref:
+            result["afterEvidenceRefs"].append(evidence_ref)
+        if action_kind == "host.remove" and cleanup_evidence:
             result["status"] = "applied"
-            result["afterEvidenceRefs"].append(
-                f"omnigent-host-container:{host_lease_ref}:removed"
-            )
         return result
 
     @staticmethod
@@ -187,17 +290,7 @@ class OmnigentOAuthHostJanitor:
     async def run(
         self, *, profile_id: str | None = None, force: bool = False
     ) -> dict[str, Any]:
-        actions: list[dict[str, str]] = []
-        if force and profile_id:
-            binding = await self._repository.get_binding_for_profile(profile_id)
-            if binding is not None and not binding.host_launch_profile_ref:
-                await self._runtime.stop_static_host(binding=binding)
-                actions.append(
-                    {
-                        "hostBindingRef": binding.binding_ref,
-                        "action": "static_host_stopped",
-                    }
-                )
+        actions: list[dict[str, Any]] = []
         leases = await self._repository.list_active_host_leases()
         terminal_provider_leases = (
             await self._repository.list_terminal_host_leases_with_active_provider_capacity()
@@ -269,40 +362,34 @@ class OmnigentOAuthHostJanitor:
                             "errorCode": type(exc).__name__,
                         }
                     )
+            cleanup_evidence: dict[str, Any] = {}
             try:
-                # Host leases persisted before lifecycle status projection was
-                # introduced remain valid janitor inputs. Treat an absent status
-                # as active so their owned container is still stopped before the
-                # Provider Profile lease is released.
-                lease_status = str(getattr(lease, "status", "assigned") or "")
-                if not missing and lease_status not in {"stopped", "failed"}:
-                    await self._runtime.stop_host(binding=binding, host_lease=lease)
+                cleanup_evidence = await self._stop_host_with_authority(
+                    binding=binding, lease=lease
+                )
+                stopped_lease = await self._repository.mark_host_lease_stopped(
+                    lease.lease_id
+                )
+                if stopped_lease is not None:
+                    lease = stopped_lease
                 provider_released = await self._release_provider_lease(
                     binding=binding, lease=lease
                 )
-                await self._repository.mark_host_lease_stopped(lease.lease_id)
             except Exception as exc:
-                if (
-                    self._run_store is not None
-                    and terminal_cleanup
-                    and hasattr(self._run_store, "record_terminal_cleanup")
-                ):
-                    await self._run_store.record_terminal_cleanup(
-                        host_lease_ref=lease.lease_id,
-                        completed=False,
-                        code=type(exc).__name__,
-                        summary=str(exc),
-                    )
-                raise
-            if (
-                self._run_store is not None
-                and terminal_cleanup
-                and hasattr(self._run_store, "record_terminal_cleanup")
-            ):
-                await self._run_store.record_terminal_cleanup(
-                    host_lease_ref=lease.lease_id,
-                    completed=True,
+                await self._record_terminal_cleanup(
+                    lease=lease,
+                    completed=False,
+                    cleanup_evidence=cleanup_evidence,
+                    error=exc,
+                    lease_released=False,
                 )
+                raise
+            await self._record_terminal_cleanup(
+                lease=lease,
+                completed=True,
+                cleanup_evidence=cleanup_evidence,
+                lease_released=provider_released,
+            )
             actions.append(
                 {
                     "hostLeaseRef": lease.lease_id,
@@ -323,14 +410,25 @@ class OmnigentOAuthHostJanitor:
                         )
                     ),
                     "providerLeaseReleased": provider_released,
+                    "egressEvidenceRef": cleanup_evidence.get("evidenceRef"),
+                    "egressLaunchEvidenceRef": cleanup_evidence.get(
+                        "launchEvidenceRef"
+                    ),
                 }
             )
         for container_name in await self._runtime.list_managed_containers():
             if container_name in known_containers:
                 continue
-            await self._runtime.remove_container(container_name)
+            # A container name and owner label are insufficient to publish the
+            # immutable launch/egress chain required before deletion. Preserve
+            # the owned resource for bounded reconciliation instead of erasing
+            # the last live evidence through an unattested remove path.
             actions.append(
-                {"containerName": container_name, "action": "orphan_container_removed"}
+                {
+                    "containerName": container_name,
+                    "action": "orphan_container_reconciliation_required",
+                    "providerLeaseReleased": False,
+                }
             )
         return {"status": "completed", "actions": actions, "count": len(actions)}
 

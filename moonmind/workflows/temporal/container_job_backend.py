@@ -1700,6 +1700,7 @@ class DockerContainerJobBackend:
                 profile=DEFAULT_EGRESS_PROFILE,
                 attestation=egress_attestation,
                 attachment_identity=name,
+                expected_image_ref=str(request.resolved_image_ref or ""),
                 started_at=request.started_at,
                 finished_at=request.finished_at,
             )
@@ -2010,6 +2011,7 @@ class DockerContainerJobBackend:
                     profile=DEFAULT_EGRESS_PROFILE,
                     attestation=attestation,
                     attachment_identity=container_name,
+                    expected_image_ref=str(request.resolved_image_ref or ""),
                     started_at=started_at,
                 )
                 diagnostics_ref = await self._publish_container_job_egress_launch(

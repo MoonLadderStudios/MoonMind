@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import pytest
 
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
+from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
 
 
 class _Repository:
@@ -53,13 +54,21 @@ class _Runtime:
         self.stopped = 0
         self.removed: list[str] = []
         self.order = order if order is not None else []
+        self.stop_kwargs: list[dict] = []
 
     async def container_exists(self, _name):
         return True
 
-    async def stop_host(self, **_kwargs):
+    async def stop_host(self, **kwargs):
         self.order.append("host_stopped")
         self.stopped += 1
+        self.stop_kwargs.append(kwargs)
+        if kwargs.get("effective_launch") is not None:
+            return {
+                "evidenceRef": "artifact://terminal-egress",
+                "launchEvidenceRef": kwargs.get("launch_evidence_ref"),
+            }
+        return {}
 
     async def list_managed_containers(self):
         return []
@@ -146,7 +155,131 @@ async def test_action_rejects_stale_expected_state_before_mutation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_host_remove_removes_named_owned_container() -> None:
+async def test_action_reuses_durable_launch_authority_and_binds_terminal_evidence() -> None:
+    lease = _lease()
+    lease.effective_launch_snapshot = {"enforcedEgress": True}
+    repository = _Repository(lease)
+    runtime = _Runtime(repository.order)
+    lease_client = _LeaseClient(repository.order)
+    terminal_records: list[dict] = []
+
+    class RunStore:
+        async def get_egress_cleanup_authority(self, *, host_lease_ref):
+            assert host_lease_ref == "lease-1"
+            return {
+                "effectiveLaunch": {
+                    "snapshotRef": "omnigent-launch:sha256:" + "a" * 64,
+                    "enforcedEgress": True,
+                },
+                "egressEvidence": {
+                    "attachmentIdentity": "host-1",
+                    "validationResult": "passed",
+                },
+                "launchEvidenceRef": "artifact://launch-egress",
+                "evidenceRequest": {
+                    "correlationId": "workflow-1",
+                    "idempotencyKey": "idem-1",
+                    "remediation": True,
+                },
+            }
+
+        async def record_terminal_cleanup(self, **kwargs):
+            terminal_records.append(kwargs)
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        run_store=RunStore(),
+        lease_client=lease_client,
+        artifact_gateway=object(),
+    ).run_action(
+        action_kind="host.stop",
+        profile_id="profile-1",
+        host_lease_ref="lease-1",
+        expected_host_state="ready",
+        request_id="request-egress",
+    )
+
+    cleanup_call = runtime.stop_kwargs[0]
+    assert cleanup_call["effective_launch"]["enforcedEgress"] is True
+    assert cleanup_call["egress_evidence"]["attachmentIdentity"] == "host-1"
+    assert cleanup_call["launch_evidence_ref"] == "artifact://launch-egress"
+    assert cleanup_call["evidence_request"].remediation_workspace is not None
+    assert cleanup_call["artifact_gateway"] is not None
+    assert result["beforeEvidenceRefs"][-1] == "artifact://launch-egress"
+    assert result["afterEvidenceRefs"][-1] == "artifact://terminal-egress"
+    assert terminal_records[-1]["completed"] is True
+    assert terminal_records[-1]["egress_evidence_ref"] == (
+        "artifact://terminal-egress"
+    )
+    assert repository.order == [
+        "host_stopped",
+        "lease_released",
+        "provider_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_action_cleanup_failure_records_published_evidence_before_raise() -> None:
+    lease = _lease()
+    lease.effective_launch_snapshot = {"enforcedEgress": True}
+    repository = _Repository(lease)
+    terminal_records: list[dict] = []
+
+    class Runtime(_Runtime):
+        async def stop_host(self, **kwargs):
+            self.stop_kwargs.append(kwargs)
+            raise OmnigentOAuthHostError(
+                "cleanup incomplete",
+                egress_evidence_ref="artifact://terminal-failure",
+                cleanup_evidence={
+                    "evidenceRef": "artifact://terminal-failure",
+                    "launchEvidenceRef": "artifact://launch-egress",
+                },
+            )
+
+    class RunStore:
+        async def get_egress_cleanup_authority(self, **_kwargs):
+            return {
+                "effectiveLaunch": {"enforcedEgress": True},
+                "egressEvidence": {"attachmentIdentity": "host-1"},
+                "launchEvidenceRef": "artifact://launch-egress",
+                "evidenceRequest": {
+                    "correlationId": "workflow-1",
+                    "idempotencyKey": "idem-1",
+                    "remediation": False,
+                },
+            }
+
+        async def record_terminal_cleanup(self, **kwargs):
+            terminal_records.append(kwargs)
+
+    with pytest.raises(OmnigentOAuthHostError, match="cleanup incomplete"):
+        await OmnigentOAuthHostJanitor(
+            repository=repository,
+            runtime=Runtime(),
+            client=_Client(),
+            run_store=RunStore(),
+            lease_client=_LeaseClient(),
+            artifact_gateway=object(),
+        ).run_action(
+            action_kind="host.remove",
+            profile_id="profile-1",
+            host_lease_ref="lease-1",
+            expected_host_state="ready",
+            request_id="request-failure",
+        )
+
+    assert terminal_records[-1]["completed"] is False
+    assert terminal_records[-1]["egress_evidence_ref"] == (
+        "artifact://terminal-failure"
+    )
+    assert repository.stopped == []
+
+
+@pytest.mark.asyncio
+async def test_host_remove_crosses_host_cleanup_owner() -> None:
     repository = _Repository(_lease())
     runtime = _Runtime()
 
@@ -161,7 +294,8 @@ async def test_host_remove_removes_named_owned_container() -> None:
     )
 
     assert result["status"] == "applied"
-    assert runtime.removed == ["host-1"]
+    assert runtime.removed == []
+    assert runtime.stopped == 1
     assert repository.stopped == ["lease-1"]
 
 
@@ -226,8 +360,8 @@ async def test_janitor_consumes_durable_runner_exit_cleanup_handoff() -> None:
     assert lease_client.released[0].runtime_id == "codex_cli"
     assert repository.order == [
         "host_stopped",
-        "provider_released",
         "lease_released",
+        "provider_released",
     ]
 
 
@@ -259,8 +393,12 @@ async def test_janitor_releases_capacity_left_on_already_stopped_host() -> None:
     ).run()
 
     assert result["actions"][-1]["action"] == "provider_lease_reconciliation"
-    assert repository.order == ["provider_released", "lease_released"]
-    assert runtime.stopped == 0
+    assert repository.order == [
+        "host_stopped",
+        "lease_released",
+        "provider_released",
+    ]
+    assert runtime.stopped == 1
 
 
 @pytest.mark.asyncio

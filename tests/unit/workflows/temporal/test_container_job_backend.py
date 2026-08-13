@@ -229,6 +229,7 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
                         "IPAddress": "172.31.0.7",
                     }
                 },
+                "imageRef": "sha256:" + "a" * 64,
                 "image": "sha256:" + "a" * 64,
             }
             return 0, json.dumps(payload).encode(), b""
@@ -339,6 +340,7 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
                         "IPAddress": "172.31.0.7",
                     }
                 },
+                "imageRef": workload_image,
                 "image": workload_image,
             }
             return 0, json.dumps(payload).encode(), b""
@@ -374,6 +376,7 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
     assert evidence["networkIdentity"] == "restricted-network-id"
     assert evidence["endpointIdentity"] == "container-job-endpoint-id"
     assert evidence["workloadImageDigest"] == "sha256:" + "a" * 64
+    assert evidence["workloadImageRef"] == "sha256:" + "a" * 64
     assert evidence["architecture"] == "amd64"
     assert evidence["cleanupResult"] == "pending"
     assert evidence["deniedConnectionCount"] == 0
@@ -1339,6 +1342,7 @@ async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
                         "IPAddress": "172.31.0.7",
                     }
                 },
+                "imageRef": "sha256:" + "a" * 64,
                 "image": "sha256:" + "a" * 64,
             }
             return 0, json.dumps(payload).encode(), b""
