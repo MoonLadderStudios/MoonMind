@@ -10,7 +10,9 @@ New checkpoint artifacts keep independent logical identity and retention while
 sharing immutable object-store bytes by digest. A workflow also reuses captured
 workspace evidence across adjacent checkpoint boundaries until execution can
 mutate the workspace. Existing checkpoint objects retain their current lifecycle
-and expire normally; no migration deletes historical evidence.
+and expire normally; no migration deletes historical evidence. Once shared
+storage keys exist, the schema downgrade refuses before changing the schema
+rather than restoring an invalid uniqueness constraint.
 
 The deployment-approved `tactics-unreal` image source now defaults to
 `pullPolicy=if-missing`. The first admitted Unreal job pulls a cold image through

@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -155,6 +156,43 @@ async def test_trusted_multipart_payload_round_trips_through_configured_store(
             assert completed.status is TemporalArtifactStatus.COMPLETE
             assert completed.size_bytes == len(payload)
             assert stored_payload == payload
+
+
+async def test_content_addressed_publish_repairs_corrupt_configured_store_blob(
+    tmp_path: Path,
+) -> None:
+    """The configured object store must validate bytes before checkpoint reuse."""
+
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            payload = f"checkpoint-{uuid4()}".encode()
+            first, _ = await service.put_content_addressed_payload_complete(
+                principal="system:integration-test",
+                payload=payload,
+                content_type="application/vnd.moonmind.worktree-archive",
+                scope="checkpoint_archive",
+            )
+            service._store.write_bytes(
+                first.storage_key,
+                b"corrupt",
+                content_type="application/vnd.moonmind.worktree-archive",
+            )
+
+            second, reused = await service.put_content_addressed_payload_complete(
+                principal="system:integration-test",
+                payload=payload,
+                content_type="application/vnd.moonmind.worktree-archive",
+                scope="checkpoint_archive",
+            )
+            _artifact, restored = await service.read(
+                artifact_id=second.artifact_id,
+                principal="system:integration-test",
+            )
+
+            assert not reused
+            assert first.storage_key == second.storage_key
+            assert restored == payload
 
 async def test_report_delete_does_not_cascade_to_observability_artifacts(
     tmp_path: Path,

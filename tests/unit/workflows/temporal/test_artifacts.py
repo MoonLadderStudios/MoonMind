@@ -1604,6 +1604,50 @@ async def test_content_addressed_checkpoint_blobs_keep_logical_retention_authori
             )
             assert not blob_path.exists()
 
+
+@pytest.mark.parametrize(
+    "corrupt_payload",
+    [b"truncated", b"deterministic checkpoint archivf"],
+)
+async def test_content_addressed_checkpoint_repairs_invalid_existing_blob(
+    tmp_path: Path,
+    corrupt_payload: bytes,
+) -> None:
+    """A present key is reusable only when its size and digest both match."""
+
+    async with temporal_db(tmp_path) as session_maker:
+        async with session_maker() as session:
+            store = LocalTemporalArtifactStore(tmp_path / "artifacts")
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=store,
+            )
+            payload = b"deterministic checkpoint archive"
+            first, first_reused = (
+                await service.put_content_addressed_payload_complete(
+                    principal="system",
+                    payload=payload,
+                    content_type="application/vnd.moonmind.worktree-archive",
+                    scope="checkpoint_archive",
+                )
+            )
+            blob_path = store.resolve_storage_key(first.storage_key)
+            blob_path.write_bytes(corrupt_payload)
+
+            second, second_reused = (
+                await service.put_content_addressed_payload_complete(
+                    principal="system",
+                    payload=payload,
+                    content_type="application/vnd.moonmind.worktree-archive",
+                    scope="checkpoint_archive",
+                )
+            )
+
+            assert not first_reused
+            assert not second_reused
+            assert first.storage_key == second.storage_key
+            assert blob_path.read_bytes() == payload
+
 async def test_write_integration_event_artifact_creates_restricted_preview(
     tmp_path: Path,
 ) -> None:

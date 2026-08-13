@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import threading
@@ -383,14 +384,34 @@ class TemporalArtifactStore:
             f"{digest[:2]}/{digest}"
         )
 
-    def object_exists(self, storage_key: str) -> bool:
-        """Return whether an immutable object is already materialized."""
+    def object_matches(
+        self,
+        storage_key: str,
+        *,
+        sha256: str,
+        size_bytes: int,
+    ) -> bool:
+        """Return whether stored bytes exactly match the immutable identity."""
 
+        expected_sha256 = _validate_sha256(sha256)
+        if expected_sha256 is None or size_bytes < 0:
+            raise TemporalArtifactValidationError(
+                "stored-object validation requires sha256 and non-negative size_bytes"
+            )
+        # Artifact digests are content identities, not password hashes.
+        digest = hashlib.sha256(usedforsecurity=False)
+        observed_size = 0
         try:
-            self.read_bytes(storage_key)
-        except (FileNotFoundError, KeyError):
+            for chunk in self.read_chunks(storage_key):
+                observed_size += len(chunk)
+                if observed_size > size_bytes:
+                    return False
+                digest.update(chunk)
+        except Exception as exc:
+            if not _is_retryable_single_put_read_error(exc):
+                raise
             return False
-        return True
+        return observed_size == size_bytes and digest.hexdigest() == expected_sha256
 
     def write_bytes(
         self, storage_key: str, payload: bytes, *, content_type: str | None
@@ -517,13 +538,18 @@ class LocalTemporalArtifactStore(TemporalArtifactStore):
         _ = content_type
         destination = self.resolve_storage_key(storage_key)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(payload)
+        temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
+        try:
+            with temporary.open("xb") as handle:
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def read_bytes(self, storage_key: str) -> bytes:
         return self.resolve_storage_key(storage_key).read_bytes()
-
-    def object_exists(self, storage_key: str) -> bool:
-        return self.resolve_storage_key(storage_key).is_file()
 
     def read_chunks(
         self, storage_key: str, *, chunk_size: int = _STREAM_CHUNK_BYTES
@@ -683,15 +709,27 @@ class S3TemporalArtifactStore(TemporalArtifactStore):
         response = self._client.get_object(Bucket=self._bucket, Key=storage_key)
         return response["Body"].read()
 
-    def object_exists(self, storage_key: str) -> bool:
+    def object_matches(
+        self,
+        storage_key: str,
+        *,
+        sha256: str,
+        size_bytes: int,
+    ) -> bool:
         try:
-            self._client.head_object(Bucket=self._bucket, Key=storage_key)
+            response = self._client.head_object(Bucket=self._bucket, Key=storage_key)
         except ClientError as exc:
             code = str(exc.response.get("Error", {}).get("Code", ""))
             if code in _SINGLE_PUT_READ_RETRYABLE_S3_ERROR_CODES:
                 return False
             raise
-        return True
+        if int(response.get("ContentLength", -1)) != size_bytes:
+            return False
+        return super().object_matches(
+            storage_key,
+            sha256=sha256,
+            size_bytes=size_bytes,
+        )
 
     def read_chunks(
         self, storage_key: str, *, chunk_size: int = _STREAM_CHUNK_BYTES
@@ -1634,12 +1672,15 @@ class TemporalArtifactService:
             storage_backend=artifact.storage_backend,
             storage_key=artifact.storage_key,
         )
-        object_exists = await asyncio.get_running_loop().run_in_executor(
+        object_matches = await asyncio.get_running_loop().run_in_executor(
             None,
-            self._store.object_exists,
-            artifact.storage_key,
+            lambda: self._store.object_matches(
+                artifact.storage_key,
+                sha256=digest,
+                size_bytes=size_bytes,
+            ),
         )
-        if not object_exists:
+        if not object_matches:
             completed = await self.write_payload_complete(
                 artifact_id=artifact.artifact_id,
                 principal=principal,
