@@ -941,7 +941,11 @@ def test_native_chat_rollout_gate_fails_closed(
         manifest["evidenceScans"].pop("archives")
     else:
         case = json.loads((tmp_path / "case-0.json").read_text(encoding="utf-8"))
-        case["sourceRecords"].pop()
+        case["sourceRecords"] = [
+            record
+            for record in case["sourceRecords"]
+            if record["type"] != "browserTrace"
+        ]
         _write(tmp_path / "case-0.json", case)
         for item in manifest["evidenceManifest"]:
             if item["ref"] == "case-0.json":

@@ -1261,6 +1261,14 @@ def validate_workflow_chat_acceptance_manifest(
                     )
                 sources_by_type[record_type] = source
                 used_refs.add(record_ref)
+            derived_assertions, correlation = validate_workflow_chat_source_records(
+                sources_by_type,
+                row_name=row_name,
+                source_commit=source_commit,
+                images=images,
+                generated_at=generated_at,
+                expected_correlation=global_correlation,
+            )
             browser_data = sources_by_type["browserTrace"].get("data")
             if isinstance(browser_data, Mapping):
                 trace_screenshot_digests.add(
@@ -1283,14 +1291,6 @@ def validate_workflow_chat_acceptance_manifest(
                             "workflow Chat capturedEvidence artifact is unresolved"
                         )
                     used_refs.add(artifact["ref"])
-            derived_assertions, correlation = validate_workflow_chat_source_records(
-                sources_by_type,
-                row_name=row_name,
-                source_commit=source_commit,
-                images=images,
-                generated_at=generated_at,
-                expected_correlation=global_correlation,
-            )
             if any(
                 evidence_assertions.get(name) is not value
                 or assertions.get(name) is not value
