@@ -125,6 +125,15 @@ class _MetricsEmitter:
         payload = f"{self._prefix}.{metric}:{value}|c{formatted_tags}"
         self._send(payload)
 
+    def increment_canonical(
+        self, metric: str, *, value: float = 1, tags: Optional[Mapping[str, Any]] = None
+    ) -> None:
+        """Emit an exact canonical registry name without the workflow prefix."""
+
+        if not self.enabled:
+            return
+        self._send(f"{metric}:{value}|c{self._format_tags(tags)}")
+
     def observe(
         self, metric: str, *, value: float, tags: Optional[Mapping[str, Any]] = None
     ) -> None:
@@ -133,6 +142,32 @@ class _MetricsEmitter:
         formatted_tags = self._format_tags(tags)
         payload = f"{self._prefix}.{metric}:{value * 1000:.6f}|ms{formatted_tags}"
         self._send(payload)
+
+    def observe_canonical(
+        self, metric: str, *, value: float, tags: Optional[Mapping[str, Any]] = None
+    ) -> None:
+        """Emit an exact canonical histogram/timer registry name."""
+
+        if not self.enabled:
+            return
+        self._send(f"{metric}:{value * 1000:.6f}|ms{self._format_tags(tags)}")
+
+    def gauge(
+        self, metric: str, *, value: float, tags: Optional[Mapping[str, Any]] = None
+    ) -> None:
+        if not self.enabled:
+            return
+        formatted_tags = self._format_tags(tags)
+        self._send(f"{self._prefix}.{metric}:{value}|g{formatted_tags}")
+
+    def gauge_canonical(
+        self, metric: str, *, value: float, tags: Optional[Mapping[str, Any]] = None
+    ) -> None:
+        """Emit an exact canonical gauge registry name."""
+
+        if not self.enabled:
+            return
+        self._send(f"{metric}:{value}|g{self._format_tags(tags)}")
 
 _metrics_singleton: _MetricsEmitter | None = None
 

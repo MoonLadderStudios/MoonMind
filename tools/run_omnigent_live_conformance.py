@@ -20,7 +20,7 @@ import sys
 import xml.etree.ElementTree as ET
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -53,6 +53,19 @@ from moonmind.omnigent.remediation_matrix import (  # noqa: E402
     derive_remediation_observation_from_source_records,
     validate_remediation_evidence_artifact,
 )
+from moonmind.omnigent.native_chat_acceptance import (  # noqa: E402
+    LANE_PROTECTED_LIVE,
+    REQUIRED_CASES as NATIVE_CHAT_REQUIRED_CASES,
+    REQUIRED_CLEANUP_CASES as NATIVE_CHAT_REQUIRED_CLEANUP_CASES,
+    SCENARIO_LANES as NATIVE_CHAT_SCENARIO_LANES,
+)
+from moonmind.omnigent.native_chat_rollout import (  # noqa: E402
+    native_chat_deployment_identity,
+)
+from tools.build_native_chat_acceptance_lane import (  # noqa: E402
+    OBSERVATION_SCHEMA_VERSION as NATIVE_CHAT_OBSERVATION_SCHEMA_VERSION,
+    build_lane as build_native_chat_lane,
+)
 
 PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 PROJECT = "moonmind-test-omnigent-live"
@@ -73,6 +86,7 @@ LIVE_CASES = {
     "ondemand": {"ondemand.codex-oauth", "cleanup.lease-owned-only"},
     "failures": {"failures.lifecycle-and-redaction"},
 }
+NATIVE_CHAT_MODE = "native-chat"
 BROWSER_ROWS = (
     "static_profile_bound",
     "static_restart_replay",
@@ -393,6 +407,26 @@ class LiveRunner:
             raise ConformanceContractError(
                 f"{scenario}/{action} evidence did not describe the observed action"
             )
+        if scenario == NATIVE_CHAT_MODE:
+            matching = [
+                item
+                for item in observations
+                if item.get("scenario") == scenario
+                and item.get("action") == action
+                and item.get("observed") is True
+            ]
+            protected_fields = (
+                ("identities", "safeIdentities", "profilePolicyEvidence")
+                if action == "resolve-deployment-authority"
+                else ("nativeChatOutcome",)
+            )
+            if any(
+                not any(item.get(field) == payload.get(field) for item in matching)
+                for field in protected_fields
+            ):
+                raise ConformanceContractError(
+                    f"{scenario}/{action} outcome is not bound to resolved evidence"
+                )
         if scenario in {"browser", "product", "cumulative", "remediation", "failures"}:
             records = [
                 record
@@ -1223,6 +1257,179 @@ class LiveRunner:
         })
         self.scenario("cumulative")
 
+    def native_chat_protected(
+        self, *, images: dict[str, str], ui_image: str
+    ) -> dict[str, object]:
+        """Drive every protected-live #3642 case through the live adapter.
+
+        The repository owns the exact case inventory and action order.  The
+        operator adapter owns only the deployment-specific mechanics and must
+        return independently resolvable action evidence plus observed side
+        effect counts; a bare status or preassembled acceptance artifact is not
+        accepted.
+        """
+
+        identity = native_chat_deployment_identity(
+            env={
+                "MOONMIND_BUILD_COMMIT": self.env.get("MOONMIND_BUILD_COMMIT", ""),
+                "OMNIGENT_IMAGE_REF": images["server"],
+                "OMNIGENT_NATIVE_UI_IMAGE_REF": ui_image,
+                "OMNIGENT_HOST_IMAGE_REF": images["host"],
+            }
+        )
+        if identity is None:
+            raise ConformanceContractError(
+                "native-chat live deployment identity is not immutable"
+            )
+        identity.update(
+            {
+                "moonmindBuild": self.env.get("MOONMIND_BUILD_ID", ""),
+                "hostArchitecture": f"linux/{platform.machine()}",
+            }
+        )
+        if not identity["moonmindBuild"]:
+            raise ConformanceContractError("MOONMIND_BUILD_ID is required")
+
+        authority = self.action(
+            NATIVE_CHAT_MODE,
+            "resolve-deployment-authority",
+            identities=identity,
+        )
+        if authority.get("identities") != identity:
+            raise ConformanceContractError(
+                "native-chat live authority does not match the candidate identity"
+            )
+        safe_identities = authority.get("safeIdentities")
+        profile_evidence = authority.get("profilePolicyEvidence")
+        if not isinstance(safe_identities, dict) or not isinstance(
+            profile_evidence, dict
+        ):
+            raise ConformanceContractError(
+                "native-chat live authority lacks safe identity/profile evidence"
+            )
+
+        evidence_dir = self.output_dir / "native-chat-evidence"
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+
+        def materialize(ref: object, filename: str) -> str:
+            if not isinstance(ref, str) or not ref.strip():
+                raise ConformanceContractError(
+                    f"native-chat evidence ref is missing for {filename}"
+                )
+            raw = self._resolve_ref_bytes(ref)
+            assert_secret_free(raw.decode("utf-8", errors="replace"))
+            path = evidence_dir / filename
+            path.write_bytes(raw)
+            return path.name
+
+        profile_files = {
+            key: materialize(profile_evidence.get(key), f"profile-{key}.json")
+            for key in (
+                "profileRef",
+                "launchPolicyRef",
+                "effectiveLaunchSnapshotRef",
+                "providerProfileRef",
+            )
+        }
+
+        def observed_case(action: str, *, filename: str) -> dict[str, object]:
+            result = self.action(NATIVE_CHAT_MODE, action)
+            evidence = result.get("evidenceRefs")
+            outcome = result.get("nativeChatOutcome")
+            if not isinstance(evidence, list) or not evidence or not isinstance(
+                outcome, dict
+            ):
+                raise ConformanceContractError(
+                    f"native-chat/{action} lacks observed case evidence"
+                )
+            return {
+                "status": "passed",
+                "boundaryTests": [f"protected-live-action:{action}"],
+                "authorizationDecision": outcome.get("authorizationDecision"),
+                "upstreamSideEffectCount": outcome.get("upstreamSideEffectCount"),
+                "expectedUpstreamSideEffectCount": outcome.get(
+                    "expectedUpstreamSideEffectCount"
+                ),
+                "durableAfterCleanup": outcome.get("durableAfterCleanup"),
+                "evidenceFiles": [
+                    {
+                        "file": materialize(evidence_ref, f"{index}-{filename}"),
+                        "kind": str(outcome.get("evidenceKind") or "artifact"),
+                    }
+                    for index, evidence_ref in enumerate(evidence)
+                ],
+            }
+
+        scenarios: dict[str, object] = {}
+        for scenario, required_cases in NATIVE_CHAT_REQUIRED_CASES.items():
+            if NATIVE_CHAT_SCENARIO_LANES[scenario] != LANE_PROTECTED_LIVE:
+                continue
+            scenarios[scenario] = {
+                case: observed_case(
+                    f"case.{scenario}.{case}",
+                    filename=f"case-{scenario}-{case}.json",
+                )
+                for case in required_cases
+            }
+        cleanup_cases = {
+            case: observed_case(
+                f"cleanup.{case}", filename=f"cleanup-{case}.json"
+            )
+            for case in NATIVE_CHAT_REQUIRED_CLEANUP_CASES
+        }
+        return {
+            "schemaVersion": NATIVE_CHAT_OBSERVATION_SCHEMA_VERSION,
+            "lane": LANE_PROTECTED_LIVE,
+            "expiresAt": (datetime.now(timezone.utc) + timedelta(days=14)).isoformat(),
+            "identities": identity,
+            "safeIdentities": safe_identities,
+            "profilePolicyFiles": profile_files,
+            "scenarios": scenarios,
+            "cleanupCases": cleanup_cases,
+            "leaseReleaseFile": cleanup_cases["leases-released"]["evidenceFiles"][0]["file"],
+        }
+
+    def finalize_native_chat_protected(
+        self,
+        observations: dict[str, object],
+        *,
+        scans: dict[str, dict[str, object]],
+    ) -> Path:
+        """Build the protected lane only after cleanup and retained-data scan."""
+
+        evidence_dir = self.output_dir / "native-chat-evidence"
+        summary = {
+            "schemaVersion": "moonmind.omnigent.native-chat-live-summary/v1",
+            "generatedAt": datetime.now(timezone.utc).isoformat(),
+            "cleanupCompleted": True,
+            "secretScans": scans,
+            "actionEvidenceRefs": sorted(set(self.evidence_refs)),
+        }
+        for name in ("audit", "cleanup", "secret-scan"):
+            (evidence_dir / f"{name}.json").write_text(
+                json.dumps({**summary, "evidenceKind": name}, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+        observations["sharedEvidence"] = {
+            "auditFile": "audit.json",
+            "cleanupFile": "cleanup.json",
+            "secretScanFile": "secret-scan.json",
+        }
+        observation_path = self.output_dir / "native-chat-protected-observations.json"
+        observation_path.write_text(
+            json.dumps(observations, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        lane = build_native_chat_lane(
+            observations,
+            lane=LANE_PROTECTED_LIVE,
+            evidence_root=evidence_dir,
+            expected_commit=str(self.env["MOONMIND_BUILD_COMMIT"]),
+        )
+        output = self.output_dir / "native-chat-protected-live.json"
+        output.write_text(json.dumps(lane, indent=2, sort_keys=True) + "\n")
+        return output
+
     @staticmethod
     def compose(*args: str) -> list[str]:
         return [
@@ -1386,8 +1593,11 @@ class LiveRunner:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run live Omnigent conformance for MoonLadderStudios/MoonMind#3368")
-    parser.add_argument("--mode", choices=(*LIVE_CASES, "all"), default="all")
+    parser.add_argument(
+        "--mode", choices=(*LIVE_CASES, NATIVE_CHAT_MODE, "all"), default="all"
+    )
     parser.add_argument("--server-image", required=True)
+    parser.add_argument("--ui-image")
     parser.add_argument("--host-image", required=True)
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/omnigent-conformance/live"))
     args = parser.parse_args()
@@ -1404,6 +1614,36 @@ def main() -> int:
         "OMNIGENT_HOST_IMAGE_TAG": "",
     })
     runner = LiveRunner(output_dir=output_dir, env=env)
+    if args.mode == NATIVE_CHAT_MODE:
+        if not args.ui_image:
+            print("live conformance failed: --ui-image is required", file=sys.stderr)
+            return 1
+        observations: dict[str, object] | None = None
+        native_failure: str | None = None
+        try:
+            observations = runner.native_chat_protected(
+                images=images, ui_image=args.ui_image
+            )
+        except (RuntimeError, ConformanceContractError) as exc:
+            native_failure = str(exc)
+        try:
+            runner.cleanup(NATIVE_CHAT_MODE)
+        except (RuntimeError, ConformanceContractError) as exc:
+            native_failure = native_failure or str(exc)
+        try:
+            scans = runner.scan()
+        except (RuntimeError, ConformanceContractError) as exc:
+            native_failure = native_failure or str(exc)
+            scans = {}
+        if observations is not None and native_failure is None:
+            try:
+                runner.finalize_native_chat_protected(observations, scans=scans)
+            except (RuntimeError, ConformanceContractError) as exc:
+                native_failure = str(exc)
+        if native_failure:
+            print(f"live conformance failed: {native_failure}", file=sys.stderr)
+            return 1
+        return 0
     selected = tuple(LIVE_CASES) if args.mode == "all" else (args.mode,)
     passed: set[str] = set()
     failure: str | None = None

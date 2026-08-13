@@ -102,10 +102,36 @@ from moonmind.omnigent.host_auth_profile import (
 )
 from moonmind.omnigent.host_auth_store import HostAuthProfileStore
 from moonmind.omnigent.native_ui import (
+    CODE_NATIVE_CHAT_UNAVAILABLE,
     NATIVE_UI_MOUNT_PREFIX,
     NATIVE_UI_ROUTE_FEATURE_VERSION,
     evaluate_native_ui_compatibility,
     scoped_api_base,
+)
+from moonmind.omnigent.native_chat_rollout import (
+    NativeChatRolloutDecision,
+    current_native_chat_rollout_decision,
+)
+from moonmind.omnigent.native_chat_telemetry import (
+    OUTCOME_BLOCKED,
+    OUTCOME_DELIVERY_UNKNOWN,
+    OUTCOME_DENIED,
+    OUTCOME_ENFORCEMENT_UNAVAILABLE,
+    OUTCOME_FAILURE,
+    OUTCOME_STALE_REJECTED,
+    OUTCOME_SUCCESS,
+    STAGE_AUTHORIZATION,
+    STAGE_BINDING_RESOLUTION,
+    STAGE_CAPABILITY,
+    STAGE_DIAGNOSTIC_FALLBACK,
+    STAGE_HTTP_REQUEST,
+    STAGE_MUTATION,
+    STAGE_NATIVE_UI_RECONNECT,
+    STAGE_SECURITY_SCAN,
+    STAGE_SSE_STREAM,
+    STAGE_TERMINAL_REPLAY,
+    STAGE_WEBSOCKET,
+    get_native_chat_telemetry,
 )
 from moonmind.omnigent.native_ui_compat import (
     CODE_COMPAT_REVIEW_REQUIRED,
@@ -2940,6 +2966,46 @@ _FACADE_MAX_BODY_BYTES = 1 * 1024 * 1024
 # authority on this cadence so it cannot silently outlive revoked authority.
 _FACADE_STREAM_REAUTH_EVERY_POLLS = 15
 
+_ROLLOUT_TERMINAL_REPLAY_OPERATIONS = frozenset(
+    {"get_session", "stream_events", "stream_events_websocket"}
+)
+
+
+def _require_native_chat_rollout_authority(
+    *, row: Any, operation: str
+) -> NativeChatRolloutDecision:
+    """Apply one rollout decision to every interactive facade authority handoff.
+
+    Rollback never removes authorized durable diagnostics. Terminal transcript
+    replay is allowed only from the durable projection after the live provider
+    session is gone. Everything else, including liveness, resources, controls,
+    SSE on an active session, and every live WebSocket, requires a validated
+    interactive rollout.
+    """
+
+    decision = current_native_chat_rollout_decision()
+    telemetry = get_native_chat_telemetry()
+    telemetry.rollout(decision.mode.value)
+    telemetry.readiness(decision.telemetry_readiness())
+    if decision.interactive:
+        return decision
+    terminal_replay = (
+        operation in _ROLLOUT_TERMINAL_REPLAY_OPERATIONS
+        and is_read_only(str(getattr(row, "status", "") or ""))
+        and not str(getattr(row, "omnigent_session_id", "") or "").strip()
+    )
+    if terminal_replay:
+        telemetry.request(stage=STAGE_TERMINAL_REPLAY, outcome=OUTCOME_SUCCESS)
+        return decision
+    telemetry.request(stage=STAGE_DIAGNOSTIC_FALLBACK, outcome=OUTCOME_SUCCESS)
+    raise WorkflowChatFacadeError(
+        "Interactive Workflow Chat is not admitted by the deployment rollout gate.",
+        failure_class="user_error",
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        code=CODE_NATIVE_CHAT_UNAVAILABLE,
+        public_details={"reason": decision.reason},
+    )
+
 
 async def _resolve_chat_binding_row(
     *, chat_binding_id: str, store: OmnigentBridgeSessionStore
@@ -2976,6 +3042,28 @@ def _audit_facade(
     """
 
     scan_suffix = ""
+    telemetry_stage = STAGE_AUTHORIZATION
+    if reason == "binding_unknown":
+        telemetry_stage = STAGE_BINDING_RESOLUTION
+    elif reason in {"identity_substitution", "caller_unauthorized", "origin_rejected"}:
+        telemetry_stage = STAGE_AUTHORIZATION
+    elif reason in {"capability_denied", "capability_revoked"}:
+        telemetry_stage = STAGE_CAPABILITY
+    elif scan_evidence is not None or outcome in {"content_blocked", "enforcement_unavailable"}:
+        telemetry_stage = STAGE_SECURITY_SCAN
+    elif outcome in {"mutation", "deduplicated"}:
+        telemetry_stage = STAGE_MUTATION
+    telemetry_outcome = {
+        "denied": OUTCOME_DENIED,
+        "content_blocked": OUTCOME_BLOCKED,
+        "enforcement_unavailable": OUTCOME_ENFORCEMENT_UNAVAILABLE,
+        "connected": OUTCOME_SUCCESS,
+        "mutation": OUTCOME_SUCCESS,
+        "deduplicated": OUTCOME_SUCCESS,
+    }.get(outcome, OUTCOME_FAILURE)
+    get_native_chat_telemetry().request(
+        stage=telemetry_stage, outcome=telemetry_outcome
+    )
     if scan_evidence is not None:
         parts = [
             f"scanOutcome={scan_evidence.outcome}",
@@ -3057,6 +3145,9 @@ async def _resolve_and_authorize_chat_binding(
         and isinstance(caller_authorities.get(caller_id), Mapping)
         and any(value is True for value in caller_authorities[caller_id].values())
     ):
+        get_native_chat_telemetry().request(
+            stage=STAGE_BINDING_RESOLUTION, outcome=OUTCOME_SUCCESS
+        )
         return row
     workflow_id = str(getattr(row, "moonmind_workflow_id", "") or "").strip()
     agent_run_id = str(getattr(row, "moonmind_agent_run_id", "") or "").strip() or None
@@ -3075,6 +3166,9 @@ async def _resolve_and_authorize_chat_binding(
             reason="caller_unauthorized",
         )
         raise _binding_unknown_error()
+    get_native_chat_telemetry().request(
+        stage=STAGE_BINDING_RESOLUTION, outcome=OUTCOME_SUCCESS
+    )
     return row
 
 
@@ -3307,6 +3401,9 @@ def _enforce_native_outbound_scan(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             code=CODE_ENFORCEMENT_UNAVAILABLE,
         ) from exc
+    get_native_chat_telemetry().request(
+        stage=STAGE_SECURITY_SCAN, outcome=OUTCOME_SUCCESS
+    )
     return evidence
 
 
@@ -3342,6 +3439,9 @@ async def _revalidate_binding_before_mutation(
         chat_binding_id=chat_binding_id, store=store
     )
     if fresh is None:
+        get_native_chat_telemetry().request(
+            stage=STAGE_CAPABILITY, outcome=OUTCOME_STALE_REJECTED
+        )
         raise _binding_unknown_error()
     fresh_status = str(getattr(fresh, "status", "") or "")
     if (
@@ -3417,6 +3517,9 @@ async def _revalidate_binding_before_mutation(
             item.reason in stale_reasons
             for item in fresh_capabilities.decisions.values()
         ):
+            get_native_chat_telemetry().request(
+                stage=STAGE_CAPABILITY, outcome=OUTCOME_STALE_REJECTED
+            )
             raise WorkflowChatFacadeError(
                 "The Workflow Chat request precondition is stale.",
                 failure_class="user_error",
@@ -3682,6 +3785,16 @@ async def _record_facade_mutation_audit(
         summary=f"workflow chat {control_type} {outcome}",
         metadata=metadata,
     )
+    metric_outcome = (
+        OUTCOME_DELIVERY_UNKNOWN
+        if outcome == "delivery_unknown"
+        else OUTCOME_SUCCESS
+        if outcome in {"posted", "completed", "accepted", "reconciled"}
+        else OUTCOME_DENIED
+    )
+    get_native_chat_telemetry().request(
+        stage=STAGE_MUTATION, outcome=metric_outcome
+    )
     return request_time or now
 
 
@@ -3946,8 +4059,14 @@ async def workflow_chat_binding_facade(
     credentials stripped and upstream credentials injected server-side.
     """
 
+    matched = match_facade_operation(request.method, omnigent_path)
+    telemetry_stage = (
+        STAGE_SSE_STREAM if matched is not None and matched.operation.sse
+        else STAGE_HTTP_REQUEST
+    )
+    started = time.monotonic()
     try:
-        return await _dispatch_workflow_chat_facade(
+        result = await _dispatch_workflow_chat_facade(
             chat_binding_id=chat_binding_id,
             omnigent_path=omnigent_path,
             request=request,
@@ -3959,7 +4078,17 @@ async def workflow_chat_binding_facade(
             embedded_facade=embedded_facade,
             registry=registry,
         )
+        get_native_chat_telemetry().request(
+            stage=telemetry_stage, outcome=OUTCOME_SUCCESS
+        )
+        get_native_chat_telemetry().upstream_latency(
+            stage=telemetry_stage, seconds=time.monotonic() - started
+        )
+        return result
     except (WorkflowChatFacadeError, OmnigentBridgeError) as exc:
+        get_native_chat_telemetry().request(
+            stage=telemetry_stage, outcome=OUTCOME_FAILURE
+        )
         raise _http_error_from_bridge(exc) from exc
 
 
@@ -4459,6 +4588,7 @@ async def _dispatch_workflow_chat_facade(
             status_code=status.HTTP_404_NOT_FOUND,
             code=CODE_ROUTE_NOT_ALLOWLISTED,
         )
+    _require_native_chat_rollout_authority(row=row, operation=operation_name)
     if native_match is not None:
         return await _dispatch_native_ui_http(
             match=native_match,
@@ -5382,6 +5512,12 @@ async def workflow_chat_binding_facade_ws(
         )
         return
 
+    try:
+        _require_native_chat_rollout_authority(row=row, operation=operation)
+    except WorkflowChatFacadeError as exc:
+        await websocket.close(code=WS_CLOSE_READ_ONLY, reason=exc.code)
+        return
+
     # 2. Reject any caller-supplied server-owned identity in the path or query
     #    (the only session id the browser may name is the bound chatBindingId).
     try:
@@ -5685,6 +5821,12 @@ async def workflow_chat_binding_facade_ws(
         user=user,
         reason="binding_scoped_websocket",
     )
+    get_native_chat_telemetry().request(
+        stage=STAGE_WEBSOCKET, outcome=OUTCOME_SUCCESS
+    )
+    get_native_chat_telemetry().request(
+        stage=STAGE_NATIVE_UI_RECONNECT, outcome=OUTCOME_SUCCESS
+    )
     await _relay_native_websocket(
         browser=websocket,
         upstream_url=_upstream_ws_url(upstream_path),
@@ -5734,6 +5876,14 @@ async def _stream_workflow_chat_events_websocket(
         )
         return
 
+    try:
+        _require_native_chat_rollout_authority(
+            row=row, operation=match.operation.name
+        )
+    except WorkflowChatFacadeError as exc:
+        await websocket.close(code=WS_CLOSE_READ_ONLY, reason=exc.code)
+        return
+
     bridge_session_id = str(getattr(row, "bridge_session_id", "") or "")
     provider_session_id = str(getattr(row, "omnigent_session_id", "") or "")
     if not _effective_capabilities(row, user).capabilities.get("viewTranscript", False):
@@ -5750,6 +5900,13 @@ async def _stream_workflow_chat_events_websocket(
         return
 
     await websocket.accept()
+    get_native_chat_telemetry().request(
+        stage=STAGE_WEBSOCKET, outcome=OUTCOME_SUCCESS
+    )
+    if cursor > 0:
+        get_native_chat_telemetry().request(
+            stage=STAGE_NATIVE_UI_RECONNECT, outcome=OUTCOME_SUCCESS
+        )
     polls_since_reauth = 0
     try:
         while True:

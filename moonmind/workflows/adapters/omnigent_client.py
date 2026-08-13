@@ -210,6 +210,7 @@ class OmnigentHttpClient:
         async with httpx.AsyncClient(
             timeout=self._stream_timeout,
             transport=self._transport,
+            trust_env=False,
         ) as client:
             try:
                 async with client.stream(
@@ -335,6 +336,7 @@ class OmnigentHttpClient:
         async with httpx.AsyncClient(
             timeout=self._timeout,
             transport=self._transport,
+            trust_env=False,
         ) as client:
             try:
                 response = await client.request(
@@ -384,6 +386,7 @@ class OmnigentHttpClient:
         async with httpx.AsyncClient(
             timeout=self._timeout,
             transport=self._transport,
+            trust_env=False,
         ) as client:
             try:
                 response = await client.request(

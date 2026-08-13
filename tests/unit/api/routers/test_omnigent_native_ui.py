@@ -12,10 +12,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 from uuid import uuid4
 
 import httpx
 import pytest
+import api_service.api.routers.omnigent_native_ui as native_ui_module
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -36,6 +38,11 @@ from api_service.api.routers.omnigent_native_ui import (
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent.native_ui import scoped_ui_base
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+from moonmind.omnigent.native_chat_rollout import (
+    NativeChatRolloutDecision,
+    NativeChatRolloutMode,
+    current_native_chat_rollout_decision,
+)
 
 _USER_ID = uuid4()
 _CHAT_BINDING_ID = "chatb_opaque123"
@@ -46,6 +53,20 @@ _INDEX_HTML = (
     '<script type="module" src="/assets/index-abc.js"></script>'
     "</head><body><div id=\"root\"></div></body></html>"
 ).encode("utf-8")
+
+
+@pytest.fixture(autouse=True)
+def _admit_rollout_for_feature_boundary_tests(monkeypatch: pytest.MonkeyPatch):
+    """Dependency feature tests run in the explicitly post-proof posture."""
+
+    decision = NativeChatRolloutDecision(
+        mode=NativeChatRolloutMode.ENABLED,
+        interactive=True,
+        serve_native_ui=True,
+        read_only_fallback=False,
+        reason="enabled",
+    )
+    monkeypatch.setattr(native_ui_module, "current_native_chat_rollout_decision", lambda: decision)
 
 
 def _mock_user():
@@ -189,6 +210,25 @@ def test_embedded_document_serves_native_app_with_bootstrap() -> None:
     assert f'<base href="{scoped}/">' in body
     # The upstream SPA shell is fetched from the server index.
     assert upstream.paths == ["/"]
+
+
+def test_production_native_ui_boundary_emits_rollout_readiness_and_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    telemetry = Mock()
+    monkeypatch.setattr(native_ui_module, "get_native_chat_telemetry", lambda: telemetry)
+    client, _upstream = _build()
+
+    response = client.get(_url(), params={"embedded": "1"})
+
+    assert response.status_code == 200
+    telemetry.rollout.assert_called_once_with("enabled")
+    telemetry.readiness.assert_called_once_with("ready")
+    assert any(
+        call.kwargs == {"stage": "native_ui_load", "outcome": "success"}
+        for call in telemetry.request.call_args_list
+    )
+    assert telemetry.upstream_latency.called
 
 
 def test_embedded_document_never_leaks_provider_identity() -> None:
@@ -393,21 +433,27 @@ def test_relative_redirect_traversal_kept_in_scope_via_router() -> None:
 # --- Rollout / canary / rollback gate (issue #3642 §10) ----------------------
 
 
-def test_rollout_default_serves_interactive_native_ui() -> None:
-    # Unset rollout flag defaults to ENABLED so the canonical deployment keeps
-    # serving the interactive native UI (dependency behavior is preserved).
+def test_rollout_default_is_non_interactive_before_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        native_ui_module,
+        "current_native_chat_rollout_decision",
+        current_native_chat_rollout_decision,
+    )
     client, _upstream = _build()
 
     response = client.get(_url(), params={"embedded": "1"})
 
-    assert response.status_code == 200
-    assert "window.__MOONMIND_OMNIGENT_CHAT__=" in response.text
+    assert response.status_code == 503
+    assert "canary_awaiting_acceptance_evidence" in response.text
 
 
 def test_rollback_to_read_only_does_not_serve_native_ui(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OMNIGENT_NATIVE_CHAT_ROLLOUT", "read_only")
+    monkeypatch.setattr(native_ui_module, "current_native_chat_rollout_decision", current_native_chat_rollout_decision)
     client, upstream = _build()
 
     response = client.get(_url(), params={"embedded": "1"})
@@ -422,6 +468,7 @@ def test_disabled_rollout_makes_native_ui_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OMNIGENT_NATIVE_CHAT_ROLLOUT", "disabled")
+    monkeypatch.setattr(native_ui_module, "current_native_chat_rollout_decision", current_native_chat_rollout_decision)
     client, _upstream = _build()
 
     response = client.get(_url("assets/index-abc.js"))
@@ -435,6 +482,7 @@ def test_canary_without_recorded_evidence_stays_read_only(
 ) -> None:
     monkeypatch.setenv("OMNIGENT_NATIVE_CHAT_ROLLOUT", "canary")
     monkeypatch.delenv("OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF", raising=False)
+    monkeypatch.setattr(native_ui_module, "current_native_chat_rollout_decision", current_native_chat_rollout_decision)
     client, upstream = _build()
 
     response = client.get(_url(), params={"embedded": "1"})
@@ -444,19 +492,20 @@ def test_canary_without_recorded_evidence_stays_read_only(
     assert upstream.paths == []
 
 
-def test_canary_with_recorded_evidence_serves_native_ui(
+def test_canary_with_arbitrary_nonempty_ref_stays_read_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("OMNIGENT_NATIVE_CHAT_ROLLOUT", "canary")
     monkeypatch.setenv(
         "OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF", "artifact://native-chat-report"
     )
-    client, _upstream = _build()
+    monkeypatch.setattr(native_ui_module, "current_native_chat_rollout_decision", current_native_chat_rollout_decision)
+    client, upstream = _build()
 
     response = client.get(_url(), params={"embedded": "1"})
 
-    assert response.status_code == 200
-    assert "window.__MOONMIND_OMNIGENT_CHAT__=" in response.text
+    assert response.status_code == 503
+    assert upstream.paths == []
 
 
 @pytest.mark.asyncio

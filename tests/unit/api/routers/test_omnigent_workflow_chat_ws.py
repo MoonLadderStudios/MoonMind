@@ -20,6 +20,7 @@ from uuid import uuid4
 
 import pytest
 import aiohttp
+import api_service.api.routers.omnigent_bridge as bridge_module
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -45,6 +46,10 @@ from api_service.api.routers.omnigent_bridge import (
 from api_service.auth_providers import get_current_user
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_PROXY
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+from moonmind.omnigent.native_chat_rollout import (
+    NativeChatRolloutDecision,
+    NativeChatRolloutMode,
+)
 
 _USER_ID = uuid4()
 _UNSET = object()
@@ -55,6 +60,16 @@ _BRIDGE_SESSION_ID = "brs-internal-1"
 
 @pytest.fixture(autouse=True)
 def _stub_upstream_relay(monkeypatch: pytest.MonkeyPatch) -> None:
+    decision = NativeChatRolloutDecision(
+        mode=NativeChatRolloutMode.ENABLED,
+        interactive=True,
+        serve_native_ui=True,
+        read_only_fallback=False,
+        reason="enabled",
+    )
+    monkeypatch.setattr(
+        bridge_module, "current_native_chat_rollout_decision", lambda: decision
+    )
     async def relay(*, browser: Any, **_: Any) -> None:
         await browser.accept()
         await browser.close(code=1000, reason="relayed")
@@ -190,6 +205,25 @@ def test_global_updates_ws_relays_through_binding_scope() -> None:
     client = _build()
     disconnect = _connect_expect_close(client, _ws_path("v1/sessions/updates"))
     assert disconnect.code == 1000
+
+
+def test_rollout_blocks_direct_live_websocket_before_upgrade(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    blocked = NativeChatRolloutDecision(
+        mode=NativeChatRolloutMode.READ_ONLY,
+        interactive=False,
+        serve_native_ui=False,
+        read_only_fallback=True,
+        reason="rolled_back_read_only",
+    )
+    monkeypatch.setattr(
+        bridge_module, "current_native_chat_rollout_decision", lambda: blocked
+    )
+    disconnect = _connect_expect_close(
+        _build(), _ws_path("v1/sessions/updates")
+    )
+    assert disconnect.code == WS_CLOSE_READ_ONLY
 
 
 def test_relay_keeps_server_to_browser_socket_alive_without_browser_input(

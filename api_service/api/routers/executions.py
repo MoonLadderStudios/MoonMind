@@ -16560,6 +16560,12 @@ async def continue_in_new_workflow(
     result are never mutated, and no message is posted into the source session.
     """
 
+    from moonmind.omnigent.native_chat_telemetry import (
+        OUTCOME_SUCCESS,
+        STAGE_CONTINUATION,
+        get_native_chat_telemetry,
+    )
+
     source = await _get_owned_execution(
         service=service, workflow_id=workflow_id, user=user
     )
@@ -16671,6 +16677,9 @@ async def continue_in_new_workflow(
     if reservation.already_finalized:
         # Duplicate request after a successful create: return the same linked
         # Workflow rather than creating a second one (§5).
+        get_native_chat_telemetry().request(
+            stage=STAGE_CONTINUATION, outcome=OUTCOME_SUCCESS
+        )
         return ContinueInNewWorkflowResponse(
             sourceWorkflowId=source.workflow_id,
             sourceRunId=source_run_id,
@@ -16803,6 +16812,9 @@ async def continue_in_new_workflow(
     )
     await session.commit()
 
+    get_native_chat_telemetry().request(
+        stage=STAGE_CONTINUATION, outcome=OUTCOME_SUCCESS
+    )
     return ContinueInNewWorkflowResponse(
         sourceWorkflowId=source.workflow_id,
         sourceRunId=source_run_id,

@@ -1291,7 +1291,7 @@ async def run_omnigent_execution(
         delete_after_harvest = bool(
             selection.capture.get("deleteOmnigentSessionAfterHarvest", False)
         )
-        async with httpx.AsyncClient() as httpx_client:
+        async with httpx.AsyncClient(trust_env=False) as httpx_client:
             client = OmnigentHttpClient(
                 base_url=resolved_server_url(),
                 api_token=resolved_api_token(),
@@ -2170,7 +2170,7 @@ async def run_omnigent_execution(
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
         if client is not None and session_id:
-            async with httpx.AsyncClient() as cleanup_httpx_client:
+            async with httpx.AsyncClient(trust_env=False) as cleanup_httpx_client:
                 cleanup_client = OmnigentHttpClient(
                     base_url=resolved_server_url(),
                     api_token=resolved_api_token(),

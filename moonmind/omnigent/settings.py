@@ -137,10 +137,10 @@ def resolved_native_chat_rollout_mode(*, env: Mapping[str, Any] | None = None) -
     MoonLadderStudios/MoonMind#3642 §10. Selects whether interactive native Chat
     is served (``enabled``), gated behind recorded acceptance evidence
     (``canary``), rolled back to read-only diagnostics (``read_only``), or
-    disabled (``disabled``). Unset defaults to ``enabled`` so the canonical
-    Compose deployment keeps serving native Chat (the dependency issues ship the
-    feature default-on); an operator opts into a staged rollout by setting a more
-    restrictive posture. The raw value is normalized/failed-closed by
+    disabled (``disabled``). Unset defaults to ``canary`` so the canonical
+    deployment remains non-interactive until the controlling report is resolved
+    and matched to the deployed commit, contracts, and images. The raw value is
+    normalized/failed-closed by
     :func:`moonmind.omnigent.native_chat_rollout.parse_rollout_mode`.
 
     This flag is deliberately temporary: it is retired after the deterministic
@@ -159,12 +159,11 @@ def resolved_native_chat_acceptance_ref(
 ) -> str:
     """Return the recorded passing native-chat acceptance report ref, if any.
 
-    The canary rollout mode admits interactive native Chat only when a passing
-    acceptance report has been recorded for the deployment. Operators point
-    ``OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF`` at the durable ref/digest of the
-    report produced by ``tools/build_native_chat_acceptance.py``; presence of a
-    non-empty ref is treated as "acceptance recorded". A blank value keeps canary
-    deployments on the read-only diagnostics projection.
+    Interactive native Chat is admitted only when the API can read and validate
+    the report produced by ``tools/merge_native_chat_acceptance_lanes.py``.
+    Operators materialize that report read-only and configure a digest-bound
+    ``file://...#sha256=<hex>`` ref. A blank, opaque, stale, mismatched, or
+    unreadable ref keeps the deployment on read-only diagnostics.
     """
 
     source = env if env is not None else os.environ

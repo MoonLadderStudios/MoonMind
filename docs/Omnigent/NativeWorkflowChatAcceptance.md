@@ -32,9 +32,11 @@ The journey is proven across two lanes and the gate requires both:
 ## The machine-readable gate report
 
 `moonmind/omnigent/native_chat_acceptance.py` defines the fail-closed contract
-(`build_native_chat_acceptance_report`); `tools/build_native_chat_acceptance.py`
-is the CLI that the `Provider / Omnigent Native Chat Acceptance` GitHub workflow
-runs to publish it. The report records:
+(`build_native_chat_acceptance_report`). The `Provider / Omnigent Native Chat
+Acceptance` workflow records the deterministic observations, builds each lane
+with `tools/build_native_chat_acceptance_lane.py`, and publishes only the report
+produced by `tools/merge_native_chat_acceptance_lanes.py` after both exact lane
+inventories validate. The report records:
 
 - MoonMind build/commit and the pinned native-chat contract versions
   (`nativeUiBootstrap`, `nativeUiRouteFeature`, `outboundScan`, `telemetry`);
@@ -61,6 +63,12 @@ Any partial, skipped, failed, mutable-image, stale, revoked, superseded,
 wrong-lane, identity-mismatched, or secret-bearing input raises
 `ConformanceContractError` — the report is never emitted as `passed`.
 
+The server-side Omnigent HTTP/SSE client does not inherit ambient process proxy
+configuration. This keeps the policy-selected upstream endpoint authoritative
+and prevents provider credentials or allowlisted transport headers from being
+silently redirected. Deployments that intentionally require an egress proxy
+must supply it through the explicit client/transport authority boundary.
+
 ## Rollout, canary, and rollback
 
 `moonmind/omnigent/native_chat_rollout.py` is the rollout control. The temporary
@@ -70,12 +78,15 @@ on every request:
 
 | Mode | Behavior |
 | --- | --- |
-| `enabled` (default when unset) | Serve interactive native Chat. Post-proof steady state; matches the dependency default-on behavior. |
-| `canary` | Serve interactive Chat **only** when the deployment has recorded a passing acceptance report ref (`OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF`); otherwise degrade to read-only diagnostics. |
+| `enabled` | Serve interactive native Chat **only** when a current acceptance report resolves and matches the deployed build, images, contract versions, compatibility manifest, complete scenario inventory, and safety attestations. |
+| `canary` (default when unset) | Apply the same validated-report requirement. Without it, all HTTP/SSE/WebSocket/resource/terminal/control paths fail closed while durable terminal diagnostics remain readable. |
 | `read_only` | Roll back: never serve the interactive native UI; present the durable read-only diagnostics projection. Historical reads are preserved. |
 | `disabled` | Interactive native Chat is unavailable. |
 
-An unrecognized value fails closed to `read_only` (never to interactive). A
+`OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF` is a digest-bound local artifact reference
+(`file://…#sha256=…`), not a truthy marker. Dangling, stale, malformed, expired,
+wrong-commit, wrong-image, or superseded reports never admit traffic. An
+unrecognized value fails closed to `read_only` (never to interactive). A
 rollback never silently routes messages through a different runtime or the
 deferred `SubmitChatInstruction` / `/chat-instructions` path — it presents
 read-only diagnostics or disables interactive Chat.
@@ -83,14 +94,18 @@ read-only diagnostics or disables interactive Chat.
 The rollout flag is **temporary**. `rollout_flag_retirement()` records the
 retirement contract: once the deterministic and protected-live acceptance
 evidence passes and the read-only fallback window completes, the flag is removed
-and native Chat serves unconditionally (`enabled`).
+and the unset/default path retains the same evidence-gated `canary` posture.
+Retiring the flag therefore cannot turn a missing or stale report into
+interactive authority.
 
 ## Readiness / operational telemetry
 
-`moonmind/omnigent/native_chat_telemetry.py` defines the bounded readiness and
-operational signal registry. It reuses the canonical
-`moonmind.observability.metrics.MetricDefinition` and the canonical
-`FORBIDDEN_LABELS` identity ban. Signals cover binding resolution, native-UI
+`moonmind/omnigent/native_chat_telemetry.py` exposes the production emission
+adapter. Definitions are registered once in the canonical
+`moonmind.observability.metrics.REGISTRY`, exported through the shared StatsD
+boundary, and guarded by the canonical `FORBIDDEN_LABELS` identity ban. Signals
+are emitted at binding, rollout, native-UI, proxy, scan, mutation, replay, and
+continuation authority handoffs, and cover binding resolution, native-UI
 compatibility/load/reconnect/fallback, scoped HTTP/SSE/WebSocket outcomes,
 authorization/substitution/capability/stale-state denials, security-scan
 allow/block/enforcement-unavailable, mutation accepted/completed/rejected/

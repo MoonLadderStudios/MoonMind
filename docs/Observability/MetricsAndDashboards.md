@@ -11,6 +11,7 @@
 | Temporal | `moonmind_task_schedule_to_start_seconds` | component | Temporal | fleet/queue dashboard |
 | providers | `moonmind_provider_requests`, `moonmind_usage_attribution_coverage_ratio` | outcome/runtime_family | profiles | provider/cost dashboard |
 | Omnigent | `moonmind_omnigent_session_start_seconds`, `moonmind_omnigent_event_lag_seconds` | outcome/runtime_family | runtime | bridge/host dashboard |
+| Omnigent native Chat | `moonmind_omnigent_native_chat_requests`, `moonmind_omnigent_native_chat_upstream_latency_seconds`, `moonmind_omnigent_native_chat_ui_readiness`, `moonmind_omnigent_native_chat_rollout_state` | native_chat_stage/outcome/readiness/rollout_mode | runtime | native Chat readiness/rollout |
 | artifacts/operator | `moonmind_artifact_operations`, `moonmind_observability_stream_lag_seconds` | outcome/component | artifacts/operator | artifact/Live Logs/Chat |
 | safety | `moonmind_policy_decisions` | outcome | security | intervention dashboard |
 

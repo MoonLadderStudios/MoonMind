@@ -160,6 +160,153 @@ def test_product_rejects_incomplete_acceptance_report_fields(tmp_path, monkeypat
         raise AssertionError("incomplete product acceptance evidence was accepted")
 
 
+def test_native_chat_protected_owns_exact_case_order_and_observed_outcomes(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    runner = module.LiveRunner(
+        output_dir=tmp_path,
+        env={"MOONMIND_BUILD_COMMIT": "abc123", "MOONMIND_BUILD_ID": "build-1"},
+    )
+    actions = []
+    digest = "a" * 64
+    images = {
+        "server": f"server@sha256:{digest}",
+        "host": f"host@sha256:{digest}",
+    }
+    expected_identity = module.native_chat_deployment_identity(
+        env={
+            "MOONMIND_BUILD_COMMIT": "abc123",
+            "OMNIGENT_IMAGE_REF": images["server"],
+            "OMNIGENT_NATIVE_UI_IMAGE_REF": f"ui@sha256:{digest}",
+            "OMNIGENT_HOST_IMAGE_REF": images["host"],
+        }
+    )
+    expected_identity.update(
+        {
+            "moonmindBuild": "build-1",
+            "hostArchitecture": f"linux/{module.platform.machine()}",
+        }
+    )
+
+    def action(scenario, name, **inputs):
+        actions.append(name)
+        if name == "resolve-deployment-authority":
+            return {
+                "ok": True,
+                "identities": expected_identity,
+                "safeIdentities": {
+                    "workflowRef": "workflow-ref",
+                    "runRef": "run-ref",
+                    "stepRef": "step-ref",
+                    "agentRunRef": "agent-run-ref",
+                    "bindingRef": "binding-ref",
+                },
+                "profilePolicyEvidence": {
+                    key: f"file:///{key}.json"
+                    for key in (
+                        "profileRef",
+                        "launchPolicyRef",
+                        "effectiveLaunchSnapshotRef",
+                        "providerProfileRef",
+                    )
+                },
+                "evidenceRefs": ["file:///authority.json"],
+            }
+        return {
+            "ok": True,
+            "evidenceRefs": [f"file:///{name}.json"],
+            "nativeChatOutcome": {
+                "authorizationDecision": "not_applicable",
+                "upstreamSideEffectCount": 0,
+                "expectedUpstreamSideEffectCount": 0,
+                "durableAfterCleanup": True,
+                "evidenceKind": "artifact",
+            },
+        }
+
+    monkeypatch.setattr(runner, "action", action)
+    monkeypatch.setattr(
+        runner,
+        "_resolve_ref_bytes",
+        lambda ref: json.dumps({"observedRef": ref}).encode(),
+    )
+    observations = runner.native_chat_protected(
+        images=images, ui_image=f"ui@sha256:{digest}"
+    )
+    expected_actions = ["resolve-deployment-authority"] + [
+        f"case.{scenario}.{case}"
+        for scenario, cases in module.NATIVE_CHAT_REQUIRED_CASES.items()
+        if module.NATIVE_CHAT_SCENARIO_LANES[scenario]
+        == module.LANE_PROTECTED_LIVE
+        for case in cases
+    ] + [
+        f"cleanup.{case}" for case in module.NATIVE_CHAT_REQUIRED_CLEANUP_CASES
+    ]
+    assert actions == expected_actions
+    assert set(observations["scenarios"]) == {
+        scenario
+        for scenario, lane in module.NATIVE_CHAT_SCENARIO_LANES.items()
+        if lane == module.LANE_PROTECTED_LIVE
+    }
+
+
+def test_native_chat_protected_rejects_bare_success_without_outcome(
+    tmp_path, monkeypatch
+):
+    module = _module()
+    runner = module.LiveRunner(
+        output_dir=tmp_path,
+        env={"MOONMIND_BUILD_COMMIT": "abc123", "MOONMIND_BUILD_ID": "build-1"},
+    )
+    digest = "a" * 64
+    images = {
+        "server": f"server@sha256:{digest}",
+        "host": f"host@sha256:{digest}",
+    }
+    identity = module.native_chat_deployment_identity(
+        env={
+            "MOONMIND_BUILD_COMMIT": "abc123",
+            "OMNIGENT_IMAGE_REF": images["server"],
+            "OMNIGENT_NATIVE_UI_IMAGE_REF": f"ui@sha256:{digest}",
+            "OMNIGENT_HOST_IMAGE_REF": images["host"],
+        }
+    )
+    identity.update(
+        {
+            "moonmindBuild": "build-1",
+            "hostArchitecture": f"linux/{module.platform.machine()}",
+        }
+    )
+    calls = 0
+
+    def action(_scenario, _name, **_inputs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {
+                "identities": identity,
+                "safeIdentities": {"workflowRef": "w"},
+                "profilePolicyEvidence": {
+                    key: f"file:///{key}.json"
+                    for key in (
+                        "profileRef",
+                        "launchPolicyRef",
+                        "effectiveLaunchSnapshotRef",
+                        "providerProfileRef",
+                    )
+                },
+            }
+        return {"ok": True, "evidenceRefs": ["file:///bare.json"]}
+
+    monkeypatch.setattr(runner, "action", action)
+    monkeypatch.setattr(runner, "_resolve_ref_bytes", lambda ref: b"{}")
+    with pytest.raises(module.ConformanceContractError, match="observed case evidence"):
+        runner.native_chat_protected(
+            images=images, ui_image=f"ui@sha256:{digest}"
+        )
+
+
 def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, monkeypatch):
     module = _module()
     runner = module.LiveRunner(output_dir=tmp_path, env={})
@@ -653,6 +800,34 @@ def test_action_rejects_mismatched_or_unreachable_evidence(tmp_path, monkeypatch
                 assert "unreachable or malformed" in str(exc)
         else:
             raise AssertionError("invalid durable evidence was accepted")
+
+
+def test_native_chat_action_binds_outcome_to_resolved_evidence(tmp_path, monkeypatch):
+    module = _module()
+    ref = _action_evidence(tmp_path, "native-chat", "launch-native-ui")
+    evidence_path = Path(ref.removeprefix("file://"))
+    evidence = json.loads(evidence_path.read_text())
+    evidence["nativeChatOutcome"] = {"loaded": False}
+    evidence_path.write_text(json.dumps(evidence))
+    runner = module.LiveRunner(
+        output_dir=tmp_path,
+        env={"MOONMIND_OMNIGENT_ACTION_COMMAND": "adapter"},
+    )
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps(
+            {
+                "ok": True,
+                "nativeChatOutcome": {"loaded": True},
+                "evidenceRefs": [ref],
+            }
+        )
+        stderr = ""
+
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    with pytest.raises(module.ConformanceContractError, match="outcome is not bound"):
+        runner.action("native-chat", "launch-native-ui")
 
 
 def test_product_action_binds_all_lifecycle_ids_to_evidence(tmp_path, monkeypatch):

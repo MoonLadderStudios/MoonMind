@@ -95,6 +95,32 @@ def test_nested_and_queued_message_shapes_are_scanned() -> None:
     )
 
 
+def test_slash_command_arguments_are_scanned() -> None:
+    with pytest.raises(NativeScanBlockedError) as exc_info:
+        scan_native_outbound(
+            surface=NativeScanSurface.MESSAGE,
+            body={"type": "command", "command": "/review", "args": [_SECRET_TEXT]},
+            high_security_mode=True,
+        )
+    assert exc_info.value.evidence.findings[0].location == "body.args[0]"
+
+
+def test_textual_attachment_and_upload_metadata_are_scanned() -> None:
+    with pytest.raises(NativeScanBlockedError) as exc_info:
+        scan_native_outbound(
+            surface=NativeScanSurface.NATIVE_MUTATION,
+            body={
+                "type": "upload",
+                "metadata": {"filename": "notes.txt", "description": _SECRET_TEXT},
+                "content": [{"type": "text", "text": "bounded attachment"}],
+            },
+            high_security_mode=True,
+        )
+    assert exc_info.value.evidence.findings[0].location == (
+        "body.metadata.description"
+    )
+
+
 def test_unknown_top_level_schema_fails_closed() -> None:
     with pytest.raises(NativeScanEnforcementError) as exc_info:
         scan_native_outbound(
@@ -138,6 +164,22 @@ def test_scanner_error_fails_closed(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "moonmind.omnigent.native_outbound_scan.scan_outbound_bundle", _boom
+    )
+    with pytest.raises(NativeScanEnforcementError) as exc_info:
+        scan_native_outbound(
+            surface=NativeScanSurface.MESSAGE,
+            body=_CLEAN_MESSAGE,
+            high_security_mode=True,
+        )
+    assert exc_info.value.evidence.reason == "scanner_error"
+
+
+def test_scanner_timeout_fails_closed(monkeypatch) -> None:
+    def _timeout(*_a, **_k):
+        raise TimeoutError("scanner deadline exceeded")
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.native_outbound_scan.scan_outbound_bundle", _timeout
     )
     with pytest.raises(NativeScanEnforcementError) as exc_info:
         scan_native_outbound(

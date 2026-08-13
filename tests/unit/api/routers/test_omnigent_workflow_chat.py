@@ -17,6 +17,7 @@ from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
+import api_service.api.routers.omnigent_bridge as bridge_module
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
@@ -39,6 +40,10 @@ from moonmind.omnigent.bridge_config import (
 )
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.omnigent.settings import resolved_proxy_forward_headers
+from moonmind.omnigent.native_chat_rollout import (
+    NativeChatRolloutDecision,
+    NativeChatRolloutMode,
+)
 from moonmind.omnigent.workflow_chat_facade import (
     CAP_CONTROL_UNSUPPORTED,
     CAP_INTERRUPT_TURN,
@@ -60,6 +65,20 @@ _CHAT_BINDING_ID = "brs-1"
 # The durable bridge-session key is server-owned and (once #3633 lands) distinct
 # from the browser-facing chatBindingId. Journal reads must use this key.
 _BRIDGE_SESSION_ID = "brs-internal-1"
+
+
+@pytest.fixture(autouse=True)
+def _admit_native_chat_rollout(monkeypatch: pytest.MonkeyPatch) -> None:
+    decision = NativeChatRolloutDecision(
+        mode=NativeChatRolloutMode.ENABLED,
+        interactive=True,
+        serve_native_ui=True,
+        read_only_fallback=False,
+        reason="enabled",
+    )
+    monkeypatch.setattr(
+        bridge_module, "current_native_chat_rollout_decision", lambda: decision
+    )
 
 
 @pytest.mark.parametrize(
@@ -472,6 +491,75 @@ def test_owner_snapshot_virtualizes_provider_identity() -> None:
     # Capabilities are recomputed from trusted state on every request.
     assert body["capabilities"][CAP_SEND_MESSAGE] is True
     assert body["readOnly"] is False
+
+
+def test_rollout_blocks_direct_http_sse_resource_and_control_bypasses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    telemetry = Mock()
+    monkeypatch.setattr(bridge_module, "get_native_chat_telemetry", lambda: telemetry)
+    blocked = NativeChatRolloutDecision(
+        mode=NativeChatRolloutMode.READ_ONLY,
+        interactive=False,
+        serve_native_ui=False,
+        read_only_fallback=True,
+        reason="rolled_back_read_only",
+    )
+    monkeypatch.setattr(
+        bridge_module, "current_native_chat_rollout_decision", lambda: blocked
+    )
+    client, proxy, _store = _build()
+
+    attempts = (
+        ("get", _path("health"), None),
+        ("get", _path(f"v1/sessions/{_CHAT_BINDING_ID}"), None),
+        ("get", _path(f"v1/sessions/{_CHAT_BINDING_ID}/stream"), None),
+        (
+            "get",
+            _path(
+                f"v1/sessions/{_CHAT_BINDING_ID}"
+                "/resources/environments/default/changes"
+            ),
+            None,
+        ),
+        (
+            "post",
+            _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+            {"type": "message", "content": "must not forward"},
+        ),
+    )
+    for method, path, body in attempts:
+        response = getattr(client, method)(path, json=body) if body else getattr(client, method)(path)
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == "omnigent_native_chat_unavailable"
+    assert proxy.posted == []
+    assert proxy.resources == []
+    telemetry.rollout.assert_called()
+    assert any(
+        call.kwargs == {"stage": "diagnostic_fallback", "outcome": "success"}
+        for call in telemetry.request.call_args_list
+    )
+
+
+def test_rollout_preserves_durable_terminal_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    terminal = _row(status="completed", omnigent_session_id="")
+    blocked = NativeChatRolloutDecision(
+        mode=NativeChatRolloutMode.READ_ONLY,
+        interactive=False,
+        serve_native_ui=False,
+        read_only_fallback=True,
+        reason="rolled_back_read_only",
+    )
+    monkeypatch.setattr(
+        bridge_module, "current_native_chat_rollout_decision", lambda: blocked
+    )
+    client, _proxy, _store = _build(store=_FakeStore(row=terminal))
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}"))
+    assert response.status_code == 200
+    assert response.json()["readOnly"] is True
+    assert response.json()["providerSessionAvailable"] is False
 
 
 def test_non_owner_gets_non_enumerating_binding_unknown() -> None:
@@ -1512,6 +1600,49 @@ def test_high_security_blocks_secret_bearing_message(monkeypatch) -> None:
     assert proxy.posted == []
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "type": "message",
+            "queued": True,
+            "data": {"segments": [{"reply": {"quote": "token=" + "q" * 24}}]},
+        },
+        {"type": "interrupt", "reason": "token=" + "s" * 24},
+        {
+            "type": "message",
+            "command": "/review",
+            "args": ["token=" + "c" * 24],
+        },
+        {
+            "type": "message",
+            "metadata": {
+                "filename": "notes.txt",
+                "description": "token=" + "u" * 24,
+            },
+            "content": [{"type": "text", "text": "bounded attachment"}],
+        },
+    ],
+    ids=("queued-reply", "steer", "slash-command", "attachment-metadata"),
+)
+def test_high_security_blocks_native_payload_surfaces_before_upstream(
+    monkeypatch, payload
+) -> None:
+    _force_high_security(monkeypatch)
+    client, proxy, store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json=payload,
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_content_blocked"
+    assert "token=" not in response.text
+    assert proxy.posted == []
+    assert "token=" not in str(store.lifecycle)
+
+
 def test_high_security_allows_clean_message_and_forwards(monkeypatch) -> None:
     _force_high_security(monkeypatch)
     client, proxy, _store = _build()
@@ -1583,6 +1714,27 @@ def test_high_security_scanner_error_fails_closed(monkeypatch) -> None:
     )
 
     # An unavailable/erroring scanner fails closed rather than forwarding.
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "omnigent_chat_enforcement_unavailable"
+    assert proxy.posted == []
+
+
+def test_high_security_scanner_timeout_fails_closed(monkeypatch) -> None:
+    _force_high_security(monkeypatch)
+
+    def _timeout(*_a, **_k):
+        raise TimeoutError("scanner deadline exceeded")
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.native_outbound_scan.scan_outbound_bundle", _timeout
+    )
+    client, proxy, _store = _build()
+
+    response = client.post(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
+        json={"type": "message", "data": {"content": [{"type": "text", "text": "hi"}]}},
+    )
+
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "omnigent_chat_enforcement_unavailable"
     assert proxy.posted == []

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from unittest.mock import Mock
 
 from moonmind.observability.metrics import FORBIDDEN_LABELS
 from moonmind.omnigent import native_chat_telemetry as tel
+from moonmind.utils.metrics import _MetricsEmitter
 
 
 def test_every_signal_is_bounded_and_identity_free() -> None:
@@ -79,3 +81,53 @@ def test_stages_cover_every_journey_boundary() -> None:
         tel.STAGE_UPSTREAM,
     ):
         assert stage in tel.NATIVE_CHAT_STAGES
+
+
+def test_production_adapter_emits_through_shared_exporter_without_identity_tags() -> None:
+    emitter = Mock()
+    metrics = tel.NativeChatTelemetry(emitter=emitter)
+
+    metrics.request(stage=tel.STAGE_BINDING_RESOLUTION, outcome=tel.OUTCOME_SUCCESS)
+    metrics.upstream_latency(stage=tel.STAGE_UPSTREAM, seconds=0.25)
+    metrics.readiness("ready")
+    metrics.rollout("canary")
+
+    emitter.increment_canonical.assert_called_once_with(
+        "moonmind_omnigent_native_chat_requests",
+        tags={"native_chat_stage": "binding_resolution", "outcome": "success"},
+    )
+    emitter.observe_canonical.assert_called_once_with(
+        "moonmind_omnigent_native_chat_upstream_latency_seconds",
+        value=0.25,
+        tags={"native_chat_stage": "upstream"},
+    )
+    assert emitter.gauge_canonical.call_count == 9
+    readiness = [
+        call for call in emitter.gauge_canonical.call_args_list
+        if call.args[0] == "moonmind_omnigent_native_chat_ui_readiness"
+    ]
+    rollout = [
+        call for call in emitter.gauge_canonical.call_args_list
+        if call.args[0] == "moonmind_omnigent_native_chat_rollout_state"
+    ]
+    assert sum(call.kwargs["value"] for call in readiness) == 1
+    assert sum(call.kwargs["value"] for call in rollout) == 1
+    for call in emitter.method_calls:
+        tags = call.kwargs.get("tags", {})
+        assert not FORBIDDEN_LABELS.intersection(tags)
+
+
+def test_shared_exporter_preserves_canonical_metric_name() -> None:
+    emitter = object.__new__(_MetricsEmitter)
+    emitter._configured = True
+    emitter._enabled = True
+    emitter._disabled_until = None
+    emitter._send = Mock()
+    emitter.increment_canonical(
+        "moonmind_omnigent_native_chat_requests",
+        tags={"native_chat_stage": "http_request", "outcome": "success"},
+    )
+    emitter._send.assert_called_once_with(
+        "moonmind_omnigent_native_chat_requests:1|c"
+        "|#native_chat_stage:http_request,outcome:success"
+    )

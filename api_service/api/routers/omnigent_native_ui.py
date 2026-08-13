@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import posixpath
+import time
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -50,7 +51,18 @@ from api_service.auth_providers import get_current_user
 from api_service.db.models import User
 from moonmind.omnigent.bridge_config import OmnigentBridgeConfig
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-from moonmind.omnigent.native_chat_rollout import resolve_native_chat_rollout
+from moonmind.omnigent.native_chat_rollout import current_native_chat_rollout_decision
+from moonmind.omnigent.native_chat_telemetry import (
+    OUTCOME_DENIED,
+    OUTCOME_FAILURE,
+    OUTCOME_SUCCESS,
+    STAGE_BINDING_RESOLUTION,
+    STAGE_DIAGNOSTIC_FALLBACK,
+    STAGE_NATIVE_UI_COMPATIBILITY,
+    STAGE_NATIVE_UI_LOAD,
+    STAGE_UPSTREAM,
+    get_native_chat_telemetry,
+)
 from moonmind.omnigent.native_ui import (
     CODE_NATIVE_CHAT_UNAVAILABLE,
     NATIVE_UI_MOUNT_PREFIX,
@@ -65,8 +77,6 @@ from moonmind.omnigent.native_ui import (
 )
 from moonmind.omnigent.settings import (
     resolved_api_token,
-    resolved_native_chat_acceptance_ref,
-    resolved_native_chat_rollout_mode,
     resolved_native_ui_serving_enabled,
     resolved_native_ui_version,
     resolved_server_url,
@@ -156,6 +166,7 @@ class NativeUiUpstream:
                 transport=self._transport,
                 timeout=_NATIVE_UI_UPSTREAM_TIMEOUT,
                 follow_redirects=False,
+                trust_env=False,
             ) as client:
                 # Stream the (decoded) body and abort as soon as the cumulative
                 # decoded size exceeds the limit, so a very large or highly
@@ -292,6 +303,7 @@ async def _serve_native_ui(
 ) -> Response:
     mode = presentation_mode_from_query(embedded)
     document = is_document_request(ui_path)
+    telemetry = get_native_chat_telemetry()
 
     # 1. Authorize the caller against the durable binding before anything else,
     #    so an unauthorized caller cannot even probe whether assets exist.
@@ -304,6 +316,7 @@ async def _serve_native_ui(
             store=store,
         )
     except WorkflowChatFacadeError:
+        telemetry.request(stage=STAGE_BINDING_RESOLUTION, outcome=OUTCOME_DENIED)
         # Non-enumerating: unknown binding and unauthorized caller collapse to
         # one unavailable state (never reveals whether a binding exists).
         return _native_chat_unavailable(
@@ -312,6 +325,7 @@ async def _serve_native_ui(
             reason="binding_unknown_or_unauthorized",
             status_code=status.HTTP_404_NOT_FOUND,
         )
+    telemetry.request(stage=STAGE_BINDING_RESOLUTION, outcome=OUTCOME_SUCCESS)
 
     # 1b. Rollout gate (issue #3642 §10). A rolled-back (read_only), canary
     #     deployment without recorded acceptance evidence, or disabled posture
@@ -319,11 +333,11 @@ async def _serve_native_ui(
     #     non-topology-revealing unavailable state the read-only diagnostics
     #     fallback presents, rather than silently routing through a different
     #     runtime or the legacy chat path.
-    rollout = resolve_native_chat_rollout(
-        mode=resolved_native_chat_rollout_mode(),
-        acceptance_recorded=bool(resolved_native_chat_acceptance_ref()),
-    )
+    rollout = current_native_chat_rollout_decision()
+    telemetry.rollout(rollout.mode.value)
+    telemetry.readiness(rollout.telemetry_readiness())
     if not rollout.serve_native_ui:
+        telemetry.request(stage=STAGE_DIAGNOSTIC_FALLBACK, outcome=OUTCOME_SUCCESS)
         return _native_chat_unavailable(
             mode=mode, is_document=document, reason=rollout.reason
         )
@@ -335,6 +349,7 @@ async def _serve_native_ui(
         enabled=bool(config.enabled) and serving_enabled,
     )
     if not compatibility.ready:
+        telemetry.request(stage=STAGE_NATIVE_UI_COMPATIBILITY, outcome=OUTCOME_FAILURE)
         reason = (
             "native_ui_serving_disabled"
             if config.enabled and not serving_enabled
@@ -343,12 +358,19 @@ async def _serve_native_ui(
         return _native_chat_unavailable(
             mode=mode, is_document=document, reason=reason
         )
+    telemetry.request(stage=STAGE_NATIVE_UI_COMPATIBILITY, outcome=OUTCOME_SUCCESS)
 
     # 3. Reverse-proxy the upstream asset or SPA document.
     scoped_base = scoped_ui_base(chat_binding_id)
+    upstream_started = time.monotonic()
     try:
         response = await upstream.fetch(upstream_path_for(ui_path))
     except NativeUiUpstreamError:
+        telemetry.upstream_latency(
+            stage=STAGE_UPSTREAM, seconds=time.monotonic() - upstream_started
+        )
+        telemetry.request(stage=STAGE_UPSTREAM, outcome=OUTCOME_FAILURE)
+        telemetry.request(stage=STAGE_DIAGNOSTIC_FALLBACK, outcome=OUTCOME_SUCCESS)
         logger.info(
             "omnigent.native_ui upstream unavailable binding=%s document=%s",
             chat_binding_id,
@@ -357,6 +379,10 @@ async def _serve_native_ui(
         return _native_chat_unavailable(
             mode=mode, is_document=document, reason="native_ui_upstream_unavailable"
         )
+    telemetry.upstream_latency(
+        stage=STAGE_UPSTREAM, seconds=time.monotonic() - upstream_started
+    )
+    telemetry.request(stage=STAGE_UPSTREAM, outcome=OUTCOME_SUCCESS)
 
     headers = native_ui_security_headers(mode=mode, is_document=document)
 
@@ -379,6 +405,7 @@ async def _serve_native_ui(
         )
 
     if response.status_code >= 400:
+        telemetry.request(stage=STAGE_NATIVE_UI_LOAD, outcome=OUTCOME_FAILURE)
         return _native_chat_unavailable(
             mode=mode, is_document=True, reason="native_ui_upstream_unavailable"
         )
@@ -402,6 +429,7 @@ async def _serve_native_ui(
         bootstrap=bootstrap,
         scoped_base=scoped_base,
     )
+    telemetry.request(stage=STAGE_NATIVE_UI_LOAD, outcome=OUTCOME_SUCCESS)
     return HTMLResponse(content=rendered, status_code=200, headers=headers)
 
 

@@ -8,13 +8,12 @@ the high-security outbound scan, mutation delivery, diagnostic fallback, and
 terminal replay/continuation. Operators need bounded operational visibility into
 those outcomes to canary and, if needed, roll back the rollout.
 
-This module is a small, self-contained signal registry for exactly that. It
-deliberately reuses the canonical observability primitives
+This module is the production adapter for those signals. It deliberately reuses
+the canonical observability primitives
 (:class:`moonmind.observability.metrics.MetricDefinition` and the canonical
-:data:`moonmind.observability.metrics.FORBIDDEN_LABELS` identity ban) rather than
-inventing parallel ones, and it is kept out of the always-on overview SLO
-``REGISTRY`` because these are bounded rollout/readiness signals with their own
-consumers, not steady-state service SLOs.
+:data:`moonmind.observability.metrics.FORBIDDEN_LABELS` identity ban); the
+definitions live in the canonical always-on registry and this adapter emits
+through MoonMind's shared StatsD boundary.
 
 Hard rule (brief §10): Workflow, user, binding, session, and credential identity
 are never metric labels. Every label here is a low-cardinality bounded dimension
@@ -27,7 +26,14 @@ from __future__ import annotations
 
 from typing import Mapping
 
-from moonmind.observability.metrics import FORBIDDEN_LABELS, MetricDefinition
+from moonmind.observability.metrics import (
+    FORBIDDEN_LABELS,
+    REGISTRY as CANONICAL_REGISTRY,
+    MetricDefinition,
+    definition as canonical_definition,
+    normalize_labels as canonical_normalize_labels,
+)
+from moonmind.utils.metrics import _MetricsEmitter, get_metrics_emitter
 
 NATIVE_CHAT_TELEMETRY_VERSION = "moonmind.omnigent.native_chat_telemetry/v1"
 
@@ -122,47 +128,18 @@ BOUNDED_VALUES: dict[str, frozenset[str]] = {
 
 
 # --- Signal registry ----------------------------------------------------------
-REGISTRY: tuple[MetricDefinition, ...] = (
-    MetricDefinition(
-        "moonmind_omnigent_native_chat_requests",
-        "counter",
-        "requests",
-        ("native_chat_stage", "outcome"),
-        "runtime",
-        ("omnigent-native-chat", "native-chat-rollout"),
-    ),
-    MetricDefinition(
-        "moonmind_omnigent_native_chat_upstream_latency_seconds",
-        "histogram",
-        "seconds",
-        ("native_chat_stage",),
-        "runtime",
-        ("omnigent-native-chat", "native-chat-rollout"),
-    ),
-    MetricDefinition(
-        "moonmind_omnigent_native_chat_ui_readiness",
-        "gauge",
-        "state",
-        ("readiness",),
-        "runtime",
-        ("omnigent-native-chat", "native-chat-rollout"),
-    ),
-    MetricDefinition(
-        "moonmind_omnigent_native_chat_rollout_state",
-        "gauge",
-        "state",
-        ("rollout_mode",),
-        "runtime",
-        ("omnigent-native-chat", "native-chat-rollout"),
-    ),
+REGISTRY: tuple[MetricDefinition, ...] = tuple(
+    metric
+    for metric in CANONICAL_REGISTRY
+    if metric.name.startswith("moonmind_omnigent_native_chat_")
 )
 
 
 def definition(name: str) -> MetricDefinition:
-    for metric in REGISTRY:
-        if metric.name == name:
-            return metric
-    raise KeyError(f"unknown native chat telemetry signal: {name}")
+    metric = canonical_definition(name)
+    if metric not in REGISTRY:
+        raise KeyError(f"unknown native chat telemetry signal: {name}")
+    return metric
 
 
 def normalize_labels(metric_name: str, labels: Mapping[str, str]) -> dict[str, str]:
@@ -184,12 +161,70 @@ def normalize_labels(metric_name: str, labels: Mapping[str, str]) -> dict[str, s
     unknown = set(labels) - set(metric.labels)
     if unknown:
         raise ValueError(f"unknown labels for {metric_name}: {sorted(unknown)}")
-    result: dict[str, str] = {}
-    for key in metric.labels:
-        value = str(labels.get(key, "unknown"))
-        allowed = BOUNDED_VALUES[key]
-        result[key] = value if value in allowed else "other"
-    return result
+    return canonical_normalize_labels(metric_name, labels)
+
+
+class NativeChatTelemetry:
+    """Production adapter from the canonical registry to the shared exporter."""
+
+    def __init__(self, emitter: _MetricsEmitter | None = None) -> None:
+        self._emitter = emitter or get_metrics_emitter()
+
+    def request(self, *, stage: str, outcome: str) -> None:
+        tags = normalize_labels(
+            "moonmind_omnigent_native_chat_requests",
+            {"native_chat_stage": stage, "outcome": outcome},
+        )
+        self._emitter.increment_canonical(
+            "moonmind_omnigent_native_chat_requests", tags=tags
+        )
+
+    def upstream_latency(self, *, stage: str, seconds: float) -> None:
+        tags = normalize_labels(
+            "moonmind_omnigent_native_chat_upstream_latency_seconds",
+            {"native_chat_stage": stage},
+        )
+        self._emitter.observe_canonical(
+            "moonmind_omnigent_native_chat_upstream_latency_seconds",
+            value=max(0.0, float(seconds)),
+            tags=tags,
+        )
+
+    def readiness(self, value: str) -> None:
+        selected = value if value in READINESS_VALUES else "other"
+        for readiness in (*sorted(READINESS_VALUES), "other"):
+            tags = normalize_labels(
+                "moonmind_omnigent_native_chat_ui_readiness",
+                {"readiness": readiness},
+            )
+            self._emitter.gauge_canonical(
+                "moonmind_omnigent_native_chat_ui_readiness",
+                value=1 if readiness == selected else 0,
+                tags=tags,
+            )
+
+    def rollout(self, mode: str) -> None:
+        selected = mode if mode in ROLLOUT_MODES else "other"
+        for rollout_mode in (*sorted(ROLLOUT_MODES), "other"):
+            tags = normalize_labels(
+                "moonmind_omnigent_native_chat_rollout_state",
+                {"rollout_mode": rollout_mode},
+            )
+            self._emitter.gauge_canonical(
+                "moonmind_omnigent_native_chat_rollout_state",
+                value=1 if rollout_mode == selected else 0,
+                tags=tags,
+            )
+
+
+_telemetry: NativeChatTelemetry | None = None
+
+
+def get_native_chat_telemetry() -> NativeChatTelemetry:
+    global _telemetry
+    if _telemetry is None:
+        _telemetry = NativeChatTelemetry()
+    return _telemetry
 
 
 __all__ = [
@@ -197,10 +232,12 @@ __all__ = [
     "NATIVE_CHAT_OUTCOMES",
     "NATIVE_CHAT_STAGES",
     "NATIVE_CHAT_TELEMETRY_VERSION",
+    "NativeChatTelemetry",
     "READINESS_VALUES",
     "REGISTRY",
     "ROLLOUT_MODES",
     "definition",
+    "get_native_chat_telemetry",
     "normalize_labels",
     # Stage constants
     "STAGE_AUTHORIZATION",
