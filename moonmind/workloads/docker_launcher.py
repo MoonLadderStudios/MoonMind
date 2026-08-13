@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import posixpath
@@ -25,7 +26,12 @@ from moonmind.security.egress import (
     EGRESS_NETWORK_REF,
     EgressAttestation,
     attest_docker_egress,
+    attest_docker_workload_egress,
     restricted_proxy_env,
+)
+from moonmind.security.egress_conformance_evidence import (
+    parse_and_verify_conformance_evidence,
+    serialize_conformance_evidence,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
 
@@ -255,6 +261,18 @@ def _profile_network_args(network_policy: str) -> tuple[str, list[str]]:
         )
     raise DockerWorkloadLauncherError("unsupported workload network policy")
 
+
+def _egress_launch_binding_args(
+    attestation: EgressAttestation | None,
+) -> list[str]:
+    if attestation is None:
+        return []
+    return [
+        "--label",
+        f"moonmind.egress.applied_rule_digest={attestation.applied_rule_digest}",
+    ]
+
+
 def _path_is_under_mount(path: str, mounts: Sequence[WorkloadMount]) -> bool:
     normalized = posixpath.normpath(path)
     for mount in mounts:
@@ -427,6 +445,239 @@ def _write_text_artifact(path: Path, payload: str) -> str:
     path.write_text(payload, encoding="utf-8")
     return str(path)
 
+
+def _egress_conformance_artifact(
+    request: ValidatedWorkloadRequest,
+    diagnostics: Mapping[str, object],
+) -> tuple[str, str] | None:
+    raw_evidence = diagnostics.get("egressWorkloadEvidence")
+    if not isinstance(raw_evidence, Mapping):
+        return None
+    status = str(diagnostics.get("status") or "unknown")
+    row = (
+        "managed_helper"
+        if request.profile is not None and request.profile.kind == "bounded_service"
+        else "generic_workload"
+    )
+    runner_profile_digest = None
+    if request.profile is not None:
+        profile_payload = request.profile.model_dump(by_alias=True, mode="json")
+        runner_profile_digest = "sha256:" + hashlib.sha256(
+            json.dumps(
+                profile_payload, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+    payload = {
+        "schemaVersion": 1,
+        "kind": "restricted-egress-workload-conformance",
+        "conformanceRow": row,
+        "workloadClass": row,
+        "hostMode": "managed_helper" if row == "managed_helper" else None,
+        "runtimeProvenance": "docker_workload_launcher/docker-engine",
+        "egressProfileVersion": DEFAULT_EGRESS_PROFILE.version,
+        "securityPolicyRef": DEFAULT_EGRESS_PROFILE.security_review_ref,
+        "securityPolicyVersion": DEFAULT_EGRESS_PROFILE.version,
+        # Workload runner profiles are the immutable launch-profile authority
+        # for this plane.  Bind both the selected identity and its canonical
+        # digest so a later registry change cannot be mistaken for this launch.
+        "agentProfileRef": (
+            request.profile.id if request.profile is not None else None
+        ),
+        "agentProfileVersion": runner_profile_digest,
+        "runnerProfileRef": (
+            request.profile.id if request.profile is not None else None
+        ),
+        "runnerProfileDigest": runner_profile_digest,
+        "networkPolicy": (
+            request.profile.network_policy if request.profile is not None else None
+        ),
+        "workloadStatus": status,
+        **dict(raw_evidence),
+    }
+    serialized = serialize_conformance_evidence(
+        payload,
+        location=f"workload-egress:{request.container_name}:{status}",
+    )
+    path = (
+        Path(request.request.artifacts_dir)
+        / "workload"
+        / request.container_name
+        / f"egress-conformance-{status}.json"
+    )
+    return str(path), serialized.decode("utf-8") + "\n"
+
+
+def _helper_egress_authority_path(
+    request: ValidatedWorkloadRequest,
+    *,
+    state: str,
+) -> Path:
+    return (
+        Path(request.request.artifacts_dir)
+        / "workload"
+        / request.container_name
+        / f"egress-helper-authority-{state}.json"
+    )
+
+
+def _runner_profile_digest(request: ValidatedWorkloadRequest) -> str:
+    payload = request.profile.model_dump(by_alias=True, mode="json")
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
+def _persist_helper_egress_authority(
+    request: ValidatedWorkloadRequest,
+    *,
+    state: str,
+    attestation: EgressAttestation,
+    workload_evidence: Mapping[str, object],
+    started_at: datetime,
+    cleanup_evidence: Mapping[str, object] | None = None,
+    lease_release_result: str = "held",
+) -> str:
+    """Persist restart-safe helper ownership and its immutable egress chain."""
+
+    payload = {
+        "schemaVersion": 1,
+        "kind": "restricted-egress-helper-authority",
+        "conformanceRow": "managed_helper",
+        "workloadClass": "managed_helper",
+        "hostMode": "managed_helper",
+        "runtimeProvenance": "docker_workload_launcher/docker-engine",
+        "state": state,
+        "containerName": request.container_name,
+        "ownershipLabels": dict(request.ownership.labels),
+        "runnerProfileRef": request.profile.id,
+        "runnerProfileDigest": _runner_profile_digest(request),
+        "egressProfileVersion": DEFAULT_EGRESS_PROFILE.version,
+        "securityPolicyRef": DEFAULT_EGRESS_PROFILE.security_review_ref,
+        "securityPolicyVersion": DEFAULT_EGRESS_PROFILE.version,
+        "agentProfileRef": request.profile.id,
+        "agentProfileVersion": _runner_profile_digest(request),
+        "startedAt": _isoformat(started_at),
+        "leaseAuthority": {
+            "owner": request.container_name,
+            "state": (
+                "released"
+                if lease_release_result
+                in {
+                    "released",
+                    "released_after_interrupted_start",
+                    "released_after_reconciliation",
+                }
+                else "held"
+            ),
+            "releaseResult": lease_release_result,
+        },
+        "reconciliationOwner": (
+            {
+                "toolName": "container.stop_helper",
+                "containerName": request.container_name,
+                "agentRunId": request.request.agent_run_id,
+                "stepId": request.request.step_id,
+                "attempt": request.request.attempt,
+            }
+            if state in {"cleanup_failed", "cleanup_validated"}
+            else None
+        ),
+        "attestation": attestation.model_dump(by_alias=True, mode="json"),
+        **dict(workload_evidence),
+        **dict(cleanup_evidence or {}),
+    }
+    serialized = serialize_conformance_evidence(
+        payload,
+        location=f"helper-egress-authority:{request.container_name}:{state}",
+    )
+    path = _helper_egress_authority_path(request, state=state)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(serialized + b"\n")
+    return str(path)
+
+
+def _load_helper_egress_authority(
+    request: ValidatedWorkloadRequest,
+) -> tuple[EgressAttestation, dict[str, object], datetime, str] | None:
+    """Recover attached helper authority after an Activity worker restart."""
+
+    candidates = [
+        candidate
+        for state in ("attached", "cleanup_failed", "cleanup_validated", "stopped")
+        if (candidate := _helper_egress_authority_path(request, state=state)).is_file()
+    ]
+    path = (
+        max(candidates, key=lambda candidate: candidate.stat().st_mtime_ns)
+        if candidates
+        else None
+    )
+    if path is None:
+        return None
+    raw = path.read_bytes()
+    payload = parse_and_verify_conformance_evidence(
+        raw,
+        location=f"helper-egress-authority:{request.container_name}:{path.stem}",
+    )
+    if (
+        payload.get("containerName") != request.container_name
+        or payload.get("runnerProfileRef") != request.profile.id
+        or payload.get("runnerProfileDigest") != _runner_profile_digest(request)
+    ):
+        raise DockerWorkloadLauncherError(
+            "durable helper egress authority does not match the stop request"
+        )
+    lease_authority = payload.get("leaseAuthority")
+    if payload.get("state") in {"cleanup_failed", "cleanup_validated"} and (
+        not isinstance(lease_authority, Mapping)
+        or lease_authority.get("state") != "held"
+    ):
+        raise DockerWorkloadLauncherError(
+            "failed helper cleanup did not retain durable lease authority"
+        )
+    attestation_payload = payload.get("attestation")
+    if not isinstance(attestation_payload, Mapping):
+        raise DockerWorkloadLauncherError(
+            "durable helper egress authority is missing its launch attestation"
+        )
+    started_at = _parse_iso_datetime(str(payload.get("startedAt") or ""))
+    if started_at is None:
+        raise DockerWorkloadLauncherError(
+            "durable helper egress authority is missing its launch time"
+        )
+    workload_evidence = {
+        key: value
+        for key, value in payload.items()
+        if key
+        not in {
+            "evidenceDigest",
+            "schemaVersion",
+            "kind",
+            "conformanceRow",
+            "workloadClass",
+            "hostMode",
+            "runtimeProvenance",
+            "state",
+            "containerName",
+            "ownershipLabels",
+            "runnerProfileRef",
+            "runnerProfileDigest",
+            "egressProfileVersion",
+            "securityPolicyRef",
+            "securityPolicyVersion",
+            "agentProfileRef",
+            "agentProfileVersion",
+            "startedAt",
+            "leaseAuthority",
+            "reconciliationOwner",
+            "attestation",
+        }
+    }
+    return (
+        EgressAttestation.model_validate(attestation_payload),
+        workload_evidence,
+        started_at,
+        str(path),
+    )
+
 def _declared_output_refs(
     request: ValidatedWorkloadRequest,
 ) -> tuple[dict[str, str], dict[str, str]]:
@@ -564,6 +815,10 @@ def _publish_workload_artifacts(
 
     sanitized_stdout = redact_sensitive_text(stdout)
     sanitized_stderr = redact_sensitive_text(stderr)
+    diagnostics_payload = redact_sensitive_payload(diagnostics)
+    # Build and high-security scan the restricted-egress artifact before any
+    # diagnostics containing the evidence are persisted.
+    egress_artifact = _egress_conformance_artifact(request, diagnostics_payload)
     stdout_ref = _write(
         "runtime.stdout",
         workload_root / "runtime.stdout.log",
@@ -574,7 +829,6 @@ def _publish_workload_artifacts(
         workload_root / "runtime.stderr.log",
         sanitized_stderr,
     )
-    diagnostics_payload = redact_sensitive_payload(diagnostics)
     diagnostics_payload["artifactPublication"] = (
         {
             "status": "failed",
@@ -589,6 +843,13 @@ def _publish_workload_artifacts(
         workload_root / "runtime.diagnostics.json",
         json.dumps(diagnostics_payload, sort_keys=True, indent=2) + "\n",
     )
+    egress_ref: str | None = None
+    if egress_artifact is not None:
+        egress_ref = _write(
+            "security.egress",
+            Path(egress_artifact[0]),
+            egress_artifact[1],
+        )
     output_refs: dict[str, str] = {}
     if stdout_ref is not None:
         output_refs["runtime.stdout"] = stdout_ref
@@ -597,6 +858,8 @@ def _publish_workload_artifacts(
         output_refs["runtime.stderr"] = stderr_ref
     if diagnostics_ref is not None:
         output_refs["runtime.diagnostics"] = diagnostics_ref
+    if egress_ref is not None:
+        output_refs["security.egress"] = egress_ref
     output_refs.update(declared_output_refs)
     if collected_output_refs:
         output_refs.update(collected_output_refs)
@@ -806,6 +1069,9 @@ class DockerWorkloadLauncher:
             concurrency_limiter or DockerWorkloadConcurrencyLimiter()
         )
         self._helper_leases: dict[str, _ConcurrencyLease] = {}
+        self._helper_egress_evidence: dict[
+            str, tuple[EgressAttestation, dict[str, object], datetime]
+        ] = {}
 
     async def _attest_egress_before_launch(
         self, request: ValidatedWorkloadRequest
@@ -838,6 +1104,78 @@ class DockerWorkloadLauncher:
             backend_ref="docker-workload-launcher",
         )
 
+    async def _attest_workload_egress_after_launch(
+        self,
+        request: ValidatedWorkloadRequest,
+        *,
+        attestation: EgressAttestation,
+        started_at: datetime,
+        finished_at: datetime | None = None,
+    ) -> dict[str, object]:
+        async def runner(args: Sequence[str]) -> tuple[int, bytes, bytes]:
+            stdout, stderr, code = await self._janitor._run_control(args)
+            return code, stdout, stderr
+
+        return await attest_docker_workload_egress(
+            runner=runner,
+            profile=DEFAULT_EGRESS_PROFILE,
+            attestation=attestation,
+            attachment_identity=request.container_name,
+            expected_image_ref=(
+                request.profile.image
+                if request.profile is not None
+                else str(request.request.image or "")
+            ),
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+
+    async def _verify_container_cleanup(
+        self,
+        request: ValidatedWorkloadRequest,
+    ) -> dict[str, object]:
+        if (
+            request.profile is None
+        ):
+            raise DockerWorkloadLauncherError(
+                "helper cleanup requires a resolved runner profile"
+            )
+        if not request.profile.cleanup.remove_container_on_exit:
+            stdout, _stderr, code = await self._janitor._run_control(
+                (
+                    "inspect",
+                    "--format",
+                    "{{.State.Running}}",
+                    request.container_name,
+                )
+            )
+            if code == 0 and stdout.strip().lower() == "true":
+                raise DockerWorkloadLauncherError(
+                    "retained helper cleanup could not be verified"
+                )
+            return {
+                "cleanupResult": "retained_by_policy",
+                "reconciliationResult": "succeeded",
+            }
+        stdout, _stderr, code = await self._janitor._run_control(
+            (
+                "ps",
+                "-a",
+                "--filter",
+                f"name=^/{request.container_name}$",
+                "--format",
+                "{{.Names}}",
+            )
+        )
+        if code != 0 or stdout.strip():
+            raise DockerWorkloadLauncherError(
+                "helper workload cleanup could not be verified"
+            )
+        return {
+            "cleanupResult": "succeeded",
+            "reconciliationResult": "succeeded",
+        }
+
     @staticmethod
     def _egress_attestation_evidence(
         egress_attestation: EgressAttestation | None,
@@ -846,7 +1184,12 @@ class DockerWorkloadLauncher:
             return None
         return egress_attestation.model_dump(by_alias=True, mode="json")
 
-    def build_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
+    def build_run_args(
+        self,
+        request: ValidatedWorkloadRequest,
+        *,
+        egress_attestation: EgressAttestation | None = None,
+    ) -> list[str]:
         _ensure_paths_are_mounted(request)
         profile = request.profile
         workload = request.request
@@ -867,6 +1210,7 @@ class DockerWorkloadLauncher:
             network_ref,
             *structured_container_security_args(),
             *egress_args,
+            *_egress_launch_binding_args(egress_attestation),
         ]
 
         for key, value in _operational_labels(request).items():
@@ -897,7 +1241,12 @@ class DockerWorkloadLauncher:
         )
         return args
 
-    def build_helper_run_args(self, request: ValidatedWorkloadRequest) -> list[str]:
+    def build_helper_run_args(
+        self,
+        request: ValidatedWorkloadRequest,
+        *,
+        egress_attestation: EgressAttestation | None = None,
+    ) -> list[str]:
         profile = request.profile
         workload = request.request
         if profile is None:
@@ -923,6 +1272,7 @@ class DockerWorkloadLauncher:
             network_ref,
             *structured_container_security_args(),
             *egress_args,
+            *_egress_launch_binding_args(egress_attestation),
         ]
         for key, value in _operational_labels(request).items():
             args.extend(["--label", f"{key}={value}"])
@@ -969,11 +1319,14 @@ class DockerWorkloadLauncher:
         )
         lease = await self._concurrency_limiter.acquire(request)
         egress_attestation: EgressAttestation | None = None
+        egress_workload_evidence: dict[str, object] | None = None
 
         try:
             egress_attestation = await self._attest_egress_before_launch(request)
             process = await asyncio.create_subprocess_exec(
-                *self.build_run_args(request),
+                *self.build_run_args(
+                    request, egress_attestation=egress_attestation
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=_docker_env(docker_host=self._docker_host),
@@ -1031,8 +1384,33 @@ class DockerWorkloadLauncher:
                         )
                 raise
             finally:
-                if request.profile is not None and request.profile.cleanup.remove_container_on_exit:
-                    await self._janitor.remove(request.container_name)
+                try:
+                    if (
+                        egress_attestation is not None
+                        and process.returncode is not None
+                    ):
+                        egress_workload_evidence = (
+                            await self._attest_workload_egress_after_launch(
+                                request,
+                                attestation=egress_attestation,
+                                started_at=started_at,
+                                finished_at=datetime.now(UTC),
+                            )
+                        )
+                finally:
+                    if (
+                        request.profile is not None
+                        and request.profile.cleanup.remove_container_on_exit
+                    ):
+                        await self._janitor.remove(request.container_name)
+                    if egress_workload_evidence is not None:
+                        cleanup_evidence = await self._verify_container_cleanup(
+                            request
+                        )
+                        egress_workload_evidence.update(cleanup_evidence)
+                        egress_workload_evidence["cleanupValidatedAt"] = _isoformat(
+                            datetime.now(UTC)
+                        )
         finally:
             await lease.release()
 
@@ -1076,7 +1454,9 @@ class DockerWorkloadLauncher:
         diagnostics["reportPublication"] = report_publication
         egress_evidence = self._egress_attestation_evidence(egress_attestation)
         diagnostics["egressAttestation"] = egress_evidence
+        diagnostics["egressWorkloadEvidence"] = egress_workload_evidence
         workload_metadata["egressAttestation"] = egress_evidence
+        workload_metadata["egressWorkloadEvidence"] = egress_workload_evidence
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
                 request,
@@ -1125,10 +1505,14 @@ class DockerWorkloadLauncher:
         started_at = datetime.now(UTC)
         lease = await self._concurrency_limiter.acquire(request)
         egress_attestation: EgressAttestation | None = None
+        egress_workload_evidence: dict[str, object] | None = None
+        egress_authority_ref: str | None = None
         try:
             egress_attestation = await self._attest_egress_before_launch(request)
             process = await asyncio.create_subprocess_exec(
-                *self.build_helper_run_args(request),
+                *self.build_helper_run_args(
+                    request, egress_attestation=egress_attestation
+                ),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=_docker_env(docker_host=self._docker_host),
@@ -1151,7 +1535,90 @@ class DockerWorkloadLauncher:
                 )
             self._helper_leases[request.container_name] = lease
             lease = None
+            if egress_attestation is not None:
+                egress_workload_evidence = (
+                    await self._attest_workload_egress_after_launch(
+                        request,
+                        attestation=egress_attestation,
+                        started_at=started_at,
+                        finished_at=datetime.now(UTC),
+                    )
+                )
+                # Persist ownership immediately after attachment, before a
+                # readiness await can be cancelled.  The artifact directory is
+                # workflow-owned shared state, so a replacement Activity worker
+                # can recover the exact attestation and clean the same helper.
+                egress_authority_ref = _persist_helper_egress_authority(
+                    request,
+                    state="attached",
+                    attestation=egress_attestation,
+                    workload_evidence=egress_workload_evidence,
+                    started_at=started_at,
+                )
+                self._helper_egress_evidence[request.container_name] = (
+                    egress_attestation,
+                    egress_workload_evidence,
+                    started_at,
+                )
             readiness = await self._wait_for_helper_readiness(request)
+        except (Exception, asyncio.CancelledError):
+            helper_lease = self._helper_leases.get(request.container_name)
+            if helper_lease is not None:
+                cleanup_error: BaseException | None = None
+                cleanup_evidence: dict[str, object] = {}
+                try:
+                    await asyncio.shield(self._janitor.remove(request.container_name))
+                    cleanup_evidence = await asyncio.shield(
+                        self._verify_container_cleanup(request)
+                    )
+                except BaseException as exc:
+                    cleanup_error = exc
+                    cleanup_evidence = {
+                        "cleanupResult": "failed",
+                        "reconciliationResult": "required",
+                        "cleanupErrorCode": type(exc).__name__,
+                    }
+                authority_workload_evidence = egress_workload_evidence
+                if egress_attestation is not None:
+                    if authority_workload_evidence is None:
+                        authority_workload_evidence = {
+                            **egress_attestation.model_dump(
+                                by_alias=True, mode="json"
+                            ),
+                            "attachmentIdentity": request.container_name,
+                            "attachmentRef": f"container:{request.container_name}",
+                            "workloadValidationResult": "not_completed",
+                        }
+                    _persist_helper_egress_authority(
+                        request,
+                        state=(
+                            "cleanup_failed"
+                            if cleanup_error is not None
+                            else "cancelled"
+                        ),
+                        attestation=egress_attestation,
+                        workload_evidence=authority_workload_evidence,
+                        started_at=started_at,
+                        cleanup_evidence={
+                            **cleanup_evidence,
+                            "cleanupValidatedAt": _isoformat(datetime.now(UTC)),
+                        },
+                        lease_release_result=(
+                            "held_for_reconciliation"
+                            if cleanup_error is not None
+                            else "released_after_interrupted_start"
+                        ),
+                    )
+                    self._helper_egress_evidence[request.container_name] = (
+                        egress_attestation,
+                        authority_workload_evidence,
+                        started_at,
+                    )
+                if cleanup_error is None:
+                    self._helper_leases.pop(request.container_name, None)
+                    self._helper_egress_evidence.pop(request.container_name, None)
+                    await asyncio.shield(helper_lease.release())
+            raise
         finally:
             if lease is not None:
                 await lease.release()
@@ -1167,6 +1634,8 @@ class DockerWorkloadLauncher:
             stderr=_decode_stream(stderr),
             readiness=readiness,
             egress_attestation=egress_attestation,
+            egress_workload_evidence=egress_workload_evidence,
+            egress_authority_ref=egress_authority_ref,
         )
 
     async def stop_helper(
@@ -1178,18 +1647,159 @@ class DockerWorkloadLauncher:
         if request.profile.kind != "bounded_service":
             raise DockerWorkloadLauncherError(
                 "stop_helper requires a bounded_service runner profile"
-            )
+        )
         started_at = datetime.now(UTC)
+        egress_state = self._helper_egress_evidence.get(request.container_name)
+        had_in_memory_authority = egress_state is not None
+        durable_state = None
+        if request.profile.network_policy == "restricted_egress":
+            durable_state = _load_helper_egress_authority(request)
+            if egress_state is None and durable_state is not None:
+                egress_state = durable_state[:3]
         stdout, stderr = await self._collect_container_logs(request.container_name)
+        egress_attestation = egress_state[0] if egress_state is not None else None
+        egress_workload_evidence = egress_state[1] if egress_state is not None else None
+        terminal_validation_error: Exception | None = (
+            DockerWorkloadLauncherError(
+                "restricted-egress helper authority is unavailable"
+            )
+            if request.profile.network_policy == "restricted_egress"
+            and egress_state is None
+            else None
+        )
+        cleanup_error: Exception | None = None
+        cleanup_evidence: dict[str, object] = {}
+        if egress_attestation is not None and egress_state is not None:
+            try:
+                egress_workload_evidence = (
+                    await self._attest_workload_egress_after_launch(
+                        request,
+                        attestation=egress_attestation,
+                        started_at=egress_state[2],
+                        finished_at=datetime.now(UTC),
+                    )
+                )
+            except Exception as exc:
+                terminal_validation_error = exc
         try:
             await self._terminate_container(request)
+        except Exception:
+            # Removal and objective reconciliation remain authoritative.
+            pass
+        try:
             if request.profile.cleanup.remove_container_on_exit:
                 await self._janitor.remove(request.container_name)
-        finally:
+        except Exception:
+            # A failed remove command is auxiliary if reconciliation proves
+            # the owned attachment is already absent.
+            pass
+        try:
+            cleanup_evidence = await self._verify_container_cleanup(request)
+        except Exception as exc:
+            cleanup_error = exc
+            cleanup_evidence = {
+                "cleanupResult": "failed",
+                "reconciliationResult": "required",
+                "cleanupErrorCode": type(exc).__name__,
+            }
+        completed_at = datetime.now(UTC)
+        egress_workload_evidence = (
+            {
+                **egress_workload_evidence,
+                **cleanup_evidence,
+                "cleanupValidatedAt": _isoformat(completed_at),
+                "terminalValidationResult": (
+                    "failed" if terminal_validation_error is not None else "passed"
+                ),
+                **(
+                    {
+                        "terminalValidationErrorCode": type(
+                            terminal_validation_error
+                        ).__name__
+                    }
+                    if terminal_validation_error is not None
+                    else {}
+                ),
+            }
+            if egress_workload_evidence is not None
+            else None
+        )
+        egress_authority_ref = None
+        if egress_attestation is not None and egress_workload_evidence is not None:
+            egress_authority_ref = _persist_helper_egress_authority(
+                request,
+                state=(
+                    "cleanup_failed"
+                    if cleanup_error is not None
+                    else "cleanup_validated"
+                ),
+                attestation=egress_attestation,
+                workload_evidence=egress_workload_evidence,
+                started_at=egress_state[2],
+                cleanup_evidence={
+                    "cleanupResult": egress_workload_evidence.get("cleanupResult"),
+                    "reconciliationResult": egress_workload_evidence.get(
+                        "reconciliationResult"
+                    ),
+                    "cleanupValidatedAt": egress_workload_evidence.get(
+                        "cleanupValidatedAt"
+                    ),
+                },
+                lease_release_result=(
+                    "held_for_reconciliation"
+                    if cleanup_error is not None
+                    else "held_until_evidence_persisted"
+                ),
+            )
+        if cleanup_error is None:
             lease = self._helper_leases.pop(request.container_name, None)
             if lease is not None:
                 await lease.release()
-        completed_at = datetime.now(UTC)
+            if egress_attestation is not None and egress_workload_evidence is not None:
+                egress_authority_ref = _persist_helper_egress_authority(
+                    request,
+                    state="stopped",
+                    attestation=egress_attestation,
+                    workload_evidence=egress_workload_evidence,
+                    started_at=egress_state[2],
+                    cleanup_evidence={
+                        "cleanupResult": egress_workload_evidence.get(
+                            "cleanupResult"
+                        ),
+                        "reconciliationResult": egress_workload_evidence.get(
+                            "reconciliationResult"
+                        ),
+                        "cleanupValidatedAt": egress_workload_evidence.get(
+                            "cleanupValidatedAt"
+                        ),
+                    },
+                    lease_release_result=(
+                        "released_after_reconciliation"
+                        if durable_state is not None
+                        and (
+                            not had_in_memory_authority
+                            or any(
+                                marker in durable_state[3]
+                                for marker in (
+                                    "cleanup_failed",
+                                    "cleanup_validated",
+                                )
+                            )
+                        )
+                        else "released"
+                    ),
+                )
+            self._helper_egress_evidence.pop(request.container_name, None)
+        if cleanup_error is not None:
+            raise DockerWorkloadLauncherError(
+                "helper cleanup requires reconciliation; "
+                f"evidence={egress_authority_ref or 'unavailable'}"
+            ) from cleanup_error
+        if terminal_validation_error is not None:
+            raise DockerWorkloadLauncherError(
+                "restricted-egress helper terminal attestation failed after cleanup; "
+                f"evidence={egress_authority_ref or 'unavailable'}"
+            ) from terminal_validation_error
         return self._helper_result(
             request,
             status="stopped",
@@ -1203,6 +1813,9 @@ class DockerWorkloadLauncher:
                 "reason": reason,
                 "removeContainerOnExit": request.profile.cleanup.remove_container_on_exit,
             },
+            egress_attestation=egress_attestation,
+            egress_workload_evidence=egress_workload_evidence,
+            egress_authority_ref=egress_authority_ref,
         )
 
     async def _wait_for_helper_readiness(
@@ -1276,6 +1889,8 @@ class DockerWorkloadLauncher:
         readiness: Mapping[str, object],
         teardown: Mapping[str, object] | None = None,
         egress_attestation: EgressAttestation | None = None,
+        egress_workload_evidence: Mapping[str, object] | None = None,
+        egress_authority_ref: str | None = None,
     ) -> WorkloadResult:
         duration_seconds = (completed_at - started_at).total_seconds()
         helper_metadata = _helper_metadata(
@@ -1313,7 +1928,17 @@ class DockerWorkloadLauncher:
         diagnostics["reportPublication"] = report_publication
         egress_evidence = self._egress_attestation_evidence(egress_attestation)
         diagnostics["egressAttestation"] = egress_evidence
+        diagnostics["egressWorkloadEvidence"] = (
+            dict(egress_workload_evidence)
+            if egress_workload_evidence is not None
+            else None
+        )
         helper_metadata["egressAttestation"] = egress_evidence
+        helper_metadata["egressWorkloadEvidence"] = diagnostics[
+            "egressWorkloadEvidence"
+        ]
+        helper_metadata["egressAuthorityRef"] = egress_authority_ref
+        diagnostics["egressAuthorityRef"] = egress_authority_ref
         stdout_ref, stderr_ref, diagnostics_ref, output_refs, artifact_publication = (
             _publish_workload_artifacts(
                 request,
@@ -1326,6 +1951,8 @@ class DockerWorkloadLauncher:
         )
         helper_metadata["artifactPublication"] = artifact_publication
         helper_metadata["reportPublication"] = report_publication
+        if egress_authority_ref is not None:
+            output_refs["security.egress.authority"] = egress_authority_ref
         metadata = redact_sensitive_payload({
             "containerName": request.container_name,
             "image": request.profile.image if request.profile is not None else getattr(request.request, "image", None),

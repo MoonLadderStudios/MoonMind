@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from unittest.mock import AsyncMock
 
@@ -16,6 +17,10 @@ from moonmind.security.egress import (
     ENFORCER_IMPLEMENTATION,
     OMNIGENT_EGRESS_NETWORK_REF,
     PROXY_URL,
+)
+from moonmind.security.egress_conformance_evidence import (
+    parse_and_verify_conformance_evidence,
+    verify_evidence_digest,
 )
 from moonmind.config.container_backend_settings import (
     ContainerBackendReadinessError,
@@ -41,6 +46,29 @@ from moonmind.workflows.temporal.container_job_backend import (
 )
 
 JOB_ID = "container-job:0123456789abcdef0123456789abcdef"
+
+
+def _expected_applied_rule_digest() -> str:
+    applied = {
+        "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+        "configDigest": EGRESS_CONFIG_DIGEST,
+        "gatewayImageDigest": "sha256:gateway-image",
+        "internal": True,
+        "ipv6": False,
+        "idleSeconds": DEFAULT_EGRESS_PROFILE.idle_seconds,
+        "gatewayNetworks": sorted(
+            {
+                EGRESS_NETWORK_REF,
+                "moonmind_sandbox-egress-network",
+                OMNIGENT_EGRESS_NETWORK_REF,
+                "local-network",
+            }
+        ),
+        "enforcer": ENFORCER_IMPLEMENTATION,
+    }
+    return "sha256:" + hashlib.sha256(
+        json.dumps(applied, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _request(tmp_path, **spec_overrides) -> ContainerJobActivityRequest:
@@ -181,6 +209,30 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
         commands.append(args)
         if args[:2] == ("network", "inspect"):
             return 0, b'{"Internal":true,"EnableIPv6":false}', b""
+        if (
+            args[0] == "inspect"
+            and "NetworkSettings.Networks" in args[2]
+            and args[-1] != DEFAULT_EGRESS_PROFILE.gateway_ref
+        ):
+            payload = {
+                "labels": {
+                    "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                    "moonmind.egress.profile_digest": DEFAULT_EGRESS_PROFILE.digest,
+                    "moonmind.egress.applied_rule_digest": (
+                        _expected_applied_rule_digest()
+                    ),
+                },
+                "networks": {
+                    EGRESS_NETWORK_REF: {
+                        "NetworkID": "restricted-network-id",
+                        "EndpointID": "recovered-endpoint-id",
+                        "IPAddress": "172.31.0.7",
+                    }
+                },
+                "imageRef": "sha256:" + "a" * 64,
+                "image": "sha256:" + "a" * 64,
+            }
+            return 0, json.dumps(payload).encode(), b""
         if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
             payload = {
                 "labels": {
@@ -199,10 +251,14 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
             }
             return 0, json.dumps(payload).encode(), b""
         if args[:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref):
+            if args[2] == "tail":
+                return 0, b"", b""
             return 0, (
                 EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
                 + "  /etc/squid/squid.conf\n"
             ).encode(), b""
+        if args[:3] == ("image", "inspect", "--format"):
+            return 0, b'"amd64"', b""
         return await _recording_runner(commands)(args)
 
     backend = DockerContainerJobBackend(
@@ -215,6 +271,123 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
     assert f"HTTPS_PROXY={PROXY_URL}" in create
     assert "NO_PROXY=" in create
     assert f"moonmind.egress.profile={DEFAULT_EGRESS_PROFILE.ref}" in create
+
+
+@pytest.mark.asyncio
+async def test_bridge_start_publishes_exact_running_attachment_authority(
+    tmp_path,
+) -> None:
+    (tmp_path / "art_workspace").mkdir()
+    commands: list[tuple[str, ...]] = []
+    published: list[tuple[str, bytes]] = []
+    lock = AsyncMock()
+    lock.acquire.return_value = object()
+    workload_image = "sha256:" + "a" * 64
+
+    async def publish(_request, name, data):
+        published.append((name, bytes(data)))
+        return f"artifact:{name}:{len(published)}"
+
+    async def runner(args):
+        args = tuple(args)
+        commands.append(args)
+        if args[:3] == ("inspect", "--format", "{{json .Config.Labels}}"):
+            return 1, b"", b"no such container"
+        if args[:2] == ("network", "inspect"):
+            return 0, b'{"Internal":true,"EnableIPv6":false}', b""
+        if args[0] == "inspect" and args[-1] == DEFAULT_EGRESS_PROFILE.gateway_ref:
+            payload = {
+                "labels": {
+                    "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
+                    "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                    "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
+                },
+                "networks": {
+                    EGRESS_NETWORK_REF: {},
+                    "moonmind_sandbox-egress-network": {},
+                    OMNIGENT_EGRESS_NETWORK_REF: {},
+                    "local-network": {},
+                },
+                "image": "sha256:gateway-image",
+                "health": "healthy",
+            }
+            return 0, json.dumps(payload).encode(), b""
+        if args[:3] == (
+            "exec",
+            DEFAULT_EGRESS_PROFILE.gateway_ref,
+            "sha256sum",
+        ):
+            return 0, (
+                EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
+                + "  /etc/squid/squid.conf\n"
+            ).encode(), b""
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
+            return 0, b"", b""
+        if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
+            preliminary = json.loads(published[0][1])
+            payload = {
+                "labels": {
+                    "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                    "moonmind.egress.profile_digest": DEFAULT_EGRESS_PROFILE.digest,
+                    "moonmind.egress.applied_rule_digest": preliminary["attestation"][
+                        "appliedRuleDigest"
+                    ],
+                },
+                "networks": {
+                    EGRESS_NETWORK_REF: {
+                        "NetworkID": "restricted-network-id",
+                        "EndpointID": "container-job-endpoint-id",
+                        "IPAddress": "172.31.0.7",
+                    }
+                },
+                "imageRef": workload_image,
+                "image": workload_image,
+            }
+            return 0, json.dumps(payload).encode(), b""
+        if args[:3] == ("image", "inspect", "--format"):
+            return 0, b'"amd64"', b""
+        if args[:2] == ("info", "--format"):
+            return 0, str(8 * 1024**3).encode(), b""
+        if args[:2] == ("ps", "--all"):
+            return 0, b"", b""
+        return 0, b"", b""
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publish,
+        capacity_lock=lock,
+    )
+    request = _request(tmp_path, networkMode="bridge")
+
+    created = await backend.create_container(request)
+    request.container_ref = created.container_ref
+    request.egress_attestation_ref = created.diagnostics_ref
+    started = await backend.start_container(request)
+
+    assert created.diagnostics_ref == f"artifact:{JOB_ID}-egress-attestation.json:1"
+    assert started.diagnostics_ref == f"artifact:{JOB_ID}-egress-attestation.json:2"
+    evidence = parse_and_verify_conformance_evidence(
+        published[-1][1], location="container-job-running-authority-test"
+    )
+    assert evidence["conformanceRow"] == "generic_container_job"
+    assert evidence["evidenceStage"] == "running"
+    assert evidence["attachmentIdentity"] == created.container_ref
+    assert evidence["networkIdentity"] == "restricted-network-id"
+    assert evidence["endpointIdentity"] == "container-job-endpoint-id"
+    assert evidence["workloadImageDigest"] == "sha256:" + "a" * 64
+    assert evidence["workloadImageRef"] == "sha256:" + "a" * 64
+    assert evidence["architecture"] == "amd64"
+    assert evidence["cleanupResult"] == "pending"
+    assert evidence["deniedConnectionCount"] == 0
+    assert lock.release.await_count == 1
+
+    workload_image = "sha256:" + "c" * 64
+    with pytest.raises(
+        RuntimeError, match="running launch evidence could not be persisted"
+    ):
+        await backend.start_container(request)
+    assert ("rm", "--force", created.container_ref) in commands
 
 
 @pytest.mark.asyncio
@@ -247,7 +420,7 @@ async def test_runtime_egress_evidence_collects_scoped_denials(tmp_path) -> None
     async def runner(args):
         if args[:3] == ("inspect", "--format", "{{json .NetworkSettings.Networks}}"):
             return 0, _sole_network_inspect(), b""
-        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "tail"):
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
             return 0, (
                 b"1 2 172.31.0.7 TCP_DENIED/403 0 CONNECT "
                 b"169.254.169.254:443/ - HIER_NONE/- text/html\n"
@@ -313,12 +486,19 @@ async def test_runtime_egress_evidence_scopes_and_counts_beyond_cap(tmp_path) ->
         f"blocked{index}.invalid:443/ - HIER_NONE/- text/html"
         for index in range(25)
     ]
-    access_log = ("\n".join(prior_lines + window_lines) + "\n").encode()
+    later_unrelated_lines = [
+        f"{in_window + 30} 2 172.31.0.99 TCP_DENIED/403 0 CONNECT "
+        f"noise{index}.invalid:443/ - HIER_NONE/- text/html"
+        for index in range(600)
+    ]
+    access_log = (
+        "\n".join(prior_lines + window_lines + later_unrelated_lines) + "\n"
+    ).encode()
 
     async def runner(args):
         if args[:3] == ("inspect", "--format", "{{json .NetworkSettings.Networks}}"):
             return 0, _sole_network_inspect(), b""
-        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "tail"):
+        if args[:3] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref, "cat"):
             return 0, access_log, b""
         raise AssertionError(args)
 
@@ -367,21 +547,25 @@ async def test_cleanup_publishes_observed_terminal_egress_evidence(tmp_path) -> 
 
     assert result.diagnostics_ref == f"artifact:{JOB_ID}-egress-lifecycle.json"
     assert result.cleanup_succeeded is True
-    assert published == [
-        (
-            f"{JOB_ID}-egress-lifecycle.json",
-            {
-                "cleanupResult": "succeeded",
-                "launchAttestationRef": "artifact:launch-attestation",
-                "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
-                "profileRef": DEFAULT_EGRESS_PROFILE.ref,
-                "reconciliationResult": "succeeded",
-                "runtimeDiagnosticsRef": "artifact:runtime-diagnostics",
-                "schemaVersion": 1,
-                "workloadAttachmentIdentity": "owned-workload",
-            },
-        )
-    ]
+    assert len(published) == 1
+    name, evidence = published[0]
+    assert name == f"{JOB_ID}-egress-lifecycle.json"
+    # The lifecycle artifact is digest-bound so a resolver can re-verify it after
+    # the workload is gone (MoonLadderStudios/MoonMind#3625). Verify and strip the
+    # digest, then assert the exact terminal body it commits to.
+    verify_evidence_digest(evidence)
+    assert {
+        key: value for key, value in evidence.items() if key != "evidenceDigest"
+    } == {
+        "cleanupResult": "succeeded",
+        "launchAttestationRef": "artifact:launch-attestation",
+        "profileDigest": DEFAULT_EGRESS_PROFILE.digest,
+        "profileRef": DEFAULT_EGRESS_PROFILE.ref,
+        "reconciliationResult": "succeeded",
+        "runtimeDiagnosticsRef": "artifact:runtime-diagnostics",
+        "schemaVersion": 1,
+        "workloadAttachmentIdentity": "owned-workload",
+    }
 
 
 @pytest.mark.asyncio
@@ -1145,6 +1329,30 @@ async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
             return 0, b"true", b""
         if args[:2] == ("network", "inspect"):
             return 0, b'{"Internal":true,"EnableIPv6":false}', b""
+        if (
+            args[0] == "inspect"
+            and "NetworkSettings.Networks" in args[2]
+            and args[-1] != DEFAULT_EGRESS_PROFILE.gateway_ref
+        ):
+            payload = {
+                "labels": {
+                    "moonmind.egress.profile": DEFAULT_EGRESS_PROFILE.ref,
+                    "moonmind.egress.profile_digest": DEFAULT_EGRESS_PROFILE.digest,
+                    "moonmind.egress.applied_rule_digest": (
+                        _expected_applied_rule_digest()
+                    ),
+                },
+                "networks": {
+                    EGRESS_NETWORK_REF: {
+                        "NetworkID": "restricted-network-id",
+                        "EndpointID": "recovered-endpoint-id",
+                        "IPAddress": "172.31.0.7",
+                    }
+                },
+                "imageRef": "sha256:" + "a" * 64,
+                "image": "sha256:" + "a" * 64,
+            }
+            return 0, json.dumps(payload).encode(), b""
         if args[0] == "inspect" and "NetworkSettings.Networks" in args[2]:
             payload = {
                 "labels": {
@@ -1163,10 +1371,14 @@ async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
             }
             return 0, json.dumps(payload).encode(), b""
         if args[:2] == ("exec", DEFAULT_EGRESS_PROFILE.gateway_ref):
+            if args[2] == "tail":
+                return 0, b"", b""
             return 0, (
                 EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
                 + "  /etc/squid/squid.conf\n"
             ).encode(), b""
+        if args[:3] == ("image", "inspect", "--format"):
+            return 0, b'"amd64"', b""
         return 0, b"", b""
 
     async def publish(_request, name, data):
@@ -1185,3 +1397,5 @@ async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
     assert result.container_ref is not None
     assert result.diagnostics_ref == f"artifact:{JOB_ID}-egress-attestation.json"
     assert published[0][1]["reconciliationResult"] == "recovered"
+    assert published[0][1]["evidenceStage"] == "running"
+    assert published[0][1]["networkIdentity"] == "restricted-network-id"

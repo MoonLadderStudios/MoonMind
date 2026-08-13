@@ -46,10 +46,31 @@ HOST_PROFILE_BUSY_ERROR_CODE = "OMNIGENT_OAUTH_HOST_PROFILE_BUSY"
 class OmnigentOAuthHostError(RuntimeError):
     code = "OMNIGENT_OAUTH_HOST_ERROR"
 
-    def __init__(self, message: str, *, code: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        egress_evidence_ref: str | None = None,
+        cleanup_evidence: Mapping[str, Any] | None = None,
+        prepared_host_evidence: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(redact_sensitive_text(message)[:512])
         if code:
             self.code = code
+        # Cleanup can fail after protected terminal evidence has already been
+        # published.  Keep that objective evidence attached to the raised
+        # authority error so the coordinator or janitor can durably project it
+        # instead of reducing the outcome to exception prose.
+        self.egress_evidence_ref = str(egress_evidence_ref or "").strip() or None
+        self.cleanup_evidence = dict(cleanup_evidence or {})
+        # A host may already be attached to its enforced network when protected
+        # launch-evidence publication or durable authority binding fails. Carry
+        # the bounded, non-secret runtime result to the coordinator so cleanup
+        # can still publish objective terminal evidence before capacity release.
+        # This is process-local handoff evidence, never a replacement for the
+        # bridge store's durable authority used by a later janitor.
+        self.prepared_host_evidence = dict(prepared_host_evidence or {})
 
 
 class HostPreflightFailure(str, Enum):
@@ -394,6 +415,15 @@ class OmnigentOAuthHostRepository:
 
     @staticmethod
     def _lease_model(record: OmnigentOAuthHostLeaseRecord) -> OmnigentHostLease:
+        def utc(value: datetime) -> datetime:
+            # SQLite drops timezone offsets even for timezone-aware columns.
+            # Repository consumers compare lease timestamps with UTC wall time,
+            # so normalize at this persistence boundary rather than teaching
+            # every coordinator and janitor caller about backend quirks.
+            if value.tzinfo is None:
+                return value.replace(tzinfo=UTC)
+            return value.astimezone(UTC)
+
         return OmnigentHostLease(
             leaseId=record.lease_id,
             providerProfileId=record.provider_profile_id,
@@ -407,9 +437,9 @@ class OmnigentOAuthHostRepository:
             bridgeSessionId=record.bridge_session_id,
             effectiveLaunchSnapshot=record.effective_launch_snapshot_json,
             status=record.status,
-            acquiredAt=record.acquired_at,
-            lastHeartbeatAt=record.last_heartbeat_at,
-            expiresAt=record.expires_at,
+            acquiredAt=utc(record.acquired_at),
+            lastHeartbeatAt=utc(record.last_heartbeat_at),
+            expiresAt=utc(record.expires_at),
         )
 
     async def get_host_lease(self, lease_id: str) -> OmnigentHostLease | None:

@@ -9877,6 +9877,10 @@ export interface components {
             cutover: {
                 [key: string]: unknown;
             };
+            /** Remediationrelease */
+            remediationRelease: {
+                [key: string]: unknown;
+            };
         };
         /** OmnigentHostResponse */
         OmnigentHostResponse: {

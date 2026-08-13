@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /*
- * Repository-owned browser controller for the protected #3508 matrix.
+ * Repository-owned browser controller for the protected #3508 matrix and the
+ * MoonLadderStudios/MoonMind#3626 operator-remediation matrix.
  * Deployment configuration supplies values and authentication state; it does
  * not supply actions, expected requests, or success conclusions.
  */
@@ -23,11 +24,47 @@ const outputDir = required("MOONMIND_OMNIGENT_BROWSER_OUTPUT_DIR");
 const storageState = process.env.MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE || undefined;
 const canaryToken = required("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN");
 const timeout = Number(process.env.MOONMIND_OMNIGENT_BROWSER_TIMEOUT_MS || "900000");
+const remediationTargetId = (
+  process.env.MOONMIND_OMNIGENT_REMEDIATION_TARGET_WORKFLOW_ID || ""
+).trim();
+const remediationTargetRunId = (
+  process.env.MOONMIND_OMNIGENT_REMEDIATION_TARGET_RUN_ID || ""
+).trim();
+const remediationAgentProfileId = (
+  process.env.MOONMIND_OMNIGENT_AGENT_PROFILE_ID || ""
+).trim();
+const remediationModel = (
+  process.env.MOONMIND_OMNIGENT_REMEDIATION_MODEL || ""
+).trim();
+const remediationAuthority = (
+  process.env.MOONMIND_OMNIGENT_REMEDIATION_AUTHORITY_MODE || "approval_gated"
+).trim();
+const remediationPublishMode = (
+  process.env.MOONMIND_OMNIGENT_REMEDIATION_PUBLISH_MODE || "branch"
+).trim();
+const remediationWorkBranch = (
+  process.env.MOONMIND_OMNIGENT_REMEDIATION_WORK_BRANCH ||
+  `remediation/operator-matrix-${row.replace(/[^a-z0-9-]+/gi, "-").toLowerCase()}`
+).trim();
+const isRemediation = Boolean(remediationTargetId);
+const autonomousGateRow = row === "remediation.autonomous.rollout-gate-closed";
+const prohibitedAuthorityMarkers = {
+  hiddenSubmission: false,
+  manualHostOrSessionId: false,
+  alternateWireContract: false,
+  unvalidatedPolicyProfileFields: false,
+  directCodexFallback: false,
+  logDerivedAuthority: false,
+};
 const admissionFailureRows = new Set([
   "failed_credential_readiness_admission",
   "failed_host_registration_readiness",
 ]);
-const staticRows = new Set(["static_profile_bound", "static_restart_replay"]);
+const staticRows = new Set([
+  "static_profile_bound",
+  "static_restart_replay",
+  "remediation.host.static-lifecycle",
+]);
 
 fs.mkdirSync(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
@@ -44,11 +81,43 @@ try {
     }
   });
 
-  await page.goto(`${baseUrl}/workflows/new`, { waitUntil: "networkidle", timeout });
+  let startPath = "/workflows/new";
+  let importedPinnedRemediationDraft = false;
+  if (isRemediation) {
+    if (!remediationTargetRunId || !remediationAgentProfileId || !remediationModel) {
+      throw new Error(
+        "remediation browser rows require target run, Agent Profile, and model authority"
+      );
+    }
+    startPath = `/workflows/${encodeURIComponent(remediationTargetId)}/evidence`;
+    await page.goto(`${baseUrl}${startPath}?source=temporal`, {
+      waitUntil: "networkidle",
+      timeout,
+    });
+    await page.getByRole("button", { name: "Workflow actions" }).click();
+    await page.getByRole("menuitem", { name: "Remediate" }).click();
+    await page.waitForURL((url) => url.pathname === "/workflows/new", { timeout });
+    await page.getByText("Remediation Draft", { exact: true }).waitFor({ timeout });
+    const pinnedTarget = page.getByLabel("Target workflow");
+    const pinnedRun = page.getByLabel("Pinned run");
+    importedPinnedRemediationDraft =
+      (await pinnedTarget.inputValue()) === remediationTargetId &&
+      (await pinnedRun.inputValue()) === remediationTargetRunId &&
+      (await pinnedTarget.isEditable()) === false &&
+      (await pinnedRun.isEditable()) === false;
+    if (!importedPinnedRemediationDraft) {
+      throw new Error("normal Create did not import the visible pinned remediation draft");
+    }
+  } else {
+    await page.goto(`${baseUrl}/workflows/new`, { waitUntil: "networkidle", timeout });
+  }
   const runtime = page.getByLabel("Runtime");
   const providerProfile = page.getByLabel("Provider profile");
   if (!admissionFailureRows.has(row)) {
     await runtime.selectOption("omnigent");
+    if (isRemediation) {
+      await page.getByLabel("Agent profile").selectOption(remediationAgentProfileId);
+    }
     await providerProfile.selectOption(profileId);
   }
   const executionTarget = page.getByLabel("Execution target");
@@ -65,10 +134,53 @@ try {
 
   const repositoryInput = page.getByLabel("GitHub Repo");
   if (await repositoryInput.count()) await repositoryInput.fill(repository);
-  const branchInput = page.getByLabel("Branch");
+  const branchInput = page.getByLabel(isRemediation ? "Starting branch" : "Branch");
   if (await branchInput.count()) await branchInput.fill(branch);
+  if (isRemediation) {
+    await page.getByLabel("Checkpoint work branch").fill(remediationWorkBranch);
+    await page.getByLabel("Remediation mode").selectOption("snapshot_then_follow");
+    if (autonomousGateRow) {
+      const autonomousOption = page.getByLabel("Authority").locator(
+        'option[value="admin_auto"]'
+      );
+      if (!(await autonomousOption.isDisabled())) {
+        throw new Error("admin_auto was selectable while the autonomous release gate is closed");
+      }
+      if (requests.length) {
+        throw new Error("closed autonomous gate emitted a Workflow Create request");
+      }
+      process.stdout.write(JSON.stringify({
+        schemaVersion: "moonmind.operator-remediation-browser-observation/v1",
+        row,
+        admissionRejected: true,
+        admissionReason: "autonomous_rollout_gate",
+        browserOriginated: true,
+        importedPinnedRemediationDraft,
+        normalCreateRequest: false,
+        validatedPolicyProfileFields: true,
+        workflowDetailFollowThrough: true,
+        createRequestCount: requests.length,
+        startPath,
+        createPath: new URL(page.url()).pathname,
+        targetWorkflowId: remediationTargetId,
+        targetRunId: remediationTargetRunId,
+        ...prohibitedAuthorityMarkers,
+      }));
+      process.exit(0);
+    }
+    await page.getByLabel("Authority").selectOption(remediationAuthority);
+    await page.getByLabel("Hard override model").fill(remediationModel);
+    await page.getByText("Context retrieval (RAG)", { exact: true }).click();
+    await page.getByLabel(
+      "Allow the session to request additional context during the run"
+    ).check();
+    await page.getByLabel("Budget preset").selectOption("balanced");
+    await page.getByLabel("Publish Mode").selectOption(remediationPublishMode);
+  }
   await page.getByLabel("Instructions").fill(
-    `MoonMind protected Omnigent acceptance row ${row}. Follow the controlled scenario contract.`
+    isRemediation
+      ? `MoonLadderStudios/MoonMind#3626 operator remediation row ${row}. Execute only the controlled scenario contract.`
+      : `MoonMind protected Omnigent acceptance row ${row}. Follow the controlled scenario contract.`
   );
   const submit = page.getByRole("button", { name: "Start Workflow" });
   if (admissionFailureRows.has(row)) {
@@ -95,7 +207,7 @@ try {
   }
   await submit.click();
   await page.waitForURL((url) => {
-    const match = url.pathname.match(/\/workflows\/([^/?]+)$/);
+    const match = url.pathname.match(/\/workflows\/([^/?]+)(?:\/evidence)?$/);
     return Boolean(match && match[1] !== "new");
   }, { timeout });
   if (requests.length !== 1) throw new Error(`expected exactly one Workflow Create request, observed ${requests.length}`);
@@ -109,11 +221,25 @@ try {
     intent?.task?.runtime?.mode !== "omnigent" ||
     intent?.task?.runtime?.profileId !== profileId
   ) throw new Error("browser-emitted Workflow Create request did not preserve the selected authorities");
-  if (/hostId|volume|registrationToken|credential|image|mount/i.test(JSON.stringify(createRequest))) {
+  if (isRemediation && (
+    intent?.agentProfile?.profileId !== remediationAgentProfileId ||
+    intent?.task?.runtime?.agentProfile?.profileId !== remediationAgentProfileId ||
+    intent?.task?.runtime?.model !== remediationModel ||
+    intent?.task?.remediation?.target?.workflowId !== remediationTargetId ||
+    intent?.task?.remediation?.target?.runId !== remediationTargetRunId ||
+    intent?.task?.remediation?.authorityMode !== remediationAuthority ||
+    intent?.task?.remediation?.checkpointBranchPolicy?.gitWorkBranch !== remediationWorkBranch ||
+    intent?.repository?.branch?.name !== branch ||
+    intent?.publishMode !== remediationPublishMode ||
+    !intent?.followUpRetrieval
+  )) throw new Error("remediation Create request did not preserve every visible authored control");
+  if (/hostId|sessionId|volume|registrationToken|credential|image|mount/i.test(JSON.stringify(createRequest))) {
     throw new Error("browser request contained launch authority or credential material");
   }
 
-  const workflowId = decodeURIComponent(new URL(page.url()).pathname.split("/").pop());
+  const workflowMatch = new URL(page.url()).pathname.match(/\/workflows\/([^/?]+)/);
+  const workflowId = workflowMatch ? decodeURIComponent(workflowMatch[1]) : "";
+  if (!workflowId || workflowId === "new") throw new Error("created workflow identity is missing");
   let controlAction = null;
   if (row === "active_cancellation_interruption") {
     const control = page.getByRole("button", { name: /cancel|interrupt/i }).first();
@@ -123,6 +249,16 @@ try {
   }
   await page.getByText(/(completed|failed|cancelled|interrupted)/i).first().waitFor({ timeout });
   const terminalText = await page.locator("body").innerText();
+  if (isRemediation) {
+    const requiredLifecycle = [/(context|evidence)/i, /(diagnos|remediation)/i];
+    if (remediationAuthority !== "observe_only") {
+      requiredLifecycle.push(/approval/i, /action/i, /(checkpoint|branch)/i, /verif/i);
+    }
+    if (row.includes("prevention")) requiredLifecycle.push(/(prevention|publication|pull request)/i);
+    if (requiredLifecycle.some((pattern) => !pattern.test(terminalText))) {
+      throw new Error("remediation Workflow Detail lacks the required lifecycle projection");
+    }
+  }
   if (row === "active_cancellation_interruption" && !/(cancelled|interrupted)/i.test(terminalText)) {
     throw new Error("active cancellation did not reach the requested terminal state");
   }
@@ -154,16 +290,53 @@ try {
   }
   await page.screenshot({ path: path.join(outputDir, `${row}-replay.png`), fullPage: true });
 
+  let targetUrl = null;
+  let targetReplayComplete = null;
+  if (isRemediation) {
+    targetUrl = `${baseUrl}${startPath}?source=temporal`;
+    await page.goto(targetUrl, { waitUntil: "networkidle", timeout });
+    const targetText = await page.locator("body").innerText();
+    if (!targetText.includes(remediationTargetId)) {
+      throw new Error("target Workflow Detail lost the pinned target identity");
+    }
+    await page.screenshot({ path: path.join(outputDir, `${row}-target.png`), fullPage: true });
+    await page.reload({ waitUntil: "networkidle", timeout });
+    targetReplayComplete = (await page.locator("body").innerText()).includes(
+      remediationTargetId
+    );
+    if (!targetReplayComplete) {
+      throw new Error("target Workflow Detail was not replayable after remediation cleanup");
+    }
+  }
+
   process.stdout.write(JSON.stringify({
-    schemaVersion: "moonmind.omnigent.browser-observation/v1",
+    schemaVersion: isRemediation
+      ? "moonmind.operator-remediation-browser-observation/v1"
+      : "moonmind.omnigent.browser-observation/v1",
     row,
     workflowId,
     selected: {
       profileId,
+      agentProfileId: isRemediation ? remediationAgentProfileId : null,
       executionTargetRef: selectedTarget,
       launchPolicyRef: selectedPolicy,
       hostMode: staticRows.has(row) ? "static_compose" : "on_demand_docker",
+      model: isRemediation ? remediationModel : null,
+      authorityMode: isRemediation ? remediationAuthority : null,
+      branch,
+      workBranch: isRemediation ? remediationWorkBranch : null,
+      publishMode: isRemediation ? remediationPublishMode : null,
+      retrieval: isRemediation ? "balanced_follow_up" : null,
     },
+    browserOriginated: true,
+    importedPinnedRemediationDraft,
+    normalCreateRequest: true,
+    validatedPolicyProfileFields: true,
+    workflowDetailFollowThrough: isRemediation ? Boolean(targetReplayComplete) : true,
+    startPath,
+    createPath: "/workflows/new",
+    targetWorkflowId: isRemediation ? remediationTargetId : null,
+    targetRunId: isRemediation ? remediationTargetRunId : null,
     createRequest,
     terminalUrl,
     replayUrl: page.url(),
@@ -173,7 +346,14 @@ try {
     repositoryOutcome: row === "repository_read_analysis" ? "read_analysis" : null,
     durableProjection,
     replayComplete: true,
-    screenshots: [`${row}-terminal.png`, `${row}-replay.png`],
+    targetUrl,
+    targetReplayComplete,
+    ...prohibitedAuthorityMarkers,
+    screenshots: [
+      `${row}-terminal.png`,
+      `${row}-replay.png`,
+      ...(isRemediation ? [`${row}-target.png`] : []),
+    ],
   }));
 } finally {
   await browser.close();

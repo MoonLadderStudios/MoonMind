@@ -283,6 +283,7 @@ def compile_effective_launch(
         "harness": profile.harness,
         "providerRuntime": profile.provider_runtime,
         **policy_payload,
+        "egressCleanupAuthorityRequired": True,
         "capture": {**profile.capture_defaults, **policy.capture},
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
