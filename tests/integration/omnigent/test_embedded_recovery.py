@@ -531,7 +531,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         nonlocal container_running
         if args[:3] == ("docker", "network", "inspect"):
             return (0, json.dumps({"Internal": True, "EnableIPv6": False}), "")
-        if args[:3] == ("docker", "compose", "-f"):
+        if args[:2] == ("docker", "compose"):
             if " up " in f" {' '.join(args)} ":
                 container_running = True
                 command_order.append("host_started")
@@ -612,7 +612,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
                     + "  /etc/squid/squid.conf\n",
                     "",
                 )
-            if args[3] == "tail":
+            if args[3] == "cat":
                 denial_time = datetime.now(UTC).timestamp()
                 return (
                     0,
