@@ -1,0 +1,114 @@
+# Native Workflow Chat Acceptance & Rollout Gate
+
+Source issue: MoonLadderStudios/MoonMind#3642 (parent #3632; depends on
+#3633–#3641; design source #3628).
+
+This document is the declarative desired state for **proving** the native
+Omnigent Workflow Chat journey and **gating** its rollout. The feature itself —
+the opaque chat binding (#3633), the binding-scoped HTTP/SSE facade (#3634), the
+scoped WebSocket + versioned compatibility map (#3635), the effective capability
+policy and durable mutation receipts (#3636), the high-security outbound scan
+(#3637), the MoonMind-scoped native UI serving (#3638), the Workflow Detail
+native Chat route (#3639), the read-only diagnostics fallback (#3640), and
+terminal read-only Chat + linked continuation (#3641) — is implemented by the
+dependency issues. This gate is the controlling evidence that the assembled
+journey is safe to make primary, and the rollout/rollback control that keeps it
+gated until that evidence passes.
+
+Implementation PRs and lower-level bridge/unit tests are necessary but never
+sufficient: the gate is a single machine-readable report that only ever reports
+`passed` when every required scenario passes in its expected lane with resolved,
+current, secret-free, image-pinned evidence.
+
+## Two required lanes
+
+The journey is proven across two lanes and the gate requires both:
+
+| Lane | What it proves | Where it runs |
+| --- | --- | --- |
+| `deterministic` | The MoonMind binding, native-UI serving, facade authorization/allowlist, immutable capability policy, high-security outbound scan, diagnostic fallback, and rollout gating — driven against a controllable fake Omnigent upstream. | Hermetic, required-CI-safe. `tests/integration/reliability_journey/test_native_chat_acceptance_journey.py` and `frontend/src/browser/workflowNativeChat.browser.test.tsx`. |
+| `protected_live` | The stock-image Codex journey (§8): interactive Chat against immutable stock Omnigent server/host image digests with a real enrolled Provider Profile, harvested terminal/mutation evidence, and every evidence ref resolving after live resources are removed. | Credentialed job against immutable stock images; no custom host build, no manual provider session id, no direct upstream browser login, no silent direct-Codex/profile/mode/policy fallback. |
+
+## The machine-readable gate report
+
+`moonmind/omnigent/native_chat_acceptance.py` defines the fail-closed contract
+(`build_native_chat_acceptance_report`); `tools/build_native_chat_acceptance.py`
+is the CLI that the `Provider / Omnigent Native Chat Acceptance` GitHub workflow
+runs to publish it. The report records:
+
+- MoonMind build/commit and the pinned native-chat contract versions
+  (`nativeUiBootstrap`, `nativeUiRouteFeature`, `outboundScan`, `telemetry`);
+- immutable Omnigent `server`/`ui`/`host` image digests (`@sha256:…`), host
+  architecture, and the route/feature **compatibility manifest digest**;
+- safe, opaque Workflow/run/Step/AgentRun/binding identities and
+  profile/policy/effective-launch/provider-profile refs (never provider, host,
+  or credential material);
+- one row per required scenario with its lane and resolved evidence refs;
+- cleanup that preserves historical diagnostic reads and releases leases;
+- a passing secret scan over all retained evidence; and
+- `generatedAt` / `expiresAt` / `supersedes` metadata.
+
+Required scenario rows (each maps to an acceptance criterion):
+
+`deterministic-browser-journey`, `binding-authorization-isolation`,
+`credential-browser-isolation`, `capability-policy-immutability`,
+`high-security-outbound-scan`, `native-ui-and-transports`,
+`diagnostic-fallback`, `terminal-and-continuation`,
+`protected-stock-image-journey`, `evidence-durability-and-secret-scan`,
+`telemetry-and-rollout`.
+
+Any partial, skipped, failed, mutable-image, stale, revoked, superseded,
+wrong-lane, identity-mismatched, or secret-bearing input raises
+`ConformanceContractError` — the report is never emitted as `passed`.
+
+## Rollout, canary, and rollback
+
+`moonmind/omnigent/native_chat_rollout.py` is the rollout control. The temporary
+flag `OMNIGENT_NATIVE_CHAT_ROLLOUT` selects the deployment posture and the native
+UI serving router (`api_service/api/routers/omnigent_native_ui.py`) consults it
+on every request:
+
+| Mode | Behavior |
+| --- | --- |
+| `enabled` (default when unset) | Serve interactive native Chat. Post-proof steady state; matches the dependency default-on behavior. |
+| `canary` | Serve interactive Chat **only** when the deployment has recorded a passing acceptance report ref (`OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF`); otherwise degrade to read-only diagnostics. |
+| `read_only` | Roll back: never serve the interactive native UI; present the durable read-only diagnostics projection. Historical reads are preserved. |
+| `disabled` | Interactive native Chat is unavailable. |
+
+An unrecognized value fails closed to `read_only` (never to interactive). A
+rollback never silently routes messages through a different runtime or the
+deferred `SubmitChatInstruction` / `/chat-instructions` path — it presents
+read-only diagnostics or disables interactive Chat.
+
+The rollout flag is **temporary**. `rollout_flag_retirement()` records the
+retirement contract: once the deterministic and protected-live acceptance
+evidence passes and the read-only fallback window completes, the flag is removed
+and native Chat serves unconditionally (`enabled`).
+
+## Readiness / operational telemetry
+
+`moonmind/omnigent/native_chat_telemetry.py` defines the bounded readiness and
+operational signal registry. It reuses the canonical
+`moonmind.observability.metrics.MetricDefinition` and the canonical
+`FORBIDDEN_LABELS` identity ban. Signals cover binding resolution, native-UI
+compatibility/load/reconnect/fallback, scoped HTTP/SSE/WebSocket outcomes,
+authorization/substitution/capability/stale-state denials, security-scan
+allow/block/enforcement-unavailable, mutation accepted/completed/rejected/
+delivery-unknown, terminal replay, continuation creation, and upstream
+latency/transport health.
+
+Every label is a low-cardinality bounded dimension (journey stage, bounded
+outcome, bounded rollout mode, readiness). **Workflow, user, binding, session,
+and credential identity are never metric labels**; unknown label values
+normalize to `other`.
+
+## Non-goals
+
+- The deferred `SubmitChatInstruction` / Steer Workflow feature.
+- Claude-through-Omnigent parity.
+- Replacing the lower-level unit, API, bridge, and conformance suites with one
+  browser run — both layers are required.
+- Automatically enabling unrestricted terminal, browser, or workspace mutation
+  capabilities.
+- Treating direct upstream Omnigent access as an acceptable development shortcut
+  in the acceptance journey.

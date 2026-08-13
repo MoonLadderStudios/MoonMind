@@ -390,6 +390,75 @@ def test_relative_redirect_traversal_kept_in_scope_via_router() -> None:
     assert "/api/executions" not in location
 
 
+# --- Rollout / canary / rollback gate (issue #3642 §10) ----------------------
+
+
+def test_rollout_default_serves_interactive_native_ui() -> None:
+    # Unset rollout flag defaults to ENABLED so the canonical deployment keeps
+    # serving the interactive native UI (dependency behavior is preserved).
+    client, _upstream = _build()
+
+    response = client.get(_url(), params={"embedded": "1"})
+
+    assert response.status_code == 200
+    assert "window.__MOONMIND_OMNIGENT_CHAT__=" in response.text
+
+
+def test_rollback_to_read_only_does_not_serve_native_ui(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_NATIVE_CHAT_ROLLOUT", "read_only")
+    client, upstream = _build()
+
+    response = client.get(_url(), params={"embedded": "1"})
+
+    assert response.status_code == 503
+    assert 'data-reason="rolled_back_read_only"' in response.text
+    # The interactive native app was never fetched from upstream.
+    assert upstream.paths == []
+
+
+def test_disabled_rollout_makes_native_ui_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_NATIVE_CHAT_ROLLOUT", "disabled")
+    client, _upstream = _build()
+
+    response = client.get(_url("assets/index-abc.js"))
+
+    assert response.status_code == 503
+    assert response.json()["detail"]["reason"] == "native_chat_disabled"
+
+
+def test_canary_without_recorded_evidence_stays_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_NATIVE_CHAT_ROLLOUT", "canary")
+    monkeypatch.delenv("OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF", raising=False)
+    client, upstream = _build()
+
+    response = client.get(_url(), params={"embedded": "1"})
+
+    assert response.status_code == 503
+    assert 'data-reason="canary_awaiting_acceptance_evidence"' in response.text
+    assert upstream.paths == []
+
+
+def test_canary_with_recorded_evidence_serves_native_ui(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_NATIVE_CHAT_ROLLOUT", "canary")
+    monkeypatch.setenv(
+        "OMNIGENT_NATIVE_CHAT_ACCEPTANCE_REF", "artifact://native-chat-report"
+    )
+    client, _upstream = _build()
+
+    response = client.get(_url(), params={"embedded": "1"})
+
+    assert response.status_code == 200
+    assert "window.__MOONMIND_OMNIGENT_CHAT__=" in response.text
+
+
 @pytest.mark.asyncio
 async def test_fetch_aborts_when_asset_exceeds_limit(monkeypatch) -> None:
     # The limit is enforced while streaming, so a large/compressed upstream
