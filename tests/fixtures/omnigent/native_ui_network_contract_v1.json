@@ -43,18 +43,19 @@
         "sha256": "b4ee700e98b524257cf0fb2c47c18c9a6f2144380821f80a80ea90bc27a19d53"
       }
     ],
-    "routeCount": 35,
+    "routeCount": 40,
     "dimensions": [
       "pathPattern", "methods", "transport", "subprotocols", "payloadClasses",
       "routeRelativeRedirects", "assetBaseDiscovery", "apiBaseDiscovery"
     ]
   },
-  "contractSha256": "bdfd088714434023eb24aff23a33e71792706bcb2cfcfe1dcfc33f94fe1604e1",
+  "contractSha256": "f5b10f18be36a0524ee5211d36e5734cf45db266771371e99423426218c9293a",
   "routes": [
-    "liveness", "list_agents", "get_session", "stream_events",
+    "liveness", "native_server_info", "native_current_user", "list_projects",
+    "list_sessions", "list_agents", "get_session", "stream_events",
     "stream_events_websocket", "post_event",
     "resolve_elicitation", "changed_files", "workspace_files", "workspace_file",
-    "workspace_diff", "session_files", "session_file", "terminal_view",
+    "workspace_diff", "session_files", "session_file", "session_items", "terminal_view",
     "terminal_create", "terminal_status", "terminal_close", "terminal_shell",
     "execution_logs", "workspace_edit",
     "workspace_delete", "resource_upload", "resource_download", "resource_attach",

@@ -65,6 +65,10 @@ from moonmind.omnigent.bridge_config import (
     OmnigentBridgeConfig,
     resolve_bridge_config,
 )
+from moonmind.omnigent.bridge_artifacts import (
+    LocalOmnigentArtifactGateway,
+    OmnigentArtifactError,
+)
 from moonmind.omnigent.bridge_embedded import (
     EmbeddedHostHeartbeatRequest,
     EmbeddedHostRegisterRequest,
@@ -80,6 +84,8 @@ from moonmind.omnigent.bridge_proxy import (
     OmnigentBridgeSessionProxy,
 )
 from moonmind.omnigent.bridge_store import (
+    BRIDGE_EVENT_JOURNAL_KEY,
+    SESSION_CREATED_EVENT_TYPE,
     BridgeProjectionAmbiguousError,
     OmnigentBridgeSessionStore,
     OmnigentIdempotencyError,
@@ -3235,6 +3241,125 @@ def _durable_terminal_snapshot(
     return snapshot
 
 
+def _terminal_items_query(query_params: Any) -> tuple[int, str | None, str | None, str]:
+    """Validate the stock transcript pagination query for durable replay."""
+
+    try:
+        limit = int(str(query_params.get("limit") or "100"))
+    except (TypeError, ValueError) as exc:
+        raise WorkflowChatFacadeError(
+            "The transcript page limit is invalid.",
+            failure_class="user_error",
+            status_code=400,
+            code=CODE_MALFORMED_PAYLOAD,
+        ) from exc
+    order = str(query_params.get("order") or "asc").strip().lower()
+    after = str(query_params.get("after") or "").strip() or None
+    before = str(query_params.get("before") or "").strip() or None
+    if not 1 <= limit <= 1000 or order not in {"asc", "desc"} or (after and before):
+        raise WorkflowChatFacadeError(
+            "The transcript pagination query is invalid.",
+            failure_class="user_error",
+            status_code=400,
+            code=CODE_MALFORMED_PAYLOAD,
+        )
+    return limit, after, before, order
+
+
+def _durable_provider_session_id(row: Any) -> str:
+    """Recover the internal provider id needed only for response redaction."""
+
+    metadata = dict(getattr(row, "metadata_", None) or {})
+    authority = dict(metadata.get("capabilityAuthority") or {})
+    provider_session_id = str(authority.get("providerSessionId") or "").strip()
+    if provider_session_id:
+        return provider_session_id
+    journal = metadata.get(BRIDGE_EVENT_JOURNAL_KEY)
+    if isinstance(journal, list):
+        for event in reversed(journal):
+            if (
+                not isinstance(event, dict)
+                or event.get("type") != SESSION_CREATED_EVENT_TYPE
+            ):
+                continue
+            provider_session_id = str(event.get("omnigentSessionId") or "").strip()
+            if provider_session_id:
+                return provider_session_id
+    return ""
+
+
+async def _durable_terminal_items_page(
+    row: Any,
+    *,
+    chat_binding_id: str,
+    query_params: Any,
+) -> dict[str, Any]:
+    """Page captured terminal transcript items after provider cleanup."""
+
+    limit, after, before, order = _terminal_items_query(query_params)
+    final_snapshot_ref = str(getattr(row, "final_snapshot_ref", None) or "").strip()
+    if not final_snapshot_ref:
+        return {
+            "object": "list",
+            "data": [],
+            "first_id": None,
+            "last_id": None,
+            "has_more": False,
+        }
+    provider_session_id = _durable_provider_session_id(row)
+    if not provider_session_id:
+        raise WorkflowChatFacadeError(
+            "The captured terminal transcript cannot be safely virtualized.",
+            failure_class="integration_error",
+            status_code=503,
+            code="omnigent_bridge_terminal_evidence_unavailable",
+        )
+    try:
+        captured = json.loads(
+            await LocalOmnigentArtifactGateway().read_text(final_snapshot_ref)
+        )
+    except (OmnigentArtifactError, OSError, ValueError) as exc:
+        raise WorkflowChatFacadeError(
+            "The captured terminal transcript is unavailable.",
+            failure_class="integration_error",
+            status_code=503,
+            code="omnigent_bridge_terminal_evidence_unavailable",
+        ) from exc
+    raw_items = captured.get("items") if isinstance(captured, dict) else None
+    items = [item for item in (raw_items or []) if isinstance(item, dict)]
+    ordered = list(items if order == "asc" else reversed(items))
+    cursor = after or before
+    if cursor:
+        cursor_index = next(
+            (
+                index
+                for index, item in enumerate(ordered)
+                if str(item.get("id") or "") == cursor
+            ),
+            None,
+        )
+        if cursor_index is None:
+            ordered = []
+        elif after:
+            ordered = ordered[cursor_index + 1 :]
+        else:
+            ordered = ordered[:cursor_index]
+    has_more = len(ordered) > limit
+    page = ordered[:limit]
+    virtualized = _virtualize_facade_payload(
+        page,
+        provider_session_id=provider_session_id,
+        chat_binding_id=chat_binding_id,
+    )
+    return {
+        "object": "list",
+        "data": virtualized,
+        "first_id": (str(page[0].get("id") or "") or None) if page else None,
+        "last_id": (str(page[-1].get("id") or "") or None) if page else None,
+        "has_more": has_more,
+    }
+
+
 def _facade_idempotency_key(request: Request) -> str | None:
     """Return the caller-supplied ``Idempotency-Key`` for a facade mutation."""
 
@@ -4183,6 +4308,16 @@ async def _dispatch_native_ui_http(
             "state": _facade_reconnect_state(row),
             "readOnly": is_read_only(session_status),
         }
+    if (
+        route.name == "session_items"
+        and is_read_only(session_status)
+        and not provider_session_id
+    ):
+        return await _durable_terminal_items_page(
+            row,
+            chat_binding_id=chat_binding_id,
+            query_params=request.query_params,
+        )
     if not provider_session_id and route.name != "session_reconnect":
         raise WorkflowChatFacadeError(
             "The Workflow Chat binding has no active provider session yet.",
@@ -4600,6 +4735,32 @@ async def _dispatch_workflow_chat_facade(
             "capabilityAuthorityDigest": capability_set.authority_digest,
         }
 
+    # Stock Omnigent boot probes are projected locally. The native presentation
+    # client needs these shapes to start, but it must not inherit the upstream
+    # server's global account/session authority through a workflow binding.
+    if operation.name == "native_server_info":
+        return {
+            "accounts_enabled": False,
+            "single_user": False,
+            "login_url": None,
+            "needs_setup": False,
+            "databricks_features": False,
+            "managed_sandboxes_enabled": False,
+            "sandbox_provider": None,
+            "sharing_mode": "off",
+            "public_sharing_enabled": False,
+            "server_version": None,
+            "smart_routing_enabled": False,
+            "smart_routing_sources": [],
+            "harness_install_enabled": False,
+            "installable_harnesses": [],
+            "dictation_available": False,
+        }
+    if operation.name == "native_current_user":
+        return {"user_id": "workflow-owner", "is_admin": False}
+    if operation.name == "list_projects":
+        return []
+
     # 6. Recompute-driven capability + session-state gates.
     #    A terminal binding deliberately survives provider cleanup with durable
     #    final snapshots and event journals, so its read-only transcript bootstrap
@@ -4607,7 +4768,7 @@ async def _dispatch_workflow_chat_facade(
     #    requiring a live upstream session id. Every other provider-session-backed
     #    operation still fails closed until a session is attached.
     serve_durable_terminal_snapshot = (
-        operation.name == "get_session"
+        operation.name in {"get_session", "list_sessions"}
         and is_read_only(session_status)
         and not provider_session_id
     )
@@ -4679,6 +4840,38 @@ async def _dispatch_workflow_chat_facade(
             provider_session_id=provider_session_id,
             chat_binding_id=chat_binding_id,
         )
+
+    if operation.name == "list_sessions":
+        snapshot = (
+            _durable_terminal_snapshot(
+                row,
+                chat_binding_id=chat_binding_id,
+                capabilities=capabilities,
+            )
+            if serve_durable_terminal_snapshot
+            else await facade.get_session(provider_session_id)
+        )
+        virtualized = _virtualize_facade_payload(
+            snapshot,
+            provider_session_id=provider_session_id,
+            chat_binding_id=chat_binding_id,
+        )
+        if not isinstance(virtualized, dict):
+            raise WorkflowChatFacadeError(
+                "The bound session catalog has an unsupported response shape.",
+                failure_class="integration_error",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                code="omnigent_bridge_upstream_payload",
+            )
+        virtualized["capabilities"] = capabilities
+        virtualized["readOnly"] = is_read_only(session_status)
+        return {
+            "object": "list",
+            "data": [virtualized],
+            "first_id": chat_binding_id,
+            "last_id": chat_binding_id,
+            "has_more": False,
+        }
 
     # 9. Session snapshot / bootstrap / history.
     if operation.name == "get_session":
