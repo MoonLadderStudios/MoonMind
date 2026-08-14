@@ -289,12 +289,14 @@ class _FakeStore:
 
 class _FakeProxy:
     def __init__(self) -> None:
+        self.sessions: list[str] = []
         self.posted: list[dict[str, Any]] = []
         self.stopped: list[str] = []
         self.resolved: list[dict[str, Any]] = []
         self.resources: list[tuple[str, str, str | None]] = []
 
     async def get_session(self, session_id: str):
+        self.sessions.append(session_id)
         return {
             "id": session_id,
             "status": "running",
@@ -473,6 +475,44 @@ def test_owner_snapshot_virtualizes_provider_identity() -> None:
     # Capabilities are recomputed from trusted state on every request.
     assert body["capabilities"][CAP_SEND_MESSAGE] is True
     assert body["readOnly"] is False
+
+
+def test_native_boot_metadata_is_local_and_safe() -> None:
+    client, proxy, _store = _build()
+
+    info = client.get(_path("v1/info"))
+    current_user = client.get(_path("v1/me"))
+    projects = client.get(_path("v1/sessions/projects"))
+
+    assert info.status_code == 200
+    assert info.json()["accounts_enabled"] is False
+    assert info.json()["needs_setup"] is False
+    assert current_user.status_code == 200
+    assert current_user.json() == {
+        "user_id": "workflow-owner",
+        "is_admin": False,
+    }
+    assert projects.status_code == 200
+    assert projects.json() == []
+    # Boot probes never acquire the upstream account or project authority.
+    assert proxy.resources == []
+
+
+def test_session_catalog_contains_only_the_bound_virtual_session() -> None:
+    client, _proxy, _store = _build()
+
+    response = client.get(_path("v1/sessions"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["object"] == "list"
+    assert body["has_more"] is False
+    assert body["first_id"] == _CHAT_BINDING_ID
+    assert body["last_id"] == _CHAT_BINDING_ID
+    assert len(body["data"]) == 1
+    assert body["data"][0]["id"] == _CHAT_BINDING_ID
+    assert body["data"][0]["readOnly"] is False
+    assert _PROVIDER_SESSION_ID not in response.text
 
 
 def test_non_owner_gets_non_enumerating_binding_unknown() -> None:
@@ -667,6 +707,7 @@ def test_stock_native_mutation_cases_exactly_cover_the_pinned_inventory() -> Non
 
 
 _STOCK_NATIVE_READ_CASES = (
+    ("items", "session_items", "relay"),
     ("resources/terminals", "terminal_view", "relay"),
     ("resources/terminals/t-1", "terminal_status", "relay"),
     ("resources/terminals/t-1/logs", "execution_logs", "relay"),
@@ -761,6 +802,8 @@ def test_every_additional_stock_native_read_uses_the_bound_identity(
         path = _path(f"v1/runners/{_CHAT_BINDING_ID}/status")
     else:
         path = _path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}")
+    if operation == "session_items":
+        path += "?limit=80&order=desc"
 
     response = client.get(
         path,
@@ -777,6 +820,8 @@ def test_every_additional_stock_native_read_uses_the_bound_identity(
         assert len(upstream_calls) == 1
         assert _PROVIDER_SESSION_ID in upstream_calls[0]["url"]
         assert _CHAT_BINDING_ID not in upstream_calls[0]["url"]
+        if operation == "session_items":
+            assert upstream_calls[0]["url"].endswith("?limit=80&order=desc")
         assert client_headers == [
             {"Accept": "*/*", "Authorization": "Bearer upstream-only"}
         ]
@@ -2275,7 +2320,79 @@ def test_terminal_binding_serves_durable_snapshot_without_provider_session() -> 
     assert body["readOnly"] is True
     assert body["providerSessionAvailable"] is False
     # Served from the durable projection; no upstream get_session call was made.
-    assert proxy.resources == []
+    assert proxy.sessions == []
+
+
+def test_terminal_catalog_contains_durable_session_without_provider_session() -> None:
+    store = _FakeStore(
+        row=_row(
+            status="completed",
+            omnigent_session_id="",
+            terminal_refs={"summary": "done"},
+            diagnostics_ref="art://diag",
+        )
+    )
+    client, proxy, _store = _build(store=store)
+
+    response = client.get(_path("v1/sessions"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["id"] for item in body["data"]] == [_CHAT_BINDING_ID]
+    assert body["data"][0]["readOnly"] is True
+    assert body["has_more"] is False
+    assert proxy.sessions == []
+
+
+def test_terminal_items_page_uses_captured_snapshot_after_provider_cleanup(
+    monkeypatch,
+) -> None:
+    metadata = dict(_row().metadata_)
+    authority = dict(metadata["capabilityAuthority"])
+    authority["providerSessionId"] = _PROVIDER_SESSION_ID
+    metadata["capabilityAuthority"] = authority
+    store = _FakeStore(
+        row=_row(
+            status="completed",
+            omnigent_session_id="",
+            final_snapshot_ref="artifact://captured-final",
+            metadata_=metadata,
+        )
+    )
+
+    class _Gateway:
+        async def read_text(self, artifact_ref: str) -> str:
+            assert artifact_ref == "artifact://captured-final"
+            return json.dumps(
+                {
+                    "items": [
+                        {"id": "item-1", "session_id": _PROVIDER_SESSION_ID},
+                        {"id": "item-2", "session_id": _PROVIDER_SESSION_ID},
+                    ]
+                }
+            )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.LocalOmnigentArtifactGateway",
+        _Gateway,
+    )
+    client, proxy, _store = _build(store=store)
+
+    response = client.get(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/items"),
+        params={"limit": "1", "order": "desc"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_more"] is True
+    assert body["first_id"] == "item-2"
+    assert body["last_id"] == "item-2"
+    assert body["data"] == [
+        {"id": "item-2", "session_id": _CHAT_BINDING_ID}
+    ]
+    assert _PROVIDER_SESSION_ID not in response.text
+    assert proxy.sessions == []
 
 
 # --- Strict stream cursors ---------------------------------------------------

@@ -33,6 +33,7 @@ from moonmind.omnigent.execute import (
     _resolve_agent_id,
     _resolve_initial_context_message,
     _restore_active_journals,
+    _session_authority_observation,
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
     normalize_omnigent_observation,
@@ -50,6 +51,31 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "expected"),
+    [
+        (None, (None, None)),
+        ({}, (None, None)),
+        ({"capabilities": {}, "status": ""}, ({}, None)),
+        (
+            {
+                "interventionCapabilities": {
+                    "sendMessage": True,
+                    "unknown": "not-a-bool",
+                },
+                "status": "idle",
+            },
+            ({"sendMessage": True}, "idle"),
+        ),
+    ],
+)
+def test_session_authority_observation_preserves_absent_fields(
+    snapshot: dict[str, Any] | None,
+    expected: tuple[dict[str, bool] | None, str | None],
+) -> None:
+    assert _session_authority_observation(snapshot) == expected
 
 
 @pytest.mark.asyncio
@@ -2362,6 +2388,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     tmp_path,
 ) -> None:
     calls: list[str] = []
+    recorded_sessions: list[dict[str, object]] = []
 
     class Row:
         omnigent_session_id = "persisted-session"
@@ -2380,6 +2407,12 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
             return Row()
 
         async def mark_terminal(self, *_: object, **__: object) -> Row:
+            return Row()
+
+        async def record_session_created(
+            self, idempotency_key: str, **kwargs: object
+        ) -> Row:
+            recorded_sessions.append({"idempotency_key": idempotency_key, **kwargs})
             return Row()
 
     class FakeClient:
@@ -2433,6 +2466,16 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
 
     assert result.summary == "durably reattached"
     assert calls == []
+    assert recorded_sessions == [
+        {
+            "idempotency_key": "idem-1",
+            "session_id": "persisted-session",
+            "agent_id": "agent-1",
+            "endpoint_ref": "default",
+            "capabilities": None,
+            "session_status": "completed",
+        }
+    ]
     assert result.metadata["checkpointKind"] == "external_state_ref"
     assert result.metadata["stateCheckpointRef"] == result.metadata["externalStateRef"]
     assert "workspaceRootRef" not in result.metadata

@@ -2276,6 +2276,7 @@ class OmnigentBridgeSessionStore:
         agent_id: str | None = None,
         endpoint_ref: str | None = None,
         capabilities: dict[str, bool] | None = None,
+        session_status: str | None = None,
     ) -> OmnigentBridgeSession:
         """Emit ``session.created`` into the durable bridge event journal.
 
@@ -2304,6 +2305,16 @@ class OmnigentBridgeSessionStore:
                 for entry in prior_created_events
             )
             changed = False
+            if session_status:
+                observed_status = coalesce_bridge_status(session_status)
+                if row.status != observed_status:
+                    # A retryable Activity timeout can terminalize the attempt
+                    # while the provider session remains alive. The fresh
+                    # provider snapshot is the authority for reactivating that
+                    # same durable binding; a truly terminal snapshot remains
+                    # terminal through normal coalescence.
+                    row.status = observed_status
+                    changed = True
             # MoonLadderStudios/MoonMind#3633: allocate the opaque chat-binding
             # id only after the durable Workflow-to-provider session binding
             # exists (§8.2 step 7). ``session.created`` runs on both the create

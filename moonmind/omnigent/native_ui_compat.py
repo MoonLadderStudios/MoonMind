@@ -252,6 +252,7 @@ def _reviewed_http(
 # each reviewed operation is explicitly allowlisted rather than falling through
 # to a generic proxy.
 _PINNED_HTTP_ROUTES: tuple[NativeUiRoute, ...] = (
+    _reviewed_http(rf"v1/sessions/{_SESSION}/items", name="session_items", methods=("GET",), operation_class=CLASS_RESOURCE_READ, capability=CAP_VIEW_TRANSCRIPT),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_view", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_VIEW_TERMINAL),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals", name="terminal_create", methods=("POST",), operation_class=CLASS_TERMINAL_CREATE, capability=CAP_CREATE_TERMINAL, mutation=True),
     _reviewed_http(rf"v1/sessions/{_SESSION}/resources/terminals/{_TERMINAL}", name="terminal_status", methods=("GET",), operation_class=CLASS_TERMINAL_VIEW, capability=CAP_VIEW_TERMINAL),
