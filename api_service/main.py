@@ -264,17 +264,27 @@ async def _sync_omnigent_bootstrap_agent_profile() -> bool:
         return False
 
 
-async def _sync_omnigent_bootstrap_policies() -> bool:
+async def _sync_omnigent_bootstrap_policies(
+    *,
+    refresh_images: bool,
+) -> bool:
     """Acquire immutable stock images and reconcile the built-in policies."""
 
     try:
         from api_service.services.omnigent_policies import (
             bootstrap_policies_ready,
+            resolve_local_bootstrap_image_ref,
             seed_bootstrap_policies,
         )
 
         async with get_async_session_context() as session:
-            await seed_bootstrap_policies(session)
+            if refresh_images:
+                await seed_bootstrap_policies(session)
+            else:
+                await seed_bootstrap_policies(
+                    session,
+                    image_resolver=resolve_local_bootstrap_image_ref,
+                )
             return await bootstrap_policies_ready(session)
     except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
         logger.warning("Omnigent policy bootstrap deferred: %s", exc)
@@ -284,8 +294,13 @@ async def _sync_omnigent_bootstrap_policies() -> bool:
         return False
 
 
-async def _reconcile_omnigent_bootstrap_once() -> bool:
-    policies_ready = await _sync_omnigent_bootstrap_policies()
+async def _reconcile_omnigent_bootstrap_once(
+    *,
+    refresh_images: bool,
+) -> bool:
+    policies_ready = await _sync_omnigent_bootstrap_policies(
+        refresh_images=refresh_images
+    )
     agent_ready = await _sync_omnigent_bootstrap_agent_profile()
     return policies_ready and agent_ready
 
@@ -297,12 +312,13 @@ async def _maintain_omnigent_bootstrap_reconciliation(
 
     ready = initial_ready
     retry_delay_seconds = 5
+    refresh_images = True
     while True:
         await asyncio.sleep(120 if ready else retry_delay_seconds)
-        if ready:
-            ready = await _sync_omnigent_bootstrap_agent_profile()
-        else:
-            ready = await _reconcile_omnigent_bootstrap_once()
+        ready = await _reconcile_omnigent_bootstrap_once(
+            refresh_images=refresh_images or not ready
+        )
+        refresh_images = False
         if ready:
             retry_delay_seconds = 5
         else:
@@ -1637,7 +1653,11 @@ async def startup_event():
             exc,
         )
     await _sync_preset_seed_catalog()
-    omnigent_bootstrap_ready = await _reconcile_omnigent_bootstrap_once()
+    # Readiness uses only bounded local image inspection. Registry refresh runs
+    # in the lifespan-owned reconciler after the API can serve health checks.
+    omnigent_bootstrap_ready = await _reconcile_omnigent_bootstrap_once(
+        refresh_images=False
+    )
     app.state.omnigent_bootstrap_initial_ready = omnigent_bootstrap_ready
     await _sync_env_managed_secrets()
     # Embedded mode is an authority-sensitive enablement boundary. Evidence

@@ -25,6 +25,7 @@ from api_service.services.omnigent_policies import (
     bootstrap_document,
     configured_bootstrap_image_refs,
     resolve_bootstrap_image_ref,
+    resolve_live_server_image_ref,
     seed_bootstrap_policies,
 )
 from moonmind.omnigent.policies import PolicyDocument, PolicyState, document_digest
@@ -608,8 +609,15 @@ async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
     async def resolver(image_ref: str) -> str:
         return resolved["host" if "host" in image_ref else "server"]
 
+    async def live_server(_image_ref: str) -> str:
+        return resolved["server"]
+
     async with policy_db(tmp_path) as sessions, sessions() as session:
-        await seed_bootstrap_policies(session, image_resolver=resolver)
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
         session.add(
             OmnigentOAuthHostBindingRecord(
                 binding_ref="bootstrap-binding",
@@ -640,6 +648,7 @@ async def test_bootstrap_advances_image_authority_when_mutable_inputs_move(
         reconciled = await seed_bootstrap_policies(
             session,
             image_resolver=resolver,
+            live_server_image_resolver=live_server,
         )
 
         assert set(reconciled) == {
@@ -726,6 +735,248 @@ async def test_bootstrap_does_not_rewrite_operator_owned_default_images(
         assert versions[0].created_by == "operator"
         assert versions[0].document_json["host"]["serverImageRef"] == first_server
         assert versions[0].document_json["host"]["hostImageRef"] == first_host
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_revisits_image_binding_after_active_lease_drains(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    first_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    first_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
+    next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
+    resolved = {"server": first_server, "host": first_host}
+
+    async def resolver(image_ref: str) -> str:
+        return resolved["host" if "host" in image_ref else "server"]
+
+    async def live_server(_image_ref: str) -> str:
+        return resolved["server"]
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+        session.add(
+            OmnigentOAuthHostBindingRecord(
+                binding_ref="deferred-image-binding",
+                provider_profile_id="profile",
+                endpoint_ref="default",
+                harness="codex-native",
+                credential_mount_template_json={
+                    "authVolumeRef": {
+                        "providerProfileId": "profile",
+                        "runtimeId": "codex_cli",
+                        "providerId": "openai",
+                        "volumeRef": "codex_auth_volume",
+                        "credentialGeneration": 1,
+                        "ownerUserId": "user-1",
+                    },
+                    "targetPath": "/home/app/.codex",
+                    "accessMode": "read_write",
+                    "runtimeUid": 1000,
+                    "runtimeGid": 1000,
+                },
+                launch_policy_ref="codex-on-demand@1",
+                effective_launch_snapshot_json={"snapshotRef": "active"},
+            )
+        )
+        now = datetime.now(UTC)
+        await session.execute(
+            OmnigentOAuthHostLeaseRecord.__table__.insert().values(
+                lease_id="deferred-image-lease",
+                provider_profile_id="profile",
+                provider_lease_id="provider-lease",
+                binding_ref="deferred-image-binding",
+                credential_generation=1,
+                holder_workflow_id="workflow-active",
+                idempotency_key="workflow-active:step-1",
+                lease_purpose="execution",
+                status="assigned",
+                acquired_at=now,
+                last_heartbeat_at=now,
+                host_capabilities_json={},
+                expires_at=now + timedelta(hours=1),
+            )
+        )
+        await session.commit()
+        resolved.update(server=next_server, host=next_host)
+
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+        binding = await session.get(
+            OmnigentOAuthHostBindingRecord,
+            "deferred-image-binding",
+        )
+        assert binding.launch_policy_ref == "codex-on-demand@1"
+        await session.execute(
+            OmnigentOAuthHostLeaseRecord.__table__
+            .update()
+            .where(
+                OmnigentOAuthHostLeaseRecord.lease_id
+                == "deferred-image-lease"
+            )
+            .values(status="stopped", stopped_at=datetime.now(UTC))
+        )
+        await session.commit()
+
+        reconciled = await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+
+        await session.refresh(binding)
+        assert reconciled == ["codex-on-demand"]
+        assert binding.launch_policy_ref == "codex-on-demand@2"
+        assert binding.effective_launch_snapshot_json is None
+        versions = await OmnigentPolicyService(session).versions("codex-on-demand")
+        assert len(versions) == 2
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_server_authority_follows_live_container_before_tag(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    first_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    first_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
+    next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
+    resolved = {"server": first_server, "host": first_host}
+    live = {"server": first_server}
+
+    async def resolver(image_ref: str) -> str:
+        return resolved["host" if "host" in image_ref else "server"]
+
+    async def live_server(_image_ref: str) -> str:
+        return live["server"]
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+        resolved.update(server=next_server, host=next_host)
+
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+
+        policy = await session.get(OmnigentPolicy, "codex-on-demand")
+        current = await OmnigentPolicyService(session).get_version(
+            "codex-on-demand",
+            policy.default_version,
+        )
+        assert current.document_json["host"]["serverImageRef"] == first_server
+        assert current.document_json["host"]["hostImageRef"] == next_host
+
+        live["server"] = next_server
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+
+        await session.refresh(policy)
+        current = await OmnigentPolicyService(session).get_version(
+            "codex-on-demand",
+            policy.default_version,
+        )
+        assert policy.default_version == 3
+        assert current.document_json["host"]["serverImageRef"] == next_server
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_advances_stale_interrupted_draft_lineage(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    first_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "1" * 64
+    first_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "2" * 64
+    stale_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "3" * 64
+    stale_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "4" * 64
+    next_server = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "5" * 64
+    next_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "6" * 64
+    resolved = {"server": first_server, "host": first_host}
+
+    async def resolver(image_ref: str) -> str:
+        return resolved["host" if "host" in image_ref else "server"]
+
+    async def live_server(_image_ref: str) -> str:
+        return resolved["server"]
+
+    async with policy_db(tmp_path) as sessions, sessions() as session:
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+        service = OmnigentPolicyService(session)
+        current = await service.get_version("codex-on-demand", 1)
+        stale_payload = deepcopy(current.document_json)
+        stale_payload["host"]["serverImageRef"] = stale_server
+        stale_payload["host"]["hostImageRef"] = stale_host
+        stale = await service.new_version(
+            policy_id="codex-on-demand",
+            document=PolicyDocument.model_validate(stale_payload),
+            actor="bootstrap",
+            expected_parent_ref="codex-on-demand@1",
+        )
+        assert stale.state == PolicyState.DRAFT.value
+        resolved.update(server=next_server, host=next_host)
+
+        reconciled = await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+
+        policy = await session.get(OmnigentPolicy, "codex-on-demand")
+        latest = await service.get_version("codex-on-demand", 3)
+        assert "codex-on-demand" in reconciled
+        assert policy.default_version == 3
+        assert latest.parent_ref == "codex-on-demand@2"
+        assert latest.state == PolicyState.ACTIVE.value
+        assert latest.document_json["host"]["serverImageRef"] == next_server
+        assert latest.document_json["host"]["hostImageRef"] == next_host
+
+
+@pytest.mark.asyncio
+async def test_live_server_image_resolver_reads_running_compose_image(monkeypatch):
+    digest_ref = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "a" * 64
+    image_id = "sha256:" + "b" * 64
+    calls: list[tuple[str, ...]] = []
+
+    async def command(argv, **_kwargs):
+        calls.append(tuple(argv))
+        if argv[1] == "ps":
+            return 0, b"container-id\n", b""
+        if argv[1:3] == ("inspect", "--format"):
+            return 0, f"{image_id}\n".encode(), b""
+        if argv[1:3] == ("image", "inspect"):
+            return 0, f"{image_id}\t{digest_ref}\n".encode(), b""
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(
+        "api_service.services.omnigent_policies.run_runtime_command", command
+    )
+
+    assert await resolve_live_server_image_ref(digest_ref) == digest_ref
+    assert any(
+        "com.docker.compose.service=omnigent" in argument
+        for call in calls
+        for argument in call
+    )
 
 
 @pytest.mark.asyncio

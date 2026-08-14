@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -21,8 +22,8 @@ async def test_omnigent_bootstrap_retries_with_capped_backoff_and_maintains_inve
         if len(delays) == 4:
             raise asyncio.CancelledError
 
-    async def reconcile_once() -> bool:
-        reconciliations.append(True)
+    async def reconcile_once(*, refresh_images: bool) -> bool:
+        reconciliations.append(refresh_images)
         return len(reconciliations) > 1
 
     async def refresh_inventory() -> bool:
@@ -43,8 +44,37 @@ async def test_omnigent_bootstrap_retries_with_capped_backoff_and_maintains_inve
         )
 
     assert delays == [5, 10, 120, 120]
-    assert len(reconciliations) == 2
-    assert len(inventory_refreshes) == 1
+    assert reconciliations == [True, True, False]
+    assert inventory_refreshes == []
+
+
+@pytest.mark.asyncio
+async def test_api_startup_bootstrap_uses_only_local_image_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from api_service.services import omnigent_policies
+
+    observed_resolver = None
+
+    @asynccontextmanager
+    async def session_context():
+        yield object()
+
+    async def seed(_session, *, image_resolver):
+        nonlocal observed_resolver
+        observed_resolver = image_resolver
+
+    async def ready(_session) -> bool:
+        return True
+
+    monkeypatch.setattr(api_main, "get_async_session_context", session_context)
+    monkeypatch.setattr(omnigent_policies, "seed_bootstrap_policies", seed)
+    monkeypatch.setattr(omnigent_policies, "bootstrap_policies_ready", ready)
+
+    assert await api_main._sync_omnigent_bootstrap_policies(
+        refresh_images=False
+    )
+    assert observed_resolver is omnigent_policies.resolve_local_bootstrap_image_ref
 
 
 @pytest.mark.asyncio

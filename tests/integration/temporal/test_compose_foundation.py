@@ -266,6 +266,9 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     assert api_env["OMNIGENT_HOST_IMAGE_TAG"] == (
         "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
     )
+    assert api_env["MOONMIND_DEPLOYMENT_PROJECT_NAME"] == (
+        "${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}"
+    )
     assert api_env["MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF"] == (
         "${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-"
         "/workspace/cutover/remediation-release.json}"

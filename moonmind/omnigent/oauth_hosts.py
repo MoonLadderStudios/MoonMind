@@ -329,8 +329,38 @@ class OmnigentOAuthHostRepository:
     ) -> OmnigentHostLease:
         now = datetime.now(UTC)
         lease_id = deterministic_host_lease_id(provider_lease_id)
-        mount = binding.credential_mount_ref
         async with self._session_factory() as session:
+            locked_row = (
+                await session.execute(
+                    select(
+                        OmnigentOAuthHostBindingRecord,
+                        ManagedAgentProviderProfile,
+                    )
+                    .join(
+                        ManagedAgentProviderProfile,
+                        ManagedAgentProviderProfile.profile_id
+                        == OmnigentOAuthHostBindingRecord.provider_profile_id,
+                    )
+                    .where(
+                        OmnigentOAuthHostBindingRecord.binding_ref
+                        == binding.binding_ref
+                    )
+                    .with_for_update()
+                )
+            ).first()
+            if locked_row is None:
+                raise OmnigentOAuthHostError("host binding does not exist")
+            locked_binding = self._binding_model(locked_row[0], locked_row[1])
+            if locked_binding != binding:
+                # Bootstrap cutover and lease creation share this binding-row
+                # serialization boundary. A caller that compiled against the
+                # previous immutable authority must restart resolution; never
+                # create a lease carrying a stale launch snapshot.
+                raise OmnigentOAuthHostError(
+                    "host binding changed before lease acquisition",
+                    code="OMNIGENT_LAUNCH_SNAPSHOT_CONFLICT",
+                )
+            mount = locked_binding.credential_mount_ref
             existing = await session.get(OmnigentOAuthHostLeaseRecord, lease_id)
             if existing is None:
                 existing = (
@@ -343,14 +373,18 @@ class OmnigentOAuthHostRepository:
                 ).scalar_one_or_none()
             if existing is not None:
                 if (
-                    existing.provider_profile_id != binding.provider_profile_id
+                    existing.provider_profile_id
+                    != locked_binding.provider_profile_id
                     or existing.provider_lease_id != provider_lease_id
-                    or existing.binding_ref != binding.binding_ref
+                    or existing.binding_ref != locked_binding.binding_ref
                 ):
                     raise OmnigentOAuthHostError(
                         "idempotency key is already bound to another host lease"
                     )
-                if existing.effective_launch_snapshot_json != binding.effective_launch_snapshot:
+                if (
+                    existing.effective_launch_snapshot_json
+                    != locked_binding.effective_launch_snapshot
+                ):
                     raise OmnigentOAuthHostError(
                         "retry launch snapshot does not match the durable host lease",
                         code="OMNIGENT_LAUNCH_SNAPSHOT_CONFLICT",
@@ -358,18 +392,20 @@ class OmnigentOAuthHostRepository:
                 return self._lease_model(existing)
             record = OmnigentOAuthHostLeaseRecord(
                 lease_id=lease_id,
-                provider_profile_id=binding.provider_profile_id,
+                provider_profile_id=locked_binding.provider_profile_id,
                 provider_lease_id=provider_lease_id,
-                binding_ref=binding.binding_ref,
+                binding_ref=locked_binding.binding_ref,
                 credential_generation=mount.auth_volume_ref.credential_generation,
                 holder_workflow_id=holder_workflow_id,
                 agent_run_id=agent_run_id,
                 idempotency_key=idempotency_key,
                 lease_purpose=lease_purpose,
-                effective_launch_snapshot_json=binding.effective_launch_snapshot,
+                effective_launch_snapshot_json=(
+                    locked_binding.effective_launch_snapshot
+                ),
                 container_name=(
                     deterministic_host_container_name(lease_id)
-                    if binding.host_launch_profile_ref
+                    if locked_binding.host_launch_profile_ref
                     else None
                 ),
                 status="allocating",
@@ -395,7 +431,7 @@ class OmnigentOAuthHostRepository:
                         await session.execute(
                             select(OmnigentOAuthHostLeaseRecord).where(
                                 OmnigentOAuthHostLeaseRecord.provider_profile_id
-                                == binding.provider_profile_id,
+                                == locked_binding.provider_profile_id,
                                 OmnigentOAuthHostLeaseRecord.status.in_(
                                     ACTIVE_HOST_STATES
                                 ),

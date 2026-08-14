@@ -14,7 +14,7 @@ with the run rather than rewriting it after registry or credential changes.
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-13
+**Last updated:** 2026-08-14
 **Authority:** Unified Temporal lifecycle and ownership model for true agent execution, including profile-bound Codex execution through Omnigent hosts
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines durable product and runtime contracts.
@@ -314,10 +314,16 @@ and `OMNIGENT_HOST_IMAGE_REF` values explicitly.
 
 Bootstrap-owned policy defaults advance through a new immutable version when
 those resolved repository digests move; operator-authored defaults are never
-rewritten by bootstrap. Live server attestation resolves the running
-container's image identity and requires the selected policy reference to appear
-in that image's observed repository digests. The mutable Compose input recorded
-in `Config.Image` is diagnostic configuration, not runtime image authority.
+rewritten by bootstrap. Registry refresh runs in the lifespan-owned background
+reconciler; API startup readiness performs only bounded local inspection. A
+server policy cutover uses the running Compose container's observed repository
+digest, never a newly pulled tag whose container is not running yet. Bindings
+with active host leases remain on their immutable prior authority and are
+revisited after the lease drains. Binding cutover and lease acquisition lock the
+same durable binding row. Live launch attestation requires the selected policy
+reference to appear in the running image's observed repository digests. The
+mutable Compose input recorded in `Config.Image` remains diagnostic
+configuration, not runtime image authority.
 
 ---
 

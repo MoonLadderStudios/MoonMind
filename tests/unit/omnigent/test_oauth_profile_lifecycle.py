@@ -19,6 +19,7 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import (
     Base,
     ManagedAgentProviderProfile,
+    OmnigentOAuthHostBindingRecord,
     ProviderCredentialSource,
     ProviderProfileAuthMethod,
     ProviderProfileAuthState,
@@ -3113,6 +3114,65 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
             new_status="starting",
         )
         assert starting.status == "starting"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_host_lease_rejects_binding_changed_before_serialized_acquisition(
+    tmp_path,
+) -> None:
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/host-lock.db")
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    try:
+        async with factory() as session:
+            session.add(
+                ManagedAgentProviderProfile(
+                    profile_id="codex",
+                    runtime_id="codex_cli",
+                    provider_id="openai",
+                    credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                    runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                    volume_ref="codex_auth_volume",
+                    volume_mount_path="/home/app/.codex",
+                    max_parallel_runs=1,
+                    credential_generation=3,
+                    enabled=True,
+                    auth_state=ProviderProfileAuthState.CONNECTED,
+                    last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+                )
+            )
+            await session.commit()
+        repository = OmnigentOAuthHostRepository(factory)
+        stale_binding = await repository.create_or_update_static_binding(
+            profile_id="codex",
+            endpoint_ref="default",
+            static_host_id="host-1",
+            execution_profile_ref="omnigent-codex@1",
+            launch_policy_ref="codex-static@1",
+            effective_launch_snapshot={"snapshotRef": "old"},
+        )
+        async with factory() as session:
+            record = await session.get(
+                OmnigentOAuthHostBindingRecord,
+                stale_binding.binding_ref,
+            )
+            record.launch_policy_ref = "codex-static@2"
+            record.effective_launch_snapshot_json = None
+            await session.commit()
+
+        with pytest.raises(OmnigentOAuthHostError) as conflict:
+            await repository.create_or_get_host_lease(
+                binding=stale_binding,
+                provider_lease_id="provider-lease-1",
+                holder_workflow_id="workflow-1",
+                agent_run_id="step-1",
+                idempotency_key="idem-1",
+            )
+
+        assert conflict.value.code == "OMNIGENT_LAUNCH_SNAPSHOT_CONFLICT"
     finally:
         await engine.dispose()
 
