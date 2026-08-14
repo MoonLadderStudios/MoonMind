@@ -1047,43 +1047,55 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_SERVER_IMAGE_UNATTESTED",
             ) from exc
         declared_ref = str(launch.get("serverImageRef") or "").strip()
-        if configured[0] != 0 or observed[0] != 0 or configured_ref != declared_ref:
-            raise OmnigentOAuthHostError(
-                "live Omnigent server image does not match launch authority",
-                code="OMNIGENT_SERVER_IMAGE_MISMATCH",
-            )
-        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest):
+        if (
+            configured[0] != 0
+            or observed[0] != 0
+            or not configured_ref
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest)
+        ):
             raise OmnigentOAuthHostError(
                 "live Omnigent server digest is unavailable",
                 code="OMNIGENT_SERVER_IMAGE_UNATTESTED",
             )
-        architecture_result = await self._run(
+        image_metadata_result = await self._run(
             "docker",
             "image",
             "inspect",
             "--format",
-            "{{json .Architecture}}",
+            (
+                '{"repoDigests":{{json .RepoDigests}},'
+                '"architecture":{{json .Architecture}}}'
+            ),
             image_digest,
             check=False,
         )
         try:
-            architecture = str(json.loads(architecture_result[1])).strip()
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            image_metadata = json.loads(image_metadata_result[1])
+            repo_digests = {
+                str(item).strip()
+                for item in image_metadata["repoDigests"]
+                if str(item).strip()
+            }
+            architecture = str(image_metadata["architecture"]).strip()
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise OmnigentOAuthHostError(
-                "live Omnigent server architecture is unavailable",
+                "live Omnigent server image metadata is unavailable",
                 code="OMNIGENT_SERVER_IMAGE_UNATTESTED",
             ) from exc
+        if image_metadata_result[0] != 0 or declared_ref not in repo_digests:
+            raise OmnigentOAuthHostError(
+                "live Omnigent server image does not match launch authority",
+                code="OMNIGENT_SERVER_IMAGE_MISMATCH",
+            )
         released_architectures = set(launch.get("architectures") or ())
-        if architecture_result[0] != 0 or (
-            released_architectures and architecture not in released_architectures
-        ):
+        if released_architectures and architecture not in released_architectures:
             raise OmnigentOAuthHostError(
                 "live Omnigent server architecture is not released",
                 code="OMNIGENT_SERVER_ARCHITECTURE_MISMATCH",
             )
         return {
             "serverAttachmentIdentity": container_id,
-            "serverImageRefObserved": configured_ref,
+            "serverImageRefObserved": declared_ref,
             "serverImageDigest": image_digest,
             "serverArchitecture": architecture,
         }

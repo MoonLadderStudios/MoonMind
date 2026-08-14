@@ -1331,6 +1331,16 @@ def test_release_builder_cli_stages_nested_evidence_for_post_cleanup_validation(
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    build_release_evidence = module.build_remediation_release_evidence
+
+    def build_release_evidence_at_fixture_time(**kwargs):
+        return build_release_evidence(**kwargs, generated_at=NOW)
+
+    monkeypatch.setattr(
+        module,
+        "build_remediation_release_evidence",
+        build_release_evidence_at_fixture_time,
+    )
     argv = [
         str(script),
         "--release",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import os
@@ -51,6 +52,7 @@ _SERVER_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-server"
 _HOST_IMAGE_REPOSITORY = "ghcr.io/omnigent-ai/omnigent-host"
 _IMAGE_INSPECT_FORMAT = '{{.Id}}\t{{join .RepoDigests ","}}'
 ImageResolver = Callable[[str], Awaitable[str | None]]
+LiveServerImageResolver = Callable[[str], Awaitable[str | None]]
 _BOOTSTRAP_POLICY_DEFINITIONS = (
     (
         "omnigent-codex",
@@ -621,20 +623,11 @@ async def resolve_bootstrap_image_ref(image_ref: str) -> str | None:
     if _DIGEST_IMAGE.fullmatch(image_ref):
         return image_ref
 
-    docker_binary = os.getenv("MOONMIND_DOCKER_BINARY", "docker").strip() or "docker"
-
-    async def inspect() -> str | None:
-        code, stdout, _ = await run_runtime_command(
-            (docker_binary, "image", "inspect", "--format", _IMAGE_INSPECT_FORMAT, image_ref),
-            timeout_seconds=30,
-            output_limit_bytes=64_000,
-        )
-        return None if code else _repository_digest(image_ref, stdout)
-
     try:
-        local_digest = await inspect()
+        local_digest = await _inspect_repository_digest(image_ref)
     except OSError:
         local_digest = None
+    docker_binary = os.getenv("MOONMIND_DOCKER_BINARY", "docker").strip() or "docker"
     try:
         code, _, stderr = await run_runtime_command(
             (docker_binary, "pull", image_ref),
@@ -659,9 +652,95 @@ async def resolve_bootstrap_image_ref(image_ref: str) -> str | None:
         )
         return None
     try:
-        return await inspect() or local_digest
+        return await _inspect_repository_digest(image_ref) or local_digest
     except OSError:
         return local_digest
+
+
+async def _inspect_repository_digest(
+    image_ref: str,
+    *,
+    inspect_ref: str | None = None,
+    timeout_seconds: int = 5,
+) -> str | None:
+    docker_binary = os.getenv("MOONMIND_DOCKER_BINARY", "docker").strip() or "docker"
+    code, stdout, _ = await run_runtime_command(
+        (
+            docker_binary,
+            "image",
+            "inspect",
+            "--format",
+            _IMAGE_INSPECT_FORMAT,
+            inspect_ref or image_ref,
+        ),
+        timeout_seconds=timeout_seconds,
+        output_limit_bytes=64_000,
+    )
+    return None if code else _repository_digest(image_ref, stdout)
+
+
+async def resolve_local_bootstrap_image_ref(image_ref: str) -> str | None:
+    """Resolve only already-acquired image evidence without registry access."""
+
+    image_ref = image_ref.strip()
+    if _DIGEST_IMAGE.fullmatch(image_ref):
+        return image_ref
+    try:
+        return await _inspect_repository_digest(image_ref)
+    except OSError:
+        return None
+
+
+async def resolve_live_server_image_ref(image_ref: str) -> str | None:
+    """Return the immutable image digest of the running Compose server."""
+
+    docker_binary = os.getenv("MOONMIND_DOCKER_BINARY", "docker").strip() or "docker"
+    project_name = (
+        os.getenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind").strip()
+        or "moonmind"
+    )
+    try:
+        code, stdout, _ = await run_runtime_command(
+            (
+                docker_binary,
+                "ps",
+                "--filter",
+                f"label=com.docker.compose.project={project_name}",
+                "--filter",
+                "label=com.docker.compose.service=omnigent",
+                "--format",
+                "{{.ID}}",
+            ),
+            timeout_seconds=5,
+            output_limit_bytes=64_000,
+        )
+        container_ids = [
+            item.strip()
+            for item in stdout.decode("utf-8", errors="replace").splitlines()
+            if item.strip()
+        ]
+        if code or len(container_ids) != 1:
+            return None
+        code, stdout, _ = await run_runtime_command(
+            (
+                docker_binary,
+                "inspect",
+                "--format",
+                "{{.Image}}",
+                container_ids[0],
+            ),
+            timeout_seconds=5,
+            output_limit_bytes=64_000,
+        )
+        image_id = stdout.decode("utf-8", errors="replace").strip()
+        if code or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            return None
+        return await _inspect_repository_digest(
+            image_ref,
+            inspect_ref=image_id,
+        )
+    except OSError:
+        return None
 
 
 async def resolve_bootstrap_image_refs(
@@ -670,8 +749,10 @@ async def resolve_bootstrap_image_refs(
     image_resolver: ImageResolver = resolve_bootstrap_image_ref,
 ) -> tuple[str | None, str | None]:
     server_input, host_input = configured_bootstrap_image_refs(env)
-    server_image = await image_resolver(server_input)
-    host_image = await image_resolver(host_input)
+    server_image, host_image = await asyncio.gather(
+        image_resolver(server_input),
+        image_resolver(host_input),
+    )
     return server_image, host_image
 
 
@@ -800,13 +881,267 @@ def _canonical_bootstrap_agent_identity(row: OmnigentPolicyVersion) -> bool:
     )
 
 
+async def _cutover_inactive_bootstrap_bindings(
+    session: AsyncSession,
+    *,
+    previous_refs: tuple[str, ...],
+    policy_ref: str,
+) -> tuple[int, int]:
+    """Move idle bindings while preserving authority for active host leases."""
+
+    if not previous_refs:
+        return 0, 0
+    bindings = list(
+        (
+            await session.execute(
+                select(OmnigentOAuthHostBindingRecord)
+                .where(
+                    OmnigentOAuthHostBindingRecord.launch_policy_ref.in_(
+                        previous_refs
+                    )
+                )
+                .with_for_update()
+            )
+        )
+        .scalars()
+        .all()
+    )
+    active_binding_refs: set[str] = set()
+    if bindings:
+        active_binding_refs = set(
+            (
+                await session.execute(
+                    select(OmnigentOAuthHostLeaseRecord.binding_ref).where(
+                        OmnigentOAuthHostLeaseRecord.binding_ref.in_(
+                            [binding.binding_ref for binding in bindings]
+                        ),
+                        OmnigentOAuthHostLeaseRecord.status.in_(
+                            ACTIVE_HOST_STATES
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    cutover_bindings = [
+        binding
+        for binding in bindings
+        if binding.binding_ref not in active_binding_refs
+    ]
+    for binding in cutover_bindings:
+        binding.launch_policy_ref = policy_ref
+        binding.effective_launch_snapshot_json = None
+    return len(cutover_bindings), len(active_binding_refs)
+
+
+async def _reconcile_bootstrap_image_authority(
+    session: AsyncSession,
+    *,
+    service: OmnigentPolicyService,
+    server_image: str | None,
+    host_image: str | None,
+    live_server_image_resolver: LiveServerImageResolver,
+) -> list[str]:
+    """Advance bootstrap-owned defaults when their resolved images change."""
+
+    resolved_images_valid = bool(
+        _DIGEST_IMAGE.fullmatch(server_image or "")
+        and _DIGEST_IMAGE.fullmatch(host_image or "")
+    )
+
+    reconciled: list[str] = []
+    live_server_checked = False
+    live_server_image: str | None = None
+    for policy_id, *_ in _BOOTSTRAP_POLICY_DEFINITIONS:
+        policy = await session.get(OmnigentPolicy, policy_id)
+        if policy is None or policy.default_version is None:
+            continue
+        current = await service.get_version(policy_id, policy.default_version)
+        if (
+            current.created_by != "bootstrap"
+            or current.state != PolicyState.ACTIVE.value
+            or not current.validation_json.get("valid")
+        ):
+            continue
+        current_host = current.document_json.get("host")
+        if not isinstance(current_host, Mapping):
+            continue
+        versions = await service.versions(policy_id)
+        desired_server_image = (
+            server_image
+            if resolved_images_valid
+            else current_host.get("serverImageRef")
+        )
+        desired_host_image = (
+            host_image
+            if resolved_images_valid
+            else current_host.get("hostImageRef")
+        )
+        if (
+            resolved_images_valid
+            and current_host.get("serverImageRef") != server_image
+        ):
+            if not live_server_checked:
+                live_server_image = await live_server_image_resolver(
+                    str(server_image)
+                )
+                live_server_checked = True
+            # A pulled tag is future deployment intent, not authority over the
+            # still-running server. Preserve the current authority until the
+            # live container objectively carries the new repository digest.
+            desired_server_image = (
+                live_server_image or current_host.get("serverImageRef")
+            )
+        current_ref = f"{policy_id}@{current.version}"
+        predecessor_refs = tuple(
+            f"{policy_id}@{version.version}"
+            for version in versions
+            if version.version != current.version
+            and version.created_by == "bootstrap"
+            and version.state == PolicyState.ACTIVE.value
+        )
+        if (
+            current_host.get("serverImageRef") == desired_server_image
+            and current_host.get("hostImageRef") == desired_host_image
+        ):
+            updated_binding_count, deferred_binding_count = (
+                await _cutover_inactive_bootstrap_bindings(
+                    session,
+                    previous_refs=predecessor_refs,
+                    policy_ref=current_ref,
+                )
+            )
+            if updated_binding_count:
+                service._event(
+                    policy_id,
+                    current.version,
+                    "bootstrap_image_authority_cutover",
+                    "bootstrap",
+                    {
+                        "previousRefs": list(predecessor_refs),
+                        "policyRef": current_ref,
+                        "serverImageRef": desired_server_image,
+                        "hostImageRef": desired_host_image,
+                        "updatedBindingCount": updated_binding_count,
+                        "deferredBindingCount": deferred_binding_count,
+                    },
+                )
+                await session.commit()
+                reconciled.append(policy_id)
+            continue
+
+        desired_payload = copy.deepcopy(current.document_json)
+        desired_payload["host"]["serverImageRef"] = desired_server_image
+        desired_payload["host"]["hostImageRef"] = desired_host_image
+        desired_document = PolicyDocument.model_validate(desired_payload)
+        desired_digest = document_digest(normalize_document(desired_document))
+        later_versions = sorted(
+            (version for version in versions if version.version > current.version),
+            key=lambda version: version.version,
+        )
+        bootstrap_draft_chain = True
+        expected_parent_ref = current_ref
+        for version in later_versions:
+            if (
+                version.created_by != "bootstrap"
+                or version.state != PolicyState.DRAFT.value
+                or version.parent_ref != expected_parent_ref
+            ):
+                bootstrap_draft_chain = False
+                break
+            expected_parent_ref = f"{policy_id}@{version.version}"
+        if not later_versions:
+            candidate = await service.new_version(
+                policy_id=policy_id,
+                document=desired_document,
+                actor="bootstrap",
+                expected_parent_ref=current_ref,
+            )
+        elif bootstrap_draft_chain and later_versions[-1].digest == desired_digest:
+            # Resume a startup interrupted between immutable version creation
+            # and activation instead of creating parallel policy authority.
+            candidate = later_versions[-1]
+        elif bootstrap_draft_chain:
+            # Tags may advance again after a prior startup persisted its draft.
+            # Preserve the immutable evidence and advance the bootstrap-owned
+            # lineage instead of letting an obsolete draft block reconciliation.
+            candidate = await service.new_version(
+                policy_id=policy_id,
+                document=desired_document,
+                actor="bootstrap",
+                expected_parent_ref=expected_parent_ref,
+            )
+        else:
+            logger.warning(
+                "Omnigent bootstrap image refresh for %s deferred because a "
+                "later policy version owns evolution",
+                policy_id,
+            )
+            continue
+        if (
+            candidate.state not in {
+                PolicyState.DRAFT.value,
+                PolicyState.ACTIVE.value,
+            }
+            or not candidate.validation_json.get("valid")
+        ):
+            continue
+        if not (
+            candidate.state == PolicyState.ACTIVE.value
+            and policy.default_version == candidate.version
+        ):
+            candidate = await service.transition(
+                policy_id=policy_id,
+                version=candidate.version,
+                state=PolicyState.ACTIVE,
+                actor="bootstrap",
+                make_default=True,
+            )
+
+        candidate_ref = f"{policy_id}@{candidate.version}"
+        candidate_versions = await service.versions(policy_id)
+        predecessor_refs = tuple(
+            f"{policy_id}@{version.version}"
+            for version in candidate_versions
+            if version.version != candidate.version
+            and version.created_by == "bootstrap"
+            and version.state == PolicyState.ACTIVE.value
+        )
+        updated_binding_count, deferred_binding_count = (
+            await _cutover_inactive_bootstrap_bindings(
+                session,
+                previous_refs=predecessor_refs,
+                policy_ref=candidate_ref,
+            )
+        )
+        service._event(
+            policy_id,
+            candidate.version,
+            "bootstrap_image_authority_cutover",
+            "bootstrap",
+            {
+                "previousRefs": list(predecessor_refs),
+                "policyRef": candidate_ref,
+                "serverImageRef": desired_server_image,
+                "hostImageRef": desired_host_image,
+                "updatedBindingCount": updated_binding_count,
+                "deferredBindingCount": deferred_binding_count,
+            },
+        )
+        await session.commit()
+        reconciled.append(policy_id)
+    return reconciled
+
+
 async def seed_bootstrap_policies(
     session: AsyncSession,
     *,
     env: Mapping[str, str] | None = None,
     image_resolver: ImageResolver = resolve_bootstrap_image_ref,
+    live_server_image_resolver: LiveServerImageResolver = resolve_live_server_image_ref,
 ) -> list[str]:
-    """Idempotently persist the three pre-existing built-in authorities."""
+    """Idempotently persist and refresh the built-in image authorities."""
 
     service = OmnigentPolicyService(session)
     reconciliation_required = False
@@ -860,13 +1195,33 @@ async def seed_bootstrap_policies(
         ):
             reconciliation_required = True
             break
-    if not reconciliation_required:
-        return []
-
     seeded: list[str] = []
     server_image, host_image = await resolve_bootstrap_image_refs(
         env=env, image_resolver=image_resolver
     )
+    if not (
+        _DIGEST_IMAGE.fullmatch(server_image or "")
+        and _DIGEST_IMAGE.fullmatch(host_image or "")
+    ):
+        # Readiness-local inspection may find no cached images on a first boot.
+        # Do not persist placeholder drafts; the background acquisition pass
+        # will seed once both immutable authorities exist. Existing active
+        # policies can still finish deferred binding cutovers meanwhile.
+        return await _reconcile_bootstrap_image_authority(
+            session,
+            service=service,
+            server_image=server_image,
+            host_image=host_image,
+            live_server_image_resolver=live_server_image_resolver,
+        )
+    if not reconciliation_required:
+        return await _reconcile_bootstrap_image_authority(
+            session,
+            service=service,
+            server_image=server_image,
+            host_image=host_image,
+            live_server_image_resolver=live_server_image_resolver,
+        )
     for policy_id, name, host_mode, profile_ref in _BOOTSTRAP_POLICY_DEFINITIONS:
         document = bootstrap_document(
             host_mode=host_mode,
@@ -1011,6 +1366,14 @@ async def seed_bootstrap_policies(
                 make_default=True,
             )
         seeded.append(policy_id)
+    image_reconciled = await _reconcile_bootstrap_image_authority(
+        session,
+        service=service,
+        server_image=server_image,
+        host_image=host_image,
+        live_server_image_resolver=live_server_image_resolver,
+    )
+    seeded.extend(item for item in image_reconciled if item not in seeded)
     return seeded
 
 
