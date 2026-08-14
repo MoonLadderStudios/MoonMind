@@ -85,6 +85,7 @@ _logger = logging.getLogger(__name__)
 _ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 30.0
 _MARKED_TURN_QUIET_PERIOD_SECONDS = 60.0
 _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS = 300.0
+_TERMINAL_RECONCILIATION_INTERVAL_SECONDS = 30.0
 _ACTIVITY_HEARTBEAT_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
     "omnigent_activity_heartbeat_state",
     default=None,
@@ -1059,6 +1060,81 @@ async def _await_marked_turn_terminal(
     )
 
 
+def _inactive_marked_turn_terminal_status(
+    snapshot: dict[str, Any],
+    *,
+    marker: str,
+    baseline_item_ids: frozenset[str] | None,
+) -> str | None:
+    """Return terminal authority for a structurally complete inactive turn."""
+
+    turn_state = _marked_turn_item_state(
+        snapshot,
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+    )
+    if (
+        not _snapshot_projects_inactive_turn(snapshot)
+        or not turn_state["progress"]
+        or turn_state["unfinishedToolCall"]
+    ):
+        return None
+    normalized = normalize_omnigent_observation(snapshot)
+    return (
+        normalized
+        if normalized in {"failed", "canceled", "timed_out"}
+        else "completed"
+    )
+
+
+async def _reconcile_inactive_marked_turn(
+    *,
+    client: OmnigentHttpClient,
+    session_id: str,
+    marker: str,
+    baseline_item_ids: frozenset[str] | None,
+    event_count: int,
+    snapshot: dict[str, Any] | None = None,
+    timeout_seconds: float = 1800.0,
+    interval_seconds: float = 2.0,
+    quiet_period_seconds: float = _MARKED_TURN_QUIET_PERIOD_SECONDS,
+    tool_only_quiet_period_seconds: float = (
+        _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS
+    ),
+) -> tuple[str, dict[str, Any]] | None:
+    """Recover a terminal turn whose SSE completion edge was not observed.
+
+    Activity retry and stream reconnect can happen after Omnigent has already
+    returned an interactive session to idle. The new stream then contains only
+    liveness heartbeats, so waiting exclusively for another terminal frame can
+    consume the Activity's entire ScheduleToClose budget. Reconcile only when
+    the provider snapshot is inactive and the marked turn has completed tool
+    structure; the existing bounded quiet-period poll remains the terminal
+    authority and prevents stale idle projections from ending active work.
+    """
+
+    candidate = snapshot or await client.get_session(session_id)
+    terminal_status = _inactive_marked_turn_terminal_status(
+        candidate,
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+    )
+    if terminal_status is None:
+        return None
+    return await _await_marked_turn_terminal(
+        client=client,
+        session_id=session_id,
+        marker=marker,
+        baseline_item_ids=baseline_item_ids,
+        event_count=event_count,
+        terminal_status=terminal_status,
+        timeout_seconds=timeout_seconds,
+        interval_seconds=interval_seconds,
+        quiet_period_seconds=quiet_period_seconds,
+        tool_only_quiet_period_seconds=tool_only_quiet_period_seconds,
+    )
+
+
 async def _enqueue_stream_events(
     *,
     client: OmnigentHttpClient,
@@ -1091,6 +1167,17 @@ async def _queued_stream_events(
         yield event
     if stream_task.done() and not stream_task.cancelled():
         stream_task.result()
+
+
+async def _optional_stream_events(
+    stream: AsyncIterator[Any] | None,
+) -> AsyncIterator[Any]:
+    """Yield a selected provider stream, or no items after prior reconciliation."""
+
+    if stream is None:
+        return
+    async for item in stream:
+        yield item
 
 
 async def _cancel_omnigent_session(
@@ -1217,6 +1304,57 @@ async def _publish_active_journals(
         content_type="application/x-ndjson",
     )
     return raw_ref, normalized_ref
+
+
+async def _append_reconciled_terminal_snapshot(
+    *,
+    artifact_gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    run_store: OmnigentBridgeSessionStore | None,
+    bridge_session_id: str | None,
+    session_id: str,
+    terminal_status: str,
+    snapshot: dict[str, Any],
+    source: str,
+    event_count: dict[str, int],
+    raw_events: list[dict[str, Any]],
+    normalized_events: list[dict[str, Any]],
+) -> None:
+    """Persist the synthetic terminal edge recovered from provider state."""
+
+    terminal_snapshot = dict(snapshot)
+    terminal_snapshot["status"] = terminal_status
+    normalized_bridge_event = build_omnigent_bridge_event(
+        payload={
+            "type": "session.final_snapshot",
+            "session": terminal_snapshot,
+            "metadata": {"terminalReconciliationSource": source},
+        },
+        sequence=event_count["value"] + 1,
+        request=request,
+        omnigent_session_id=session_id,
+        bridge_session_id=bridge_session_id,
+    )
+    normalized_events.append(normalized_bridge_event.event)
+    event_count["value"] += 1
+    if run_store is None or not bridge_session_id:
+        return
+    raw_ref, normalized_ref = await _publish_active_journals(
+        artifact_gateway=artifact_gateway,
+        request=request,
+        raw_events=raw_events,
+        normalized_events=normalized_events,
+    )
+    normalized_bridge_event.event["artifactRef"] = normalized_ref
+    await run_store.attach_active_journal_refs(
+        bridge_session_id,
+        raw_ref=raw_ref,
+        normalized_ref=normalized_ref,
+    )
+    await run_store.append_events(
+        bridge_session_id,
+        [normalized_bridge_event.event],
+    )
 
 
 def _parse_jsonl(payload: str) -> list[dict[str, Any]]:
@@ -1861,25 +1999,64 @@ async def run_omnigent_execution(
 
             event_count = {"value": durable_cursor}
             heartbeat_status = {"value": "running"}
-            heartbeat_task = asyncio.create_task(
-                _periodic_stream_heartbeat(
-                    session_id=session_id,
-                    event_count=event_count,
-                    status=heartbeat_status,
-                )
-            )
             terminal_status: str | None = None
             terminal_snapshot_override: dict[str, Any] | None = None
-            try:
-                stream_events = (
-                    _queued_stream_events(
-                        queue=stream_queue,
-                        stream_task=stream_task,
-                    )
-                    if stream_queue is not None and stream_task is not None
-                    else client.stream_events(session_id)
+            if (
+                first_message_posted
+                and bool(external_state["retry"].get("attached"))
+                and isinstance(initial_snapshot, dict)
+            ):
+                reattached_terminal = await _reconcile_inactive_marked_turn(
+                    client=client,
+                    session_id=session_id,
+                    marker=marker,
+                    baseline_item_ids=pre_dispatch_item_ids,
+                    event_count=event_count["value"],
+                    snapshot=initial_snapshot,
                 )
-                async for stream_item in stream_events:
+                if reattached_terminal is not None:
+                    (
+                        terminal_status,
+                        terminal_snapshot_override,
+                    ) = reattached_terminal
+                    external_state["terminalReconciliation"] = {
+                        "source": "reattached_inactive_snapshot",
+                        "status": terminal_status,
+                    }
+                    await _append_reconciled_terminal_snapshot(
+                        artifact_gateway=artifact_gateway,
+                        request=request,
+                        run_store=run_store,
+                        bridge_session_id=bridge_session_id,
+                        session_id=session_id,
+                        terminal_status=terminal_status,
+                        snapshot=terminal_snapshot_override,
+                        source="reattached_inactive_snapshot",
+                        event_count=event_count,
+                        raw_events=raw_events,
+                        normalized_events=normalized_events,
+                    )
+            if terminal_status is None:
+                heartbeat_task = asyncio.create_task(
+                    _periodic_stream_heartbeat(
+                        session_id=session_id,
+                        event_count=event_count,
+                        status=heartbeat_status,
+                    )
+                )
+            next_terminal_reconciliation_at = 0.0
+            try:
+                stream_events = None
+                if terminal_status is None:
+                    stream_events = (
+                        _queued_stream_events(
+                            queue=stream_queue,
+                            stream_task=stream_task,
+                        )
+                        if stream_queue is not None and stream_task is not None
+                        else client.stream_events(session_id)
+                    )
+                async for stream_item in _optional_stream_events(stream_events):
                     if isinstance(stream_item, tuple):
                         event, arrived_after_message_post = stream_item
                     else:
@@ -1939,6 +2116,46 @@ async def run_omnigent_execution(
                             }
                         )
                         continue
+                    if normalized_bridge_event.event["type"] == "session.heartbeat":
+                        loop_time = asyncio.get_running_loop().time()
+                        if loop_time >= next_terminal_reconciliation_at:
+                            next_terminal_reconciliation_at = (
+                                loop_time
+                                + _TERMINAL_RECONCILIATION_INTERVAL_SECONDS
+                            )
+                            reconciled_terminal = (
+                                await _reconcile_inactive_marked_turn(
+                                    client=client,
+                                    session_id=session_id,
+                                    marker=marker,
+                                    baseline_item_ids=pre_dispatch_item_ids,
+                                    event_count=event_count["value"],
+                                )
+                            )
+                            if reconciled_terminal is not None:
+                                (
+                                    terminal_status,
+                                    terminal_snapshot_override,
+                                ) = reconciled_terminal
+                                external_state["terminalReconciliation"] = {
+                                    "source": "session_heartbeat_snapshot",
+                                    "status": terminal_status,
+                                }
+                                await _append_reconciled_terminal_snapshot(
+                                    artifact_gateway=artifact_gateway,
+                                    request=request,
+                                    run_store=run_store,
+                                    bridge_session_id=bridge_session_id,
+                                    session_id=session_id,
+                                    terminal_status=terminal_status,
+                                    snapshot=terminal_snapshot_override,
+                                    source="session_heartbeat_snapshot",
+                                    event_count=event_count,
+                                    raw_events=raw_events,
+                                    normalized_events=normalized_events,
+                                )
+                                heartbeat_status["value"] = terminal_status
+                                break
                     if normalized in {
                         "completed",
                         "failed",

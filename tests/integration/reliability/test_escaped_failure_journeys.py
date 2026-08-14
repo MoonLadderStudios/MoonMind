@@ -35,8 +35,10 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.execute import (
     OmnigentSessionStillRunningError,
     _await_marked_turn_terminal,
+    _inactive_marked_turn_terminal_status,
     _marked_turn_item_state,
     _persisted_pre_dispatch_item_ids,
+    _reconcile_inactive_marked_turn,
     _safe_heartbeat,
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
@@ -499,6 +501,53 @@ async def test_profile_bound_activity_heartbeats_preflight_and_fences_cancelled_
     assert "host_stop" not in owner_calls
     assert "provider_released" not in actions
     assert expected["releaseProviderLeaseOnCancellation"] is False
+
+
+async def test_missed_terminal_edge_reconciles_from_idle_retry_snapshot() -> None:
+    """Replay mm:54d3ef07 after its heartbeat-timeout Activity retry."""
+
+    manifest = load_replay(
+        "omnigent-missed-terminal-edge-after-retry", "manifest.json"
+    )
+    expected = load_replay(
+        "omnigent-missed-terminal-edge-after-retry", "expected-outcome.json"
+    )
+    snapshot = manifest["reattachedSnapshot"]
+    baseline_item_ids = frozenset(manifest["preDispatchItemIds"])
+
+    assert _inactive_marked_turn_terminal_status(
+        snapshot,
+        marker=manifest["firstMessageMarker"],
+        baseline_item_ids=baseline_item_ids,
+    ) == expected["terminalStatus"]
+
+    class IdleRetryClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_session(self, _session_id: str) -> dict[str, object]:
+            self.calls += 1
+            return snapshot
+
+    client = IdleRetryClient()
+    status, terminal_snapshot = await _reconcile_inactive_marked_turn(
+        client=client,
+        session_id=manifest["omnigentSessionId"],
+        marker=manifest["firstMessageMarker"],
+        baseline_item_ids=baseline_item_ids,
+        event_count=manifest["durableEventCount"],
+        snapshot=snapshot,
+        timeout_seconds=0.1,
+        interval_seconds=0.001,
+        quiet_period_seconds=0.002,
+        tool_only_quiet_period_seconds=0.002,
+    )
+
+    assert status == expected["terminalStatus"]
+    assert terminal_snapshot == snapshot
+    assert client.calls >= expected["minimumStableSnapshotReads"]
+    assert expected["reconciliationSource"] == "session_heartbeat_snapshot"
+    assert expected["requiresNewTerminalSseEvent"] is False
 
 
 async def test_evicted_turn_marker_preserves_terminal_and_retry_authority() -> None:

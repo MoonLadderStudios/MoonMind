@@ -1,0 +1,6 @@
+{
+  "terminalStatus": "completed",
+  "reconciliationSource": "session_heartbeat_snapshot",
+  "requiresNewTerminalSseEvent": false,
+  "minimumStableSnapshotReads": 2
+}
