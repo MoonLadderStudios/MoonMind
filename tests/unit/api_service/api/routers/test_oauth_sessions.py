@@ -546,7 +546,7 @@ async def test_create_oauth_session_rejects_profile_owned_by_another_user(
     assert response.json()["detail"] == "Not authorized to use this profile ID."
 
 @pytest.mark.asyncio
-async def test_create_oauth_session_returns_conflict_for_non_stale_active(
+async def test_create_oauth_session_resumes_non_stale_active_for_same_user(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     profile_id = "codex-cli-busy-profile"
@@ -564,6 +564,51 @@ async def test_create_oauth_session_returns_conflict_for_non_stale_active(
         await session.commit()
 
     async def _unexpected_start(_session_model):
+        raise AssertionError("workflow start should not be called when resuming")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _unexpected_start,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions", json=_oauth_payload(profile_id)
+        )
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "oas_activeexisting1"
+    assert response.json()["status"] == OAuthSessionStatus.PENDING.value
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentOAuthSession).where(
+                ManagedAgentOAuthSession.profile_id == profile_id
+            )
+        )
+        assert len(result.scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_returns_conflict_for_another_users_active_session(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-other-user-busy-profile"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id="oas_otheruseractive1",
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="different-user",
+                created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_start(_session_model):
         raise AssertionError("workflow start should not be called when conflict exists")
 
     monkeypatch.setattr(
@@ -572,7 +617,9 @@ async def test_create_oauth_session_returns_conflict_for_non_stale_active(
     )
 
     async with client_app as client:
-        response = await client.post("/api/v1/oauth-sessions", json=_oauth_payload(profile_id))
+        response = await client.post(
+            "/api/v1/oauth-sessions", json=_oauth_payload(profile_id)
+        )
 
     assert response.status_code == 409
     assert response.json()["detail"] == "An active OAuth session already exists for this profile."

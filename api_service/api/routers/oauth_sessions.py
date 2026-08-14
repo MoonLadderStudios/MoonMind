@@ -11,6 +11,7 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Response,
     WebSocket,
     WebSocketDisconnect,
     status,
@@ -345,6 +346,7 @@ async def _expire_stale_active_sessions(db: AsyncSession, *, profile_id: str) ->
 )
 async def create_oauth_session(
     request: CreateOAuthSessionRequest,
+    response: Response,
     db: AsyncSession = Depends(get_async_session),
     current_user: User = Depends(get_current_user()),
 ):
@@ -394,6 +396,12 @@ async def create_oauth_session(
     )
     existing_session = result.scalars().first()
     if existing_session:
+        if existing_session.requested_by_user_id == str(current_user.id):
+            response.status_code = status.HTTP_200_OK
+            return _oauth_session_response(
+                existing_session,
+                profile=existing_profile,
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An active OAuth session already exists for this profile.",
