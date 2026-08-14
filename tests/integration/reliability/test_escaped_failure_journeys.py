@@ -205,12 +205,19 @@ async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
     async def resolver(image_ref: str) -> str:
         return resolved["host" if "host" in image_ref else "server"]
 
+    async def live_server(_image_ref: str) -> str:
+        return resolved["server"]
+
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'policy.db'}")
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     async with sessions() as session:
-        await seed_bootstrap_policies(session, image_resolver=resolver)
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
         resolved.update(
             server=manifest["observedServerImageRef"],
             host=manifest["observedHostImageRef"],
@@ -219,6 +226,7 @@ async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
         reconciled = await seed_bootstrap_policies(
             session,
             image_resolver=resolver,
+            live_server_image_resolver=live_server,
         )
 
         assert sorted(reconciled) == expected["reconciledPolicyIds"]
