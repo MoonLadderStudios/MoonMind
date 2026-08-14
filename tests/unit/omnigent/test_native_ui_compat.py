@@ -130,6 +130,7 @@ def test_served_surface_is_single_sourced_from_facade_operations() -> None:
         "ws_session_updates",
         "terminal_attach",
         "dictation_stream",
+        "session_items",
     }
 
 
