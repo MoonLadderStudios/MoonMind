@@ -16,12 +16,16 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 import yaml
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
 from temporalio.testing import ActivityEnvironment
 
-from api_service.db.models import Base
-from api_service.services.omnigent_policies import bootstrap_document
+from api_service.db.models import Base, OmnigentPolicy, OmnigentPolicyVersion
+from api_service.services.omnigent_policies import (
+    bootstrap_document,
+    seed_bootstrap_policies,
+)
 from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import (
@@ -183,6 +187,88 @@ pytestmark = [
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay_id = "omnigent-server-image-authority-drift"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    resolved = {
+        "server": manifest["persistedServerImageRef"],
+        "host": manifest["persistedHostImageRef"],
+    }
+
+    async def resolver(image_ref: str) -> str:
+        return resolved["host" if "host" in image_ref else "server"]
+
+    async def live_server(_image_ref: str) -> str:
+        return resolved["server"]
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'policy.db'}")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    async with sessions() as session:
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+        resolved.update(
+            server=manifest["observedServerImageRef"],
+            host=manifest["observedHostImageRef"],
+        )
+
+        reconciled = await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+
+        assert sorted(reconciled) == expected["reconciledPolicyIds"]
+        policy = await session.get(OmnigentPolicy, "codex-on-demand")
+        assert policy.default_version == expected["defaultPolicyVersion"]
+        version = await session.scalar(
+            select(OmnigentPolicyVersion).where(
+                OmnigentPolicyVersion.policy_id == "codex-on-demand",
+                OmnigentPolicyVersion.version == policy.default_version,
+            )
+        )
+        assert version.document_json["host"]["serverImageRef"] == resolved["server"]
+        assert version.document_json["host"]["hostImageRef"] == resolved["host"]
+    await engine.dispose()
+
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            (0, "omnigent-container-id\n", ""),
+            (0, json.dumps(manifest["configuredServerImageRef"]), ""),
+            (0, json.dumps(manifest["observedServerImageId"]), ""),
+            (
+                0,
+                json.dumps(
+                    {
+                        "repoDigests": [manifest["observedServerImageRef"]],
+                        "architecture": manifest["architecture"],
+                    }
+                ),
+                "",
+            ),
+        ]
+    )
+    evidence = await runtime._attest_server_image(
+        {
+            "serverImageRef": manifest["observedServerImageRef"],
+            "architectures": [manifest["architecture"]],
+        }
+    )
+
+    assert evidence["serverImageRefObserved"] == expected["serverImageRefObserved"]
+    assert evidence["serverArchitecture"] == expected["serverArchitecture"]
 
 
 def _egress_attestation() -> EgressAttestation:
