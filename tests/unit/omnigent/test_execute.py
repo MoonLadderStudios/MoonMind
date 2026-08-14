@@ -2422,9 +2422,18 @@ async def test_run_omnigent_execution_reconciles_idle_snapshot_before_retry_stre
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("heartbeat_type", "reconciliation_source"),
+    [
+        ("session.heartbeat", "session_heartbeat_snapshot"),
+        ("response.heartbeat", "response_heartbeat_snapshot"),
+    ],
+)
 async def test_run_omnigent_execution_reconciles_idle_snapshot_from_heartbeat(
     monkeypatch,
     tmp_path,
+    heartbeat_type: str,
+    reconciliation_source: str,
 ) -> None:
     awaited: dict[str, object] = {}
     terminal_snapshot = {
@@ -2465,7 +2474,7 @@ async def test_run_omnigent_execution_reconciles_idle_snapshot_from_heartbeat(
 
         async def stream_events(self, session_id: str):
             await self.posted.wait()
-            yield {"type": "session.heartbeat", "status": "running"}
+            yield {"type": heartbeat_type, "status": "running"}
             raise AssertionError(
                 "heartbeat reconciliation must finish without another SSE edge"
             )
@@ -2516,9 +2525,127 @@ async def test_run_omnigent_execution_reconciles_idle_snapshot_from_heartbeat(
     assert result.summary == "completed without terminal event"
     assert awaited["baseline_item_ids"] == frozenset({"prior-item"})
     assert external_state["terminalReconciliation"] == {
-        "source": "session_heartbeat_snapshot",
+        "source": reconciliation_source,
         "status": "completed",
     }
+    normalized_path = (
+        tmp_path
+        / "corr-heartbeat-terminal-reconcile"
+        / "runtime.omnigent.sse.normalized.jsonl"
+    )
+    normalized_events = [
+        json.loads(line)
+        for line in normalized_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    reconciled = normalized_events[-1]
+    assert reconciled["metadata"]["moonmind"] == {
+        "source": "omnigent_terminal_reconciliation",
+        "terminalReconciliationSource": reconciliation_source,
+        "workflowChatVisible": True,
+    }
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        "  correlationId: corr-heartbeat-terminal-reconcile\n"
+        "  idempotencyKey: idem-heartbeat-terminal-reconcile"
+    )
+    marker_digest = hashlib.sha256(f"session-1\n{marker}".encode()).hexdigest()
+    assert reconciled["deduplicationKey"] == (
+        f"terminal-reconciliation:{marker_digest}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    terminal_calls: list[str] = []
+
+    class Row:
+        bridge_session_id = ""
+        omnigent_session_id = "existing-session"
+        status = "failed"
+        first_message_state = "terminal"
+        first_message_posted_at = object()
+        first_message_pending_id = "pending-1"
+        first_message_item_id = "item-1"
+        terminal_refs = {
+            "summary": "durable provider failure",
+            "failureClass": "execution_error",
+        }
+        metadata_: dict[str, object] = {}
+
+    row = Row()
+
+    class Store:
+        async def get_binding(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        async def get_or_create(self, **_kwargs: object) -> Row:
+            return row
+
+        async def mark_prepared(self, *_args: object, **_kwargs: object) -> Row:
+            return row
+
+        async def mark_terminal(
+            self, *_args: object, status: str, **_kwargs: object
+        ) -> Row:
+            terminal_calls.append(status)
+            return row
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            raise AssertionError("retry must reuse the durable session")
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            raise AssertionError("retry must not repost a terminal turn")
+
+        async def stream_events(self, session_id: str):
+            raise AssertionError("retry must not stream after a durable terminal")
+            if False:
+                yield {}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            assert session_id == "existing-session"
+            return {"status": "idle", "summary": "provider has returned to idle"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-durable-terminal",
+            idempotencyKey="idem-durable-terminal",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                }
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        run_store=Store(),
+        first_message_text="continue",
+    )
+
+    assert result.metadata["normalizedStatus"] == "failed"
+    assert result.failure_class == "execution_error"
+    assert result.summary == "durable provider failure"
+    assert terminal_calls == ["failed"]
 
 
 @pytest.mark.asyncio

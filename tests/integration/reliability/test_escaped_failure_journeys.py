@@ -27,6 +27,7 @@ from api_service.services.omnigent_policies import (
     seed_bootstrap_policies,
 )
 from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
+from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_ITEM_FRONTIER_KEY,
@@ -35,14 +36,13 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.execute import (
     OmnigentSessionStillRunningError,
     _await_marked_turn_terminal,
-    _inactive_marked_turn_terminal_status,
     _marked_turn_item_state,
     _persisted_pre_dispatch_item_ids,
-    _reconcile_inactive_marked_turn,
     _safe_heartbeat,
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
     omnigent_activity_heartbeat,
+    run_omnigent_execution,
 )
 from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
@@ -503,7 +503,10 @@ async def test_profile_bound_activity_heartbeats_preflight_and_fences_cancelled_
     assert expected["releaseProviderLeaseOnCancellation"] is False
 
 
-async def test_missed_terminal_edge_reconciles_from_idle_retry_snapshot() -> None:
+async def test_missed_terminal_edge_reconciles_from_idle_retry_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     """Replay mm:54d3ef07 after its heartbeat-timeout Activity retry."""
 
     manifest = load_replay(
@@ -513,40 +516,168 @@ async def test_missed_terminal_edge_reconciles_from_idle_retry_snapshot() -> Non
         "omnigent-missed-terminal-edge-after-retry", "expected-outcome.json"
     )
     snapshot = manifest["reattachedSnapshot"]
-    baseline_item_ids = frozenset(manifest["preDispatchItemIds"])
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey="idem-mm-54d3ef07",
+        parameters={
+            "omnigent": {
+                "agent": {"agentName": "codex-native-ui"},
+                "session": {"allowEmptyWorkspace": True},
+            }
+        },
+    )
+    first_message_text = "continue the workflow"
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {request.correlation_id}\n"
+        f"  idempotencyKey: {request.idempotency_key}"
+    )
+    prepared_message = {
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": f"{first_message_text}\n\n{marker}",
+                }
+            ],
+        },
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            prepared_message,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    store = OmnigentBridgeSessionStore(sessions)
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path / "artifacts")
 
-    assert _inactive_marked_turn_terminal_status(
-        snapshot,
-        marker=manifest["firstMessageMarker"],
-        baseline_item_ids=baseline_item_ids,
-    ) == expected["terminalStatus"]
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="agent-1",
+        agent_name="codex-native-ui",
+        target_metadata={},
+    )
+    await store.record_first_message_item_frontier(
+        request.idempotency_key,
+        item_ids=manifest["preDispatchItemIds"],
+    )
+    await store.mark_prepared(
+        request.idempotency_key,
+        digest=digest,
+        marker=marker,
+    )
+    await store.attach_session(
+        request.idempotency_key,
+        manifest["omnigentSessionId"],
+    )
+    await store.mark_posted(request.idempotency_key)
+    durable_event = build_omnigent_bridge_event(
+        payload={"type": "session.heartbeat", "status": "running"},
+        sequence=manifest["durableEventCount"],
+        request=request,
+        omnigent_session_id=manifest["omnigentSessionId"],
+        bridge_session_id=row.bridge_session_id,
+    ).event
+    raw_ref = await gateway.write_text(
+        request=request,
+        name="seed.raw.jsonl",
+        payload='{"type":"session.heartbeat","status":"running"}\n',
+        link_type="runtime.omnigent.sse.raw",
+        content_type="application/x-ndjson",
+    )
+    normalized_ref = await gateway.write_text(
+        request=request,
+        name="seed.normalized.jsonl",
+        payload=f"{json.dumps(durable_event, sort_keys=True)}\n",
+        link_type="runtime.omnigent.sse.normalized",
+        content_type="application/x-ndjson",
+    )
+    await store.attach_active_journal_refs(
+        row.bridge_session_id,
+        raw_ref=raw_ref,
+        normalized_ref=normalized_ref,
+    )
+    await store.append_events(row.bridge_session_id, [durable_event])
+
+    client_calls: list[str] = []
 
     class IdleRetryClient:
-        def __init__(self) -> None:
-            self.calls = 0
+        def __init__(self, **_: object) -> None:
+            pass
 
-        async def get_session(self, _session_id: str) -> dict[str, object]:
-            self.calls += 1
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            raise AssertionError("retry must reuse the durable provider session")
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            raise AssertionError("retry must not repost the first message")
+
+        async def stream_events(self, session_id: str):
+            raise AssertionError("reconciled retry must bypass the SSE stream")
+            if False:
+                yield {}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            client_calls.append(session_id)
             return snapshot
 
-    client = IdleRetryClient()
-    status, terminal_snapshot = await _reconcile_inactive_marked_turn(
-        client=client,
-        session_id=manifest["omnigentSessionId"],
-        marker=manifest["firstMessageMarker"],
-        baseline_item_ids=baseline_item_ids,
-        event_count=manifest["durableEventCount"],
-        snapshot=snapshot,
-        timeout_seconds=0.1,
-        interval_seconds=0.001,
-        quiet_period_seconds=0.002,
-        tool_only_quiet_period_seconds=0.002,
+    async def settle_terminal(**_kwargs: object):
+        client_calls.append("settled")
+        return expected["terminalStatus"], snapshot
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", IdleRetryClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._await_marked_turn_terminal",
+        settle_terminal,
     )
 
-    assert status == expected["terminalStatus"]
-    assert terminal_snapshot == snapshot
-    assert client.calls >= expected["minimumStableSnapshotReads"]
-    assert expected["reconciliationSource"] == "session_heartbeat_snapshot"
+    try:
+        result = await run_omnigent_execution(
+            request,
+            artifact_gateway=gateway,
+            run_store=store,
+            first_message_text=first_message_text,
+        )
+        indexed_events = await store.list_events(row.bridge_session_id)
+    finally:
+        await engine.dispose()
+
+    reconciled_events = [
+        event
+        for event in indexed_events
+        if event.event_type == "session.final_snapshot"
+    ]
+    assert result.metadata["normalizedStatus"] == expected["terminalStatus"]
+    assert result.summary == expected["terminalSummary"]
+    assert client_calls.count("settled") == 1
+    assert len(reconciled_events) == 1
+    assert reconciled_events[0].metadata_["moonmind"] == {
+        "source": "omnigent_terminal_reconciliation",
+        "terminalReconciliationSource": expected["reconciliationSource"],
+        "workflowChatVisible": True,
+    }
+    assert reconciled_events[0].deduplication_key.startswith(
+        "terminal-reconciliation:"
+    )
+    assert expected["reconciliationSource"] == "reattached_inactive_snapshot"
     assert expected["requiresNewTerminalSseEvent"] is False
 
 

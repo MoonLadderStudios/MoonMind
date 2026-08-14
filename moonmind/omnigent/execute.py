@@ -80,6 +80,7 @@ _NON_TERMINAL_STATUSES = {
     "waiting",
     "idle",
 }
+_TERMINAL_STATUSES = {"completed", "failed", "canceled", "timed_out"}
 _logger = logging.getLogger(__name__)
 
 _ACTIVITY_HEARTBEAT_INTERVAL_SECONDS = 30.0
@@ -1335,6 +1336,15 @@ async def _append_reconciled_terminal_snapshot(
         omnigent_session_id=session_id,
         bridge_session_id=bridge_session_id,
     )
+    marker_digest = hashlib.sha256(
+        f"{session_id}\n{_first_message_marker(request=request)}".encode()
+    ).hexdigest()
+    normalized_bridge_event.event["deduplicationKey"] = (
+        f"terminal-reconciliation:{marker_digest}"
+    )
+    moonmind_metadata = normalized_bridge_event.event["metadata"]["moonmind"]
+    moonmind_metadata["source"] = "omnigent_terminal_reconciliation"
+    moonmind_metadata["terminalReconciliationSource"] = source
     normalized_events.append(normalized_bridge_event.event)
     event_count["value"] += 1
     if run_store is None or not bridge_session_id:
@@ -1489,6 +1499,7 @@ async def run_omnigent_execution(
                 labels.setdefault("moonmind.issue", "MM-1059")
 
             durable_row = None
+            durable_terminal_status: str | None = None
             bridge_session_id: str | None = None
             if run_store is not None:
                 durable_row = await run_store.get_or_create(
@@ -1504,6 +1515,15 @@ async def run_omnigent_execution(
                 bridge_session_id = str(
                     getattr(durable_row, "bridge_session_id", "") or ""
                 )
+                restored_status = str(
+                    getattr(durable_row, "status", "") or ""
+                ).strip().lower()
+                if (
+                    restored_status in _TERMINAL_STATUSES
+                    and getattr(durable_row, "first_message_posted_at", None)
+                    is not None
+                ):
+                    durable_terminal_status = restored_status
                 external_state["bridgeSessionId"] = bridge_session_id
                 assert_bridge_session_binding(
                     authorization,
@@ -1999,10 +2019,26 @@ async def run_omnigent_execution(
 
             event_count = {"value": durable_cursor}
             heartbeat_status = {"value": "running"}
-            terminal_status: str | None = None
+            terminal_status = durable_terminal_status
             terminal_snapshot_override: dict[str, Any] | None = None
+            if durable_terminal_status is not None:
+                terminal_snapshot_override = dict(initial_snapshot or {})
+                terminal_snapshot_override["status"] = durable_terminal_status
+                durable_terminal_refs = dict(
+                    getattr(durable_row, "terminal_refs", None) or {}
+                )
+                durable_summary = str(
+                    durable_terminal_refs.get("summary") or ""
+                ).strip()
+                if durable_summary:
+                    terminal_snapshot_override["summary"] = durable_summary
+                external_state["terminalReconciliation"] = {
+                    "source": "durable_bridge_terminal",
+                    "status": durable_terminal_status,
+                }
             if (
-                first_message_posted
+                terminal_status is None
+                and first_message_posted
                 and bool(external_state["retry"].get("attached"))
                 and isinstance(initial_snapshot, dict)
             ):
@@ -2116,7 +2152,10 @@ async def run_omnigent_execution(
                             }
                         )
                         continue
-                    if normalized_bridge_event.event["type"] == "session.heartbeat":
+                    if normalized_bridge_event.event["type"] in {
+                        "response.heartbeat",
+                        "session.heartbeat",
+                    }:
                         loop_time = asyncio.get_running_loop().time()
                         if loop_time >= next_terminal_reconciliation_at:
                             next_terminal_reconciliation_at = (
@@ -2137,8 +2176,14 @@ async def run_omnigent_execution(
                                     terminal_status,
                                     terminal_snapshot_override,
                                 ) = reconciled_terminal
+                                heartbeat_reconciliation_source = (
+                                    normalized_bridge_event.event["type"].replace(
+                                        ".", "_"
+                                    )
+                                    + "_snapshot"
+                                )
                                 external_state["terminalReconciliation"] = {
-                                    "source": "session_heartbeat_snapshot",
+                                    "source": heartbeat_reconciliation_source,
                                     "status": terminal_status,
                                 }
                                 await _append_reconciled_terminal_snapshot(
@@ -2149,7 +2194,7 @@ async def run_omnigent_execution(
                                     session_id=session_id,
                                     terminal_status=terminal_status,
                                     snapshot=terminal_snapshot_override,
-                                    source="session_heartbeat_snapshot",
+                                    source=heartbeat_reconciliation_source,
                                     event_count=event_count,
                                     raw_events=raw_events,
                                     normalized_events=normalized_events,
