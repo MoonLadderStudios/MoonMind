@@ -4600,6 +4600,32 @@ async def _dispatch_workflow_chat_facade(
             "capabilityAuthorityDigest": capability_set.authority_digest,
         }
 
+    # Stock Omnigent boot probes are projected locally. The native presentation
+    # client needs these shapes to start, but it must not inherit the upstream
+    # server's global account/session authority through a workflow binding.
+    if operation.name == "native_server_info":
+        return {
+            "accounts_enabled": False,
+            "single_user": False,
+            "login_url": None,
+            "needs_setup": False,
+            "databricks_features": False,
+            "managed_sandboxes_enabled": False,
+            "sandbox_provider": None,
+            "sharing_mode": "off",
+            "public_sharing_enabled": False,
+            "server_version": None,
+            "smart_routing_enabled": False,
+            "smart_routing_sources": [],
+            "harness_install_enabled": False,
+            "installable_harnesses": [],
+            "dictation_available": False,
+        }
+    if operation.name == "native_current_user":
+        return {"user_id": "workflow-owner", "is_admin": False}
+    if operation.name == "list_projects":
+        return []
+
     # 6. Recompute-driven capability + session-state gates.
     #    A terminal binding deliberately survives provider cleanup with durable
     #    final snapshots and event journals, so its read-only transcript bootstrap
@@ -4679,6 +4705,30 @@ async def _dispatch_workflow_chat_facade(
             provider_session_id=provider_session_id,
             chat_binding_id=chat_binding_id,
         )
+
+    if operation.name == "list_sessions":
+        snapshot = await facade.get_session(provider_session_id)
+        virtualized = _virtualize_facade_payload(
+            snapshot,
+            provider_session_id=provider_session_id,
+            chat_binding_id=chat_binding_id,
+        )
+        if not isinstance(virtualized, dict):
+            raise WorkflowChatFacadeError(
+                "The bound session catalog has an unsupported response shape.",
+                failure_class="integration_error",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                code="omnigent_bridge_upstream_payload",
+            )
+        virtualized["capabilities"] = capabilities
+        virtualized["readOnly"] = is_read_only(session_status)
+        return {
+            "object": "list",
+            "data": [virtualized],
+            "first_id": chat_binding_id,
+            "last_id": chat_binding_id,
+            "has_more": False,
+        }
 
     # 9. Session snapshot / bootstrap / history.
     if operation.name == "get_session":

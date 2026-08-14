@@ -1485,6 +1485,37 @@ async def run_omnigent_execution(
                 )
             with suppress(Exception):
                 initial_snapshot = await client.get_session(session_id)
+            record_session_created = (
+                getattr(run_store, "record_session_created", None)
+                if run_store is not None
+                else None
+            )
+            if callable(record_session_created):
+                snapshot_capabilities: dict[str, bool] = {}
+                if isinstance(initial_snapshot, dict):
+                    raw_capabilities = initial_snapshot.get(
+                        "interventionCapabilities"
+                    )
+                    if not isinstance(raw_capabilities, dict):
+                        raw_capabilities = initial_snapshot.get("capabilities")
+                    if isinstance(raw_capabilities, dict):
+                        snapshot_capabilities = {
+                            str(key): value
+                            for key, value in raw_capabilities.items()
+                            if isinstance(key, str) and isinstance(value, bool)
+                        }
+                await record_session_created(
+                    request.idempotency_key,
+                    session_id=session_id,
+                    agent_id=target.agent_id,
+                    endpoint_ref=str(selection.endpoint_ref or "default"),
+                    capabilities=snapshot_capabilities,
+                    session_status=(
+                        str(initial_snapshot.get("status") or "running")
+                        if isinstance(initial_snapshot, dict)
+                        else None
+                    ),
+                )
             if (
                 pre_dispatch_item_ids is None
                 and not first_message_posted

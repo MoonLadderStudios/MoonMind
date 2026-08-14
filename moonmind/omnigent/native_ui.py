@@ -373,9 +373,93 @@ def render_native_ui_document(
     payload = json.dumps(dict(bootstrap), separators=(",", ":")).replace(
         "</", "<\\/"
     )
+    # The stock standalone app owns a root BrowserRouter and root-absolute
+    # transport paths. Install the thin host adapter before its module executes:
+    # route the app to the one virtualized binding id and rebase API/WS traffic
+    # onto the binding-scoped facade. This is execution substrate only; the
+    # provider-maintained UI still owns rendering and interaction semantics.
+    adapter = r"""
+(function () {
+  "use strict";
+  const binding = window.__MOONMIND_OMNIGENT_CHAT__;
+  if (!binding || !binding.chatBindingId || !binding.apiBase) return;
+
+  const apiBase = String(binding.apiBase).replace(/\/+$/, "");
+  const bindingId = encodeURIComponent(String(binding.chatBindingId));
+  const scopedDocumentUrl = window.location.href;
+  const sameOriginApiPath = /^\/(?:v1|api|health)(?:\/|$)/;
+
+  function scopedHttpUrl(input) {
+    const url = new URL(String(input), window.location.origin);
+    const sameHttpOrigin = url.origin === window.location.origin;
+    const sameSocketHost =
+      (url.protocol === "ws:" || url.protocol === "wss:") &&
+      url.host === window.location.host;
+    if (
+      (!sameHttpOrigin && !sameSocketHost) ||
+      url.pathname === apiBase ||
+      url.pathname.startsWith(apiBase + "/") ||
+      !sameOriginApiPath.test(url.pathname)
+    ) {
+      return null;
+    }
+    url.pathname = apiBase + url.pathname;
+    return url;
+  }
+
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    const source = input instanceof Request ? input.url : input;
+    const scoped = scopedHttpUrl(source);
+    if (!scoped) return nativeFetch(input, init);
+    const request = input instanceof Request ? new Request(scoped.href, input) : scoped.href;
+    return nativeFetch(request, init);
+  };
+
+  const nativeXhrOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url) {
+    const scoped = scopedHttpUrl(url);
+    const args = Array.from(arguments);
+    if (scoped) args[1] = scoped.href;
+    return nativeXhrOpen.apply(this, args);
+  };
+
+  if (window.EventSource) {
+    const NativeEventSource = window.EventSource;
+    window.EventSource = function (url, config) {
+      const scoped = scopedHttpUrl(url);
+      return new NativeEventSource(scoped ? scoped.href : url, config);
+    };
+    window.EventSource.prototype = NativeEventSource.prototype;
+  }
+
+  if (window.WebSocket) {
+    const NativeWebSocket = window.WebSocket;
+    window.WebSocket = function (url, protocols) {
+      const scoped = scopedHttpUrl(url);
+      if (scoped) scoped.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return protocols === undefined
+        ? new NativeWebSocket(scoped ? scoped.href : url)
+        : new NativeWebSocket(scoped ? scoped.href : url, protocols);
+    };
+    window.WebSocket.prototype = NativeWebSocket.prototype;
+  }
+
+  // BrowserRouter must see the stock chat route at first render. The provider
+  // id remains virtualized: the only client-visible id is chatBindingId.
+  window.history.replaceState(
+    window.history.state,
+    "",
+    "/c/" + bindingId + window.location.search + window.location.hash
+  );
+  window.addEventListener("beforeunload", function () {
+    window.history.replaceState(window.history.state, "", scopedDocumentUrl);
+  });
+})();
+""".strip()
     injected = (
         f'<base href="{base}/">'
-        f"<script>window.__MOONMIND_OMNIGENT_CHAT__={payload};</script>"
+        f"<script>window.__MOONMIND_OMNIGENT_CHAT__={payload};\n{adapter}</script>"
     )
     rewritten = rewrite_asset_urls(upstream_html, scoped_base=base)
     match = _HEAD_OPEN.search(rewritten)

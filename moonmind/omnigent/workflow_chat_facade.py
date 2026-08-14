@@ -217,6 +217,40 @@ FACADE_OPERATIONS: tuple[FacadeOperation, ...] = (
         references_session=False,
         requires_provider_session=False,
     ),
+    # Stock native-app boot metadata. These are served from bounded MoonMind
+    # projections, not forwarded to an upstream account/control plane.
+    _op(
+        r"v1/info",
+        name="native_server_info",
+        method="GET",
+        capability=None,
+        references_session=False,
+        requires_provider_session=False,
+    ),
+    _op(
+        r"v1/me",
+        name="native_current_user",
+        method="GET",
+        capability=None,
+        references_session=False,
+        requires_provider_session=False,
+    ),
+    # The workflow-scoped native app has exactly one visible session. Never
+    # forward the stock global catalog/project scans, which would expose other
+    # upstream sessions through a binding that authorizes only one.
+    _op(
+        r"v1/sessions/projects",
+        name="list_projects",
+        method="GET",
+        references_session=False,
+        requires_provider_session=False,
+    ),
+    _op(
+        r"v1/sessions",
+        name="list_sessions",
+        method="GET",
+        references_session=False,
+    ),
     # Session catalog / metadata required to bootstrap the native UI.
     _op(
         r"v1/agents",

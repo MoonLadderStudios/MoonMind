@@ -475,6 +475,44 @@ def test_owner_snapshot_virtualizes_provider_identity() -> None:
     assert body["readOnly"] is False
 
 
+def test_native_boot_metadata_is_local_and_safe() -> None:
+    client, proxy, _store = _build()
+
+    info = client.get(_path("v1/info"))
+    current_user = client.get(_path("v1/me"))
+    projects = client.get(_path("v1/sessions/projects"))
+
+    assert info.status_code == 200
+    assert info.json()["accounts_enabled"] is False
+    assert info.json()["needs_setup"] is False
+    assert current_user.status_code == 200
+    assert current_user.json() == {
+        "user_id": "workflow-owner",
+        "is_admin": False,
+    }
+    assert projects.status_code == 200
+    assert projects.json() == []
+    # Boot probes never acquire the upstream account or project authority.
+    assert proxy.resources == []
+
+
+def test_session_catalog_contains_only_the_bound_virtual_session() -> None:
+    client, _proxy, _store = _build()
+
+    response = client.get(_path("v1/sessions"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["object"] == "list"
+    assert body["has_more"] is False
+    assert body["first_id"] == _CHAT_BINDING_ID
+    assert body["last_id"] == _CHAT_BINDING_ID
+    assert len(body["data"]) == 1
+    assert body["data"][0]["id"] == _CHAT_BINDING_ID
+    assert body["data"][0]["readOnly"] is False
+    assert _PROVIDER_SESSION_ID not in response.text
+
+
 def test_non_owner_gets_non_enumerating_binding_unknown() -> None:
     metadata = {**_row().metadata_, "callerAuthorities": {}}
     client, _proxy, _store = _build(
@@ -667,6 +705,7 @@ def test_stock_native_mutation_cases_exactly_cover_the_pinned_inventory() -> Non
 
 
 _STOCK_NATIVE_READ_CASES = (
+    ("items", "session_items", "relay"),
     ("resources/terminals", "terminal_view", "relay"),
     ("resources/terminals/t-1", "terminal_status", "relay"),
     ("resources/terminals/t-1/logs", "execution_logs", "relay"),
@@ -761,6 +800,8 @@ def test_every_additional_stock_native_read_uses_the_bound_identity(
         path = _path(f"v1/runners/{_CHAT_BINDING_ID}/status")
     else:
         path = _path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}")
+    if operation == "session_items":
+        path += "?limit=80&order=desc"
 
     response = client.get(
         path,
@@ -777,6 +818,8 @@ def test_every_additional_stock_native_read_uses_the_bound_identity(
         assert len(upstream_calls) == 1
         assert _PROVIDER_SESSION_ID in upstream_calls[0]["url"]
         assert _CHAT_BINDING_ID not in upstream_calls[0]["url"]
+        if operation == "session_items":
+            assert upstream_calls[0]["url"].endswith("?limit=80&order=desc")
         assert client_headers == [
             {"Accept": "*/*", "Authorization": "Bearer upstream-only"}
         ]

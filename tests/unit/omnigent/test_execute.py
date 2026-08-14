@@ -2362,6 +2362,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     tmp_path,
 ) -> None:
     calls: list[str] = []
+    recorded_sessions: list[dict[str, object]] = []
 
     class Row:
         omnigent_session_id = "persisted-session"
@@ -2380,6 +2381,12 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
             return Row()
 
         async def mark_terminal(self, *_: object, **__: object) -> Row:
+            return Row()
+
+        async def record_session_created(
+            self, idempotency_key: str, **kwargs: object
+        ) -> Row:
+            recorded_sessions.append({"idempotency_key": idempotency_key, **kwargs})
             return Row()
 
     class FakeClient:
@@ -2433,6 +2440,16 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
 
     assert result.summary == "durably reattached"
     assert calls == []
+    assert recorded_sessions == [
+        {
+            "idempotency_key": "idem-1",
+            "session_id": "persisted-session",
+            "agent_id": "agent-1",
+            "endpoint_ref": "default",
+            "capabilities": {},
+            "session_status": "completed",
+        }
+    ]
     assert result.metadata["checkpointKind"] == "external_state_ref"
     assert result.metadata["stateCheckpointRef"] == result.metadata["externalStateRef"]
     assert "workspaceRootRef" not in result.metadata

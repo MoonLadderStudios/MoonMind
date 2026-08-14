@@ -1491,6 +1491,45 @@ async def test_record_session_created_is_idempotent(store):
 
 
 @pytest.mark.asyncio
+async def test_record_session_created_reactivates_live_session_after_attempt_timeout(
+    store,
+):
+    await _seed_created_session(store)
+    await store.mark_terminal("idem-1", status="failed")
+
+    row = await store.record_session_created(
+        "idem-1",
+        session_id="sess-1",
+        capabilities={},
+        session_status="idle",
+    )
+
+    assert row.status == STATUS_ACTIVE
+    authority = row.metadata_["capabilityAuthority"]
+    # An empty provider capability object retains safe presentation reads but
+    # cannot manufacture mutation authority.
+    assert authority["fresh"] is True
+    assert authority["upstream"]["viewTranscript"] is True
+    assert authority["upstream"]["readResources"] is True
+    assert authority["upstream"]["sendMessage"] is False
+
+
+@pytest.mark.asyncio
+async def test_record_session_created_does_not_reactivate_without_fresh_status(store):
+    await _seed_created_session(store)
+    await store.mark_terminal("idem-1", status="failed")
+
+    row = await store.record_session_created(
+        "idem-1",
+        session_id="sess-1",
+        capabilities={},
+        session_status=None,
+    )
+
+    assert row.status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_record_session_created_preserves_state_and_advances_replacement_epoch(
     store,
 ):
