@@ -800,13 +800,174 @@ def _canonical_bootstrap_agent_identity(row: OmnigentPolicyVersion) -> bool:
     )
 
 
+async def _cutover_inactive_bootstrap_bindings(
+    session: AsyncSession,
+    *,
+    previous_ref: str,
+    policy_ref: str,
+) -> tuple[int, int]:
+    """Move idle bindings while preserving authority for active host leases."""
+
+    bindings = list(
+        (
+            await session.execute(
+                select(OmnigentOAuthHostBindingRecord).where(
+                    OmnigentOAuthHostBindingRecord.launch_policy_ref
+                    == previous_ref
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    active_binding_refs: set[str] = set()
+    if bindings:
+        active_binding_refs = set(
+            (
+                await session.execute(
+                    select(OmnigentOAuthHostLeaseRecord.binding_ref).where(
+                        OmnigentOAuthHostLeaseRecord.binding_ref.in_(
+                            [binding.binding_ref for binding in bindings]
+                        ),
+                        OmnigentOAuthHostLeaseRecord.status.in_(
+                            ACTIVE_HOST_STATES
+                        ),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    cutover_bindings = [
+        binding
+        for binding in bindings
+        if binding.binding_ref not in active_binding_refs
+    ]
+    for binding in cutover_bindings:
+        binding.launch_policy_ref = policy_ref
+        binding.effective_launch_snapshot_json = None
+    return len(cutover_bindings), len(active_binding_refs)
+
+
+async def _reconcile_bootstrap_image_authority(
+    session: AsyncSession,
+    *,
+    service: OmnigentPolicyService,
+    server_image: str | None,
+    host_image: str | None,
+) -> list[str]:
+    """Advance bootstrap-owned defaults when their resolved images change."""
+
+    if not (
+        _DIGEST_IMAGE.fullmatch(server_image or "")
+        and _DIGEST_IMAGE.fullmatch(host_image or "")
+    ):
+        return []
+
+    reconciled: list[str] = []
+    for policy_id, *_ in _BOOTSTRAP_POLICY_DEFINITIONS:
+        policy = await session.get(OmnigentPolicy, policy_id)
+        if policy is None or policy.default_version is None:
+            continue
+        current = await service.get_version(policy_id, policy.default_version)
+        if (
+            current.created_by != "bootstrap"
+            or current.state != PolicyState.ACTIVE.value
+            or not current.validation_json.get("valid")
+        ):
+            continue
+        current_host = current.document_json.get("host")
+        if not isinstance(current_host, Mapping):
+            continue
+        if (
+            current_host.get("serverImageRef") == server_image
+            and current_host.get("hostImageRef") == host_image
+        ):
+            continue
+
+        current_ref = f"{policy_id}@{current.version}"
+        desired_payload = copy.deepcopy(current.document_json)
+        desired_payload["host"]["serverImageRef"] = server_image
+        desired_payload["host"]["hostImageRef"] = host_image
+        desired_document = PolicyDocument.model_validate(desired_payload)
+        desired_digest = document_digest(normalize_document(desired_document))
+        latest = (await service.versions(policy_id))[0]
+        if latest.version == current.version:
+            candidate = await service.new_version(
+                policy_id=policy_id,
+                document=desired_document,
+                actor="bootstrap",
+                expected_parent_ref=current_ref,
+            )
+        elif (
+            latest.created_by == "bootstrap"
+            and latest.parent_ref == current_ref
+            and latest.digest == desired_digest
+        ):
+            # Resume a startup interrupted between immutable version creation
+            # and activation instead of creating parallel policy authority.
+            candidate = latest
+        else:
+            logger.warning(
+                "Omnigent bootstrap image refresh for %s deferred because a "
+                "later policy version owns evolution",
+                policy_id,
+            )
+            continue
+        if (
+            candidate.state not in {
+                PolicyState.DRAFT.value,
+                PolicyState.ACTIVE.value,
+            }
+            or not candidate.validation_json.get("valid")
+        ):
+            continue
+        if not (
+            candidate.state == PolicyState.ACTIVE.value
+            and policy.default_version == candidate.version
+        ):
+            candidate = await service.transition(
+                policy_id=policy_id,
+                version=candidate.version,
+                state=PolicyState.ACTIVE,
+                actor="bootstrap",
+                make_default=True,
+            )
+
+        candidate_ref = f"{policy_id}@{candidate.version}"
+        updated_binding_count, deferred_binding_count = (
+            await _cutover_inactive_bootstrap_bindings(
+                session,
+                previous_ref=current_ref,
+                policy_ref=candidate_ref,
+            )
+        )
+        service._event(
+            policy_id,
+            candidate.version,
+            "bootstrap_image_authority_cutover",
+            "bootstrap",
+            {
+                "previousRef": current_ref,
+                "policyRef": candidate_ref,
+                "serverImageRef": server_image,
+                "hostImageRef": host_image,
+                "updatedBindingCount": updated_binding_count,
+                "deferredBindingCount": deferred_binding_count,
+            },
+        )
+        await session.commit()
+        reconciled.append(policy_id)
+    return reconciled
+
+
 async def seed_bootstrap_policies(
     session: AsyncSession,
     *,
     env: Mapping[str, str] | None = None,
     image_resolver: ImageResolver = resolve_bootstrap_image_ref,
 ) -> list[str]:
-    """Idempotently persist the three pre-existing built-in authorities."""
+    """Idempotently persist and refresh the built-in image authorities."""
 
     service = OmnigentPolicyService(session)
     reconciliation_required = False
@@ -860,13 +1021,17 @@ async def seed_bootstrap_policies(
         ):
             reconciliation_required = True
             break
-    if not reconciliation_required:
-        return []
-
     seeded: list[str] = []
     server_image, host_image = await resolve_bootstrap_image_refs(
         env=env, image_resolver=image_resolver
     )
+    if not reconciliation_required:
+        return await _reconcile_bootstrap_image_authority(
+            session,
+            service=service,
+            server_image=server_image,
+            host_image=host_image,
+        )
     for policy_id, name, host_mode, profile_ref in _BOOTSTRAP_POLICY_DEFINITIONS:
         document = bootstrap_document(
             host_mode=host_mode,
@@ -1011,6 +1176,13 @@ async def seed_bootstrap_policies(
                 make_default=True,
             )
         seeded.append(policy_id)
+    image_reconciled = await _reconcile_bootstrap_image_authority(
+        session,
+        service=service,
+        server_image=server_image,
+        host_image=host_image,
+    )
+    seeded.extend(item for item in image_reconciled if item not in seeded)
     return seeded
 
 

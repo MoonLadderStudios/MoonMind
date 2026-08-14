@@ -599,6 +599,17 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
                 return (0, "true\n" if container_running else "false\n", "")
             raise AssertionError(f"unexpected Docker inspect: {args}")
         if args[:2] == ("docker", "image") and args[2] == "inspect":
+            if args[4].startswith('{"repoDigests"'):
+                return (
+                    0,
+                    json.dumps(
+                        {
+                            "repoDigests": [immutable_server],
+                            "architecture": observed_architecture,
+                        }
+                    ),
+                    "",
+                )
             return (0, json.dumps(observed_architecture), "")
         if args[:3] == (
             "docker",

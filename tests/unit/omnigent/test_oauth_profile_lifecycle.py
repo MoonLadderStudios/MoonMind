@@ -1441,9 +1441,18 @@ async def test_server_image_attestation_records_live_digest_and_architecture() -
     runtime._run = AsyncMock(  # type: ignore[method-assign]
         side_effect=[
             (0, "omnigent-container-id\n", ""),
-            (0, json.dumps(declared_ref), ""),
+            (0, json.dumps("ghcr.io/omnigent-ai/omnigent-server:latest"), ""),
             (0, json.dumps(image_digest), ""),
-            (0, json.dumps("amd64"), ""),
+            (
+                0,
+                json.dumps(
+                    {
+                        "repoDigests": [declared_ref],
+                        "architecture": "amd64",
+                    }
+                ),
+                "",
+            ),
         ]
     )
 
@@ -1468,8 +1477,18 @@ async def test_server_image_attestation_rejects_declared_digest_mismatch() -> No
     runtime._run = AsyncMock(  # type: ignore[method-assign]
         side_effect=[
             (0, "omnigent-container-id\n", ""),
-            (0, json.dumps("server@sha256:" + "0" * 64), ""),
+            (0, json.dumps("server:latest"), ""),
             (0, json.dumps("sha256:" + "9" * 64), ""),
+            (
+                0,
+                json.dumps(
+                    {
+                        "repoDigests": ["server@sha256:" + "0" * 64],
+                        "architecture": "amd64",
+                    }
+                ),
+                "",
+            ),
         ]
     )
 
@@ -1494,7 +1513,16 @@ async def test_server_image_attestation_rejects_unreleased_architecture() -> Non
             (0, "omnigent-container-id\n", ""),
             (0, json.dumps(launch["serverImageRef"]), ""),
             (0, json.dumps(image_digest), ""),
-            (0, json.dumps("amd64"), ""),
+            (
+                0,
+                json.dumps(
+                    {
+                        "repoDigests": [launch["serverImageRef"]],
+                        "architecture": "amd64",
+                    }
+                ),
+                "",
+            ),
         ]
     )
 

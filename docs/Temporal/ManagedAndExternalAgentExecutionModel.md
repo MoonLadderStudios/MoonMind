@@ -14,7 +14,7 @@ with the run rather than rewriting it after registry or credential changes.
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-07
+**Last updated:** 2026-08-13
 **Authority:** Unified Temporal lifecycle and ownership model for true agent execution, including profile-bound Codex execution through Omnigent hosts
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines durable product and runtime contracts.
@@ -311,6 +311,13 @@ If a tag cannot be resolved and no safe local repository digest exists, policy
 activation fails closed with image readiness evidence. Credentialed conformance
 and release manifests still name the resolved immutable `OMNIGENT_IMAGE_REF`
 and `OMNIGENT_HOST_IMAGE_REF` values explicitly.
+
+Bootstrap-owned policy defaults advance through a new immutable version when
+those resolved repository digests move; operator-authored defaults are never
+rewritten by bootstrap. Live server attestation resolves the running
+container's image identity and requires the selected policy reference to appear
+in that image's observed repository digests. The mutable Compose input recorded
+in `Config.Image` is diagnostic configuration, not runtime image authority.
 
 ---
 
