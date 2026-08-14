@@ -289,12 +289,14 @@ class _FakeStore:
 
 class _FakeProxy:
     def __init__(self) -> None:
+        self.sessions: list[str] = []
         self.posted: list[dict[str, Any]] = []
         self.stopped: list[str] = []
         self.resolved: list[dict[str, Any]] = []
         self.resources: list[tuple[str, str, str | None]] = []
 
     async def get_session(self, session_id: str):
+        self.sessions.append(session_id)
         return {
             "id": session_id,
             "status": "running",
@@ -2318,7 +2320,79 @@ def test_terminal_binding_serves_durable_snapshot_without_provider_session() -> 
     assert body["readOnly"] is True
     assert body["providerSessionAvailable"] is False
     # Served from the durable projection; no upstream get_session call was made.
-    assert proxy.resources == []
+    assert proxy.sessions == []
+
+
+def test_terminal_catalog_contains_durable_session_without_provider_session() -> None:
+    store = _FakeStore(
+        row=_row(
+            status="completed",
+            omnigent_session_id="",
+            terminal_refs={"summary": "done"},
+            diagnostics_ref="art://diag",
+        )
+    )
+    client, proxy, _store = _build(store=store)
+
+    response = client.get(_path("v1/sessions"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["id"] for item in body["data"]] == [_CHAT_BINDING_ID]
+    assert body["data"][0]["readOnly"] is True
+    assert body["has_more"] is False
+    assert proxy.sessions == []
+
+
+def test_terminal_items_page_uses_captured_snapshot_after_provider_cleanup(
+    monkeypatch,
+) -> None:
+    metadata = dict(_row().metadata_)
+    authority = dict(metadata["capabilityAuthority"])
+    authority["providerSessionId"] = _PROVIDER_SESSION_ID
+    metadata["capabilityAuthority"] = authority
+    store = _FakeStore(
+        row=_row(
+            status="completed",
+            omnigent_session_id="",
+            final_snapshot_ref="artifact://captured-final",
+            metadata_=metadata,
+        )
+    )
+
+    class _Gateway:
+        async def read_text(self, artifact_ref: str) -> str:
+            assert artifact_ref == "artifact://captured-final"
+            return json.dumps(
+                {
+                    "items": [
+                        {"id": "item-1", "session_id": _PROVIDER_SESSION_ID},
+                        {"id": "item-2", "session_id": _PROVIDER_SESSION_ID},
+                    ]
+                }
+            )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.LocalOmnigentArtifactGateway",
+        _Gateway,
+    )
+    client, proxy, _store = _build(store=store)
+
+    response = client.get(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/items"),
+        params={"limit": "1", "order": "desc"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_more"] is True
+    assert body["first_id"] == "item-2"
+    assert body["last_id"] == "item-2"
+    assert body["data"] == [
+        {"id": "item-2", "session_id": _CHAT_BINDING_ID}
+    ]
+    assert _PROVIDER_SESSION_ID not in response.text
+    assert proxy.sessions == []
 
 
 # --- Strict stream cursors ---------------------------------------------------

@@ -304,6 +304,9 @@ def test_render_document_injects_bootstrap_and_base() -> None:
     assert "sameSocketHost" in document
     assert "window.EventSource =" in document
     assert "window.WebSocket =" in document
+    assert "MutationObserver" in document
+    assert "restoreScopedDocumentUrl" in document
+    assert "beforeunload" not in document
     # Assets are scoped in the rendered document too.
     assert f'src="{base}/assets/index-abc.js"' in document
 

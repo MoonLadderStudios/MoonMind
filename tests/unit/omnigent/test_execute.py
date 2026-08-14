@@ -33,6 +33,7 @@ from moonmind.omnigent.execute import (
     _resolve_agent_id,
     _resolve_initial_context_message,
     _restore_active_journals,
+    _session_authority_observation,
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
     normalize_omnigent_observation,
@@ -50,6 +51,31 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "expected"),
+    [
+        (None, (None, None)),
+        ({}, (None, None)),
+        ({"capabilities": {}, "status": ""}, ({}, None)),
+        (
+            {
+                "interventionCapabilities": {
+                    "sendMessage": True,
+                    "unknown": "not-a-bool",
+                },
+                "status": "idle",
+            },
+            ({"sendMessage": True}, "idle"),
+        ),
+    ],
+)
+def test_session_authority_observation_preserves_absent_fields(
+    snapshot: dict[str, Any] | None,
+    expected: tuple[dict[str, bool] | None, str | None],
+) -> None:
+    assert _session_authority_observation(snapshot) == expected
 
 
 @pytest.mark.asyncio
@@ -2446,7 +2472,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
             "session_id": "persisted-session",
             "agent_id": "agent-1",
             "endpoint_ref": "default",
-            "capabilities": {},
+            "capabilities": None,
             "session_status": "completed",
         }
     ]

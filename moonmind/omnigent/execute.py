@@ -105,6 +105,30 @@ def _session_id(payload: dict[str, Any]) -> str:
     return session_id
 
 
+def _session_authority_observation(
+    snapshot: Mapping[str, Any] | None,
+) -> tuple[dict[str, bool] | None, str | None]:
+    """Return only provider authority fields actually present in a snapshot."""
+
+    if not isinstance(snapshot, Mapping):
+        return None, None
+    raw_capabilities = snapshot.get("interventionCapabilities")
+    if not isinstance(raw_capabilities, Mapping):
+        raw_capabilities = snapshot.get("capabilities")
+    capabilities = (
+        {
+            str(key): value
+            for key, value in raw_capabilities.items()
+            if isinstance(key, str) and isinstance(value, bool)
+        }
+        if isinstance(raw_capabilities, Mapping)
+        else None
+    )
+    raw_status = snapshot.get("status")
+    status = raw_status if isinstance(raw_status, str) and raw_status.strip() else None
+    return capabilities, status
+
+
 def _agent_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     items = payload.get("items") or payload.get("agents") or payload.get("data") or []
     if isinstance(items, dict):
@@ -1491,30 +1515,16 @@ async def run_omnigent_execution(
                 else None
             )
             if callable(record_session_created):
-                snapshot_capabilities: dict[str, bool] = {}
-                if isinstance(initial_snapshot, dict):
-                    raw_capabilities = initial_snapshot.get(
-                        "interventionCapabilities"
-                    )
-                    if not isinstance(raw_capabilities, dict):
-                        raw_capabilities = initial_snapshot.get("capabilities")
-                    if isinstance(raw_capabilities, dict):
-                        snapshot_capabilities = {
-                            str(key): value
-                            for key, value in raw_capabilities.items()
-                            if isinstance(key, str) and isinstance(value, bool)
-                        }
+                snapshot_capabilities, snapshot_status = (
+                    _session_authority_observation(initial_snapshot)
+                )
                 await record_session_created(
                     request.idempotency_key,
                     session_id=session_id,
                     agent_id=target.agent_id,
                     endpoint_ref=str(selection.endpoint_ref or "default"),
                     capabilities=snapshot_capabilities,
-                    session_status=(
-                        str(initial_snapshot.get("status") or "running")
-                        if isinstance(initial_snapshot, dict)
-                        else None
-                    ),
+                    session_status=snapshot_status,
                 )
             if (
                 pre_dispatch_item_ids is None

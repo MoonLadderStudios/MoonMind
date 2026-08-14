@@ -452,9 +452,36 @@ def render_native_ui_document(
     "",
     "/c/" + bindingId + window.location.search + window.location.hash
   );
-  window.addEventListener("beforeunload", function () {
+  // Once BrowserRouter has captured the stock route, restore the authorized
+  // scoped URL without emitting a navigation event. The mounted router keeps
+  // its virtual location while reloads, bookmarks, and crash recovery continue
+  // to target a server route MoonMind actually serves.
+  function restoreScopedDocumentUrl() {
     window.history.replaceState(window.history.state, "", scopedDocumentUrl);
-  });
+  }
+  function restoreAfterFirstRender() {
+    const root = document.getElementById("root");
+    if (!root) return;
+    if (root.hasChildNodes()) {
+      restoreScopedDocumentUrl();
+      return;
+    }
+    const observer = new MutationObserver(function () {
+      if (!root.hasChildNodes()) return;
+      observer.disconnect();
+      restoreScopedDocumentUrl();
+    });
+    observer.observe(root, { childList: true });
+    window.setTimeout(function () {
+      observer.disconnect();
+      restoreScopedDocumentUrl();
+    }, 5000);
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", restoreAfterFirstRender, { once: true });
+  } else {
+    restoreAfterFirstRender();
+  }
 })();
 """.strip()
     injected = (
