@@ -228,6 +228,14 @@ def _oauth_session_is_expired(session: ManagedAgentOAuthSession) -> bool:
     )
 
 
+def _oauth_terminal_is_connected(session: ManagedAgentOAuthSession) -> bool:
+    if session.connected_at is None:
+        return False
+    if session.disconnected_at is None:
+        return True
+    return _as_aware_utc(session.connected_at) > _as_aware_utc(session.disconnected_at)
+
+
 def _oauth_default(runtime_id: str, key: str) -> str | None:
     return get_provider_default(runtime_id, key)
 
@@ -389,23 +397,62 @@ async def create_oauth_session(
 
     # Check for existing active session for this profile
     result = await db.execute(
-        select(ManagedAgentOAuthSession).where(
+        select(ManagedAgentOAuthSession)
+        .where(
             ManagedAgentOAuthSession.profile_id == request.profile_id,
             ManagedAgentOAuthSession.status.in_(_ACTIVE_SESSION_STATUSES),
+        )
+        .order_by(
+            ManagedAgentOAuthSession.created_at.desc(),
+            ManagedAgentOAuthSession.session_id.desc(),
         )
     )
     existing_session = result.scalars().first()
     if existing_session:
         if existing_session.requested_by_user_id == str(current_user.id):
-            response.status_code = status.HTTP_200_OK
-            return _oauth_session_response(
-                existing_session,
-                profile=existing_profile,
+            from api_service.services.oauth_session_service import (
+                get_oauth_session_workflow_status,
             )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="An active OAuth session already exists for this profile.",
-        )
+
+            try:
+                workflow_status = await get_oauth_session_workflow_status(
+                    existing_session.session_id
+                )
+            except RuntimeError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Unable to verify the active OAuth session. Please retry.",
+                ) from exc
+
+            if workflow_status == "RUNNING":
+                if (
+                    existing_session.session_transport == "moonmind_pty_ws"
+                    and _oauth_terminal_is_connected(existing_session)
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "OAuth terminal is already connected for this profile."
+                        ),
+                    )
+                response.status_code = status.HTTP_200_OK
+                return _oauth_session_response(
+                    existing_session,
+                    profile=existing_profile,
+                )
+
+            existing_session.status = OAuthSessionStatus.FAILED
+            existing_session.completed_at = _utcnow()
+            existing_session.failure_reason = "OAuth session workflow is not running"
+            await db.commit()
+            await _stop_oauth_auth_runner(existing_session)
+            existing_session = None
+
+        if existing_session is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An active OAuth session already exists for this profile.",
+            )
 
     session_id = f"oas_{uuid.uuid4().hex[:12]}"
 
@@ -545,6 +592,14 @@ async def attach_oauth_terminal(
             status_code=status.HTTP_410_GONE,
             detail="OAuth terminal session has expired.",
         )
+    if (
+        session_obj.session_transport == "moonmind_pty_ws"
+        and _oauth_terminal_is_connected(session_obj)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="OAuth terminal already has an active connection.",
+        )
     if not session_obj.terminal_session_id or not session_obj.terminal_bridge_id:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -595,6 +650,7 @@ async def oauth_terminal_websocket(
             not session_obj
             or session_obj.status not in _TERMINAL_ATTACH_STATUSES
             or _oauth_session_is_expired(session_obj)
+            or _oauth_terminal_is_connected(session_obj)
             or not session_obj.container_name
             or not expected_digest
             or token_used

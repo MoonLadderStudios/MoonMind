@@ -8,6 +8,35 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+async def get_oauth_session_workflow_status(session_id: str) -> str | None:
+    """Return the authoritative Temporal status for an OAuth session workflow.
+
+    ``None`` means the deterministic workflow ID does not exist. Other
+    inspection failures are surfaced so callers fail closed instead of
+    treating a database projection as authoritative.
+    """
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    workflow_id = f"oauth-session:{session_id}"
+    try:
+        adapter = TemporalClientAdapter()
+        client = await adapter.get_client()
+        description = await client.get_workflow_handle(workflow_id).describe()
+    except Exception as exc:
+        if getattr(getattr(exc, "status", None), "name", None) == "NOT_FOUND":
+            return None
+        raise RuntimeError(
+            f"Failed to inspect OAuth session workflow {workflow_id}"
+        ) from exc
+
+    status_name = getattr(getattr(description, "status", None), "name", None)
+    if not isinstance(status_name, str) or not status_name:
+        raise RuntimeError(
+            f"OAuth session workflow {workflow_id} returned no execution status"
+        )
+    return status_name
+
+
 async def start_oauth_session_workflow(session_model: Any) -> None:
     """Start the Temporal workflow for a new OAuth session.
 
