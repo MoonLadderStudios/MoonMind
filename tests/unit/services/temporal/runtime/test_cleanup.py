@@ -649,7 +649,11 @@ def test_mm_949_enabled_delete_uses_rescan_and_deletes_records_after_retention(
     assert session_store.load("sess-1") is None
 
 
-def test_mm_951_delete_budget_exhaustion_is_visible(tmp_path: Path) -> None:
+def test_mm_951_delete_budget_exhaustion_skips_size_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from moonmind.workflows.temporal.runtime import cleanup
+
     root = tmp_path / "agent_jobs"
     run_root = root / "run-1"
     _touch_old(run_root)
@@ -670,6 +674,13 @@ def test_mm_951_delete_budget_exhaustion_is_visible(tmp_path: Path) -> None:
         artifact_root=config.artifact_root,
     )
 
+    monkeypatch.setattr(
+        cleanup,
+        "_path_size",
+        lambda *_args, **_kwargs: pytest.fail(
+            "path budget must be checked before recursive size walks"
+        ),
+    )
     result = ManagedRuntimeWorkspaceJanitor(
         run_store=run_store,
         session_store=session_store,
@@ -681,7 +692,32 @@ def test_mm_951_delete_budget_exhaustion_is_visible(tmp_path: Path) -> None:
     assert workspace_decision.classification == "budget_exhausted"
     assert result.delete_budget_exhausted == 1
     assert result.metrics["resource.workspace.budget_exhausted"] == 1
+    assert workspace_decision.estimated_bytes == 0
     assert run_root.exists()
+
+
+def test_mm_949_temporal_result_uses_bounded_samples(tmp_path: Path) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    for index in range(100):
+        run_id = f"run-{index:03d}"
+        _touch_old(root / run_id)
+        run_store.save(_run(run_id, "completed", root=root))
+
+    result = _janitor(root, run_store, session_store).run()
+    payload = result.to_dict()
+
+    assert len(result.decisions) > 20
+    assert "decisions" not in payload
+    assert len(payload["candidateSamples"]) == 20
+    assert len(json.dumps(payload)) < 20_000
+
+    error_payload = replace(
+        result,
+        errors=tuple(f"cleanup error {index}" for index in range(100)),
+    ).to_dict()
+    assert len(error_payload["errors"]) == 21
+    assert error_payload["errors"][-1] == "80 additional cleanup errors"
 
 
 def test_mm_949_config_from_env_normalizes_artifact_root_and_caps() -> None:

@@ -2100,42 +2100,6 @@ async def _maybe_call_heartbeat(
     if inspect.isawaitable(result):
         await result
 
-_CLEANUP_HEARTBEAT_MIN_INTERVAL_SECONDS = 5.0
-
-
-def _throttled_cleanup_heartbeat(
-    *,
-    min_interval_seconds: float = _CLEANUP_HEARTBEAT_MIN_INTERVAL_SECONDS,
-    monotonic: Callable[[], float] = time.monotonic,
-) -> Callable[[Mapping[str, Any]], None]:
-    """Return a rate-limited heartbeat sink for managed-runtime cleanup progress.
-
-    The janitor reports progress per filesystem path. Forwarding each one is a
-    heartbeat storm that overflows the SDK's bounded pending-heartbeat queue and
-    fails the activity with ``QueueFull``, so liveness is reported at most once
-    per interval instead of once per path.
-    """
-
-    state = {"last": None}
-
-    def _emit(progress: Mapping[str, Any]) -> None:
-        if not temporal_activity.in_activity():
-            return
-        now = monotonic()
-        last = state["last"]
-        if last is not None and now - last < min_interval_seconds:
-            return
-        state["last"] = now
-        temporal_activity.heartbeat(
-            {
-                "activityType": "agent_runtime.cleanup_managed_runtime_files",
-                **dict(progress),
-            }
-        )
-
-    return _emit
-
-
 async def _await_with_activity_heartbeats(
     awaitable: Awaitable[Any],
     *,
@@ -11794,14 +11758,24 @@ class TemporalAgentRuntimeActivities:
                 failed=True,
                 reason="docker reference scan unavailable",
             )
-        result = cleanup_managed_runtime_files(
-            run_store=self._run_store,
-            session_store=session_store,
-            config=config,
-            docker_reference_provider=(
-                None if docker_state is None else lambda: docker_state
+        # The janitor performs recursive synchronous filesystem work. Keep it
+        # off this fleet's async loop so live status/control Activities remain
+        # serviceable, and own heartbeats from the event-loop side.
+        result = await _await_with_activity_heartbeats(
+            asyncio.to_thread(
+                cleanup_managed_runtime_files,
+                run_store=self._run_store,
+                session_store=session_store,
+                config=config,
+                docker_reference_provider=(
+                    None if docker_state is None else lambda: docker_state
+                ),
+                progress_callback=None,
             ),
-            progress_callback=_throttled_cleanup_heartbeat(),
+            heartbeat_payload={
+                "activityType": "agent_runtime.cleanup_managed_runtime_files",
+                "phase": "filesystem_cleanup",
+            },
         )
         result_payload = result.to_dict()
         if action_kind:
