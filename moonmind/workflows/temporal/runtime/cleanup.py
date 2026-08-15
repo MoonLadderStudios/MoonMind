@@ -1127,7 +1127,6 @@ class ManagedRuntimeWorkspaceJanitor:
             for decision in decisions
             if decision.classification == "error"
         )
-        all_errors = list(_bounded_cleanup_errors(all_errors))
         metrics: dict[str, int] = {}
         for decision in decisions:
             key = f"resource.{decision.kind}.{decision.classification}"

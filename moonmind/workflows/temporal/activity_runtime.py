@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import fcntl
+import functools
 import gzip
 from email.message import EmailMessage
 import hashlib
@@ -20,6 +21,7 @@ import shutil
 import smtplib
 import stat
 import tempfile
+import threading
 import time
 import tarfile
 from dataclasses import dataclass
@@ -2135,6 +2137,30 @@ async def _await_with_activity_heartbeats(
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+
+async def _run_sync_call_until_stopped(
+    call: Callable[[], Any],
+    *,
+    cancellation_requested: threading.Event,
+) -> Any:
+    """Keep ownership of a sync worker until it exits after cancellation."""
+
+    worker = asyncio.get_running_loop().run_in_executor(None, call)
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError:
+        cancellation_requested.set()
+        while not worker.done():
+            try:
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # Repeated Activity cancellation must not orphan the worker.
+                continue
+        with contextlib.suppress(BaseException):
+            worker.result()
+        raise
+
 
 class TemporalPlanActivities:
     """Implementation helpers for ``plan.*`` activities."""
@@ -11760,17 +11786,28 @@ class TemporalAgentRuntimeActivities:
             )
         # The janitor performs recursive synchronous filesystem work. Keep it
         # off this fleet's async loop so live status/control Activities remain
-        # serviceable, and own heartbeats from the event-loop side.
+        # serviceable, and own heartbeats from the event-loop side. Cancellation
+        # is cooperative, and the Activity does not release ownership until the
+        # janitor has stopped and released its process lock.
+        cancellation_requested = threading.Event()
+
+        def _check_cleanup_cancellation(_progress: Mapping[str, object]) -> None:
+            if cancellation_requested.is_set():
+                raise asyncio.CancelledError
+
         result = await _await_with_activity_heartbeats(
-            asyncio.to_thread(
-                cleanup_managed_runtime_files,
-                run_store=self._run_store,
-                session_store=session_store,
-                config=config,
-                docker_reference_provider=(
-                    None if docker_state is None else lambda: docker_state
+            _run_sync_call_until_stopped(
+                functools.partial(
+                    cleanup_managed_runtime_files,
+                    run_store=self._run_store,
+                    session_store=session_store,
+                    config=config,
+                    docker_reference_provider=(
+                        None if docker_state is None else lambda: docker_state
+                    ),
+                    progress_callback=_check_cleanup_cancellation,
                 ),
-                progress_callback=None,
+                cancellation_requested=cancellation_requested,
             ),
             heartbeat_payload={
                 "activityType": "agent_runtime.cleanup_managed_runtime_files",

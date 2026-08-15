@@ -604,7 +604,11 @@ report must use an artifact reference.
 The retained-state filesystem pass runs off the agent-runtime worker's async
 event loop. The Activity owner emits bounded timer-driven heartbeats while that
 pass runs so recursive scanning or deletion cannot starve live runtime status,
-control, or result Activities that share the worker fleet.
+control, or result Activities that share the worker fleet. Activity cancellation
+sets a cooperative stop signal, and the Activity retains ownership until the
+janitor thread exits and releases its process lock. Cleanup errors remain complete
+in the in-process result and are bounded exactly once when projected into the
+Temporal result, preserving an accurate omitted-error count.
 
 ---
 
@@ -681,8 +685,9 @@ The implementation should include tests for:
 8b. an owner record that no longer satisfies its current model protects the paths
    it names, is reported in the pass result, and is itself reclaimed only once
    those paths are gone;
-8c. filesystem cleanup runs off the shared async worker loop and emits bounded
-   timer-driven heartbeats without per-path heartbeat traffic;
+8c. filesystem cleanup runs off the shared async worker loop, emits bounded
+   timer-driven heartbeats without per-path heartbeat traffic, and retains
+   Activity ownership through cooperative cancellation until the janitor exits;
 9. paths outside `/work/agent_jobs` are skipped;
 10. symlink candidates are skipped;
 11. precise live Docker owner references and candidate-scoped mounts protect

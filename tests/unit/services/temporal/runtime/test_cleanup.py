@@ -13,6 +13,7 @@ from moonmind.schemas.managed_session_models import CodexManagedSessionRecord
 from moonmind.workflows.temporal.runtime.cleanup import (
     DockerReferenceState,
     ManagedRuntimeCleanupConfig,
+    ManagedRuntimeCleanupDecision,
     ManagedRuntimeWorkspaceJanitor,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
@@ -718,6 +719,41 @@ def test_mm_949_temporal_result_uses_bounded_samples(tmp_path: Path) -> None:
     ).to_dict()
     assert len(error_payload["errors"]) == 21
     assert error_payload["errors"][-1] == "80 additional cleanup errors"
+
+
+def test_mm_949_cleanup_summary_only_bounds_errors_at_temporal_projection(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "agent_jobs"
+    run_store, session_store = _stores(root)
+    janitor = ManagedRuntimeWorkspaceJanitor(
+        run_store=run_store,
+        session_store=session_store,
+        config=_config(root),
+        now=lambda: NOW,
+    )
+    decisions = tuple(
+        ManagedRuntimeCleanupDecision(
+            kind="workspace",
+            path=f"store:workspaces/run-{index:03d}",
+            ownership_root=None,
+            classification="error",
+            reason=f"cleanup error {index}",
+        )
+        for index in range(100)
+    )
+
+    result = janitor._summarize(
+        decisions,
+        scanned_run_records=0,
+        scanned_session_records=0,
+        errors=(),
+    )
+    payload = result.to_dict()
+
+    assert len(result.errors) == 100
+    assert len(payload["errors"]) == 21
+    assert payload["errors"][-1] == "80 additional cleanup errors"
 
 
 def test_mm_949_config_from_env_normalizes_artifact_root_and_caps() -> None:

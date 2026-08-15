@@ -5803,9 +5803,74 @@ async def test_cleanup_filesystem_pass_does_not_block_shared_activity_loop(
             }
         }
     )
-    await loop_task
+    await asyncio.wait_for(loop_task, timeout=1.0)
 
     assert result["eventLoopRemainedResponsive"] is True
+
+
+async def test_cleanup_cancellation_waits_for_janitor_thread_to_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancellation must retain Activity ownership until the janitor exits."""
+
+    from moonmind.workflows.temporal.runtime import cleanup as cleanup_module
+
+    cleanup_started = Event()
+    cancellation_seen = Event()
+    release_cleanup = Event()
+    cleanup_finished = Event()
+
+    class _CleanupResult:
+        def to_dict(self) -> dict[str, object]:
+            return {"errors": []}
+
+    def _blocking_cleanup(*, progress_callback: Any, **_kwargs: object) -> _CleanupResult:
+        cleanup_started.set()
+        try:
+            while True:
+                try:
+                    progress_callback({"phase": "size_walk"})
+                except asyncio.CancelledError:
+                    cancellation_seen.set()
+                    release_cleanup.wait(timeout=1.0)
+                    raise
+                if release_cleanup.wait(timeout=0.01):
+                    return _CleanupResult()
+        finally:
+            cleanup_finished.set()
+
+    monkeypatch.setattr(
+        cleanup_module,
+        "cleanup_managed_runtime_files",
+        _blocking_cleanup,
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=ManagedRunStore(tmp_path / "managed_runs")
+    )
+    cleanup_task = asyncio.create_task(
+        activities.agent_runtime_cleanup_managed_runtime_files(
+            {
+                "config": {
+                    "dryRun": True,
+                    "runtimeStoreRoot": str(tmp_path),
+                    "artifactRoot": str(tmp_path / "artifacts"),
+                    "lockPath": str(tmp_path / ".janitor.lock"),
+                }
+            }
+        )
+    )
+
+    assert await asyncio.to_thread(cleanup_started.wait, 1.0)
+    cleanup_task.cancel()
+    assert await asyncio.to_thread(cancellation_seen.wait, 1.0)
+    await asyncio.sleep(0.05)
+    assert cleanup_task.done() is False
+
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(cleanup_task, timeout=1.0)
+    assert cleanup_finished.is_set()
 
 
 async def test_agent_runtime_cleanup_managed_runtime_files_activity_boundary(
@@ -6103,15 +6168,13 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
         }
     )
 
-    assert cleanup_calls == [
-        {
-            "run_store": run_store,
-            "session_store_root": tmp_path / "managed_sessions",
-            "runtime_store_root": tmp_path,
-            "docker_reference_provider": None,
-            "progress_callback": None,
-        }
-    ]
+    assert len(cleanup_calls) == 1
+    cleanup_call = cleanup_calls[0]
+    assert cleanup_call["run_store"] is run_store
+    assert cleanup_call["session_store_root"] == tmp_path / "managed_sessions"
+    assert cleanup_call["runtime_store_root"] == tmp_path
+    assert cleanup_call["docker_reference_provider"] is None
+    assert callable(cleanup_call["progress_callback"])
     assert heartbeat_payloads == [
         {
             "activityType": "agent_runtime.cleanup_managed_runtime_files",
