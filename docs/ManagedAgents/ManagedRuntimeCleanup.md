@@ -594,6 +594,22 @@ class ManagedRuntimeCleanupResult:
     errors: tuple[str, ...]
 ```
 
+The Temporal-facing result contains aggregate counters, bounded errors, and
+bounded candidate/deletion samples only. The janitor may retain complete
+per-candidate decisions in process while calculating the summary, but it must
+not serialize that unbounded list into Activity results, Workflow results, or a
+later scheduled run's `lastCompletionResult`. A future need for the complete
+report must use an artifact reference.
+
+The retained-state filesystem pass runs off the agent-runtime worker's async
+event loop. The Activity owner emits bounded timer-driven heartbeats while that
+pass runs so recursive scanning or deletion cannot starve live runtime status,
+control, or result Activities that share the worker fleet. Activity cancellation
+sets a cooperative stop signal, and the Activity retains ownership until the
+janitor thread exits and releases its process lock. Cleanup errors remain complete
+in the in-process result and are bounded exactly once when projected into the
+Temporal result, preserving an accurate omitted-error count.
+
 ---
 
 ## 9. State and path classification
@@ -669,7 +685,9 @@ The implementation should include tests for:
 8b. an owner record that no longer satisfies its current model protects the paths
    it names, is reported in the pass result, and is itself reclaimed only once
    those paths are gone;
-8c. filesystem progress reporting cannot exhaust the activity heartbeat queue;
+8c. filesystem cleanup runs off the shared async worker loop, emits bounded
+   timer-driven heartbeats without per-path heartbeat traffic, and retains
+   Activity ownership through cooperative cancellation until the janitor exits;
 9. paths outside `/work/agent_jobs` are skipped;
 10. symlink candidates are skipped;
 11. precise live Docker owner references and candidate-scoped mounts protect
@@ -677,6 +695,8 @@ The implementation should include tests for:
     every retained child;
 12. second scan prevents deletion if a new active owner appears;
 13. delete path and byte budgets stop a pass cleanly;
+13b. candidates encountered after the delete-path cap do not receive recursive
+   size walks;
 14. artifact directories are retained longer than workspace roots;
 15. record deletion is disabled when record retention is unset.
 

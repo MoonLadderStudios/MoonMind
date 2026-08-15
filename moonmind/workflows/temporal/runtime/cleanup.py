@@ -73,8 +73,17 @@ _RAW_ARTIFACT_REF_KEYS = (
     "latest_checkpoint_ref",
 )
 _MAX_REPORTED_UNREADABLE_RECORDS = 20
+_MAX_REPORTED_CLEANUP_ERRORS = 20
 
 _FALSEY = frozenset({"", "0", "false", "no", "off"})
+
+
+def _bounded_cleanup_errors(errors: Sequence[str]) -> tuple[str, ...]:
+    bounded = tuple(errors[:_MAX_REPORTED_CLEANUP_ERRORS])
+    omitted = len(errors) - len(bounded)
+    if omitted <= 0:
+        return bounded
+    return (*bounded, f"{omitted} additional cleanup errors")
 
 
 @dataclass(frozen=True)
@@ -244,28 +253,12 @@ class ManagedRuntimeCleanupResult:
             "skippedUnreadableOwner": self.skipped_unreadable_owner,
             "unreadableOwnerRecords": self.unreadable_owner_records,
             "deleteBudgetExhausted": self.delete_budget_exhausted,
-            "errors": list(self.errors),
+            "errors": list(_bounded_cleanup_errors(self.errors)),
             "metrics": dict(self.metrics),
             "candidateSamples": [
                 sample.to_dict() for sample in self.candidate_samples
             ],
             "deletedSamples": [sample.to_dict() for sample in self.deleted_samples],
-            "decisions": [
-                {
-                    "kind": decision.kind,
-                    "path": decision.path,
-                    "ownershipRoot": decision.ownership_root,
-                    "classification": decision.classification,
-                    "reason": decision.reason,
-                    "newestActivityAt": (
-                        decision.newest_activity_at.isoformat()
-                        if decision.newest_activity_at
-                        else None
-                    ),
-                    "estimatedBytes": decision.estimated_bytes,
-                }
-                for decision in self.decisions
-            ],
         }
 
 
@@ -844,16 +837,15 @@ class ManagedRuntimeWorkspaceJanitor:
                 return self._decision(
                     candidate, "protected_recent", "grace window has not elapsed", newest
                 )
-            self._emit_progress("size", candidate)
-            estimated_bytes = _path_size(path, progress_callback=self._progress_callback)
             if budget.deleted_paths >= self._config.max_delete_paths:
                 return self._decision(
                     candidate,
                     "budget_exhausted",
                     "delete path cap reached",
                     newest,
-                    estimated_bytes,
                 )
+            self._emit_progress("size", candidate)
+            estimated_bytes = _path_size(path, progress_callback=self._progress_callback)
             max_bytes = self._config.max_delete_bytes
             if max_bytes is not None and budget.deleted_bytes + estimated_bytes > max_bytes:
                 return self._decision(

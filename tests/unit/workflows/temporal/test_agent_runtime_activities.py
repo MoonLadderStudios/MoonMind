@@ -11,8 +11,10 @@ import asyncio
 import hashlib
 import json
 import os
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -5755,41 +5757,120 @@ async def test_agent_runtime_reconcile_orphan_reap_failure_is_best_effort() -> N
     assert result["orphanVolumesScanned"] == 0
     assert result["orphanVolumesReaped"] == 0
 
-async def test_cleanup_progress_heartbeats_are_rate_limited(
+async def test_cleanup_filesystem_pass_does_not_block_shared_activity_loop(
+    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A per-path heartbeat storm overflows the SDK queue and fails the pass."""
+    """A long janitor pass must not starve status Activities on this worker."""
 
-    from moonmind.workflows.temporal import activity_runtime as activity_runtime_module
+    from moonmind.workflows.temporal.runtime import cleanup as cleanup_module
 
-    sent: list[dict[str, object]] = []
-    clock = {"now": 100.0}
+    cleanup_started = Event()
+    event_loop_advanced = Event()
+
+    class _CleanupResult:
+        def __init__(self, responsive: bool) -> None:
+            self._responsive = responsive
+
+        def to_dict(self) -> dict[str, object]:
+            return {"eventLoopRemainedResponsive": self._responsive, "errors": []}
+
+    def _blocking_cleanup(**_kwargs: object) -> _CleanupResult:
+        cleanup_started.set()
+        return _CleanupResult(event_loop_advanced.wait(timeout=1.0))
+
+    async def _advance_event_loop() -> None:
+        while not cleanup_started.is_set():
+            await asyncio.sleep(0)
+        event_loop_advanced.set()
+
     monkeypatch.setattr(
-        activity_runtime_module.temporal_activity,
-        "in_activity",
-        lambda: True,
+        cleanup_module,
+        "cleanup_managed_runtime_files",
+        _blocking_cleanup,
     )
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    activities = TemporalAgentRuntimeActivities(run_store=run_store)
+    loop_task = asyncio.create_task(_advance_event_loop())
+
+    result = await activities.agent_runtime_cleanup_managed_runtime_files(
+        {
+            "config": {
+                "dryRun": True,
+                "runtimeStoreRoot": str(tmp_path),
+                "artifactRoot": str(tmp_path / "artifacts"),
+                "lockPath": str(tmp_path / ".janitor.lock"),
+            }
+        }
+    )
+    await asyncio.wait_for(loop_task, timeout=1.0)
+
+    assert result["eventLoopRemainedResponsive"] is True
+
+
+async def test_cleanup_cancellation_waits_for_janitor_thread_to_stop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancellation must retain Activity ownership until the janitor exits."""
+
+    from moonmind.workflows.temporal.runtime import cleanup as cleanup_module
+
+    cleanup_started = Event()
+    cancellation_seen = Event()
+    release_cleanup = Event()
+    cleanup_finished = Event()
+
+    class _CleanupResult:
+        def to_dict(self) -> dict[str, object]:
+            return {"errors": []}
+
+    def _blocking_cleanup(*, progress_callback: Any, **_kwargs: object) -> _CleanupResult:
+        cleanup_started.set()
+        try:
+            while True:
+                try:
+                    progress_callback({"phase": "size_walk"})
+                except asyncio.CancelledError:
+                    cancellation_seen.set()
+                    release_cleanup.wait(timeout=1.0)
+                    raise
+                if release_cleanup.wait(timeout=0.01):
+                    return _CleanupResult()
+        finally:
+            cleanup_finished.set()
+
     monkeypatch.setattr(
-        activity_runtime_module.temporal_activity,
-        "heartbeat",
-        lambda payload: sent.append(dict(payload)),
+        cleanup_module,
+        "cleanup_managed_runtime_files",
+        _blocking_cleanup,
+    )
+    activities = TemporalAgentRuntimeActivities(
+        run_store=ManagedRunStore(tmp_path / "managed_runs")
+    )
+    cleanup_task = asyncio.create_task(
+        activities.agent_runtime_cleanup_managed_runtime_files(
+            {
+                "config": {
+                    "dryRun": True,
+                    "runtimeStoreRoot": str(tmp_path),
+                    "artifactRoot": str(tmp_path / "artifacts"),
+                    "lockPath": str(tmp_path / ".janitor.lock"),
+                }
+            }
+        )
     )
 
-    emit = activity_runtime_module._throttled_cleanup_heartbeat(
-        min_interval_seconds=5.0,
-        monotonic=lambda: clock["now"],
-    )
-    for index in range(2000):
-        emit({"phase": "size_walk", "path": f"/work/agent_jobs/mm:{index}/repo"})
+    assert await asyncio.to_thread(cleanup_started.wait, 1.0)
+    cleanup_task.cancel()
+    assert await asyncio.to_thread(cancellation_seen.wait, 1.0)
+    await asyncio.sleep(0.05)
+    assert cleanup_task.done() is False
 
-    assert len(sent) == 1
-    assert sent[0]["activityType"] == "agent_runtime.cleanup_managed_runtime_files"
-    assert sent[0]["phase"] == "size_walk"
-
-    clock["now"] += 5.0
-    emit({"phase": "delete", "path": "/work/agent_jobs/mm:old"})
-    assert len(sent) == 2
-    assert sent[1]["phase"] == "delete"
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(cleanup_task, timeout=1.0)
+    assert cleanup_finished.is_set()
 
 
 async def test_agent_runtime_cleanup_managed_runtime_files_activity_boundary(
@@ -5842,8 +5923,8 @@ async def test_agent_runtime_cleanup_managed_runtime_files_activity_boundary(
     assert result["disabled"] is False
     assert result["dryRun"] is True
     assert result["scannedRunRecords"] == 1
-    assert result["decisions"][0]["classification"] == "eligible"
-    assert result["decisions"][0]["reason"] == "dry-run would delete"
+    assert result["candidateSamples"][0]["classification"] == "eligible"
+    assert result["candidateSamples"][0]["reason"] == "dry-run would delete"
 
 
 async def test_agent_runtime_cleanup_managed_runtime_files_uses_docker_references(
@@ -5899,8 +5980,8 @@ async def test_agent_runtime_cleanup_managed_runtime_files_uses_docker_reference
         }
     )
 
-    assert result["decisions"][0]["classification"] == "protected_active"
-    assert result["decisions"][0]["reason"] == "live Docker reference"
+    assert result["candidateSamples"][0]["classification"] == "protected_active"
+    assert result["candidateSamples"][0]["reason"] == "live Docker reference"
     assert run_root.exists()
 
 
@@ -5947,8 +6028,11 @@ async def test_agent_runtime_cleanup_managed_runtime_files_fails_closed_without_
         }
     )
 
-    assert result["decisions"][0]["classification"] == "protected_active"
-    assert result["decisions"][0]["reason"] == "docker reference scan unavailable"
+    assert result["candidateSamples"][0]["classification"] == "protected_active"
+    assert (
+        result["candidateSamples"][0]["reason"]
+        == "docker reference scan unavailable"
+    )
     assert result["errors"] == ["docker reference scan unavailable"]
     assert run_root.exists()
 
@@ -6008,6 +6092,7 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
 
     run_store = ManagedRunStore(tmp_path / "managed_runs")
     cleanup_calls: list[dict[str, object]] = []
+    heartbeat_payloads: list[dict[str, object]] = []
 
     class _CleanupResult:
         def to_dict(self) -> dict[str, Any]:
@@ -6041,15 +6126,30 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
                 "session_store_root": session_store.store_root,
                 "runtime_store_root": config.runtime_store_root,
                 "docker_reference_provider": docker_reference_provider,
-                "progress_callback": callable(progress_callback),
+                "progress_callback": progress_callback,
             }
         )
         return _CleanupResult()
+
+    async def _fake_await_with_activity_heartbeats(
+        awaitable: Any,
+        *,
+        heartbeat_payload: Mapping[str, object],
+        interval_seconds: float | None = None,
+    ) -> Any:
+        del interval_seconds
+        heartbeat_payloads.append(dict(heartbeat_payload))
+        return await awaitable
 
     monkeypatch.setattr(
         cleanup_module,
         "cleanup_managed_runtime_files",
         _fake_cleanup_managed_runtime_files,
+    )
+    monkeypatch.setattr(
+        activity_runtime_module,
+        "_await_with_activity_heartbeats",
+        _fake_await_with_activity_heartbeats,
     )
 
     activities = TemporalAgentRuntimeActivities(
@@ -6068,13 +6168,17 @@ async def test_agent_runtime_cleanup_managed_runtime_files_returns_observability
         }
     )
 
-    assert cleanup_calls == [
+    assert len(cleanup_calls) == 1
+    cleanup_call = cleanup_calls[0]
+    assert cleanup_call["run_store"] is run_store
+    assert cleanup_call["session_store_root"] == tmp_path / "managed_sessions"
+    assert cleanup_call["runtime_store_root"] == tmp_path
+    assert cleanup_call["docker_reference_provider"] is None
+    assert callable(cleanup_call["progress_callback"])
+    assert heartbeat_payloads == [
         {
-            "run_store": run_store,
-            "session_store_root": tmp_path / "managed_sessions",
-            "runtime_store_root": tmp_path,
-            "docker_reference_provider": None,
-            "progress_callback": True,
+            "activityType": "agent_runtime.cleanup_managed_runtime_files",
+            "phase": "filesystem_cleanup",
         }
     ]
     assert result["eligibleRoots"] == 1
