@@ -33,6 +33,7 @@ from api_service.api.routers.omnigent_bridge import (
 )
 from api_service.api.routers.retrieval_gateway import get_capability_registry
 from api_service.auth_providers import get_current_user
+from moonmind.omnigent import native_ui_compat
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
     HOST_PROTOCOL_MODE_PROXY,
@@ -288,12 +289,14 @@ class _FakeStore:
 
 class _FakeProxy:
     def __init__(self) -> None:
+        self.sessions: list[str] = []
         self.posted: list[dict[str, Any]] = []
         self.stopped: list[str] = []
         self.resolved: list[dict[str, Any]] = []
         self.resources: list[tuple[str, str, str | None]] = []
 
     async def get_session(self, session_id: str):
+        self.sessions.append(session_id)
         return {
             "id": session_id,
             "status": "running",
@@ -474,6 +477,44 @@ def test_owner_snapshot_virtualizes_provider_identity() -> None:
     assert body["readOnly"] is False
 
 
+def test_native_boot_metadata_is_local_and_safe() -> None:
+    client, proxy, _store = _build()
+
+    info = client.get(_path("v1/info"))
+    current_user = client.get(_path("v1/me"))
+    projects = client.get(_path("v1/sessions/projects"))
+
+    assert info.status_code == 200
+    assert info.json()["accounts_enabled"] is False
+    assert info.json()["needs_setup"] is False
+    assert current_user.status_code == 200
+    assert current_user.json() == {
+        "user_id": "workflow-owner",
+        "is_admin": False,
+    }
+    assert projects.status_code == 200
+    assert projects.json() == []
+    # Boot probes never acquire the upstream account or project authority.
+    assert proxy.resources == []
+
+
+def test_session_catalog_contains_only_the_bound_virtual_session() -> None:
+    client, _proxy, _store = _build()
+
+    response = client.get(_path("v1/sessions"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["object"] == "list"
+    assert body["has_more"] is False
+    assert body["first_id"] == _CHAT_BINDING_ID
+    assert body["last_id"] == _CHAT_BINDING_ID
+    assert len(body["data"]) == 1
+    assert body["data"][0]["id"] == _CHAT_BINDING_ID
+    assert body["data"][0]["readOnly"] is False
+    assert _PROVIDER_SESSION_ID not in response.text
+
+
 def test_non_owner_gets_non_enumerating_binding_unknown() -> None:
     metadata = {**_row().metadata_, "callerAuthorities": {}}
     client, _proxy, _store = _build(
@@ -604,6 +645,399 @@ def test_native_http_mutation_is_scanned_receipted_and_replay_safe(
         if entry["metadata"].get("controlOutcome") == "posted"
     )
     assert posted["metadata"]["normalizedResult"]["statusCode"] == 307
+
+
+_STOCK_NATIVE_MUTATION_CASES = (
+    ("POST", "resources/terminals", {"cols": 80}, "terminal_create"),
+    ("DELETE", "resources/terminals/t-1", None, "terminal_close"),
+    (
+        "POST",
+        "resources/environments/default/shell",
+        {"command": "pwd"},
+        "terminal_shell",
+    ),
+    (
+        "PUT",
+        "resources/environments/default/filesystem/src/main.py",
+        {"content": "hello"},
+        "workspace_edit",
+    ),
+    (
+        "PATCH",
+        "resources/environments/default/filesystem/src/main.py",
+        {"content": "hello"},
+        "workspace_edit",
+    ),
+    (
+        "DELETE",
+        "resources/environments/default/filesystem/src/main.py",
+        None,
+        "workspace_delete",
+    ),
+    ("POST", "resources/files", {"name": "note.txt"}, "resource_upload"),
+    ("POST", "resources/files/file-1/attach", {}, "resource_attach"),
+    ("GET", "browser", None, "browser_pane"),
+    ("POST", "browser/open", {"url": "about:blank"}, "browser_pane"),
+    ("DELETE", "browser/open", None, "browser_pane"),
+    ("POST", "subagents/agent-1/interrupt", {}, "subagent_control"),
+    ("POST", "tasks/task-1", {"title": "follow up"}, "task_mutate"),
+    ("PATCH", "tasks/task-1", {"completed": True}, "task_mutate"),
+    ("POST", "reconnect", {}, "session_reconnect"),
+)
+
+
+def test_stock_native_mutation_cases_exactly_cover_the_pinned_inventory() -> None:
+    base_operation_names = {
+        operation.name for operation in native_ui_compat.FACADE_OPERATIONS
+    }
+    pinned_inventory = {
+        (route.name, method)
+        for route in native_ui_compat.NATIVE_UI_ROUTES
+        if route.transport == native_ui_compat.TRANSPORT_HTTP
+        and route.mutation
+        and route.name not in base_operation_names
+        for method in route.methods
+    }
+    exercised = {
+        (operation, method)
+        for method, _suffix, _payload, operation in _STOCK_NATIVE_MUTATION_CASES
+    }
+
+    assert exercised == pinned_inventory
+
+
+_STOCK_NATIVE_READ_CASES = (
+    ("items", "session_items", "relay"),
+    ("resources/terminals", "terminal_view", "relay"),
+    ("resources/terminals/t-1", "terminal_status", "relay"),
+    ("resources/terminals/t-1/logs", "execution_logs", "relay"),
+    ("resources/files/file-1/content", "resource_download", "resource"),
+    ("subagents", "subagent_tree", "relay"),
+    ("tasks", "task_todo", "relay"),
+    (None, "host_liveness", "local"),
+    (None, "runner_liveness", "local"),
+)
+
+
+def test_stock_native_read_cases_exactly_cover_the_pinned_inventory() -> None:
+    base_operation_names = {
+        operation.name for operation in native_ui_compat.FACADE_OPERATIONS
+    }
+    pinned_inventory = {
+        (route.name, method)
+        for route in native_ui_compat.NATIVE_UI_ROUTES
+        if route.transport == native_ui_compat.TRANSPORT_HTTP
+        and not route.mutation
+        and route.name not in base_operation_names
+        for method in route.methods
+    }
+    exercised = {
+        (operation, "GET")
+        for _suffix, operation, _owner in _STOCK_NATIVE_READ_CASES
+    }
+
+    assert exercised == pinned_inventory
+
+
+@pytest.mark.parametrize(
+    ("suffix", "operation", "owner"),
+    _STOCK_NATIVE_READ_CASES,
+)
+def test_every_additional_stock_native_read_uses_the_bound_identity(
+    monkeypatch,
+    suffix: str | None,
+    operation: str,
+    owner: str,
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.resolved_api_token",
+        lambda: "upstream-only",
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.resolved_server_url",
+        lambda: "https://stock-omnigent.invalid",
+    )
+    upstream_calls: list[dict[str, Any]] = []
+    client_headers: list[dict[str, str]] = []
+    response_body = json.dumps(
+        {"ok": True, "session_id": _PROVIDER_SESSION_ID}
+    ).encode()
+
+    class _Content:
+        async def read(self, _limit: int) -> bytes:
+            return response_body
+
+    class _Response:
+        status = 200
+        headers = {"content-type": "application/json"}
+        content = _Content()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Client:
+        def __init__(self, *, headers=None, **_kwargs):
+            client_headers.append(dict(headers or {}))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, request_method: str, url: str, **kwargs):
+            upstream_calls.append({"method": request_method, "url": url, **kwargs})
+            return _Response()
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession", _Client
+    )
+    client, proxy, _store = _build()
+    if operation == "host_liveness":
+        path = _path("v1/hosts")
+    elif operation == "runner_liveness":
+        path = _path(f"v1/runners/{_CHAT_BINDING_ID}/status")
+    else:
+        path = _path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}")
+    if operation == "session_items":
+        path += "?limit=80&order=desc"
+
+    response = client.get(
+        path,
+        headers={
+            "Authorization": "Bearer moonmind-browser",
+            "Cookie": "moonmind=session",
+            "X-CSRF-Token": "browser-csrf",
+        },
+    )
+
+    assert response.status_code == 200
+    assert _PROVIDER_SESSION_ID not in response.text
+    if owner == "relay":
+        assert len(upstream_calls) == 1
+        assert _PROVIDER_SESSION_ID in upstream_calls[0]["url"]
+        assert _CHAT_BINDING_ID not in upstream_calls[0]["url"]
+        if operation == "session_items":
+            assert upstream_calls[0]["url"].endswith("?limit=80&order=desc")
+        assert client_headers == [
+            {"Accept": "*/*", "Authorization": "Bearer upstream-only"}
+        ]
+        serialized_headers = json.dumps(client_headers).lower()
+        assert "moonmind-browser" not in serialized_headers
+        assert "cookie" not in serialized_headers
+        assert "csrf" not in serialized_headers
+    elif owner == "resource":
+        assert upstream_calls == []
+        assert proxy.resources == [
+            ("session_file", _PROVIDER_SESSION_ID, "file-1")
+        ]
+    else:
+        assert upstream_calls == []
+        assert proxy.resources == []
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix", "payload", "operation"),
+    _STOCK_NATIVE_MUTATION_CASES,
+)
+def test_every_stock_native_http_mutation_has_a_complete_durable_receipt(
+    monkeypatch,
+    method: str,
+    suffix: str,
+    payload: dict[str, Any] | None,
+    operation: str,
+) -> None:
+    """Exercise the complete pinned mutation inventory at the router boundary.
+
+    This is intentionally parametrized from the stock route families rather
+    than merely checking compatibility-map metadata: every request must reach
+    the real authorization, capability, scan, idempotency, credential, and
+    durable-receipt path required by MoonLadderStudios/MoonMind#3632.
+    """
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.native_outbound_scan.resolve_high_security_mode",
+        lambda *args, **kwargs: False,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.resolved_api_token",
+        lambda: "upstream-only",
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.resolved_server_url",
+        lambda: "https://stock-omnigent.invalid",
+    )
+    upstream_calls: list[dict[str, Any]] = []
+    client_headers: list[dict[str, str]] = []
+    response_body = json.dumps(
+        {"ok": True, "session_id": _PROVIDER_SESSION_ID, "requestId": "up-1"}
+    ).encode()
+
+    class _Content:
+        async def read(self, _limit: int) -> bytes:
+            return response_body
+
+    class _Response:
+        status = 200
+        headers = {"content-type": "application/json"}
+        content = _Content()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Client:
+        def __init__(self, *, headers=None, **_kwargs):
+            client_headers.append(dict(headers or {}))
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, request_method: str, url: str, **kwargs):
+            upstream_calls.append({"method": request_method, "url": url, **kwargs})
+            return _Response()
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession", _Client
+    )
+    client, _proxy, store = _build()
+    path = _path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}")
+    request_kwargs: dict[str, Any] = {
+        "headers": {
+            "Idempotency-Key": f"native-{method.lower()}-{operation}",
+            "Authorization": "Bearer moonmind-browser",
+            "Cookie": "moonmind=session",
+            "X-CSRF-Token": "browser-csrf",
+        }
+    }
+    if payload is not None:
+        request_kwargs["json"] = payload
+
+    response = client.request(method, path, **request_kwargs)
+
+    assert response.status_code == 200
+    expected_upstream_calls = 0 if operation == "session_reconnect" else 1
+    assert len(upstream_calls) == expected_upstream_calls
+    replay = client.request(method, path, **request_kwargs)
+    assert replay.status_code == response.status_code
+    assert replay.content == response.content
+    assert len(upstream_calls) == expected_upstream_calls
+    if upstream_calls:
+        assert _PROVIDER_SESSION_ID in upstream_calls[0]["url"]
+        assert _CHAT_BINDING_ID not in upstream_calls[0]["url"]
+        assert client_headers == [
+            {
+                "Accept": "*/*",
+                **(
+                    {"Content-Type": "application/json"}
+                    if payload is not None
+                    else {}
+                ),
+                "Authorization": "Bearer upstream-only",
+                "Idempotency-Key": f"native-{method.lower()}-{operation}",
+            }
+        ]
+        serialized_headers = json.dumps(client_headers).lower()
+        assert "moonmind-browser" not in serialized_headers
+        assert "cookie" not in serialized_headers
+        assert "csrf" not in serialized_headers
+
+    claim = next(entry for entry in store.lifecycle if entry["kind"] == "claim")
+    posted_records = [
+        entry
+        for entry in store.lifecycle
+        if entry["kind"] == "record"
+        and entry["metadata"].get("controlOutcome") == "posted"
+    ]
+    assert len(posted_records) == 1
+    posted = posted_records[0]
+    assert claim["metadata"]["controlType"] == operation
+    receipt = posted["metadata"]
+    assert receipt["receiptSchemaVersion"] == (
+        "moonmind.omnigent.mutation-receipt.v1"
+    )
+    assert receipt["controlType"] == operation
+    assert receipt["actor"] == str(_USER_ID)
+    assert receipt["workflowId"] == "mm:w1"
+    assert receipt["runId"] == "run-1"
+    assert receipt["stepExecutionId"] == "step-1"
+    assert receipt["bridgeSessionId"] == _BRIDGE_SESSION_ID
+    assert receipt["providerSessionId"] == _PROVIDER_SESSION_ID
+    assert receipt["controlIdempotencyKey"]
+    assert receipt["requestTime"]
+    assert receipt["dispatchTime"]
+    assert receipt["completionTime"]
+    assert receipt["normalizedResult"]["statusCode"] == 200
+
+
+def test_native_http_mutation_response_failure_records_delivery_unknown(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "moonmind.omnigent.native_outbound_scan.resolve_high_security_mode",
+        lambda *args, **kwargs: False,
+    )
+
+    class _Content:
+        async def read(self, limit: int) -> bytes:
+            return b"x" * limit
+
+    class _Response:
+        status = 200
+        headers = {"content-type": "application/octet-stream"}
+        content = _Content()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession",
+        lambda **_kwargs: _Client(),
+    )
+    client, _proxy, store = _build()
+
+    response = client.patch(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1"),
+        json={"completed": True},
+        headers={"Idempotency-Key": "native-oversized-response"},
+    )
+    replay = client.patch(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/tasks/task-1"),
+        json={"completed": True},
+        headers={"Idempotency-Key": "native-oversized-response"},
+    )
+
+    assert response.status_code == 502
+    assert replay.status_code == 409
+    unknown = next(
+        entry
+        for entry in store.lifecycle
+        if entry["kind"] == "record"
+        and entry["metadata"].get("controlOutcome") == "delivery_unknown"
+    )
+    assert unknown["metadata"]["controlType"] == "task_mutate"
+    assert unknown["metadata"]["completionTime"]
 
 
 def test_delete_method_not_allowlisted() -> None:
@@ -942,6 +1376,44 @@ def test_oversized_body_is_rejected() -> None:
 
 
 # --- Resources ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("suffix", "operation", "value", "binary"),
+    [
+        ("resources/environments/default/changes", "changed_files", None, False),
+        ("resources/environments/default/filesystem", "workspace_files", None, False),
+        (
+            "resources/environments/default/filesystem/src/main.py",
+            "workspace_file",
+            "src/main.py",
+            True,
+        ),
+        (
+            "resources/environments/default/diff/src/main.py",
+            "workspace_diff",
+            "src/main.py",
+            True,
+        ),
+        ("resources/files", "session_files", None, False),
+        ("resources/files/file-1/content", "session_file", "file-1", True),
+    ],
+)
+def test_every_stock_resource_read_is_bound_and_authorized(
+    suffix: str,
+    operation: str,
+    value: str | None,
+    binary: bool,
+) -> None:
+    client, proxy, _store = _build()
+
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}/{suffix}"))
+
+    assert response.status_code == 200
+    assert proxy.resources == [(operation, _PROVIDER_SESSION_ID, value)]
+    assert _PROVIDER_SESSION_ID not in response.text
+    if binary:
+        assert response.content == b"RAW-BYTES"
 
 
 def test_resource_index_delegated_to_bound_session() -> None:
@@ -1848,7 +2320,79 @@ def test_terminal_binding_serves_durable_snapshot_without_provider_session() -> 
     assert body["readOnly"] is True
     assert body["providerSessionAvailable"] is False
     # Served from the durable projection; no upstream get_session call was made.
-    assert proxy.resources == []
+    assert proxy.sessions == []
+
+
+def test_terminal_catalog_contains_durable_session_without_provider_session() -> None:
+    store = _FakeStore(
+        row=_row(
+            status="completed",
+            omnigent_session_id="",
+            terminal_refs={"summary": "done"},
+            diagnostics_ref="art://diag",
+        )
+    )
+    client, proxy, _store = _build(store=store)
+
+    response = client.get(_path("v1/sessions"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["id"] for item in body["data"]] == [_CHAT_BINDING_ID]
+    assert body["data"][0]["readOnly"] is True
+    assert body["has_more"] is False
+    assert proxy.sessions == []
+
+
+def test_terminal_items_page_uses_captured_snapshot_after_provider_cleanup(
+    monkeypatch,
+) -> None:
+    metadata = dict(_row().metadata_)
+    authority = dict(metadata["capabilityAuthority"])
+    authority["providerSessionId"] = _PROVIDER_SESSION_ID
+    metadata["capabilityAuthority"] = authority
+    store = _FakeStore(
+        row=_row(
+            status="completed",
+            omnigent_session_id="",
+            final_snapshot_ref="artifact://captured-final",
+            metadata_=metadata,
+        )
+    )
+
+    class _Gateway:
+        async def read_text(self, artifact_ref: str) -> str:
+            assert artifact_ref == "artifact://captured-final"
+            return json.dumps(
+                {
+                    "items": [
+                        {"id": "item-1", "session_id": _PROVIDER_SESSION_ID},
+                        {"id": "item-2", "session_id": _PROVIDER_SESSION_ID},
+                    ]
+                }
+            )
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.LocalOmnigentArtifactGateway",
+        _Gateway,
+    )
+    client, proxy, _store = _build(store=store)
+
+    response = client.get(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/items"),
+        params={"limit": "1", "order": "desc"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_more"] is True
+    assert body["first_id"] == "item-2"
+    assert body["last_id"] == "item-2"
+    assert body["data"] == [
+        {"id": "item-2", "session_id": _CHAT_BINDING_ID}
+    ]
+    assert _PROVIDER_SESSION_ID not in response.text
+    assert proxy.sessions == []
 
 
 # --- Strict stream cursors ---------------------------------------------------

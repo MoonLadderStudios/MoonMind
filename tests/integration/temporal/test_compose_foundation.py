@@ -266,6 +266,13 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
     assert api_env["OMNIGENT_HOST_IMAGE_TAG"] == (
         "${OMNIGENT_HOST_IMAGE_TAG:-latest}"
     )
+    assert api_env["MOONMIND_DEPLOYMENT_PROJECT_NAME"] == (
+        "${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}"
+    )
+    assert api_env["MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF"] == (
+        "${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-"
+        "/workspace/cutover/remediation-release.json}"
+    )
     for worker_name in (
         "temporal-worker-agent-runtime",
         "temporal-worker-integrations",
@@ -310,7 +317,7 @@ def test_managed_runtime_cleanup_defaults_match_api_and_agent_runtime_worker():
         "MOONMIND_AGENT_RUNTIME_ARTIFACTS": "${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}",
         "MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED": "${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}",
         "MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN": "${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}",
-        "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS": "${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-30}",
+        "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS": "${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-10}",
         "MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS": "${MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS:-90}",
         "MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS": "${MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS:-}",
         "MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS": "${MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS:-3600}",
@@ -688,6 +695,22 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
         "sandbox-egress-proxy": {"condition": "service_healthy"},
     }
     assert _network_names(host_service) == {"omnigent-egress-network"}
+    init_service = compose["services"]["omnigent-host-claude-init"]
+    assert init_service["network_mode"] == "none"
+    assert init_service["cap_drop"] == ["ALL"]
+    assert init_service["cap_add"] == ["CHOWN", "FOWNER"]
+    assert init_service["security_opt"] == ["no-new-privileges:true"]
+    assert init_service["read_only"] is True
+    assert init_service["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=16m"]
+    assert host_service["labels"] == {
+        "moonmind.egress.profile": "${OMNIGENT_EGRESS_PROFILE_REF:-unattested}",
+        "moonmind.egress.profile_digest": (
+            "${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}"
+        ),
+        "moonmind.egress.applied_rule_digest": (
+            "${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}"
+        ),
+    }
     assert host_service["cap_drop"] == ["ALL"]
     assert host_service["security_opt"] == ["no-new-privileges:true"]
     assert host_service["restart"] == "unless-stopped"
@@ -790,6 +813,14 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     }
     init_service = compose["services"]["omnigent-host-codex-init"]
     assert init_service["user"] == "0:0"
+    assert init_service["network_mode"] == "none"
+    assert init_service["cap_drop"] == ["ALL"]
+    assert init_service["cap_add"] == ["CHOWN", "FOWNER"]
+    assert init_service["security_opt"] == ["no-new-privileges:true"]
+    assert init_service["read_only"] is True
+    assert init_service["tmpfs"] == ["/tmp:rw,noexec,nosuid,size=16m"]
+    assert "omnigent-host-artifacts:/artifacts" in init_service["volumes"]
+    assert "omnigent-host-cache:/home/app/.cache" in init_service["volumes"]
     assert init_service["depends_on"] == {
         "codex-auth-init": {"condition": "service_completed_successfully"}
     }
@@ -800,6 +831,15 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     # network (MoonLadderStudios/MoonMind#3516), never the routable
     # local-network.
     assert _network_names(host_service) == {"omnigent-egress-network"}
+    assert host_service["labels"]["moonmind.egress.profile"] == (
+        "${OMNIGENT_EGRESS_PROFILE_REF:-unattested}"
+    )
+    assert host_service["labels"]["moonmind.egress.profile_digest"] == (
+        "${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}"
+    )
+    assert host_service["labels"]["moonmind.egress.applied_rule_digest"] == (
+        "${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}"
+    )
 
 
 def test_canonical_omnigent_codex_host_uses_base_owned_oauth_volume():
@@ -919,7 +959,7 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
         "${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}"
     )
     assert worker_env["MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY"] == (
-        "${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-never}"
+        "${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}"
     )
     assert worker_env["MOONMIND_UNREAL_CCACHE_VOLUME_NAME"] == (
         "${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}"

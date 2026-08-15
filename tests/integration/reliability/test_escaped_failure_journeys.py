@@ -16,13 +16,18 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 import yaml
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
 from temporalio.testing import ActivityEnvironment
 
-from api_service.db.models import Base
-from api_service.services.omnigent_policies import bootstrap_document
+from api_service.db.models import Base, OmnigentPolicy, OmnigentPolicyVersion
+from api_service.services.omnigent_policies import (
+    bootstrap_document,
+    seed_bootstrap_policies,
+)
 from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
+from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import (
     FIRST_MESSAGE_ITEM_FRONTIER_KEY,
@@ -37,6 +42,7 @@ from moonmind.omnigent.execute import (
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
     omnigent_activity_heartbeat,
+    run_omnigent_execution,
 )
 from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
@@ -50,8 +56,13 @@ from moonmind.omnigent.profile_bound_execution import (
     _bind_exact_host,
 )
 from moonmind.omnigent.stock_agents import CODEX_STOCK_AGENT_NAME
-from moonmind.security.egress import OMNIGENT_EGRESS_PROFILE
-from moonmind.security.egress import omnigent_proxy_env
+from moonmind.security.egress import (
+    EGRESS_CONFIG_DIGEST,
+    ENFORCER_IMPLEMENTATION,
+    EgressAttestation,
+    OMNIGENT_EGRESS_PROFILE,
+    omnigent_proxy_env,
+)
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     SendCodexManagedSessionTurnRequest,
@@ -101,6 +112,25 @@ from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import (
     checkpoint_branch_turn as checkpoint_branch_turn_module,
 )
+
+
+def _egress_attestation() -> EgressAttestation:
+    return EgressAttestation(
+        profileRef=OMNIGENT_EGRESS_PROFILE.ref,
+        profileDigest=OMNIGENT_EGRESS_PROFILE.digest,
+        enforcerImplementation=ENFORCER_IMPLEMENTATION,
+        backendRef="replay-test",
+        networkRef=OMNIGENT_EGRESS_PROFILE.network_ref,
+        gatewayRef=OMNIGENT_EGRESS_PROFILE.gateway_ref,
+        appliedRuleDigest="sha256:" + "a" * 64,
+        configDigest=EGRESS_CONFIG_DIGEST,
+        gatewayImageDigest="sha256:" + "b" * 64,
+        healthResult="healthy",
+        validatedAt=datetime(2026, 8, 12, tzinfo=timezone.utc),
+        validationResult="passed",
+    )
+
+
 from moonmind.workflows.temporal.workflows import run as run_workflow_module
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.checkpoint_branch_turn import (
@@ -159,6 +189,105 @@ pytestmark = [
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    replay_id = "omnigent-server-image-authority-drift"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    monkeypatch.setenv("MOONMIND_CONTAINER_JOBS_ENABLED", "true")
+    resolved = {
+        "server": manifest["persistedServerImageRef"],
+        "host": manifest["persistedHostImageRef"],
+    }
+
+    async def resolver(image_ref: str) -> str:
+        return resolved["host" if "host" in image_ref else "server"]
+
+    async def live_server(_image_ref: str) -> str:
+        return resolved["server"]
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'policy.db'}")
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    async with sessions() as session:
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+        resolved.update(
+            server=manifest["observedServerImageRef"],
+            host=manifest["observedHostImageRef"],
+        )
+
+        reconciled = await seed_bootstrap_policies(
+            session,
+            image_resolver=resolver,
+            live_server_image_resolver=live_server,
+        )
+
+        assert sorted(reconciled) == expected["reconciledPolicyIds"]
+        policy = await session.get(OmnigentPolicy, "codex-on-demand")
+        assert policy.default_version == expected["defaultPolicyVersion"]
+        version = await session.scalar(
+            select(OmnigentPolicyVersion).where(
+                OmnigentPolicyVersion.policy_id == "codex-on-demand",
+                OmnigentPolicyVersion.version == policy.default_version,
+            )
+        )
+        assert version.document_json["host"]["serverImageRef"] == resolved["server"]
+        assert version.document_json["host"]["hostImageRef"] == resolved["host"]
+    await engine.dispose()
+
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._run = AsyncMock(  # type: ignore[method-assign]
+        side_effect=[
+            (0, "omnigent-container-id\n", ""),
+            (0, json.dumps(manifest["configuredServerImageRef"]), ""),
+            (0, json.dumps(manifest["observedServerImageId"]), ""),
+            (
+                0,
+                json.dumps(
+                    {
+                        "repoDigests": [manifest["observedServerImageRef"]],
+                        "architecture": manifest["architecture"],
+                    }
+                ),
+                "",
+            ),
+        ]
+    )
+    evidence = await runtime._attest_server_image(
+        {
+            "serverImageRef": manifest["observedServerImageRef"],
+            "architectures": [manifest["architecture"]],
+        }
+    )
+
+    assert evidence["serverImageRefObserved"] == expected["serverImageRefObserved"]
+    assert evidence["serverArchitecture"] == expected["serverArchitecture"]
+
+
+def _egress_attestation() -> EgressAttestation:
+    return EgressAttestation(
+        profileRef=OMNIGENT_EGRESS_PROFILE.ref,
+        profileDigest=OMNIGENT_EGRESS_PROFILE.digest,
+        enforcerImplementation=ENFORCER_IMPLEMENTATION,
+        backendRef="replay-test",
+        networkRef=OMNIGENT_EGRESS_PROFILE.network_ref,
+        gatewayRef=OMNIGENT_EGRESS_PROFILE.gateway_ref,
+        appliedRuleDigest="sha256:" + "a" * 64,
+        configDigest=EGRESS_CONFIG_DIGEST,
+        gatewayImageDigest="sha256:" + "b" * 64,
+        healthResult="healthy",
+        validatedAt=datetime(2026, 8, 12, tzinfo=timezone.utc),
+        validationResult="passed",
+    )
 
 
 def _checkpoint_branch_turn_profile_request() -> AgentExecutionRequest:
@@ -372,6 +501,184 @@ async def test_profile_bound_activity_heartbeats_preflight_and_fences_cancelled_
     assert "host_stop" not in owner_calls
     assert "provider_released" not in actions
     assert expected["releaseProviderLeaseOnCancellation"] is False
+
+
+async def test_missed_terminal_edge_reconciles_from_idle_retry_snapshot(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Replay mm:54d3ef07 after its heartbeat-timeout Activity retry."""
+
+    manifest = load_replay(
+        "omnigent-missed-terminal-edge-after-retry", "manifest.json"
+    )
+    expected = load_replay(
+        "omnigent-missed-terminal-edge-after-retry", "expected-outcome.json"
+    )
+    snapshot = manifest["reattachedSnapshot"]
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey="idem-mm-54d3ef07",
+        parameters={
+            "omnigent": {
+                "agent": {"agentName": "codex-native-ui"},
+                "session": {"allowEmptyWorkspace": True},
+            }
+        },
+    )
+    first_message_text = "continue the workflow"
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        f"  correlationId: {request.correlation_id}\n"
+        f"  idempotencyKey: {request.idempotency_key}"
+    )
+    prepared_message = {
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": f"{first_message_text}\n\n{marker}",
+                }
+            ],
+        },
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            prepared_message,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    store = OmnigentBridgeSessionStore(sessions)
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path / "artifacts")
+
+    row = await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="agent-1",
+        agent_name="codex-native-ui",
+        target_metadata={},
+    )
+    await store.record_first_message_item_frontier(
+        request.idempotency_key,
+        item_ids=manifest["preDispatchItemIds"],
+    )
+    await store.mark_prepared(
+        request.idempotency_key,
+        digest=digest,
+        marker=marker,
+    )
+    await store.attach_session(
+        request.idempotency_key,
+        manifest["omnigentSessionId"],
+    )
+    await store.mark_posted(request.idempotency_key)
+    durable_event = build_omnigent_bridge_event(
+        payload={"type": "session.heartbeat", "status": "running"},
+        sequence=manifest["durableEventCount"],
+        request=request,
+        omnigent_session_id=manifest["omnigentSessionId"],
+        bridge_session_id=row.bridge_session_id,
+    ).event
+    raw_ref = await gateway.write_text(
+        request=request,
+        name="seed.raw.jsonl",
+        payload='{"type":"session.heartbeat","status":"running"}\n',
+        link_type="runtime.omnigent.sse.raw",
+        content_type="application/x-ndjson",
+    )
+    normalized_ref = await gateway.write_text(
+        request=request,
+        name="seed.normalized.jsonl",
+        payload=f"{json.dumps(durable_event, sort_keys=True)}\n",
+        link_type="runtime.omnigent.sse.normalized",
+        content_type="application/x-ndjson",
+    )
+    await store.attach_active_journal_refs(
+        row.bridge_session_id,
+        raw_ref=raw_ref,
+        normalized_ref=normalized_ref,
+    )
+    await store.append_events(row.bridge_session_id, [durable_event])
+
+    client_calls: list[str] = []
+
+    class IdleRetryClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            raise AssertionError("retry must reuse the durable provider session")
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            raise AssertionError("retry must not repost the first message")
+
+        async def stream_events(self, session_id: str):
+            raise AssertionError("reconciled retry must bypass the SSE stream")
+            if False:
+                yield {}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            client_calls.append(session_id)
+            return snapshot
+
+    async def settle_terminal(**_kwargs: object):
+        client_calls.append("settled")
+        return expected["terminalStatus"], snapshot
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", IdleRetryClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._await_marked_turn_terminal",
+        settle_terminal,
+    )
+
+    try:
+        result = await run_omnigent_execution(
+            request,
+            artifact_gateway=gateway,
+            run_store=store,
+            first_message_text=first_message_text,
+        )
+        indexed_events = await store.list_events(row.bridge_session_id)
+    finally:
+        await engine.dispose()
+
+    reconciled_events = [
+        event
+        for event in indexed_events
+        if event.event_type == "session.final_snapshot"
+    ]
+    assert result.metadata["normalizedStatus"] == expected["terminalStatus"]
+    assert result.summary == expected["terminalSummary"]
+    assert client_calls.count("settled") == 1
+    assert len(reconciled_events) == 1
+    assert reconciled_events[0].metadata_["moonmind"] == {
+        "source": "omnigent_terminal_reconciliation",
+        "terminalReconciliationSource": expected["reconciliationSource"],
+        "workflowChatVisible": True,
+    }
+    assert reconciled_events[0].deduplication_key.startswith(
+        "terminal-reconciliation:"
+    )
+    assert expected["reconciliationSource"] == "reattached_inactive_snapshot"
+    assert expected["requiresNewTerminalSseEvent"] is False
 
 
 async def test_evicted_turn_marker_preserves_terminal_and_retry_authority() -> None:
@@ -1960,6 +2267,7 @@ async def test_omnigent_host_entrypoint_arguments_follow_image_boundary(
         runtime_scripts=tmp_path,
         current_step_execution_id="workflow:run:node-1:execution:1",
         effective_launch=effective_launch,
+        egress_attestation=_egress_attestation(),
     )
 
     command = runtime._run.await_args_list[-1].args
@@ -2595,6 +2903,7 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
             policy_ref="codex-on-demand@1",
             provider_profile_id="codex",
         ),
+        egress_attestation=_egress_attestation(),
     )
 
     launch_command = runtime._run.await_args_list[-1].args

@@ -485,6 +485,146 @@ async def attest_docker_egress(
     )
 
 
+async def attest_docker_workload_egress(
+    *,
+    runner: CommandRunner,
+    profile: EgressProfile,
+    attestation: EgressAttestation,
+    attachment_identity: str,
+    expected_image_ref: str,
+    started_at: datetime | None = None,
+    finished_at: datetime | None = None,
+) -> dict[str, object]:
+    """Prove one launched workload inherited the attested network boundary.
+
+    Gateway attestation alone does not prove that the created container uses the
+    gateway or lacks a secondary route.  This check runs after the production
+    launch owner creates the workload and binds the exact container, network
+    endpoint, immutable image, architecture, and bounded denial observations to
+    the pre-launch attestation.  It intentionally reads only selected Docker
+    fields so mounts and environment values never enter durable evidence.
+    """
+
+    if (
+        attestation.profile_ref != profile.ref
+        or attestation.profile_digest != profile.digest
+        or attestation.network_ref != profile.network_ref
+        or attestation.gateway_ref != profile.gateway_ref
+        or attestation.validation_result != "passed"
+    ):
+        raise RuntimeError("restricted-egress launch attestation is inconsistent")
+    identity = str(attachment_identity or "").strip()
+    if not identity:
+        raise RuntimeError("restricted-egress attachment identity is unavailable")
+    expected_image = str(expected_image_ref or "").strip()
+    if not expected_image:
+        raise RuntimeError("restricted-egress workload image authority is unavailable")
+
+    format_value = (
+        '{"labels":{{json .Config.Labels}},"networks":'
+        '{{json .NetworkSettings.Networks}},"imageRef":{{json .Config.Image}},'
+        '"image":{{json .Image}}}'
+    )
+    code, stdout, _ = await runner(("inspect", "--format", format_value, identity))
+    if code or not stdout.strip():
+        raise RuntimeError("restricted-egress attachment evidence is unavailable")
+    try:
+        observed = json.loads(stdout)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise RuntimeError(
+            "restricted-egress attachment evidence is malformed"
+        ) from exc
+
+    labels = observed.get("labels") if isinstance(observed, dict) else None
+    networks = observed.get("networks") if isinstance(observed, dict) else None
+    image_digest = str(
+        observed.get("image") if isinstance(observed, dict) else ""
+    ).strip()
+    image_ref = str(
+        observed.get("imageRef") if isinstance(observed, dict) else ""
+    ).strip()
+    if not isinstance(labels, dict) or not isinstance(networks, dict):
+        raise RuntimeError("restricted-egress attachment evidence is malformed")
+    if set(networks) != {profile.network_ref}:
+        raise RuntimeError(
+            "restricted-egress attachment is not the sole approved network"
+        )
+    expected_labels = {
+        "moonmind.egress.profile": attestation.profile_ref,
+        "moonmind.egress.profile_digest": attestation.profile_digest,
+        "moonmind.egress.applied_rule_digest": attestation.applied_rule_digest,
+    }
+    if any(labels.get(key) != value for key, value in expected_labels.items()):
+        raise RuntimeError("restricted-egress workload labels are unattested")
+    if not image_digest.startswith("sha256:"):
+        raise RuntimeError("restricted-egress workload image is unattested")
+    if image_ref != expected_image:
+        raise RuntimeError(
+            "restricted-egress workload image does not match launch authority"
+        )
+
+    attachment = networks.get(profile.network_ref)
+    if not isinstance(attachment, dict):
+        raise RuntimeError("restricted-egress network attachment is malformed")
+    network_id = str(attachment.get("NetworkID") or "").strip()
+    endpoint_id = str(attachment.get("EndpointID") or "").strip()
+    client_address = str(attachment.get("IPAddress") or "").strip()
+    if not network_id or not endpoint_id or not client_address:
+        raise RuntimeError(
+            "restricted-egress network attachment identity is incomplete"
+        )
+
+    code, stdout, _ = await runner(
+        ("image", "inspect", "--format", "{{json .Architecture}}", image_digest)
+    )
+    if code or not stdout.strip():
+        raise RuntimeError("restricted-egress workload architecture is unavailable")
+    try:
+        architecture = json.loads(stdout)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise RuntimeError(
+            "restricted-egress workload architecture is malformed"
+        ) from exc
+    if not isinstance(architecture, str) or not architecture.strip():
+        raise RuntimeError("restricted-egress workload architecture is malformed")
+
+    code, access_log, _ = await runner(
+        (
+            "exec",
+            profile.gateway_ref,
+            "cat",
+            "/var/log/squid/access.log",
+        )
+    )
+    if code:
+        raise RuntimeError("restricted-egress denial evidence is unavailable")
+    denial_diagnostics = bounded_denial_diagnostics(
+        access_log,
+        client_address=client_address,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+    denied_count = denied_connection_count(
+        access_log,
+        client_address=client_address,
+        started_at=started_at,
+        finished_at=finished_at,
+    )
+    return {
+        **attestation.model_dump(by_alias=True, mode="json"),
+        "attachmentIdentity": identity,
+        "networkIdentity": network_id,
+        "endpointIdentity": endpoint_id,
+        "attachmentAddressDigest": "sha256:"
+        + hashlib.sha256(client_address.encode()).hexdigest(),
+        "workloadImageDigest": image_digest,
+        "workloadImageRef": image_ref,
+        "architecture": architecture.strip(),
+        "deniedConnectionCount": denied_count,
+        "denialDiagnostics": list(denial_diagnostics),
+    }
+
+
 def restricted_proxy_env() -> tuple[str, ...]:
     """Non-overridable proxy environment for an internally routed workload."""
 

@@ -7,6 +7,10 @@ import asyncio
 import pytest
 from temporalio.exceptions import ApplicationError
 
+from moonmind.config.container_backend_settings import (
+    TACTICS_UNREAL_IMAGE_SOURCE_REF,
+    resolve_container_backend_settings,
+)
 from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
     ContainerJobFailureClass,
@@ -130,11 +134,17 @@ async def test_recent_empty_lease_preserves_creator_claim(tmp_path) -> None:
 
 
 def _request(
-    image: str,
+    image: str | None,
     *,
     policy: str = "if-missing",
     workspace: str | None = "ws:resolved",
+    image_source_ref: str | None = None,
 ) -> ContainerJobActivityRequest:
+    image_selection = (
+        {"imageSourceRef": image_source_ref}
+        if image_source_ref is not None
+        else {"image": image, "pullPolicy": policy}
+    )
     return ContainerJobActivityRequest.model_validate(
         {
             "jobId": JOB_ID,
@@ -144,12 +154,11 @@ def _request(
                 "idempotencyKey": "issue-3256",
                 "source": {"source": "workflow", "workflowId": "mm:3256"},
                 "spec": {
-                    "image": image,
-                    "pullPolicy": policy,
-                        "workspaceRef": {
-                            "kind": "sandbox",
-                            "workspaceId": "art_workspace",
-                        },
+                    **image_selection,
+                    "workspaceRef": {
+                        "kind": "sandbox",
+                        "workspaceId": "art_workspace",
+                    },
                     "resources": {"cpuMillis": 1000, "memoryMiB": 512},
                 },
             },
@@ -225,6 +234,32 @@ async def test_if_missing_absent_pulls_and_records_duration(tmp_path) -> None:
     assert not obs.cache_hit
     assert obs.resolved_digest == DIGEST_A
     assert obs.pull_duration_ms is not None and obs.pull_duration_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_missing_tactics_unreal_source_pulls_on_first_use(tmp_path) -> None:
+    image = "ghcr.io/moonladderstudios/tactics-ue-base:5.8"
+    daemon = FakeDaemon()
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(
+            {"MOONMIND_UNREAL_ENGINE_IMAGE": image}
+        ),
+    )
+
+    result = await backend.acquire_image(
+        _request(
+            None,
+            image_source_ref=TACTICS_UNREAL_IMAGE_SOURCE_REF,
+        )
+    )
+
+    assert daemon.pulls == [image]
+    assert result.image_observation.image_source_ref == (
+        TACTICS_UNREAL_IMAGE_SOURCE_REF
+    )
+    assert result.image_observation.provision_action == "pull"
 
 
 @pytest.mark.asyncio

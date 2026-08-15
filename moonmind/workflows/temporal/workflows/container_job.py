@@ -181,7 +181,14 @@ class MoonMindContainerJobWorkflow:
                     request.egress_attestation_ref = reconciled.diagnostics_ref
                 if not reconciled.running:
                     await self._project(request, ContainerJobState.STARTING)
-                    await self._activity("container_job.start_container", request)
+                    started = await self._activity(
+                        "container_job.start_container", request
+                    )
+                    if started.diagnostics_ref:
+                        # The complete row is published only after the actual
+                        # workload is running and its endpoint, immutable image,
+                        # architecture, and denials can be observed.
+                        request.egress_attestation_ref = started.diagnostics_ref
             while not self._cancel_requested and request.container_ref:
                 await self._project(request, ContainerJobState.RUNNING)
                 observed = await self._activity(

@@ -7,10 +7,14 @@ import pytest
 from temporalio import exceptions as temporal_exceptions
 
 from moonmind.schemas.workload_models import RunnerProfile, WorkloadResult
+from moonmind.security.egress_conformance_evidence import (
+    parse_and_verify_conformance_evidence,
+)
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
 )
+from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
 from moonmind.workloads.registry import RunnerProfileRegistry
 
 WORKSPACE_ROOT = Path("/work/agent_jobs")
@@ -283,6 +287,110 @@ async def test_workload_run_activity_stops_helper_by_tool_name() -> None:
     assert result["status"] == "stopped"
     assert result["labels"]["moonmind.kind"] == "bounded_service"
     assert result["metadata"]["helper"]["teardown"]["reason"] == "owner_task_canceled"
+
+
+@pytest.mark.asyncio
+async def test_workload_activity_owner_reconciles_durable_helper_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cross the real Activity and launcher owners on start and cleanup."""
+
+    # Reuse the daemon fixture exercised by the launcher suite. Only the Docker
+    # process boundary is simulated; request validation, launch attestation,
+    # authority persistence, Activity routing, cleanup verification, and lease
+    # release all execute their production implementations here.
+    from tests.unit.workloads.test_docker_workload_launcher import (
+        _healthy_egress_run_process,
+    )
+
+    workspace_root = tmp_path / "agent-workspaces"
+    repository = workspace_root / "task-1" / "repo"
+    artifacts = workspace_root / "task-1" / "artifacts" / "step-service"
+    repository.mkdir(parents=True)
+    artifacts.mkdir(parents=True)
+    profile_payload = _helper_profile_payload()
+    profile_payload["workdir_template"] = str(
+        workspace_root / "${agent_run_id}" / "repo"
+    )
+    profile_payload["required_mounts"] = [
+        {
+            "type": "volume",
+            "source": "agent_workspaces",
+            "target": str(workspace_root),
+        }
+    ]
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(profile_payload)],
+        workspace_root=workspace_root,
+    )
+    launcher = DockerWorkloadLauncher()
+
+    async def fake_subprocess(*args: str, **_kwargs: Any):
+        return _healthy_egress_run_process(list(args))
+
+    async def fake_control(args):
+        process = _healthy_egress_run_process(["docker", *args])
+        stdout, stderr = await process.communicate()
+        return stdout, stderr, int(process.returncode or 0)
+
+    monkeypatch.setattr(
+        "moonmind.workloads.docker_launcher.asyncio.create_subprocess_exec",
+        fake_subprocess,
+    )
+    monkeypatch.setattr(launcher._janitor, "_run_control", fake_control)
+    activities = TemporalAgentRuntimeActivities(
+        workload_registry=registry,
+        workload_launcher=launcher,
+    )
+    start_request = _request_payload(
+        profileId="redis-helper",
+        toolName="container.start_helper",
+        repoDir=str(repository),
+        artifactsDir=str(artifacts),
+        command=["--appendonly", "no"],
+        ttlSeconds=300,
+    )
+
+    started = await activities.workload_run({"request": start_request})
+    stopped = await activities.workload_run(
+        {
+            "request": {
+                **start_request,
+                "toolName": "container.stop_helper",
+                "command": ["stop"],
+                "reason": "durable_activity_reconciliation",
+            }
+        }
+    )
+
+    attached = parse_and_verify_conformance_evidence(
+        Path(started["outputRefs"]["security.egress.authority"]).read_bytes(),
+        location="activity-helper-attached-authority",
+    )
+    terminal = parse_and_verify_conformance_evidence(
+        Path(stopped["outputRefs"]["security.egress.authority"]).read_bytes(),
+        location="activity-helper-terminal-authority",
+    )
+    reconciliation = parse_and_verify_conformance_evidence(
+        (
+            artifacts
+            / "workload"
+            / started["requestId"]
+            / "egress-helper-authority-cleanup_validated.json"
+        ).read_bytes(),
+        location="activity-helper-reconciliation-authority",
+    )
+    assert attached["state"] == "attached"
+    assert attached["leaseAuthority"]["state"] == "held"
+    assert terminal["state"] == "stopped"
+    assert terminal["leaseAuthority"]["state"] == "released"
+    assert terminal["cleanupResult"] == "succeeded"
+    assert reconciliation["leaseAuthority"]["state"] == "held"
+    assert reconciliation["reconciliationOwner"]["toolName"] == (
+        "container.stop_helper"
+    )
+
 
 @pytest.mark.asyncio
 async def test_workload_run_activity_requires_runtime_dependencies() -> None:

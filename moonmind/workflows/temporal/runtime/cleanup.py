@@ -81,7 +81,7 @@ _FALSEY = frozenset({"", "0", "false", "no", "off"})
 class ManagedRuntimeCleanupConfig:
     enabled: bool = True
     dry_run: bool = False
-    workspace_retention: timedelta = timedelta(days=30)
+    workspace_retention: timedelta = timedelta(days=10)
     artifact_retention: timedelta = timedelta(days=90)
     record_retention: timedelta | None = None
     grace: timedelta = timedelta(hours=1)
@@ -120,7 +120,7 @@ class ManagedRuntimeCleanupConfig:
             ),
             workspace_retention=timedelta(
                 days=_env_int(
-                    source, "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 30
+                    source, "MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS", 10
                 )
             ),
             artifact_retention=timedelta(

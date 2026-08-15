@@ -653,6 +653,16 @@ class TemporalExecutionService:
             f"{path} must use a MoonMind artifact ref."
         )
 
+    @staticmethod
+    def _autonomous_remediation_release_authorized() -> bool:
+        """Read the server-owned gate lazily to avoid workflow import cycles."""
+
+        from moonmind.omnigent.remediation_matrix import (
+            load_remediation_release_status,
+        )
+
+        return load_remediation_release_status().autonomous_rollout_authorized
+
     async def _validate_remediation_link(
         self,
         *,
@@ -750,6 +760,15 @@ class TemporalExecutionService:
         ):
             raise TemporalExecutionValidationError(
                 f"Remediation target unauthorized: {target_workflow_id}"
+            )
+        if (
+            authority_mode == "admin_auto"
+            and not self._autonomous_remediation_release_authorized()
+        ):
+            raise TemporalExecutionValidationError(
+                "workflow.remediation.authorityMode 'admin_auto' is disabled until "
+                "the server-owned MoonLadderStudios/MoonMind#3626 operator "
+                "remediation release gate authorizes autonomous rollout."
             )
         if getattr(target_record, "workflow_type", None) is not TemporalWorkflowType.USER_WORKFLOW:
             wf_type_value = getattr(

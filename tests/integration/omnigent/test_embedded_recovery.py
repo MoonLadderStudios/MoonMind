@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import platform
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,9 +21,13 @@ from api_service.db.models import (
     OmnigentOAuthHostBindingRecord,
     OmnigentOAuthHostLeaseRecord,
     ProviderCredentialSource,
+    ProviderProfileAuthMethod,
+    ProviderProfileAuthState,
     RuntimeMaterializationMode,
     OmnigentBridgeSession,
 )
+from api_service.services.omnigent_policies import seed_bootstrap_policies
+from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED, parse_bridge_config
 from moonmind.omnigent.bridge_embedded import (
     EmbeddedHostAuthContext,
@@ -35,8 +43,42 @@ from moonmind.omnigent.bridge_store import (
     OmnigentDigestMismatchError,
     OmnigentIdempotencyError,
 )
+from moonmind.omnigent.execute import OmnigentSessionStillRunningError
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.oauth_hosts import (
+    OmnigentOAuthHostError,
+    OmnigentOAuthHostRepository,
+)
+from moonmind.omnigent.profile_bound_execution import (
+    OmnigentProfileBoundExecutionCoordinator,
+)
+from moonmind.omnigent.remediation_workspace import (
+    RemediationLiveWorkspace,
+    RemediationLoopHead,
+    SandboxRemediationWorkspaceOwner,
+)
+from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRuntimeStepExecutionLaunch,
+)
+from moonmind.security.egress import (
+    DEFAULT_EGRESS_PROFILE,
+    EGRESS_CONFIG_DIGEST,
+    EGRESS_PROFILE_SET_DIGEST,
+    ENFORCER_IMPLEMENTATION,
+    OMNIGENT_EGRESS_PROFILE,
+)
+from moonmind.security.egress_conformance_evidence import (
+    parse_and_verify_conformance_evidence,
+)
+from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _OnDemandTemporalArtifactService,
+)
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+)
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -219,13 +261,510 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
 
     assert row.status == "failed"
     assert row.terminal_refs["cleanupState"] == "completed"
-    assert row.terminal_refs["leaseReleaseState"] == "released"
+    assert row.terminal_refs["leaseReleaseState"] == "held"
     assert [event.event_type for event in events] == [
         "lifecycle.terminal", "lifecycle.control", "lifecycle.control",
     ]
     assert events[-1].metadata_["metadata"]["controlOutcome"] == "completed"
     assert result["actions"][-1]["action"] == "runner_exit_cleanup"
     assert repository.stopped == ["host-lease-1"]
+
+
+@pytest.mark.parametrize("cleanup_succeeds", [True, False])
+async def test_remediation_continuation_janitor_uses_real_authority_chain(
+    session_factory,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_succeeds: bool,
+) -> None:
+    """Cross remediation admission, prepare, continuation, janitor, and artifacts.
+
+    Docker and Temporal transports are deterministic hermetic boundaries, while
+    every authority owner under test is the production implementation: the
+    coordinator, remediation workspace owner, SQL host/bridge repositories,
+    OAuth host runtime, Temporal artifact service, janitor action owner, and
+    Provider Profile lease client.
+    """
+
+    monkeypatch.setattr(settings.workflow, "temporal_artifact_backend", "local_fs")
+    monkeypatch.setattr(
+        settings.workflow,
+        "temporal_artifact_root",
+        str(tmp_path / "temporal-artifacts"),
+    )
+    immutable_server = (
+        "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "8" * 64
+    )
+    immutable_host = "ghcr.io/omnigent-ai/omnigent-host@sha256:" + "9" * 64
+
+    async def resolve_image(image_ref: str) -> str:
+        return immutable_server if "server" in image_ref else immutable_host
+
+    async with session_factory() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="codex",
+                runtime_id="codex_cli",
+                provider_id="openai",
+                credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+                runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
+                volume_ref="codex_auth_volume",
+                volume_mount_path="/home/app/.codex",
+                max_parallel_runs=1,
+                credential_generation=3,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+                last_auth_method=ProviderProfileAuthMethod.OAUTH_VOLUME,
+            )
+        )
+        await session.commit()
+        await seed_bootstrap_policies(
+            session,
+            image_resolver=resolve_image,
+        )
+
+    workspace_root = tmp_path / "workspaces"
+    workspace_owner = SandboxRemediationWorkspaceOwner(workspace_root)
+    loop_id = "issue-3625-remediation"
+    branch_ref = "refs/heads/remediation/issue-3625"
+    checkpoint_ref = "artifact://checkpoint-3625"
+    workspace_digest = "sha256:" + "a" * 64
+    prior_workspace_id = "prior-remediation-workspace"
+    prior_workflow_id = "mm:issue-3625:verification"
+    prior_step_id = f"{prior_workflow_id}:run:verify:execution:1"
+    workspace_owner.records.ensure(
+        SandboxWorkspaceRecord(
+            workspace_id=prior_workspace_id,
+            workflow_id=prior_workflow_id,
+            step_execution_id=prior_step_id,
+            relative_path="repo",
+        )
+    )
+    prior_workspace = (
+        workspace_root / "temporal_sandbox" / prior_workspace_id / "repo"
+    )
+    prior_workspace.mkdir(parents=True)
+    (prior_workspace / "candidate.txt").write_text(
+        "verified cumulative remediation head\n",
+        encoding="utf-8",
+    )
+    workspace_owner.record_loop_head(
+        RemediationLoopHead(
+            loop_id=loop_id,
+            branch_ref=branch_ref,
+            checkpoint_ref=checkpoint_ref,
+            workspace_digest=workspace_digest,
+            head_version=2,
+            base_commit="b" * 40,
+            manifest_ref="artifact://manifest-3625",
+        )
+    )
+    workspace_owner.record_live_workspace(
+        RemediationLiveWorkspace(
+            loop_id=loop_id,
+            branch_ref=branch_ref,
+            checkpoint_ref=checkpoint_ref,
+            workspace_digest=workspace_digest,
+            head_version=2,
+            workspace_id=prior_workspace_id,
+            workflow_id=prior_workflow_id,
+            step_execution_id=prior_step_id,
+        )
+    )
+
+    workflow_id = "mm:issue-3625:remediation"
+    step_execution_id = f"{workflow_id}:run:remediate:execution:1"
+    destination_workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_execution_id}".encode()
+    ).hexdigest()[:24]
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId=workflow_id,
+        idempotencyKey="issue-3625-remediation-attempt",
+        stepExecution=AgentRuntimeStepExecutionLaunch(
+            workflowId=workflow_id,
+            runId="run",
+            logicalStepId="remediate",
+            executionOrdinal=1,
+            stepExecutionId=step_execution_id,
+            runtimeContextPolicy="fresh_agent_run",
+        ),
+        remediationWorkspace={
+            "schemaVersion": "v1",
+            "loopId": loop_id,
+            "branchRef": branch_ref,
+            "attemptOrdinal": 1,
+            "workflowId": workflow_id,
+            "runId": "run",
+            "logicalStepId": "remediate",
+            "stepExecutionId": step_execution_id,
+            "baseCheckpointRef": checkpoint_ref,
+            "baseWorkspaceDigest": workspace_digest,
+            "expectedHeadVersion": 2,
+            "headAuthorityRef": "artifact://loop-head-3625",
+            "destinationWorkspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": destination_workspace_id,
+                "relativePath": "repo",
+            },
+            "workspacePolicy": "continue_from_loop_head",
+            "executionProfileRef": "codex",
+            "hostProfileRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-static@1",
+            "workspaceCapabilitySnapshot": {
+                "locatorKind": "sandbox",
+                "restore": True,
+            },
+        },
+        parameters={
+            "publishMode": "none",
+            "omnigent": {
+                "executionTargetRef": "omnigent-codex@1",
+                "launchPolicyRef": "codex-static@1",
+                "session": {},
+            },
+        },
+    )
+
+    store = OmnigentBridgeSessionStore(session_factory)
+    repository = OmnigentOAuthHostRepository(session_factory)
+    artifact_service = _OnDemandTemporalArtifactService(session_factory)
+    release_signals: list[dict[str, object]] = []
+    release_times: list[datetime] = []
+    command_order: list[str] = []
+
+    class TemporalClient:
+        async def start_workflow(self, *_args, **_kwargs):
+            return None
+
+    class TemporalAdapter:
+        async def get_client(self):
+            return TemporalClient()
+
+        async def update_workflow(self, _workflow_id, _name, payload):
+            return {
+                "profile_id": payload["execution_profile_ref"],
+                "lease_id": (
+                    f"provider-lease:{payload['execution_profile_ref']}:"
+                    f"{payload['requester_workflow_id']}"
+                ),
+                "already_held": False,
+            }
+
+        async def signal_workflow(self, _workflow_id, name, payload):
+            assert name == "release_slot"
+            command_order.append("provider_released")
+            release_times.append(datetime.now(UTC))
+            release_signals.append(dict(payload))
+
+    lease_client = ProviderProfileLeaseClient(TemporalAdapter())
+    registered_host_id = (
+        "host-" + hashlib.sha256(workflow_id.encode()).hexdigest()[:16]
+    )
+
+    class HostClient:
+        async def list_hosts(self):
+            return [
+                {
+                    "id": registered_host_id,
+                    "name": "omnigent-host-codex",
+                    "status": "online",
+                    "harnesses": ["codex-native"],
+                }
+            ]
+
+    runtime = OmnigentOAuthHostRuntime(
+        client=HostClient(),
+        workspace_root=workspace_root,
+    )
+    skill_projection = tmp_path / "resolved-skills"
+    skill_projection.mkdir()
+
+    async def prepare_skill_projection(**_kwargs):
+        return skill_projection
+
+    runtime._prepare_skill_projection = prepare_skill_projection  # type: ignore[method-assign]
+    runtime._align_workspace_ownership = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    current_host_lease_ref: list[str] = []
+    captured_authorization: list[dict[str, object]] = []
+    container_running = True
+    server_container_id = hashlib.sha256(
+        f"server:{workflow_id}".encode()
+    ).hexdigest()
+    host_container_id = hashlib.sha256(
+        f"host:{workflow_id}".encode()
+    ).hexdigest()
+    gateway_image_digest = "sha256:" + "d" * 64
+    host_image_digest = immutable_host.rsplit("@", 1)[-1]
+    gateway_networks = {
+        DEFAULT_EGRESS_PROFILE.network_ref: {},
+        "moonmind_sandbox-egress-network": {},
+        OMNIGENT_EGRESS_PROFILE.network_ref: {},
+        "local-network": {},
+    }
+    applied_rule_payload = {
+        "profileDigest": OMNIGENT_EGRESS_PROFILE.digest,
+        "configDigest": EGRESS_CONFIG_DIGEST,
+        "gatewayImageDigest": gateway_image_digest,
+        "internal": True,
+        "ipv6": False,
+        "idleSeconds": OMNIGENT_EGRESS_PROFILE.idle_seconds,
+        "gatewayNetworks": sorted(gateway_networks),
+        "enforcer": ENFORCER_IMPLEMENTATION,
+    }
+    applied_rule_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            applied_rule_payload,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    client_address = "172.31.0.19"
+    observed_architecture = {
+        "aarch64": "arm64",
+        "x86_64": "amd64",
+    }.get(platform.machine().lower(), platform.machine().lower())
+
+    async def run_host_command(*args, **_kwargs):
+        nonlocal container_running
+        if args[:3] == ("docker", "network", "inspect"):
+            return (0, json.dumps({"Internal": True, "EnableIPv6": False}), "")
+        if args[:2] == ("docker", "compose"):
+            if " up " in f" {' '.join(args)} ":
+                container_running = True
+                command_order.append("host_started")
+            elif " stop " in f" {' '.join(args)} ":
+                command_order.append("host_stop_requested")
+                if cleanup_succeeds:
+                    container_running = False
+            elif " ps " in f" {' '.join(args)} ":
+                identity = (
+                    server_container_id if args[-1] == "omnigent" else host_container_id
+                )
+                return (0, f"{identity}\n", "")
+            return (0, "", "")
+        if args[:2] == ("docker", "inspect"):
+            format_value = args[3]
+            identity = args[4]
+            if identity == OMNIGENT_EGRESS_PROFILE.gateway_ref:
+                return (
+                    0,
+                    json.dumps(
+                        {
+                            "labels": {
+                                "moonmind.egress.profile-set-digest": EGRESS_PROFILE_SET_DIGEST,
+                                "moonmind.egress.enforcer": ENFORCER_IMPLEMENTATION,
+                                "moonmind.egress.config-digest": EGRESS_CONFIG_DIGEST,
+                            },
+                            "networks": gateway_networks,
+                            "image": gateway_image_digest,
+                            "health": "healthy",
+                        }
+                    ),
+                    "",
+                )
+            if identity == server_container_id:
+                if format_value == "{{json .Config.Image}}":
+                    return (0, json.dumps(immutable_server), "")
+                if format_value == "{{json .Image}}":
+                    return (0, json.dumps("sha256:" + "8" * 64), "")
+            if identity == host_container_id and format_value.startswith(
+                '{"labels"'
+            ):
+                return (
+                    0,
+                    json.dumps(
+                        {
+                            "labels": {
+                                "moonmind.egress.profile": OMNIGENT_EGRESS_PROFILE.ref,
+                                "moonmind.egress.profile_digest": OMNIGENT_EGRESS_PROFILE.digest,
+                                "moonmind.egress.applied_rule_digest": applied_rule_digest,
+                            },
+                            "networks": {
+                                OMNIGENT_EGRESS_PROFILE.network_ref: {
+                                    "NetworkID": "network-" + host_container_id[:16],
+                                    "EndpointID": "endpoint-" + host_container_id[:16],
+                                    "IPAddress": client_address,
+                                }
+                            },
+                            "imageRef": immutable_host,
+                            "image": host_image_digest,
+                        }
+                    ),
+                    "",
+                )
+            if identity == host_container_id and format_value == "{{.State.Running}}":
+                return (0, "true\n" if container_running else "false\n", "")
+            raise AssertionError(f"unexpected Docker inspect: {args}")
+        if args[:2] == ("docker", "image") and args[2] == "inspect":
+            if args[4].startswith('{"repoDigests"'):
+                return (
+                    0,
+                    json.dumps(
+                        {
+                            "repoDigests": [immutable_server],
+                            "architecture": observed_architecture,
+                        }
+                    ),
+                    "",
+                )
+            return (0, json.dumps(observed_architecture), "")
+        if args[:3] == (
+            "docker",
+            "exec",
+            OMNIGENT_EGRESS_PROFILE.gateway_ref,
+        ):
+            if args[3] == "sha256sum":
+                return (
+                    0,
+                    EGRESS_CONFIG_DIGEST.removeprefix("sha256:")
+                    + "  /etc/squid/squid.conf\n",
+                    "",
+                )
+            if args[3] == "cat":
+                denial_time = datetime.now(UTC).timestamp()
+                return (
+                    0,
+                    f"{denial_time} 2 {client_address} TCP_DENIED/403 0 CONNECT "
+                    "metadata.invalid:443/ - HIER_NONE/- text/html\n",
+                    "",
+                )
+        raise AssertionError(f"unexpected host command: {args}")
+
+    runtime._run = run_host_command  # type: ignore[method-assign]
+
+    async def execute_with_continuation(bound_request, **_kwargs):
+        authorization = bound_request.parameters["omnigent"][
+            "_moonmindProfileAuthorization"
+        ]
+        current_host_lease_ref.append(authorization["hostLeaseRef"])
+        captured_authorization.append(dict(authorization))
+        raise OmnigentSessionStillRunningError(
+            "defer this exact host to the production janitor"
+        )
+
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=session_factory,
+        lease_client=lease_client,
+        host_repository=repository,
+        host_runtime=runtime,
+        run_store=store,
+        execution_runner=execute_with_continuation,
+        artifact_gateway=artifact_service,
+        artifact_service=artifact_service,
+        workspace_owner=workspace_owner,
+    )
+
+    with pytest.raises(OmnigentSessionStillRunningError):
+        await coordinator.execute(request)
+
+    assert current_host_lease_ref
+    host_lease_ref = current_host_lease_ref[0]
+    authorization = captured_authorization[0]
+    persisted_host_lease = await repository.get_host_lease(host_lease_ref)
+    assert persisted_host_lease is not None
+    continuation_key = f"{request.idempotency_key}:repository-continuation:1"
+    continuation = request.model_copy(
+        update={"idempotency_key": continuation_key}
+    )
+    await store.bind_profile_authorization(
+        request=continuation,
+        endpoint_ref=str(authorization["endpointRef"]),
+        provider_profile_id=str(authorization["providerProfileId"]),
+        provider_lease_id=str(authorization["providerLeaseRef"]),
+        credential_generation=int(authorization["credentialGeneration"]),
+        host_binding_ref=str(authorization["hostBindingRef"]),
+        host_lease_ref=str(authorization["hostLeaseRef"]),
+        omnigent_host_id=str(authorization["omnigentHostId"]),
+        effective_launch_snapshot=persisted_host_lease.effective_launch_snapshot,
+    )
+    await store.record_lifecycle_event(
+        continuation_key,
+        event_type="repository_continuation_1",
+        status="failed",
+    )
+    authority = await store.get_egress_cleanup_authority(
+        host_lease_ref=host_lease_ref
+    )
+    assert authority is not None
+    assert authority["evidenceRequest"]["remediation"] is True
+    launch_ref = authority["launchEvidenceRef"]
+    launch_artifact, launch_bytes = await artifact_service.read(
+        artifact_id=launch_ref,
+        principal="system",
+    )
+    assert launch_artifact.sha256 == hashlib.sha256(launch_bytes).hexdigest()
+    launch_payload = parse_and_verify_conformance_evidence(
+        launch_bytes,
+        location="integration-remediation-launch",
+    )
+    assert launch_payload["conformanceRow"] == "remediation_static_compose"
+
+    host_lease = await repository.get_host_lease(host_lease_ref)
+    assert host_lease is not None
+    janitor = OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=HostClient(),
+        run_store=store,
+        lease_client=lease_client,
+        artifact_gateway=artifact_service,
+    )
+    if cleanup_succeeds:
+        action = await janitor.run_action(
+            action_kind="host.stop",
+            profile_id="codex",
+            host_lease_ref=host_lease_ref,
+            expected_host_state=host_lease.status,
+            request_id="issue-3625-janitor-success",
+        )
+        terminal_ref = action["afterEvidenceRefs"][-1]
+        assert release_signals
+        assert command_order.index("host_stop_requested") < command_order.index(
+            "provider_released"
+        )
+    else:
+        with pytest.raises(OmnigentOAuthHostError) as cleanup_error:
+            await janitor.run_action(
+                action_kind="host.stop",
+                profile_id="codex",
+                host_lease_ref=host_lease_ref,
+                expected_host_state=host_lease.status,
+                request_id="issue-3625-janitor-failure",
+            )
+        terminal_ref = cleanup_error.value.egress_evidence_ref
+        assert terminal_ref
+        assert release_signals == []
+
+    terminal_artifact, terminal_bytes = await artifact_service.read(
+        artifact_id=terminal_ref,
+        principal="system",
+    )
+    assert terminal_artifact.sha256 == hashlib.sha256(terminal_bytes).hexdigest()
+    if cleanup_succeeds:
+        terminal_created_at = terminal_artifact.created_at
+        if terminal_created_at.tzinfo is None:
+            terminal_created_at = terminal_created_at.replace(tzinfo=UTC)
+        assert terminal_created_at <= release_times[0]
+    terminal_payload = parse_and_verify_conformance_evidence(
+        terminal_bytes,
+        location="integration-remediation-terminal",
+    )
+    assert terminal_payload["launchEvidenceRef"] == launch_ref
+    assert terminal_payload["cleanupResult"] == (
+        "drained_owned_static_host" if cleanup_succeeds else "failed"
+    )
+    continuation_row = await store.get_existing(
+        continuation_key
+    )
+    assert continuation_row is not None
+    assert continuation_row.terminal_refs["egressLaunchEvidenceRef"] == launch_ref
+    assert continuation_row.terminal_refs["egressEvidenceRef"] == terminal_ref
+    assert continuation_row.terminal_refs["leaseReleaseState"] == (
+        "released" if cleanup_succeeds else "held"
+    )
 
 
 @pytest.mark.parametrize(

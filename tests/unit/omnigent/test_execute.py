@@ -33,6 +33,7 @@ from moonmind.omnigent.execute import (
     _resolve_agent_id,
     _resolve_initial_context_message,
     _restore_active_journals,
+    _session_authority_observation,
     _snapshot_confirms_current_turn_terminal,
     _snapshot_contains_current_turn_progress,
     normalize_omnigent_observation,
@@ -50,6 +51,31 @@ def _request() -> AgentExecutionRequest:
         correlationId="corr-1",
         idempotencyKey="idem-1",
     )
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "expected"),
+    [
+        (None, (None, None)),
+        ({}, (None, None)),
+        ({"capabilities": {}, "status": ""}, ({}, None)),
+        (
+            {
+                "interventionCapabilities": {
+                    "sendMessage": True,
+                    "unknown": "not-a-bool",
+                },
+                "status": "idle",
+            },
+            ({"sendMessage": True}, "idle"),
+        ),
+    ],
+)
+def test_session_authority_observation_preserves_absent_fields(
+    snapshot: dict[str, Any] | None,
+    expected: tuple[dict[str, bool] | None, str | None],
+) -> None:
+    assert _session_authority_observation(snapshot) == expected
 
 
 @pytest.mark.asyncio
@@ -2287,6 +2313,342 @@ async def test_run_omnigent_execution_reuses_heartbeat_session_on_retry(
 
 
 @pytest.mark.asyncio
+async def test_run_omnigent_execution_reconciles_idle_snapshot_before_retry_stream(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    awaited: dict[str, object] = {}
+    terminal_snapshot = {
+        "status": "idle",
+        "active_response_id": None,
+        "summary": "completed before retry attached",
+        "items": [
+            {
+                "id": "current-call",
+                "type": "function_call",
+                "data": {"call_id": "current-call"},
+            },
+            {
+                "id": "current-output",
+                "type": "function_call_output",
+                "data": {"call_id": "current-call"},
+            },
+            {
+                "id": "current-assistant",
+                "type": "message",
+                "data": {
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Done"}],
+                },
+            },
+        ],
+    }
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            raise AssertionError("retry must reuse the heartbeat session")
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            raise AssertionError("retry must not repost the first message")
+
+        async def stream_events(self, session_id: str):
+            raise AssertionError(
+                "an already-terminal retry must not wait on a heartbeat-only stream"
+            )
+            if False:
+                yield {}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            assert session_id == "existing-session"
+            return terminal_snapshot
+
+    async def capture_terminal_wait(**kwargs: object):
+        awaited.update(kwargs)
+        return "completed", terminal_snapshot
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._heartbeat_state",
+        lambda: {
+            "omnigentSessionId": "existing-session",
+            "firstMessagePosted": True,
+            "preDispatchItemIds": ["prior-item"],
+        },
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._await_marked_turn_terminal",
+        capture_terminal_wait,
+    )
+
+    artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-missed-terminal-edge",
+            idempotencyKey="idem-missed-terminal-edge",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "continue"},
+                },
+            },
+        ),
+        artifact_gateway=artifact_gateway,
+    )
+
+    external_state = json.loads(
+        await artifact_gateway.read_text(result.metadata["externalStateRef"])
+    )
+    assert result.summary == "completed before retry attached"
+    assert awaited["baseline_item_ids"] == frozenset({"prior-item"})
+    assert external_state["terminalReconciliation"] == {
+        "source": "reattached_inactive_snapshot",
+        "status": "completed",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("heartbeat_type", "reconciliation_source"),
+    [
+        ("session.heartbeat", "session_heartbeat_snapshot"),
+        ("response.heartbeat", "response_heartbeat_snapshot"),
+    ],
+)
+async def test_run_omnigent_execution_reconciles_idle_snapshot_from_heartbeat(
+    monkeypatch,
+    tmp_path,
+    heartbeat_type: str,
+    reconciliation_source: str,
+) -> None:
+    awaited: dict[str, object] = {}
+    terminal_snapshot = {
+        "status": "idle",
+        "active_response_id": None,
+        "summary": "completed without terminal event",
+        "items": [
+            {
+                "id": "current-call",
+                "type": "function_call",
+                "data": {"call_id": "current-call"},
+            },
+            {
+                "id": "current-output",
+                "type": "function_call_output",
+                "data": {"call_id": "current-call"},
+            },
+        ],
+    }
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            self.posted = asyncio.Event()
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            return {"id": "session-1"}
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            self.posted.set()
+            return {"pending_id": "pending-1"}
+
+        async def stream_events(self, session_id: str):
+            await self.posted.wait()
+            yield {"type": heartbeat_type, "status": "running"}
+            raise AssertionError(
+                "heartbeat reconciliation must finish without another SSE edge"
+            )
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            assert session_id == "session-1"
+            if not self.posted.is_set():
+                return {
+                    "status": "idle",
+                    "active_response_id": None,
+                    "items": [{"id": "prior-item", "type": "message"}],
+                }
+            return terminal_snapshot
+
+    async def capture_terminal_wait(**kwargs: object):
+        awaited.update(kwargs)
+        return "completed", terminal_snapshot
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+    monkeypatch.setattr(
+        "moonmind.omnigent.execute._await_marked_turn_terminal",
+        capture_terminal_wait,
+    )
+
+    artifact_gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-heartbeat-terminal-reconcile",
+            idempotencyKey="idem-heartbeat-terminal-reconcile",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "do the work"},
+                },
+            },
+        ),
+        artifact_gateway=artifact_gateway,
+    )
+
+    external_state = json.loads(
+        await artifact_gateway.read_text(result.metadata["externalStateRef"])
+    )
+    assert result.summary == "completed without terminal event"
+    assert awaited["baseline_item_ids"] == frozenset({"prior-item"})
+    assert external_state["terminalReconciliation"] == {
+        "source": reconciliation_source,
+        "status": "completed",
+    }
+    normalized_path = (
+        tmp_path
+        / "corr-heartbeat-terminal-reconcile"
+        / "runtime.omnigent.sse.normalized.jsonl"
+    )
+    normalized_events = [
+        json.loads(line)
+        for line in normalized_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    reconciled = normalized_events[-1]
+    assert reconciled["metadata"]["moonmind"] == {
+        "source": "omnigent_terminal_reconciliation",
+        "terminalReconciliationSource": reconciliation_source,
+        "workflowChatVisible": True,
+    }
+    marker = (
+        "MoonMind-Omnigent-Run:\n"
+        "  correlationId: corr-heartbeat-terminal-reconcile\n"
+        "  idempotencyKey: idem-heartbeat-terminal-reconcile"
+    )
+    marker_digest = hashlib.sha256(f"session-1\n{marker}".encode()).hexdigest()
+    assert reconciled["deduplicationKey"] == (
+        f"terminal-reconciliation:{marker_digest}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_preserves_durable_failed_terminal_on_retry(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    terminal_calls: list[str] = []
+
+    class Row:
+        bridge_session_id = ""
+        omnigent_session_id = "existing-session"
+        status = "failed"
+        first_message_state = "terminal"
+        first_message_posted_at = object()
+        first_message_pending_id = "pending-1"
+        first_message_item_id = "item-1"
+        terminal_refs = {
+            "summary": "durable provider failure",
+            "failureClass": "execution_error",
+        }
+        metadata_: dict[str, object] = {}
+
+    row = Row()
+
+    class Store:
+        async def get_binding(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        async def get_or_create(self, **_kwargs: object) -> Row:
+            return row
+
+        async def mark_prepared(self, *_args: object, **_kwargs: object) -> Row:
+            return row
+
+        async def mark_terminal(
+            self, *_args: object, status: str, **_kwargs: object
+        ) -> Row:
+            terminal_calls.append(status)
+            return row
+
+    class FakeClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def list_agents(self) -> dict[str, object]:
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, payload: dict[str, object]) -> dict[str, object]:
+            raise AssertionError("retry must reuse the durable session")
+
+        async def post_event(
+            self,
+            session_id: str,
+            payload: dict[str, object],
+        ) -> dict[str, object]:
+            raise AssertionError("retry must not repost a terminal turn")
+
+        async def stream_events(self, session_id: str):
+            raise AssertionError("retry must not stream after a durable terminal")
+            if False:
+                yield {}
+
+        async def get_session(self, session_id: str) -> dict[str, object]:
+            assert session_id == "existing-session"
+            return {"status": "idle", "summary": "provider has returned to idle"}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-durable-terminal",
+            idempotencyKey="idem-durable-terminal",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                }
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        run_store=Store(),
+        first_message_text="continue",
+    )
+
+    assert result.metadata["normalizedStatus"] == "failed"
+    assert result.failure_class == "execution_error"
+    assert result.summary == "durable provider failure"
+    assert terminal_calls == ["failed"]
+
+
+@pytest.mark.asyncio
 async def test_run_omnigent_execution_continues_existing_session_with_new_message(
     monkeypatch,
     tmp_path,
@@ -2362,6 +2724,7 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
     tmp_path,
 ) -> None:
     calls: list[str] = []
+    recorded_sessions: list[dict[str, object]] = []
 
     class Row:
         omnigent_session_id = "persisted-session"
@@ -2380,6 +2743,12 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
             return Row()
 
         async def mark_terminal(self, *_: object, **__: object) -> Row:
+            return Row()
+
+        async def record_session_created(
+            self, idempotency_key: str, **kwargs: object
+        ) -> Row:
+            recorded_sessions.append({"idempotency_key": idempotency_key, **kwargs})
             return Row()
 
     class FakeClient:
@@ -2433,6 +2802,16 @@ async def test_run_omnigent_execution_reuses_persisted_session_on_retry(
 
     assert result.summary == "durably reattached"
     assert calls == []
+    assert recorded_sessions == [
+        {
+            "idempotency_key": "idem-1",
+            "session_id": "persisted-session",
+            "agent_id": "agent-1",
+            "endpoint_ref": "default",
+            "capabilities": None,
+            "session_status": "completed",
+        }
+    ]
     assert result.metadata["checkpointKind"] == "external_state_ref"
     assert result.metadata["stateCheckpointRef"] == result.metadata["externalStateRef"]
     assert "workspaceRootRef" not in result.metadata

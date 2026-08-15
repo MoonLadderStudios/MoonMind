@@ -296,6 +296,17 @@ def test_render_document_injects_bootstrap_and_base() -> None:
     assert document.index("__MOONMIND_OMNIGENT_CHAT__") < document.index(
         "index-abc.js"
     )
+    # The host adapter runs before BrowserRouter and sends every stock
+    # root-relative transport through the binding-scoped facade.
+    assert document.index("window.fetch =") < document.index("index-abc.js")
+    assert '"/c/" + bindingId' in document
+    assert "apiBase + url.pathname" in document
+    assert "sameSocketHost" in document
+    assert "window.EventSource =" in document
+    assert "window.WebSocket =" in document
+    assert "MutationObserver" in document
+    assert "restoreScopedDocumentUrl" in document
+    assert "beforeunload" not in document
     # Assets are scoped in the rendered document too.
     assert f'src="{base}/assets/index-abc.js"' in document
 

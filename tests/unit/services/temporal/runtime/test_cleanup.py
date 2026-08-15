@@ -721,7 +721,7 @@ def test_managed_runtime_cleanup_config_has_operational_defaults() -> None:
     for config in (direct, from_empty_env):
         assert config.enabled is True
         assert config.dry_run is False
-        assert config.workspace_retention == timedelta(days=30)
+        assert config.workspace_retention == timedelta(days=10)
         assert config.artifact_retention == timedelta(days=90)
         assert config.record_retention is None
         assert config.grace == timedelta(hours=1)

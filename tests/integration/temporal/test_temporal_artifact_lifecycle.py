@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -67,6 +68,61 @@ async def test_lifecycle_soft_then_hard_delete(tmp_path: Path) -> None:
             assert refreshed.hard_deleted_at is not None
 
 
+async def test_lifecycle_keeps_shared_checkpoint_blob_until_last_ref_expires(
+    tmp_path: Path,
+) -> None:
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            store = LocalTemporalArtifactStore(tmp_path / "shared-artifacts")
+            service = TemporalArtifactService(
+                TemporalArtifactRepository(session),
+                store=store,
+                lifecycle_hard_delete_after_seconds=1,
+            )
+            payload = b"same checkpoint bytes"
+            first, _ = await service.put_content_addressed_payload_complete(
+                principal="system",
+                payload=payload,
+                content_type="application/vnd.moonmind.worktree-archive",
+                scope="checkpoint_archive",
+            )
+            second, reused = await service.put_content_addressed_payload_complete(
+                principal="system",
+                payload=payload,
+                content_type="application/vnd.moonmind.worktree-archive",
+                scope="checkpoint_archive",
+            )
+            assert reused
+            assert first.storage_key == second.storage_key
+            blob_path = store.resolve_storage_key(first.storage_key)
+
+            first.expires_at = datetime.now(UTC) - timedelta(days=1)
+            await service._repository.commit()
+            sweep_started = datetime.now(UTC)
+            await service.sweep_lifecycle(
+                principal="service:lifecycle",
+                now=sweep_started,
+            )
+            await service.sweep_lifecycle(
+                principal="service:lifecycle",
+                now=sweep_started + timedelta(seconds=3),
+            )
+            assert blob_path.read_bytes() == payload
+            assert second.status is TemporalArtifactStatus.COMPLETE
+
+            second.expires_at = sweep_started - timedelta(days=1)
+            await service._repository.commit()
+            await service.sweep_lifecycle(
+                principal="service:lifecycle",
+                now=sweep_started + timedelta(seconds=4),
+            )
+            await service.sweep_lifecycle(
+                principal="service:lifecycle",
+                now=sweep_started + timedelta(seconds=7),
+            )
+            assert not blob_path.exists()
+
+
 async def test_trusted_multipart_payload_round_trips_through_configured_store(
     tmp_path: Path,
 ) -> None:
@@ -100,6 +156,43 @@ async def test_trusted_multipart_payload_round_trips_through_configured_store(
             assert completed.status is TemporalArtifactStatus.COMPLETE
             assert completed.size_bytes == len(payload)
             assert stored_payload == payload
+
+
+async def test_content_addressed_publish_repairs_corrupt_configured_store_blob(
+    tmp_path: Path,
+) -> None:
+    """The configured object store must validate bytes before checkpoint reuse."""
+
+    async with _db(tmp_path) as maker:
+        async with maker() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            payload = f"checkpoint-{uuid4()}".encode()
+            first, _ = await service.put_content_addressed_payload_complete(
+                principal="system:integration-test",
+                payload=payload,
+                content_type="application/vnd.moonmind.worktree-archive",
+                scope="checkpoint_archive",
+            )
+            service._store.write_bytes(
+                first.storage_key,
+                b"corrupt",
+                content_type="application/vnd.moonmind.worktree-archive",
+            )
+
+            second, reused = await service.put_content_addressed_payload_complete(
+                principal="system:integration-test",
+                payload=payload,
+                content_type="application/vnd.moonmind.worktree-archive",
+                scope="checkpoint_archive",
+            )
+            _artifact, restored = await service.read(
+                artifact_id=second.artifact_id,
+                principal="system:integration-test",
+            )
+
+            assert not reused
+            assert first.storage_key == second.storage_key
+            assert restored == payload
 
 async def test_report_delete_does_not_cascade_to_observability_artifacts(
     tmp_path: Path,

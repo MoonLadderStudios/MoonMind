@@ -71,10 +71,12 @@ services:
       - MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE=${MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
+      - MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF=${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-/workspace/cutover/remediation-release.json}
       # The API needs DOCKER_HOST only for its remaining direct Docker paths
       # (terminal exec, OAuth auth-runner teardown). SYSTEM_DOCKER_HOST is a
       # trusted-worker-only backend selector and is not read by the API service.
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
       - MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE=${MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE:-/workspace/deployment_state/desired-state.json}
@@ -84,7 +86,7 @@ services:
       - MOONMIND_AGENT_RUNTIME_ARTIFACTS=${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}
-      - MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-30}
+      - MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-10}
       - MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS:-90}
       - MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS:-}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS=${MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS:-3600}
@@ -638,7 +640,7 @@ services:
       - MOONMIND_AGENT_RUNTIME_ARTIFACTS=${MOONMIND_AGENT_RUNTIME_ARTIFACTS:-/work/agent_jobs/artifacts}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED=${MOONMIND_MANAGED_RUNTIME_JANITOR_ENABLED:-true}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN=${MOONMIND_MANAGED_RUNTIME_JANITOR_DRY_RUN:-false}
-      - MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-30}
+      - MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_WORKSPACE_RETENTION_DAYS:-10}
       - MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_ARTIFACT_RETENTION_DAYS:-90}
       - MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS=${MOONMIND_MANAGED_RUNTIME_RECORD_RETENTION_DAYS:-}
       - MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS=${MOONMIND_MANAGED_RUNTIME_JANITOR_GRACE_SECONDS:-3600}
@@ -650,11 +652,11 @@ services:
       - MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT=${MOONMIND_DOCKER_STORAGE_CRITICAL_WATERMARK_PERCENT:-90}
       - MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS=${MOONMIND_DOCKER_STORAGE_IMAGE_MIN_AGE_HOURS:-168}
       - MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS=${MOONMIND_DOCKER_STORAGE_BUILD_CACHE_MIN_AGE_HOURS:-24}
-      # Operator-provisioned Unreal image in the shared host daemon.
-      # The default pull policy is `never`, so private images are reused without
-      # exposing registry credentials or silently attempting anonymous pulls.
+      # Deployment-approved Unreal image in the shared host daemon.
+      # First use pulls a missing image through the trusted deployment daemon;
+      # operators may explicitly select `never` when prewarming is required.
       - MOONMIND_UNREAL_ENGINE_IMAGE=${MOONMIND_UNREAL_ENGINE_IMAGE:-ghcr.io/moonladderstudios/tactics-ue-base:5.8}
-      - MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY=${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-never}
+      - MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY=${MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY:-if-missing}
       - MOONMIND_UNREAL_CCACHE_VOLUME_NAME=${MOONMIND_UNREAL_CCACHE_VOLUME_NAME:-unreal_ccache_volume}
       - MOONMIND_UNREAL_UBT_VOLUME_NAME=${MOONMIND_UNREAL_UBT_VOLUME_NAME:-unreal_ubt_volume}
       - MOONMIND_DEPLOYMENT_PROJECT_DIR=${MOONMIND_DEPLOYMENT_PROJECT_DIR:-}
@@ -917,6 +919,10 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=${OMNIGENT_HOST_TMPFS_LIMIT:-256m}
     stop_grace_period: ${OMNIGENT_HOST_STOP_GRACE_SECONDS:-20}s
+    labels:
+      moonmind.egress.profile: ${OMNIGENT_EGRESS_PROFILE_REF:-unattested}
+      moonmind.egress.profile_digest: ${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}
+      moonmind.egress.applied_rule_digest: ${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}
     entrypoint: ["/opt/moonmind/start-claude-oauth-host.sh"]
     environment:
       HTTP_PROXY: http://omnigent-egress-proxy:3129
@@ -978,6 +984,17 @@ services:
     profiles: ["omnigent-host-claude"]
     image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
     user: "0:0"
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
     entrypoint: ["/opt/moonmind/init-oauth-host.sh"]
     environment:
       OMNIGENT_STATE_PATH: /home/app/.omnigent
@@ -997,12 +1014,25 @@ services:
     profiles: ["omnigent-host-codex"]
     image: ${OMNIGENT_HOST_IMAGE_REF:-${OMNIGENT_HOST_IMAGE:-ghcr.io/omnigent-ai/omnigent-host}:${OMNIGENT_HOST_IMAGE_TAG:-latest}}
     user: "0:0"
+    network_mode: none
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
     entrypoint: ["/opt/moonmind/init-codex-oauth-host.sh"]
     environment:
       OMNIGENT_STATE_PATH: /home/app/.omnigent
       CODEX_HOME: /home/app/.codex
     volumes:
       - omnigent-host-codex-state:/home/app/.omnigent
+      - omnigent-host-artifacts:/artifacts
+      - omnigent-host-cache:/home/app/.cache
       - codex_auth_volume:/home/app/.codex
       - ./services/omnigent/scripts:/opt/moonmind:ro
     depends_on:
@@ -1033,6 +1063,9 @@ services:
       moonmind.capture_retention_days: ${OMNIGENT_CAPTURE_RETENTION_DAYS:-30}
       moonmind.cleanup_mode: drain
       moonmind.control_capabilities: ${OMNIGENT_CONTROL_CAPABILITIES:-interrupt,terminate,clear_context}
+      moonmind.egress.profile: ${OMNIGENT_EGRESS_PROFILE_REF:-unattested}
+      moonmind.egress.profile_digest: ${OMNIGENT_EGRESS_PROFILE_DIGEST:-unattested}
+      moonmind.egress.applied_rule_digest: ${OMNIGENT_EGRESS_APPLIED_RULE_DIGEST:-unattested}
     entrypoint: ["/usr/bin/env", "-u", "OPENAI_API_KEY", "-u", "CODEX_ACCESS_TOKEN", "-u", "OPENAI_BASE_URL", "-u", "MINIMAX_API_KEY", "-u", "ANTHROPIC_API_KEY", "-u", "ANTHROPIC_AUTH_TOKEN", "-u", "CLAUDE_API_KEY", "-u", "CLAUDE_CODE_OAUTH_TOKEN", "-u", "GEMINI_API_KEY", "-u", "GOOGLE_API_KEY"]
     command: ["/opt/moonmind/start-codex-oauth-host.sh"]
     environment:

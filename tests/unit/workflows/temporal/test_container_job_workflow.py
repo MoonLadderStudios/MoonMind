@@ -739,15 +739,23 @@ async def test_terminal_projection_carries_post_cleanup_evidence(
         if name == "container_job.project_status":
             projections.append(request.model_copy(deep=True))
         if name == "container_job.publish_evidence":
-            assert request.egress_attestation_ref == "art:launch-attestation"
+            assert request.egress_attestation_ref == "art:running-attestation"
             return ContainerJobActivityResult(diagnosticsRef="art:runtime")
         if name == "container_job.create_container":
             return ContainerJobActivityResult(
                 containerRef="owned:3277",
                 diagnosticsRef="art:launch-attestation",
             )
+        if name == "container_job.start_container":
+            assert request.egress_attestation_ref == "art:launch-attestation"
+            return ContainerJobActivityResult(
+                containerRef="owned:3277",
+                running=True,
+                diagnosticsRef="art:running-attestation",
+            )
         if name == "container_job.cleanup":
             assert request.publication.diagnostics_ref == "art:runtime"
+            assert request.egress_attestation_ref == "art:running-attestation"
             return ContainerJobActivityResult(diagnosticsRef="art:lifecycle")
         return _result_for(name)
 
@@ -759,7 +767,7 @@ async def test_terminal_projection_carries_post_cleanup_evidence(
         "diagnosticsRef": "art:lifecycle",
     }
     assert projections[-1].cleanup_outcome.diagnostics_ref == "art:lifecycle"
-    assert projections[-1].egress_attestation_ref == "art:launch-attestation"
+    assert projections[-1].egress_attestation_ref == "art:running-attestation"
 
 
 @pytest.mark.asyncio

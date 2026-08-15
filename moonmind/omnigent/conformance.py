@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 PROFILE_VERSION = "moonmind.omnigent.conformance/v4"
-PROFILE_SHA256 = "4098a93e74fb354d2a557e900ea85d3d34ca4957a02f91a529daa276ee7b3a1b"
+PROFILE_SHA256 = "79d188fffa261eb5f49e97023ce82ae31e7f5640e386d46703a0283de68c58b5"
 REPORT_VERSION = "moonmind.omnigent.conformance-report/v1"
 ACCEPTANCE_VERSION = "moonmind.omnigent.product-acceptance/v1"
 BROWSER_EVIDENCE_VERSION = "moonmind.omnigent.live-evidence/v1"

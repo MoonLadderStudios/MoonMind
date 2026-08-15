@@ -2715,16 +2715,17 @@ class TemporalSandboxActivities:
         metadata: Mapping[str, Any] | None = None,
     ) -> str:
         if self._artifact_service is not None:
-            artifact, _upload = await self._artifact_service.create(
-                principal="system",
-                content_type=content_type,
-                metadata_json=dict(metadata or {}),
-            )
-            completed = await self._artifact_service.write_complete(
-                artifact_id=artifact.artifact_id,
-                principal="system",
-                payload=payload,
-                content_type=content_type,
+            artifact_kind = str(
+                (metadata or {}).get("artifact_kind") or "checkpoint"
+            ).strip()
+            completed, _reused = (
+                await self._artifact_service.put_content_addressed_payload_complete(
+                    principal="system",
+                    payload=payload,
+                    content_type=content_type,
+                    metadata_json=dict(metadata or {}),
+                    scope=artifact_kind,
+                )
             )
             return _compact_artifact_ref_text(build_artifact_ref(completed))
         artifact = self._artifact_store.put_bytes(
@@ -7176,13 +7177,14 @@ class TemporalAgentRuntimeActivities:
     async def _put_managed_checkpoint_artifact(
         self, payload: bytes, content_type: str, artifact_kind: str
     ) -> str:
-        artifact, _ = await self._artifact_service.create(
-            principal="system", content_type=content_type,
-            size_bytes=len(payload), metadata_json={"artifact_kind": artifact_kind},
-        )
-        completed = await self._artifact_service.write_payload_complete(
-            artifact_id=artifact.artifact_id, principal="system",
-            payload=payload, content_type=content_type,
+        completed, _reused = (
+            await self._artifact_service.put_content_addressed_payload_complete(
+                principal="system",
+                payload=payload,
+                content_type=content_type,
+                scope=artifact_kind,
+                metadata_json={"artifact_kind": artifact_kind},
+            )
         )
         return _compact_artifact_ref_text(build_artifact_ref(completed))
 

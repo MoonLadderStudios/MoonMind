@@ -691,6 +691,7 @@ RUN_CANONICAL_STEP_STATUS_VOCAB_PATCH = "run-canonical-step-status-vocabulary-v1
 RUN_CANONICAL_STEP_CHECKPOINTS_PATCH = "run-canonical-step-checkpoints-v1"
 RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH = "run-managed-checkpoint-authority-v1"
 RUN_MANAGED_CHECKPOINT_CAPTURE_PATCH = "run-managed-checkpoint-capture-v1"
+RUN_UNCHANGED_CHECKPOINT_REUSE_PATCH = "run-unchanged-checkpoint-reuse-v1"
 RUN_MANAGED_CHECKPOINT_LOCATOR_GUARD_PATCH = (
     "run-managed-checkpoint-locator-guard-v1"
 )
@@ -1592,6 +1593,14 @@ class MoonMindRunWorkflow:
         self._step_checkpoint_refs_by_boundary: dict[str, dict[str, str]] = {}
         self._step_checkpoint_workspace_evidence_by_boundary: dict[
             str, dict[str, dict[str, str]]
+        ] = {}
+        # Compact workspace artifact evidence is reusable until the workflow
+        # crosses a boundary that can mutate that workspace. This prevents
+        # adjacent checkpoint boundaries from recapturing identical bytes while
+        # retaining one logical Step Execution checkpoint per boundary.
+        self._step_workspace_mutation_generations: dict[str, int] = {}
+        self._step_checkpoint_workspace_evidence_by_generation: dict[
+            str, dict[int, dict[str, Any]]
         ] = {}
         self._step_workspace_capture_inputs: dict[str, dict[str, Any]] = {}
         self._step_checkpoint_capture_outcomes: dict[str, dict[str, Any]] = {}
@@ -4712,6 +4721,11 @@ class MoonMindRunWorkflow:
             logical_step_id,
             None,
         )
+        self._step_workspace_mutation_generations.pop(logical_step_id, None)
+        self._step_checkpoint_workspace_evidence_by_generation.pop(
+            logical_step_id,
+            None,
+        )
         try:
             clear_step_checkpoint_evidence(
                 self._step_ledger_rows,
@@ -6488,6 +6502,62 @@ class MoonMindRunWorkflow:
             ],
         }
 
+    @staticmethod
+    def _unchanged_checkpoint_reuse_enabled() -> bool:
+        try:
+            return workflow.patched(RUN_UNCHANGED_CHECKPOINT_REUSE_PATCH)
+        except workflow._NotInWorkflowEventLoopError:
+            return True
+
+    def _reusable_step_checkpoint_workspace(
+        self,
+        logical_step_id: str,
+    ) -> dict[str, Any] | None:
+        generation = self._step_workspace_mutation_generations.get(
+            logical_step_id,
+            0,
+        )
+        cached = self._step_checkpoint_workspace_evidence_by_generation.get(
+            logical_step_id,
+            {},
+        ).get(generation)
+        if not isinstance(cached, Mapping):
+            return None
+        workspace_evidence = cached.get("workspace")
+        if not isinstance(workspace_evidence, Mapping):
+            return None
+        return {
+            "workspace": dict(workspace_evidence),
+            "diagnosticRefs": list(cached.get("diagnosticRefs") or []),
+        }
+
+    def _cache_step_checkpoint_workspace(
+        self,
+        logical_step_id: str,
+        capture: Mapping[str, Any],
+    ) -> None:
+        workspace_evidence = capture.get("workspace")
+        if not isinstance(workspace_evidence, Mapping):
+            return
+        generation = self._step_workspace_mutation_generations.get(
+            logical_step_id,
+            0,
+        )
+        self._step_checkpoint_workspace_evidence_by_generation.setdefault(
+            logical_step_id,
+            {},
+        )[generation] = {
+            "workspace": dict(workspace_evidence),
+            "diagnosticRefs": list(capture.get("diagnosticRefs") or []),
+        }
+
+    def _mark_step_workspace_mutation_started(self, logical_step_id: str) -> None:
+        if not self._unchanged_checkpoint_reuse_enabled():
+            return
+        self._step_workspace_mutation_generations[logical_step_id] = (
+            self._step_workspace_mutation_generations.get(logical_step_id, 0) + 1
+        )
+
     async def _record_canonical_step_checkpoint(
         self,
         logical_step_id: str,
@@ -6506,13 +6576,22 @@ class MoonMindRunWorkflow:
             self._input_ref
             or f"temporal://{identity.workflow_id}/{identity.run_id}/task-input"
         )
-        capture = await self._capture_canonical_step_checkpoint_workspace(
-            logical_step_id,
-            identity=identity,
-            boundary=boundary,
+        reuse_enabled = self._unchanged_checkpoint_reuse_enabled()
+        capture = (
+            self._reusable_step_checkpoint_workspace(logical_step_id)
+            if reuse_enabled
+            else None
         )
         if capture is None:
+            capture = await self._capture_canonical_step_checkpoint_workspace(
+                logical_step_id,
+                identity=identity,
+                boundary=boundary,
+            )
+        if capture is None:
             return None
+        if reuse_enabled:
+            self._cache_step_checkpoint_workspace(logical_step_id, capture)
         capture_diagnostics = list(capture.get("diagnosticRefs") or [])
         step_capture_input = self._step_workspace_capture_inputs.get(
             logical_step_id, {}
@@ -11674,6 +11753,11 @@ class MoonMindRunWorkflow:
                         boundary="before_execution",
                         updated_at=workflow.now(),
                     )
+                    # From this point onward, preflight, runtime, or tool
+                    # execution may mutate the authoritative workspace. A later
+                    # checkpoint must capture the next generation rather than
+                    # reusing the pre-execution artifact evidence.
+                    self._mark_step_workspace_mutation_started(node_id)
                     if self._remediation_workspace_materialization_required(node):
                         self._validate_remediation_workspace_materialization(
                             node_id

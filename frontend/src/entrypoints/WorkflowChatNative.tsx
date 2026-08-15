@@ -25,32 +25,9 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 
 import type { components } from '../generated/openapi';
+import { WorkflowTerminalChatActions } from '../features/workflow-native-chat/WorkflowTerminalChatActions';
 
 export type WorkflowChatBinding = components['schemas']['WorkflowChatBinding'];
-
-/** One authorized MoonMind evidence artifact ref (browser-safe). */
-export interface CapturedEvidenceItem {
-  label: string;
-  kind: string;
-  artifactRef: string;
-}
-
-export interface CapturedEvidence {
-  workflowId: string;
-  runId?: string | null;
-  available: boolean;
-  items: CapturedEvidenceItem[];
-  summary?: string | null;
-  unavailableReason?: string | null;
-}
-
-export interface ContinueInNewWorkflowResult {
-  sourceWorkflowId: string;
-  sourceRunId: string;
-  destinationWorkflowId: string;
-  relationshipType: string;
-  created: boolean;
-}
 
 function joinApiPath(apiBase: string, path: string): string {
   const base = (apiBase || '/api').replace(/\/+$/, '');
@@ -71,99 +48,6 @@ export async function fetchWorkflowChatBinding(
     throw new Error(`workflow chat binding request failed (${resp.status})`);
   }
   return (await resp.json()) as WorkflowChatBinding;
-}
-
-/**
- * Turn a MoonMind evidence ref into a download href on the MoonMind origin.
- *
- * Routes through the workflow-scoped captured-evidence download endpoint, which
- * authorizes the caller against the Workflow and reads the ref through the same
- * scheme-aware boundary the runtime uses. This is required because production
- * Omnigent evidence refs are gateway refs (`artifact://omnigent/<corr>/<name>`)
- * that the generic `/artifacts/{id}/download` route cannot serve (its nested
- * path never routes and it has no matching `TemporalArtifact`). The ref is
- * carried as a query parameter so its scheme and slashes survive intact. A full
- * same-origin URL passes through unchanged; a provider session id or upstream
- * path never becomes a durable link.
- */
-export function capturedEvidenceHref(
-  apiBase: string,
-  workflowId: string,
-  artifactRef: string,
-): string | null {
-  const ref = (artifactRef || '').trim();
-  if (!ref) return null;
-  if (/^https?:\/\//i.test(ref)) return ref;
-  if (!workflowId) return null;
-  const base = joinApiPath(
-    apiBase,
-    `/executions/${encodeURIComponent(workflowId)}/captured-evidence/download`,
-  );
-  return `${base}?ref=${encodeURIComponent(ref)}`;
-}
-
-export async function fetchCapturedEvidence(
-  apiBase: string,
-  workflowId: string,
-): Promise<CapturedEvidence> {
-  const resp = await fetch(
-    joinApiPath(
-      apiBase,
-      `/executions/${encodeURIComponent(workflowId)}/captured-evidence`,
-    ),
-    { credentials: 'include' },
-  );
-  if (!resp.ok) {
-    throw new Error(`captured evidence request failed (${resp.status})`);
-  }
-  return (await resp.json()) as CapturedEvidence;
-}
-
-/** Authored continuation intent collected before launching a new workflow. */
-export interface ContinuationIntent {
-  idempotencyKey: string;
-  /** New instructions for the continuation (required — never an empty rerun). */
-  instructions: string;
-  title?: string;
-}
-
-/**
- * Create a linked continuation Workflow from a terminal source.
- *
- * The server pins the source run, Step lineage, and authorized evidence refs; the
- * browser authors the new intent (title + instructions) and carries a stable
- * idempotency key so a double-click resolves to the same linked Workflow rather
- * than creating two. New instructions are required so the continuation is an
- * authored follow-up rather than an accidental rerun of the source's old intent.
- */
-export async function continueInNewWorkflow(
-  apiBase: string,
-  workflowId: string,
-  intent: ContinuationIntent,
-): Promise<ContinueInNewWorkflowResult> {
-  const body: Record<string, unknown> = {
-    idempotencyKey: intent.idempotencyKey,
-    instructions: intent.instructions,
-  };
-  if (intent.title) body.title = intent.title;
-  const resp = await fetch(
-    joinApiPath(apiBase, `/executions/${encodeURIComponent(workflowId)}/continue`),
-    {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    },
-  );
-  if (!resp.ok) {
-    throw new Error(`continue request failed (${resp.status})`);
-  }
-  return (await resp.json()) as ContinueInNewWorkflowResult;
-}
-
-/** Canonical Workflow Detail route for a continuation destination. */
-export function workflowDetailHref(workflowId: string): string {
-  return `/workflows/${encodeURIComponent(workflowId)}?source=temporal`;
 }
 
 /**
@@ -188,220 +72,6 @@ export function fullPageChatUrl(chatUrl: string): string {
 function hasLiveNativeChat(binding: WorkflowChatBinding | null | undefined): boolean {
   return Boolean(
     binding && binding.chatUrl && binding.state !== 'unavailable',
-  );
-}
-
-function newIdempotencyKey(): string {
-  const cryptoObj =
-    typeof globalThis !== 'undefined'
-      ? (globalThis.crypto as Crypto | undefined)
-      : undefined;
-  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
-    return `continue:${cryptoObj.randomUUID()}`;
-  }
-  return `continue:${Date.now()}:${Math.random().toString(16).slice(2)}`;
-}
-
-/**
- * The captured-evidence panel rendered below the terminal context bar.
- * Lists authorized MoonMind artifact refs as download links reusing the existing
- * artifact download contract.
- */
-function CapturedEvidencePanel({
-  apiBase,
-  workflowId,
-}: {
-  apiBase: string;
-  workflowId: string;
-}): React.ReactElement {
-  const query = useQuery({
-    queryKey: ['workflow-captured-evidence', workflowId],
-    queryFn: () => fetchCapturedEvidence(apiBase, workflowId),
-    enabled: Boolean(workflowId),
-    staleTime: 60_000,
-    retry: false,
-  });
-  const evidence = query.data ?? null;
-
-  return (
-    <div
-      className="td-native-chat-evidence"
-      data-testid="workflow-native-chat-evidence"
-    >
-      {query.isLoading ? (
-        <p className="small">Loading captured evidence…</p>
-      ) : query.isError ? (
-        <p className="small" role="alert">
-          Captured evidence is unavailable.
-        </p>
-      ) : evidence && evidence.available && evidence.items.length > 0 ? (
-        <ul className="td-native-chat-evidence-list">
-          {evidence.items.map((item, index) => {
-            const href = capturedEvidenceHref(apiBase, workflowId, item.artifactRef);
-            return (
-              <li key={`${item.kind}-${index}`}>
-                {href ? (
-                  <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    data-testid="workflow-native-chat-evidence-link"
-                  >
-                    {item.label}
-                  </a>
-                ) : (
-                  <span>{item.label}</span>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      ) : (
-        <p className="small">
-          {evidence?.unavailableReason
-            ? `No captured evidence: ${evidence.unavailableReason}`
-            : 'No captured evidence is available for this workflow.'}
-        </p>
-      )}
-    </div>
-  );
-}
-
-/**
- * Workflow-level terminal actions — **View captured evidence** and **Continue in
- * a new workflow**.
- *
- * These are governed by the Workflow Execution being terminal (the authoritative
- * execution status passed from the parent), not by the chat binding's write
- * capability or native-iframe availability. A binding can be read-only while its
- * workflow is still live, and a terminal workflow's native UI can be unavailable;
- * in both cases these workflow-scoped actions must reflect terminality alone, so
- * this component is rendered both inside the live read-only chat and in the
- * compatibility fallback (#3641 §9, §10).
- *
- * Continuing requires the operator to author new intent (instructions) first, so
- * the linked Workflow is a deliberate follow-up rather than an accidental rerun
- * of the source's old instructions.
- */
-function TerminalWorkflowActions({
-  apiBase,
-  workflowId,
-}: {
-  apiBase: string;
-  workflowId: string;
-}): React.ReactElement {
-  const [evidenceOpen, setEvidenceOpen] = React.useState(false);
-  const [formOpen, setFormOpen] = React.useState(false);
-  const [title, setTitle] = React.useState('');
-  const [instructions, setInstructions] = React.useState('');
-  const [continueState, setContinueState] = React.useState<
-    'idle' | 'pending' | 'error'
-  >('idle');
-  // Stable per-mount idempotency key: a double-submit resolves to the same
-  // linked Workflow instead of creating two.
-  const idempotencyKey = React.useRef<string>('');
-  if (!idempotencyKey.current) {
-    idempotencyKey.current = newIdempotencyKey();
-  }
-
-  const canSubmit =
-    instructions.trim().length > 0 && continueState !== 'pending';
-
-  const onSubmit = React.useCallback(
-    async (event: React.FormEvent) => {
-      event.preventDefault();
-      if (instructions.trim().length === 0 || continueState === 'pending') {
-        return;
-      }
-      setContinueState('pending');
-      try {
-        const intent: ContinuationIntent = {
-          idempotencyKey: idempotencyKey.current,
-          instructions: instructions.trim(),
-        };
-        const trimmedTitle = title.trim();
-        if (trimmedTitle) intent.title = trimmedTitle;
-        const result = await continueInNewWorkflow(apiBase, workflowId, intent);
-        window.location.assign(workflowDetailHref(result.destinationWorkflowId));
-      } catch {
-        setContinueState('error');
-      }
-    },
-    [apiBase, workflowId, instructions, title, continueState],
-  );
-
-  return (
-    <div className="stack td-native-chat-terminal-actions">
-      <div className="td-native-chat-actions">
-        <button
-          type="button"
-          className="button secondary"
-          aria-expanded={evidenceOpen}
-          onClick={() => setEvidenceOpen((open) => !open)}
-          data-testid="workflow-native-chat-evidence-toggle"
-        >
-          View captured evidence
-        </button>
-        <button
-          type="button"
-          className="button secondary"
-          aria-expanded={formOpen}
-          onClick={() => setFormOpen((open) => !open)}
-          data-testid="workflow-native-chat-continue"
-        >
-          Continue in a new workflow
-        </button>
-      </div>
-      {formOpen ? (
-        <form
-          className="stack td-native-chat-continue-form"
-          onSubmit={onSubmit}
-          data-testid="workflow-native-chat-continue-form"
-        >
-          <label className="field">
-            <span className="small">Title (optional)</span>
-            <input
-              type="text"
-              value={title}
-              maxLength={500}
-              onChange={(event) => setTitle(event.target.value)}
-              data-testid="workflow-native-chat-continue-title"
-            />
-          </label>
-          <label className="field">
-            <span className="small">New instructions</span>
-            <textarea
-              value={instructions}
-              required
-              rows={3}
-              onChange={(event) => setInstructions(event.target.value)}
-              placeholder="Describe what the continuation workflow should do."
-              data-testid="workflow-native-chat-continue-instructions"
-            />
-          </label>
-          <button
-            type="submit"
-            className="button"
-            disabled={!canSubmit}
-            data-testid="workflow-native-chat-continue-submit"
-          >
-            {continueState === 'pending' ? 'Continuing…' : 'Start continuation'}
-          </button>
-        </form>
-      ) : null}
-      {continueState === 'error' ? (
-        <p
-          className="small td-native-chat-continue-error"
-          role="alert"
-          data-testid="workflow-native-chat-continue-error"
-        >
-          Could not start a linked workflow. Please try again.
-        </p>
-      ) : null}
-      {evidenceOpen ? (
-        <CapturedEvidencePanel apiBase={apiBase} workflowId={workflowId} />
-      ) : null}
-    </div>
   );
 }
 
@@ -438,7 +108,7 @@ function NativeChatLive({
         </a>
       </div>
       {terminal ? (
-        <TerminalWorkflowActions apiBase={apiBase} workflowId={workflowId} />
+        <WorkflowTerminalChatActions apiBase={apiBase} workflowId={workflowId} />
       ) : null}
       <iframe
         title="Workflow chat"
@@ -554,7 +224,7 @@ export function WorkflowChatNative({
         </div>
       ) : null}
       {terminal ? (
-        <TerminalWorkflowActions apiBase={apiBase} workflowId={workflowId} />
+        <WorkflowTerminalChatActions apiBase={apiBase} workflowId={workflowId} />
       ) : null}
       {children}
     </>

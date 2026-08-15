@@ -77,6 +77,10 @@ def _oauth_payload(profile_id: str) -> dict[str, object]:
         "rate_limit_policy": "backoff",
     }
 
+
+async def _async_result(value):
+    return value
+
 @pytest.mark.asyncio
 async def test_create_oauth_session_expires_stale_active_before_conflict_check(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
@@ -546,7 +550,7 @@ async def test_create_oauth_session_rejects_profile_owned_by_another_user(
     assert response.json()["detail"] == "Not authorized to use this profile ID."
 
 @pytest.mark.asyncio
-async def test_create_oauth_session_returns_conflict_for_non_stale_active(
+async def test_create_oauth_session_resumes_non_stale_active_for_same_user(
     client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     profile_id = "codex-cli-busy-profile"
@@ -564,6 +568,199 @@ async def test_create_oauth_session_returns_conflict_for_non_stale_active(
         await session.commit()
 
     async def _unexpected_start(_session_model):
+        raise AssertionError("workflow start should not be called when resuming")
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _unexpected_start,
+    )
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.get_oauth_session_workflow_status",
+        lambda _session_id: _async_result("RUNNING"),
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions", json=_oauth_payload(profile_id)
+        )
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "oas_activeexisting1"
+    assert response.json()["status"] == OAuthSessionStatus.PENDING.value
+
+    async with db_base.async_session_maker() as session:
+        result = await session.execute(
+            select(ManagedAgentOAuthSession).where(
+                ManagedAgentOAuthSession.profile_id == profile_id
+            )
+        )
+        assert len(result.scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_resumes_newest_active_for_same_user(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-duplicate-active-profile"
+    now = datetime.now(timezone.utc)
+
+    async with db_base.async_session_maker() as session:
+        session.add_all(
+            [
+                ManagedAgentOAuthSession(
+                    session_id="oas_olderactive001",
+                    runtime_id="codex_cli",
+                    profile_id=profile_id,
+                    status=OAuthSessionStatus.AWAITING_USER,
+                    requested_by_user_id="None",
+                    created_at=now - timedelta(minutes=10),
+                ),
+                ManagedAgentOAuthSession(
+                    session_id="oas_neweractive001",
+                    runtime_id="codex_cli",
+                    profile_id=profile_id,
+                    status=OAuthSessionStatus.AWAITING_USER,
+                    requested_by_user_id="None",
+                    created_at=now - timedelta(minutes=5),
+                ),
+            ]
+        )
+        await session.commit()
+
+    inspected_session_ids: list[str] = []
+
+    async def _running_workflow(session_id: str) -> str:
+        inspected_session_ids.append(session_id)
+        return "RUNNING"
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.get_oauth_session_workflow_status",
+        _running_workflow,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions", json=_oauth_payload(profile_id)
+        )
+
+    assert response.status_code == 200
+    assert response.json()["session_id"] == "oas_neweractive001"
+    assert inspected_session_ids == ["oas_neweractive001"]
+
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_rejects_duplicate_connected_pty(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-connected-profile"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id="oas_connectedactive1",
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                status=OAuthSessionStatus.AWAITING_USER,
+                session_transport="moonmind_pty_ws",
+                requested_by_user_id="None",
+                connected_at=datetime.now(timezone.utc),
+                created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            )
+        )
+        await session.commit()
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.get_oauth_session_workflow_status",
+        lambda _session_id: _async_result("RUNNING"),
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions", json=_oauth_payload(profile_id)
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "OAuth terminal is already connected for this profile."
+
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_replaces_active_row_without_running_workflow(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-orphaned-active-profile"
+    old_session_id = "oas_orphanedactive1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=old_session_id,
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                status=OAuthSessionStatus.PENDING,
+                requested_by_user_id="None",
+                created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            )
+        )
+        await session.commit()
+
+    started_session_ids: list[str] = []
+
+    async def _capture_start(session_model) -> None:
+        started_session_ids.append(session_model.session_id)
+
+    async def _noop_stop(_session_model) -> None:
+        return None
+
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.get_oauth_session_workflow_status",
+        lambda _session_id: _async_result(None),
+    )
+    monkeypatch.setattr(
+        "api_service.services.oauth_session_service.start_oauth_session_workflow",
+        _capture_start,
+    )
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._stop_oauth_auth_runner",
+        _noop_stop,
+    )
+
+    async with client_app as client:
+        response = await client.post(
+            "/api/v1/oauth-sessions", json=_oauth_payload(profile_id)
+        )
+
+    assert response.status_code == 201
+    assert response.json()["session_id"] != old_session_id
+    assert started_session_ids == [response.json()["session_id"]]
+
+    async with db_base.async_session_maker() as session:
+        old_session = await session.get(ManagedAgentOAuthSession, old_session_id)
+        assert old_session is not None
+        assert old_session.status == OAuthSessionStatus.FAILED
+        assert old_session.completed_at is not None
+        assert old_session.failure_reason == "OAuth session workflow is not running"
+
+
+@pytest.mark.asyncio
+async def test_create_oauth_session_returns_conflict_for_another_users_active_session(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile_id = "codex-cli-other-user-busy-profile"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id="oas_otheruseractive1",
+                runtime_id="codex_cli",
+                profile_id=profile_id,
+                status=OAuthSessionStatus.AWAITING_USER,
+                requested_by_user_id="different-user",
+                created_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+            )
+        )
+        await session.commit()
+
+    async def _unexpected_start(_session_model):
         raise AssertionError("workflow start should not be called when conflict exists")
 
     monkeypatch.setattr(
@@ -572,7 +769,9 @@ async def test_create_oauth_session_returns_conflict_for_non_stale_active(
     )
 
     async with client_app as client:
-        response = await client.post("/api/v1/oauth-sessions", json=_oauth_payload(profile_id))
+        response = await client.post(
+            "/api/v1/oauth-sessions", json=_oauth_payload(profile_id)
+        )
 
     assert response.status_code == 409
     assert response.json()["detail"] == "An active OAuth session already exists for this profile."
@@ -653,6 +852,37 @@ async def test_oauth_terminal_attach_returns_one_time_websocket_token(
         assert row.metadata_json is not None
         assert row.metadata_json["terminal_attach_token_sha256"] != payload["attach_token"]
         assert row.metadata_json["terminal_attach_token_used"] is False
+
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_attach_rejects_existing_pty_connection(
+    client_app: AsyncClient, _module_db
+) -> None:
+    session_id = "oas_terminalconnected1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude-connected-terminal",
+                status=OAuthSessionStatus.AWAITING_USER,
+                session_transport="moonmind_pty_ws",
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_terminalconnected1",
+                terminal_bridge_id="br_oas_terminalconnected1",
+                connected_at=datetime.now(timezone.utc),
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "OAuth terminal already has an active connection."
 
 @pytest.mark.asyncio
 async def test_claude_oauth_terminal_attach_allows_awaiting_user_with_hash_only_token(
@@ -1743,6 +1973,70 @@ async def test_claude_oauth_terminal_websocket_rejects_replayed_attach_token(
         async def accept(self) -> None:
             self.accepted = True
             raise AssertionError("replayed tokens must fail before websocket accept")
+
+    websocket = _CloseOnlyWebSocket()
+    await oauth_terminal_websocket(websocket, session_id, token)
+
+    assert websocket.closed == [4403]
+    assert websocket.accepted is False
+
+
+@pytest.mark.asyncio
+async def test_oauth_terminal_websocket_rejects_connection_established_after_attach(
+    client_app: AsyncClient, _module_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    session_id = "oas_claudewsalreadyconnected1"
+
+    async with db_base.async_session_maker() as session:
+        session.add(
+            ManagedAgentOAuthSession(
+                session_id=session_id,
+                runtime_id="claude_code",
+                profile_id="claude_anthropic_ws_connected",
+                status=OAuthSessionStatus.AWAITING_USER,
+                session_transport="moonmind_pty_ws",
+                requested_by_user_id="None",
+                terminal_session_id="term_oas_claudewsalreadyconnected1",
+                terminal_bridge_id="br_oas_claudewsalreadyconnected1",
+                container_name="moonmind_auth_oas_claudewsalreadyconnected1",
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+        )
+        await session.commit()
+
+    async with client_app as client:
+        attach_response = await client.post(
+            f"/api/v1/oauth-sessions/{session_id}/terminal/attach"
+        )
+
+    assert attach_response.status_code == 200
+    token = attach_response.json()["attach_token"]
+
+    async with db_base.async_session_maker() as session:
+        row = await session.get(ManagedAgentOAuthSession, session_id)
+        assert row is not None
+        row.connected_at = datetime.now(timezone.utc)
+        await session.commit()
+
+    def _unexpected_pty_adapter(**_kwargs):
+        raise AssertionError("a second PTY process must not be created")
+
+    monkeypatch.setattr(
+        "api_service.api.routers.oauth_sessions._oauth_terminal_pty_adapter_factory",
+        _unexpected_pty_adapter,
+    )
+
+    class _CloseOnlyWebSocket:
+        def __init__(self) -> None:
+            self.closed: list[int] = []
+            self.accepted = False
+
+        async def close(self, code: int) -> None:
+            self.closed.append(code)
+
+        async def accept(self) -> None:
+            self.accepted = True
+            raise AssertionError("duplicate connections must fail before accept")
 
     websocket = _CloseOnlyWebSocket()
     await oauth_terminal_websocket(websocket, session_id, token)

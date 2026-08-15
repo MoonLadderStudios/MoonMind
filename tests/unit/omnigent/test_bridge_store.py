@@ -109,6 +109,262 @@ def _request(idempotency_key: str = "idem-1", *, with_step: bool = False):
 
 
 @pytest.mark.asyncio
+async def test_egress_cleanup_authority_round_trips_and_terminal_refs_persist(
+    store,
+) -> None:
+    request = _request()
+    policy_authority = {
+        "policyId": "codex-static",
+        "policyVersion": 1,
+        "policyRef": "codex-static@1",
+        "policyDigest": "sha256:" + "1" * 64,
+        "snapshotRef": "policy:sha256:" + "2" * 64,
+        "validation": {"valid": True},
+    }
+    effective_launch = {
+        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
+        "launchPolicyRef": "codex-static@1",
+        "policyAuthority": policy_authority,
+        "enforcedEgress": True,
+    }
+    await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=4,
+        host_binding_ref="binding-1",
+        host_lease_ref="lease-1",
+        omnigent_host_id="host-1",
+        effective_launch_snapshot=effective_launch,
+    )
+    await store.bind_egress_cleanup_authority(
+        request=request,
+        host_lease_ref="lease-1",
+        egress_evidence={
+            "attachmentIdentity": "host-container-1",
+            "validationResult": "passed",
+        },
+        launch_evidence_ref="artifact://launch-egress",
+    )
+
+    authority = await store.get_egress_cleanup_authority(
+        host_lease_ref="lease-1"
+    )
+
+    assert authority is not None
+    assert authority["effectiveLaunch"] == effective_launch
+    assert authority["launchEvidenceRef"] == "artifact://launch-egress"
+    assert authority["evidenceRequest"] == {
+        "correlationId": request.correlation_id,
+        "idempotencyKey": request.idempotency_key,
+        "remediation": False,
+    }
+
+    row = await store.record_terminal_cleanup(
+        host_lease_ref="lease-1",
+        completed=True,
+        egress_evidence_ref="artifact://terminal-egress",
+        launch_evidence_ref="artifact://launch-egress",
+        lease_released=True,
+    )
+    assert row is not None
+    assert row.terminal_refs["egressEvidenceRef"] == "artifact://terminal-egress"
+    assert row.terminal_refs["egressLaunchEvidenceRef"] == (
+        "artifact://launch-egress"
+    )
+
+
+@pytest.mark.asyncio
+async def test_egress_cleanup_authority_upgrades_launch_to_attested_phase(store) -> None:
+    request = _request()
+    policy_authority = {
+        "policyId": "codex-static",
+        "policyVersion": 1,
+        "policyRef": "codex-static@1",
+        "policyDigest": "sha256:" + "1" * 64,
+        "snapshotRef": "policy:sha256:" + "2" * 64,
+        "validation": {"valid": True},
+    }
+    effective_launch = {
+        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
+        "launchPolicyRef": "codex-static@1",
+        "policyAuthority": policy_authority,
+        "enforcedEgress": True,
+    }
+    await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=4,
+        host_binding_ref="binding-1",
+        host_lease_ref="lease-1",
+        omnigent_host_id="host-1",
+        effective_launch_snapshot=effective_launch,
+    )
+    provisional = {
+        "attachmentIdentity": "host-container-1",
+        "profileRef": "omnigent-egress@1",
+        "deniedConnectionCount": 0,
+    }
+    await store.bind_egress_cleanup_authority(
+        request=request,
+        host_lease_ref="lease-1",
+        egress_evidence=provisional,
+        launch_evidence_ref="artifact://launch-pending",
+        phase="launched",
+    )
+    await store.bind_egress_cleanup_authority(
+        request=request,
+        host_lease_ref="lease-1",
+        egress_evidence={
+            **provisional,
+            "deniedConnectionCount": 2,
+            "networkIdentity": "network-1",
+            "endpointIdentity": "endpoint-1",
+        },
+        launch_evidence_ref="artifact://launch-attested",
+        phase="attested",
+    )
+
+    authority = await store.get_egress_cleanup_authority(
+        host_lease_ref="lease-1"
+    )
+
+    assert authority is not None
+    assert authority["phase"] == "attested"
+    assert authority["launchEvidenceRef"] == "artifact://launch-attested"
+    assert authority["egressEvidence"]["deniedConnectionCount"] == 2
+    assert authority["egressEvidence"]["networkIdentity"] == "network-1"
+
+
+@pytest.mark.asyncio
+async def test_egress_cleanup_authority_survives_newer_continuation_row(store) -> None:
+    initial = _request("initial")
+    continuation = _request("initial:repository-continuation:1")
+    policy_authority = {
+        "policyId": "codex-static",
+        "policyVersion": 1,
+        "policyRef": "codex-static@1",
+        "policyDigest": "sha256:" + "1" * 64,
+        "snapshotRef": "policy:sha256:" + "2" * 64,
+        "validation": {"valid": True},
+    }
+    effective_launch = {
+        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
+        "launchPolicyRef": "codex-static@1",
+        "policyAuthority": policy_authority,
+        "enforcedEgress": True,
+    }
+    authorization = {
+        "endpoint_ref": "embedded",
+        "provider_profile_id": "profile-1",
+        "provider_lease_id": "provider-lease-1",
+        "credential_generation": 4,
+        "host_binding_ref": "binding-1",
+        "host_lease_ref": "lease-1",
+        "omnigent_host_id": "host-1",
+        "effective_launch_snapshot": effective_launch,
+    }
+    await store.bind_profile_authorization(request=initial, **authorization)
+    await store.bind_egress_cleanup_authority(
+        request=initial,
+        host_lease_ref="lease-1",
+        egress_evidence={
+            "attachmentIdentity": "host-container-1",
+            "validationResult": "passed",
+        },
+        launch_evidence_ref="artifact://launch-egress",
+    )
+
+    # The production repository-publication continuation owns a new bridge row
+    # while deliberately reusing the same host lease. It must not hide the
+    # launch row's immutable cleanup authority from a later janitor process.
+    await store.bind_profile_authorization(request=continuation, **authorization)
+
+    authority = await store.get_egress_cleanup_authority(
+        host_lease_ref="lease-1"
+    )
+
+    assert authority is not None
+    assert authority["effectiveLaunch"] == effective_launch
+    assert authority["launchEvidenceRef"] == "artifact://launch-egress"
+    assert authority["evidenceRequest"]["idempotencyKey"] == "initial"
+
+    await store.record_terminal_cleanup(
+        host_lease_ref="lease-1",
+        completed=True,
+        egress_evidence_ref="artifact://terminal-egress",
+        launch_evidence_ref="artifact://launch-egress",
+        lease_released=True,
+    )
+    continuation_row = await store.get_existing(
+        "initial:repository-continuation:1"
+    )
+    assert continuation_row is not None
+    assert continuation_row.terminal_refs["egressEvidenceRef"] == (
+        "artifact://terminal-egress"
+    )
+    assert continuation_row.terminal_refs["egressLaunchEvidenceRef"] == (
+        "artifact://launch-egress"
+    )
+    assert continuation_row.terminal_refs["leaseReleaseState"] == "released"
+
+
+@pytest.mark.asyncio
+async def test_egress_cleanup_authority_rejects_conflicting_host_lease_rows(
+    store,
+) -> None:
+    initial = _request("initial")
+    conflicting = _request("conflicting")
+    policy_authority = {
+        "policyId": "codex-static",
+        "policyVersion": 1,
+        "policyRef": "codex-static@1",
+        "policyDigest": "sha256:" + "1" * 64,
+        "snapshotRef": "policy:sha256:" + "2" * 64,
+        "validation": {"valid": True},
+    }
+    effective_launch = {
+        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
+        "launchPolicyRef": "codex-static@1",
+        "policyAuthority": policy_authority,
+        "enforcedEgress": True,
+    }
+    authorization = {
+        "endpoint_ref": "embedded",
+        "provider_profile_id": "profile-1",
+        "provider_lease_id": "provider-lease-1",
+        "credential_generation": 4,
+        "host_binding_ref": "binding-1",
+        "host_lease_ref": "lease-1",
+        "omnigent_host_id": "host-1",
+        "effective_launch_snapshot": effective_launch,
+    }
+    for request in (initial, conflicting):
+        await store.bind_profile_authorization(request=request, **authorization)
+    await store.bind_egress_cleanup_authority(
+        request=initial,
+        host_lease_ref="lease-1",
+        egress_evidence={"attachmentIdentity": "host-container-1"},
+        launch_evidence_ref="artifact://launch-egress",
+    )
+    await store.bind_egress_cleanup_authority(
+        request=conflicting,
+        host_lease_ref="lease-1",
+        egress_evidence={"attachmentIdentity": "host-container-conflict"},
+        launch_evidence_ref="artifact://launch-egress-conflict",
+    )
+
+    with pytest.raises(
+        OmnigentIdempotencyError,
+        match="conflicting egress cleanup authority",
+    ):
+        await store.get_egress_cleanup_authority(host_lease_ref="lease-1")
+
+
+@pytest.mark.asyncio
 async def test_initial_retrieval_store_rejects_unbounded_or_unknown_evidence(
     store,
 ) -> None:
@@ -1232,6 +1488,45 @@ async def test_record_session_created_is_idempotent(store):
     row = await store.record_session_created("idem-1", session_id="sess-1")
 
     assert len(row.metadata_[BRIDGE_EVENT_JOURNAL_KEY]) == 1
+
+
+@pytest.mark.asyncio
+async def test_record_session_created_reactivates_live_session_after_attempt_timeout(
+    store,
+):
+    await _seed_created_session(store)
+    await store.mark_terminal("idem-1", status="failed")
+
+    row = await store.record_session_created(
+        "idem-1",
+        session_id="sess-1",
+        capabilities={},
+        session_status="idle",
+    )
+
+    assert row.status == STATUS_ACTIVE
+    authority = row.metadata_["capabilityAuthority"]
+    # An empty provider capability object retains safe presentation reads but
+    # cannot manufacture mutation authority.
+    assert authority["fresh"] is True
+    assert authority["upstream"]["viewTranscript"] is True
+    assert authority["upstream"]["readResources"] is True
+    assert authority["upstream"]["sendMessage"] is False
+
+
+@pytest.mark.asyncio
+async def test_record_session_created_does_not_reactivate_without_fresh_status(store):
+    await _seed_created_session(store)
+    await store.mark_terminal("idem-1", status="failed")
+
+    row = await store.record_session_created(
+        "idem-1",
+        session_id="sess-1",
+        capabilities={},
+        session_status=None,
+    )
+
+    assert row.status == "failed"
 
 
 @pytest.mark.asyncio

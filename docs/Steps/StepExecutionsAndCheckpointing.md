@@ -629,6 +629,15 @@ MoonMind creates or updates checkpoint evidence at these canonical boundaries (`
 
 Checkpoint writes must be idempotent because Activities and workflow tasks may retry.
 
+Adjacent checkpoint boundaries reuse the prior workspace artifact evidence only
+while the workflow remains in the same explicit workspace-mutation generation.
+The workflow still writes a distinct Step Execution checkpoint for every
+boundary. Immediately before preflight or execution can mutate the authoritative
+workspace, it advances the generation; the next checkpoint must capture fresh
+workspace evidence. Independently, identical immutable checkpoint bytes share a
+content-addressed artifact blob while retaining boundary-specific logical
+artifact rows and retention authority.
+
 For Omnigent, the canonical writer attaches one versioned `omnigentCheckpoint`
 object to this Step Execution checkpoint. Capture occurs after workspace
 preparation and before the first message, after each completed turn or logical

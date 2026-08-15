@@ -1,0 +1,6 @@
+{
+  "terminalStatus": "completed",
+  "terminalSummary": "Omnigent session completed",
+  "reconciliationSource": "reattached_inactive_snapshot",
+  "requiresNewTerminalSseEvent": false
+}

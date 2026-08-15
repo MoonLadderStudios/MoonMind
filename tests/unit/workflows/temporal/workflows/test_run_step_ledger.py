@@ -3478,6 +3478,101 @@ async def test_run_records_pre_execution_checkpoint_from_node_workspace_inputs(
 
 
 @pytest.mark.asyncio
+async def test_run_reuses_workspace_capture_until_execution_can_mutate_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        run_module.workflow,
+        "patched",
+        lambda patch_id: patch_id
+        in {
+            run_module.RUN_CANONICAL_STEP_CHECKPOINTS_PATCH,
+            run_module.RUN_MANAGED_CHECKPOINT_AUTHORITY_PATCH,
+            run_module.RUN_UNCHANGED_CHECKPOINT_REUSE_PATCH,
+        },
+    )
+    workflow = MoonMindRunWorkflow()
+    now = datetime(2026, 8, 13, 8, 0, tzinfo=UTC)
+    workflow._initialize_step_ledger(
+        ordered_nodes=[{"id": "implement", "inputs": {"title": "Implement"}}],
+        dependency_map={"implement": []},
+        updated_at=now,
+    )
+    workflow._mark_step_running(
+        "implement",
+        updated_at=now,
+        summary="Implementing",
+    )
+    workflow._step_workspace_capture_inputs["implement"] = {
+        "workspacePath": "/work/agent_jobs/run-1/repo",
+        "baseCommit": "abc123",
+        "kind": "git_patch",
+    }
+    capture_boundaries: list[str] = []
+    checkpoint_boundaries: list[str] = []
+
+    async def fake_execute_activity(
+        activity: str,
+        payload: dict[str, Any],
+        **_kwargs: Any,
+    ) -> dict[str, Any]:
+        boundary = payload["boundary"]
+        if activity == "workspace.capture_checkpoint":
+            capture_boundaries.append(boundary)
+            return {
+                "status": "captured",
+                "workspace": {
+                    "kind": "git_patch",
+                    "baseCommit": "abc123",
+                    "patchRef": f"artifact://patch/{len(capture_boundaries)}",
+                    "manifestRef": f"artifact://manifest/{len(capture_boundaries)}",
+                },
+                "diagnosticRefs": [
+                    f"artifact://manifest/{len(capture_boundaries)}"
+                ],
+            }
+        assert activity == "step_checkpoint.create"
+        checkpoint_boundaries.append(boundary)
+        return {
+            "checkpointRef": f"artifact://checkpoint/{boundary}",
+            "checkpointId": payload["idempotencyKey"],
+            "contentType": STEP_EXECUTION_CHECKPOINT_CONTENT_TYPE,
+            "workspaceKind": payload["workspace"]["kind"],
+            "diagnosticRefs": [],
+            "idempotencyKey": payload["idempotencyKey"],
+        }
+
+    monkeypatch.setattr(run_module.workflow, "execute_activity", fake_execute_activity)
+
+    await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_prepare",
+        updated_at=now,
+    )
+    await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="before_execution",
+        updated_at=now,
+    )
+    assert capture_boundaries == ["after_prepare"]
+    assert checkpoint_boundaries == ["after_prepare", "before_execution"]
+
+    workflow._mark_step_workspace_mutation_started("implement")
+    await workflow._record_canonical_step_checkpoint(
+        "implement",
+        boundary="after_execution",
+        updated_at=now,
+    )
+    assert capture_boundaries == ["after_prepare", "after_execution"]
+    assert checkpoint_boundaries == [
+        "after_prepare",
+        "before_execution",
+        "after_execution",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_run_degrades_managed_checkpoint_without_sandbox_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
