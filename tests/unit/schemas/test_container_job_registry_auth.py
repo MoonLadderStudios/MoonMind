@@ -159,3 +159,53 @@ def test_failure_message_prefers_nested_application_cause() -> None:
         )
         == "denied by registry"
     )
+
+
+def test_failure_message_stops_at_normalized_backend_message() -> None:
+    # A backend that deliberately normalizes a lower-level exception owns the
+    # durable terminal text; recovery must not continue past it and republish
+    # the deepest internal cause.
+    lower = RuntimeError("managed secret lookup failed for vault path /srv/x")
+    normalized = ContainerJobBackendError(
+        ContainerJobFailureClass.CREDENTIAL_UNRESOLVED,
+        "registry credential reference could not be resolved",
+    )
+    normalized.__cause__ = lower
+
+    assert (
+        failure_message_from_exception(normalized)
+        == "registry credential reference could not be resolved"
+    )
+
+    from temporalio.exceptions import ApplicationError
+
+    # The same chain after Temporal preserves it across the activity boundary.
+    inner = ApplicationError(str(lower), type="RuntimeError")
+    outer = ApplicationError(str(normalized), type="ContainerJobBackendError")
+    outer.__cause__ = inner
+    activity_error = RuntimeError("Activity task failed")
+    activity_error.__cause__ = outer
+
+    assert (
+        failure_message_from_exception(activity_error)
+        == "registry credential reference could not be resolved"
+    )
+
+
+def test_failure_message_redacts_credentials_before_projection() -> None:
+    from temporalio.exceptions import ApplicationError
+
+    cause = ApplicationError(
+        "docker version failed: DOCKER_HOST=tcp://host:2376 token=ghp_"
+        + "a" * 36,
+        type="ImageAcquisitionError",
+    )
+    wrapped = RuntimeError("Activity task failed")
+    wrapped.__cause__ = cause
+
+    recovered = failure_message_from_exception(wrapped)
+    # The recovered text is written verbatim into the durable terminal outcome
+    # and its projection, so it is scrubbed before it leaves the workflow.
+    assert recovered is not None
+    assert "ghp_" not in recovered
+    assert "[REDACTED]" in recovered

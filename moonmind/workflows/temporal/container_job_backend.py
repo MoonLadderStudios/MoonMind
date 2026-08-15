@@ -2225,16 +2225,43 @@ class DockerContainerJobBackend:
             return b"[truncated]\n" + data[-limit:]
         return data
 
+    @staticmethod
+    def _pre_container_evidence_message(
+        request: ContainerJobActivityRequest,
+    ) -> str:
+        """Describe a terminal outcome reached before a container existed.
+
+        The terminal state and failure class own the outcome, so the fallback
+        never contradicts them by publishing "failed" for an operator
+        cancellation or a timeout.
+        """
+
+        if request.message:
+            return request.message
+        if (
+            request.terminal_state == ContainerJobState.CANCELED
+            or request.failure_class == ContainerJobFailureClass.CANCELED
+        ):
+            return "container job was canceled before a container was created"
+        if (
+            request.terminal_state == ContainerJobState.TIMED_OUT
+            or request.failure_class == ContainerJobFailureClass.TIMEOUT
+        ):
+            return "container job timed out before a container was created"
+        if request.terminal_state == ContainerJobState.SUCCEEDED:
+            return "container job completed before a container was created"
+        return "container job failed before a container was created"
+
     async def publish_evidence(self, request: ContainerJobActivityRequest):
         limit = self._settings.max_output_bytes
-        if request.resolved_image_ref is None and request.container_ref is None:
-            # Before image acquisition succeeds no create Activity can have run,
-            # so a deterministic container name is not evidence that a container
-            # exists. Persist the authoritative terminal cause without replacing
-            # it with Docker's derived "No such container" response.
+        if request.container_ref is None:
+            # ``container_ref`` is the only authority that a reconcile or create
+            # Activity actually produced a container. A deterministic container
+            # name is not that evidence, so querying it here would replace the
+            # authoritative terminal cause with Docker's derived "No such
+            # container" response.
             message = redact_sensitive_text(
-                request.message
-                or "container job failed before image acquisition completed"
+                self._pre_container_evidence_message(request)
             )
             stdout_raw = b""
             stderr_raw = b""
@@ -2570,15 +2597,15 @@ class DockerContainerJobBackend:
     ) -> dict | None:
         """Observe bounded denial and attachment evidence before cleanup."""
 
+        # Only an actual container reference proves a container exists to
+        # inspect; a deterministic name would make ``docker inspect`` report a
+        # missing container as drifted network evidence.
         if (
             request.request.spec.network_mode != "bridge"
-            or (
-                request.resolved_image_ref is None
-                and request.container_ref is None
-            )
+            or request.container_ref is None
         ):
             return None
-        ref = request.container_ref or self._name(request)
+        ref = request.container_ref
         # Inspect the complete network map, not just the approved network. If
         # daemon state drifted or another trusted client attached a second
         # network, indexing only the approved network would still return a valid

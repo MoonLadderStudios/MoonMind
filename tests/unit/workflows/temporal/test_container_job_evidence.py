@@ -166,6 +166,95 @@ async def test_pre_image_failure_publishes_cause_without_container_lookup(
     assert publisher.artifacts[f"{JOB_ID}-stderr.txt"] == b""
 
 
+@pytest.mark.asyncio
+async def test_pre_container_failure_after_image_keeps_authoritative_cause(
+    tmp_path,
+) -> None:
+    """A resolved image is not evidence that a container was ever created."""
+
+    publisher = _Publisher()
+    commands: list[tuple[str, ...]] = []
+
+    async def runner(args):
+        commands.append(tuple(args))
+        return 1, b"", b"Error: No such container: moonmind-container-job-x"
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publisher,
+    )
+    request = _request(tmp_path)
+    # Image acquisition succeeded, then reconcile/pre-create validation failed,
+    # so no create Activity ever produced a container reference.
+    request.resolved_image_ref = "python:3.13@sha256:" + "b" * 64
+    request.container_ref = None
+    request.terminal_state = "failed"
+    request.failure_class = "launch"
+    request.message = "approved egress network is unavailable"
+
+    await backend.publish_evidence(request)
+
+    assert commands == []
+    combined = publisher.artifacts[f"{JOB_ID}-logs.txt"]
+    assert b"approved egress network is unavailable" in combined
+    assert b"No such container" not in combined
+
+
+@pytest.mark.asyncio
+async def test_pre_container_cancellation_is_not_labeled_failed(tmp_path) -> None:
+    publisher = _Publisher()
+
+    async def runner(args):
+        raise AssertionError("no container command may run without a container")
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publisher,
+    )
+    request = _request(tmp_path)
+    request.resolved_image_ref = None
+    request.container_ref = None
+    request.terminal_state = "canceled"
+    request.failure_class = "canceled"
+    request.message = None
+
+    await backend.publish_evidence(request)
+
+    combined = publisher.artifacts[f"{JOB_ID}-logs.txt"]
+    # The durable evidence must not contradict the terminal outcome by calling
+    # an operator cancellation an infrastructure failure.
+    assert b"canceled" in combined
+    assert b"container job failed" not in combined
+
+
+@pytest.mark.asyncio
+async def test_pre_container_timeout_is_labeled_timed_out(tmp_path) -> None:
+    publisher = _Publisher()
+
+    async def runner(args):
+        raise AssertionError("no container command may run without a container")
+
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        command_runner=runner,
+        evidence_publisher=publisher,
+    )
+    request = _request(tmp_path)
+    request.resolved_image_ref = None
+    request.container_ref = None
+    request.terminal_state = "timed_out"
+    request.failure_class = "timeout"
+    request.message = None
+
+    await backend.publish_evidence(request)
+
+    combined = publisher.artifacts[f"{JOB_ID}-logs.txt"]
+    assert b"timed out" in combined
+    assert b"container job failed" not in combined
+
+
 # --------------------------------------------------------------- output manifest
 
 

@@ -1176,7 +1176,11 @@ async def test_publish_evidence_bounds_captured_output(tmp_path) -> None:
         command_runner=runner,
         evidence_publisher=publish,
     )
-    result = await backend.publish_evidence(_request(tmp_path))
+    request = _request(tmp_path)
+    # Log capture requires an actual container reference; a deterministic name
+    # alone is not authority that a container was ever created.
+    request.container_ref = "moonmind-container-job-bounded"
+    result = await backend.publish_evidence(request)
     assert result.logs_ref == "art:logs"
     payload = captured[f"{JOB_ID}-logs.txt"]
     assert payload.startswith(b"[truncated]\n")

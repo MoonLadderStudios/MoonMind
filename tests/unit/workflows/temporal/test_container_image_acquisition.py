@@ -276,7 +276,15 @@ async def test_never_without_image_fails_image_not_found_without_pull(tmp_path) 
 @pytest.mark.asyncio
 async def test_deployment_source_absence_names_operator_remediation(tmp_path) -> None:
     daemon = FakeDaemon()
-    backend = _backend(daemon, tmp_path)
+    # The deployment explicitly owns ``never`` for this image source, so an
+    # absent image must name the operator remediation instead of pulling.
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(
+            {"MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY": "never"}
+        ),
+    )
     payload = _request("python:3.13").model_dump(
         mode="json", by_alias=True, exclude_none=True
     )

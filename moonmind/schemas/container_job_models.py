@@ -16,6 +16,7 @@ from moonmind.schemas.workspace_locator_models import (
     SandboxWorkspaceLocator,
     WorkspaceLocator,
 )
+from moonmind.utils.logging import redact_sensitive_text
 
 CONTAINER_JOB_CONTRACT_VERSION = "v1"
 MAX_TEMPORAL_PAYLOAD_BYTES = 64 * 1024
@@ -442,27 +443,56 @@ def failure_class_from_exception(
     return None
 
 
-def failure_message_from_exception(exc: BaseException) -> str | None:
-    """Recover the deepest trusted failure message from activity wrappers.
+def _decoded_failure_text(text: str) -> str:
+    """Strip the failure marker and scrub credential-shaped values.
 
-    Temporal's outer ``ActivityError`` message is intentionally generic. The
-    nested ``ApplicationError.message`` or backend marker carries the actionable
-    cause that belongs in the durable terminal outcome.
+    The recovered text crosses the workflow boundary into the durable terminal
+    outcome and its projection, so it is redacted here rather than only in the
+    downstream CLI and evidence publisher.
     """
 
-    candidate: str | None = None
+    marker_index = text.find(CONTAINER_JOB_FAILURE_MARKER)
+    if marker_index == -1:
+        return redact_sensitive_text(text)
+    encoded = text[marker_index + len(CONTAINER_JOB_FAILURE_MARKER) :]
+    _token, _colon, detail = encoded.partition(":")
+    return redact_sensitive_text(detail.strip() or encoded.strip())
+
+
+def failure_message_from_exception(exc: BaseException) -> str | None:
+    """Recover the first trusted failure message from activity wrappers.
+
+    Temporal's outer ``ActivityError`` message is intentionally generic, so the
+    chain is walked to reach the backend's own failure. It stops at the first
+    normalized message a trusted backend produced -- a carried
+    ``failure_class``, the stable failure marker, or a typed
+    ``ApplicationError`` -- because a backend that normalizes a lower-level
+    exception owns the durable terminal text. Continuing past that boundary
+    would replace the actionable normalized cause with internal detail from the
+    deepest exception.
+    """
+
+    fallback: str | None = None
     for current in _exception_chain(exc):
         direct = getattr(current, "message", None)
         text = str(direct if isinstance(direct, str) and direct else current).strip()
         if not text:
             continue
-        marker_index = text.find(CONTAINER_JOB_FAILURE_MARKER)
-        if marker_index != -1:
-            encoded = text[marker_index + len(CONTAINER_JOB_FAILURE_MARKER) :]
-            _separator, _colon, detail = encoded.partition(":")
-            text = detail.strip() or encoded.strip()
-        candidate = text
-    return candidate
+        typed = getattr(current, "type", None)
+        normalized = (
+            isinstance(
+                getattr(current, "failure_class", None), ContainerJobFailureClass
+            )
+            or CONTAINER_JOB_FAILURE_MARKER in text
+            or bool(isinstance(typed, str) and typed)
+        )
+        if normalized:
+            return _decoded_failure_text(text)
+        # No normalization boundary yet; keep the deepest cause so a plain
+        # wrapper chain still recovers something more actionable than the
+        # generic outer message.
+        fallback = _decoded_failure_text(text)
+    return fallback
 
 
 class ImageObservation(ContractModel):
