@@ -1321,6 +1321,160 @@ async def test_successful_batch_fanout_is_compacted_before_publish_activity_deco
     )
 
 
+async def test_omnigent_terminal_result_replays_after_metadata_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:25e93f42 after its completed Omnigent activity overflowed."""
+
+    replay_id = "omnigent-agent-run-metadata-overflow"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    shape = manifest["resultShape"]
+    request = AgentExecutionRequest.model_validate(manifest["request"])
+    egress_ref = expected["preservedEgressEvidenceRef"]
+    provider_metadata = {
+        "providerName": "omnigent",
+        "normalizedStatus": "completed",
+        "captureManifestRef": "artifact://omnigent/replay/capture.json",
+        "externalStateRef": "artifact://omnigent/replay/checkpoint.json",
+        "omnigentCheckpointCapture": {
+            "bridgeSessionId": "bridge-replay",
+            "effectiveLaunchRef": "omnigent-launch:sha256:" + "1" * 64,
+            "egressEvidenceRef": egress_ref,
+            "egressAttestation": {
+                "profileRef": "moonmind-omnigent-egress@1",
+                "profileDigest": "sha256:" + "2" * 64,
+                "appliedRuleDigest": "sha256:" + "3" * 64,
+                "policyAuthority": {
+                    "policyRef": "codex-on-demand@3",
+                    "policyDigest": "sha256:" + "4" * 64,
+                    "snapshotRef": "omnigent-policy:sha256:" + "5" * 64,
+                    "boundaries": {
+                        "approvalMatrix": "x" * shape["policyBoundariesChars"]
+                    },
+                },
+            },
+            "terminalRef": "artifact://omnigent/replay/final.json",
+        },
+        "authorityChain": {
+            "schemaVersion": "omnigent-authority-chain-v1",
+            "runtime": {
+                "observation": "y" * shape["authorityObservationChars"]
+            },
+            "terminal": {
+                "cleanupCompleted": True,
+                "leaseReleased": True,
+            },
+        },
+        "terminalContractAuthority": "MoonMind.AgentRun",
+        "terminalContractEvidencePath": "artifacts/publish_result.json",
+        "terminalContractEvidenceRef": "art_terminal_evidence",
+        "terminalContractId": "auto_publish_terminal.v1",
+        "terminalContractOutcome": shape["terminalOutcome"],
+        "terminalContractSatisfied": False,
+        "failureCode": shape["failureCode"],
+    }
+    replay_runtime = provider_metadata["authorityChain"]["runtime"]
+    replay_runtime["recordedEventPadding"] = ""
+    recorded_metadata_bytes = manifest["eventScript"][1]["metadataBytes"]
+    current_metadata_bytes = len(
+        json.dumps(
+            provider_metadata,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    replay_padding_chars = recorded_metadata_bytes - current_metadata_bytes
+    assert 0 < replay_padding_chars <= 8192
+    replay_runtime["recordedEventPadding"] = "z" * replay_padding_chars
+    assert (
+        len(
+            json.dumps(
+                provider_metadata,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        == recorded_metadata_bytes
+    )
+    provider_result = AgentRunResult(
+        summary="Agent completed without required terminal evidence",
+        failureClass="execution_error",
+        metadata=provider_metadata,
+    )
+    agent_run = MoonMindAgentRun()
+    workflow_info = type(
+        "WorkflowInfo",
+        (),
+        {
+            "namespace": "default",
+            "workflow_id": manifest["incidentChildWorkflowId"],
+            "run_id": "01a002c0-2468-70a7-a4fe-084afc817977",
+            "search_attributes": {},
+            "parent": None,
+        },
+    )
+    monkeypatch.setattr(agent_run_module.workflow, "info", workflow_info)
+    monkeypatch.setattr(agent_run_module.workflow, "patched", lambda _patch: True)
+
+    replayed_metadata = dict(provider_result.metadata)
+    replayed_metadata["resiliencyPolicy"] = {
+        "noProgressTimeoutSeconds": 1800,
+        "retryPolicy": {},
+        "runtime": "omnigent",
+        "stuckAction": "request_intervention",
+    }
+    replayed_result = provider_result.model_copy(
+        update={"metadata": replayed_metadata}
+    )
+    with pytest.raises(ValueError, match="metadata must serialize"):
+        AgentRunResult.model_validate(
+            agent_run._enrich_result_metadata(
+                request=request,
+                result=replayed_result,
+            ).model_dump(mode="json", by_alias=True)
+        )
+
+    published_payloads: list[AgentRunResult] = []
+
+    async def execute_activity(
+        name: str,
+        payload: AgentRunResult,
+        **kwargs: object,
+    ) -> dict:
+        assert name == manifest["activityName"]
+        assert kwargs["task_queue"] == manifest["expectedTaskQueue"]
+        validated = AgentRunResult.model_validate(
+            payload.model_dump(mode="json", by_alias=True)
+        )
+        metadata_bytes = len(
+            json.dumps(
+                validated.metadata,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        assert metadata_bytes <= expected["maxMetadataBytes"]
+        published_payloads.append(validated)
+        return validated.model_dump(mode="json", by_alias=True)
+
+    monkeypatch.setattr(agent_run_module, "execute_typed_activity", execute_activity)
+
+    result = await agent_run._publish_terminal_result(
+        request=request,
+        result=replayed_result,
+    )
+
+    assert len(published_payloads) == 1
+    capture = published_payloads[0].metadata["omnigentCheckpointCapture"]
+    assert capture["egressEvidenceRef"] == egress_ref
+    for field in expected["removedInlineFields"]:
+        assert field not in capture
+    assert result.metadata["terminalContractOutcome"] == expected["terminalOutcome"]
+    assert result.metadata["failureCode"] == expected["failureCode"]
+    assert expected["childState"] == "completed"
+
+
 async def test_dependabot_build_titles_replay_through_portable_skill_classifier() -> (
     None
 ):

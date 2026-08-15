@@ -1,0 +1,51 @@
+{
+  "failureShapeId": "omnigent-agent-run-metadata-overflow",
+  "incidentWorkflowId": "mm:25e93f42-a88e-4bae-b2c9-bf8bdd9977d0",
+  "incidentChildWorkflowId": "mm:25e93f42-a88e-4bae-b2c9-bf8bdd9977d0:agent:node-1",
+  "runtime": {
+    "runtimeId": "omnigent",
+    "executionLane": "profile_bound_omnigent"
+  },
+  "activityName": "agent_runtime.publish_artifacts",
+  "expectedTaskQueue": "mm.activity.agent_runtime",
+  "eventScript": [
+    {
+      "event": "integration.omnigent.profile_bound_execute",
+      "metadataBytes": 15700,
+      "outcome": "completed"
+    },
+    {
+      "event": "agent_runtime.evaluate_terminal_evidence",
+      "metadataBytes": 16176,
+      "outcome": "terminal_failure"
+    },
+    {
+      "event": "MoonMind.AgentRun.enrich_result_metadata",
+      "outcome": "workflow_task_failed_before_fix"
+    }
+  ],
+  "request": {
+    "agentKind": "external",
+    "agentId": "omnigent",
+    "executionProfileRef": "codex_openai_oauth",
+    "correlationId": "mm:25e93f42-a88e-4bae-b2c9-bf8bdd9977d0",
+    "idempotencyKey": "replay-omnigent-agent-run-metadata-overflow:1",
+    "instructionRef": "artifact:replay-instructions",
+    "resolvedSkillsetRef": "art_01REPLAYRESOLVEDSKILLSET001",
+    "workspaceSpec": {
+      "repository": "owner/repository",
+      "repo": "owner/repository",
+      "branch": "feature/replay"
+    },
+    "parameters": {
+      "publishMode": "auto",
+      "repository": "owner/repository"
+    }
+  },
+  "resultShape": {
+    "policyBoundariesChars": 6500,
+    "authorityObservationChars": 2400,
+    "terminalOutcome": "terminal_failure",
+    "failureCode": "MALFORMED_TERMINAL_EVIDENCE"
+  }
+}

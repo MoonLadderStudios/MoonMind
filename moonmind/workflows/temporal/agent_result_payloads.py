@@ -135,6 +135,25 @@ def _compact_moonspec_verify_for_workflow_history(
     return compact
 
 
+def _compact_omnigent_checkpoint_capture_for_workflow_history(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Keep referenced egress evidence out of replay-sensitive metadata.
+
+    Omnigent launch evidence is durably stored behind ``egressEvidenceRef``.
+    Older histories may also contain the full inline attestation, including the
+    compiled launch-policy boundary. Once the reference exists, retaining that
+    duplicate object in an ``AgentRunResult`` only consumes workflow-history
+    budget and can prevent a terminal result from being decoded on replay.
+    """
+
+    compact = dict(value)
+    egress_evidence_ref = compact.get("egressEvidenceRef")
+    if isinstance(egress_evidence_ref, str) and egress_evidence_ref.strip():
+        compact.pop("egressAttestation", None)
+    return compact
+
+
 def compact_agent_run_result_payload_for_workflow_history(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -184,6 +203,14 @@ def compact_agent_run_result_payload_for_workflow_history(
             if compact_child:
                 compact_children.append(compact_child)
         compact_metadata["queuedChildren"] = compact_children
+
+    omnigent_capture = compact_metadata.get("omnigentCheckpointCapture")
+    if isinstance(omnigent_capture, Mapping):
+        compact_metadata["omnigentCheckpointCapture"] = (
+            _compact_omnigent_checkpoint_capture_for_workflow_history(
+                omnigent_capture
+            )
+        )
     compact_payload["metadata"] = compact_metadata
     return compact_payload
 
