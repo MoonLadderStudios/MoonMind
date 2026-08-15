@@ -3699,12 +3699,9 @@ async def test_coordinator_emits_bounded_authority_chain_before_terminal() -> No
     assert chain["runtime"]["hostMode"] == "on_demand_docker"
     assert chain["runtime"]["egress"]["validationState"] == "attested"
     assert chain["runtime"]["egress"]["attachmentRef"] == "container:host-1"
-    checkpoint_egress = result_metadata["omnigentCheckpointCapture"][
-        "egressAttestation"
-    ]
-    assert checkpoint_egress["profileRef"] == "omnigent-egress@1"
-    assert checkpoint_egress["appliedRuleDigest"] == "sha256:" + "2" * 64
-    assert checkpoint_egress["attachmentRef"] == "container:host-1"
+    checkpoint_capture = result_metadata["omnigentCheckpointCapture"]
+    assert checkpoint_capture["egressEvidenceRef"] == "artifact://launch-egress"
+    assert "egressAttestation" not in checkpoint_capture
     assert chain["terminal"]["cleanupMode"] == "on_demand_remove"
     # No credential material or raw daemon path anywhere in the projection.
     flat = repr(chain)

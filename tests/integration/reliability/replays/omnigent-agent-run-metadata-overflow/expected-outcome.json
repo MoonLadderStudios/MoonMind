@@ -1,0 +1,10 @@
+{
+  "childState": "completed",
+  "terminalOutcome": "terminal_failure",
+  "failureCode": "MALFORMED_TERMINAL_EVIDENCE",
+  "preservedEgressEvidenceRef": "art_01REPLAYEGRESSEVIDENCE0001",
+  "removedInlineFields": [
+    "egressAttestation"
+  ],
+  "maxMetadataBytes": 16384
+}

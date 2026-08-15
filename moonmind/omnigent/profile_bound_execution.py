@@ -1763,7 +1763,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "effectiveLaunchRef": effective_launch["snapshotRef"],
                 "executionProfileRef": effective_launch["executionProfileRef"],
                 "launchPolicyRef": effective_launch["launchPolicyRef"],
-                "egressAttestation": dict(preflight.get("egressAttestation") or {}),
+                # The full attestation includes the compiled launch-policy
+                # boundary and is already durable behind this reference. Keep
+                # the workflow result plane reference-only so terminal evidence
+                # enrichment cannot overflow AgentRunResult metadata.
                 "egressEvidenceRef": preflight.get("egressEvidenceRef"),
                 # Stamp the immutable policy-authority evidence resolved for this
                 # launch so the Step Execution checkpoint can prove which compiled
