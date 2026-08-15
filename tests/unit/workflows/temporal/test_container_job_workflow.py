@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from temporalio.common import WorkflowIDReusePolicy
-from temporalio.exceptions import ApplicationError
+from temporalio.exceptions import ActivityError, ApplicationError
 
 from moonmind.config.settings import settings
 from moonmind.schemas.container_job_models import (
@@ -33,6 +33,20 @@ from moonmind.workflows.temporal.workflows.container_job import (
 )
 
 JOB_ID = "container-job:0123456789abcdef0123456789abcdef"
+
+
+def _wrapped_activity_error(cause: BaseException) -> ActivityError:
+    error = ActivityError(
+        "Activity task failed",
+        scheduled_event_id=1,
+        started_event_id=2,
+        identity="container-job-worker",
+        activity_type="container_job.acquire_image",
+        activity_id="3",
+        retry_state=None,
+    )
+    error.__cause__ = cause
+    return error
 
 
 def _input(*, timeout: int = 60) -> ContainerJobWorkflowInput:
@@ -527,6 +541,7 @@ async def test_authorization_flows_to_acquire_image_and_failure_class_survives(
     assert seen["authorization"].credential_ref == "db://ghcr"
     assert result["state"] == "failed"
     assert result["terminal"]["failureClass"] == "registry_auth_failed"
+    assert result["terminal"]["message"] == "registry denied"
 
 
 @pytest.mark.asyncio
@@ -562,13 +577,38 @@ async def test_image_acquisition_failure_maps_to_granular_failure_class(
     async def activity(name, request):
         if name == "container_job.acquire_image":
             # The trusted backend surfaces the class via the ApplicationError type.
-            raise ApplicationError("image absent", type="image_not_found")
+            cause = ApplicationError("image absent", type="image_not_found")
+            raise _wrapped_activity_error(cause)
         return _result_for(name)
 
     monkeypatch.setattr(job, "_activity", activity)
     result = await job.run(_input().model_dump(mode="json", by_alias=True))
     assert result["state"] == "failed"
     assert result["terminal"]["failureClass"] == "image_not_found"
+    assert result["terminal"]["message"] == "image absent"
+
+
+@pytest.mark.asyncio
+async def test_in_flight_failure_history_retains_legacy_wrapper_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    job = MoonMindContainerJobWorkflow()
+
+    async def activity(name, request):
+        if name == "container_job.acquire_image":
+            raise _wrapped_activity_error(
+                ApplicationError("image absent", type="image_not_found")
+            )
+        return _result_for(name)
+
+    monkeypatch.setattr(job, "_activity", activity)
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.workflows.container_job._workflow_patch_enabled",
+        lambda _patch_id: False,
+    )
+    result = await job.run(_input().model_dump(mode="json", by_alias=True))
+
+    assert result["terminal"]["message"] == "Activity task failed"
 
 
 @pytest.mark.asyncio

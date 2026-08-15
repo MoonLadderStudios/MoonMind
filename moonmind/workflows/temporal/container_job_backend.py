@@ -1394,8 +1394,17 @@ class DockerContainerJobBackend:
             )
 
         if policy == "never":
+            if image_source_ref is not None:
+                detail = (
+                    f"deployment image source {image_source_ref!r} is absent on "
+                    "the selected backend and pullPolicy=never; provision its "
+                    "configured image on that backend or change the "
+                    "deployment-owned pull policy"
+                )
+            else:
+                detail = "requested image is absent and pullPolicy=never"
             raise ImageAcquisitionError(
-                "requested image is absent and pullPolicy=never",
+                detail,
                 failure_class=ContainerJobFailureClass.IMAGE_NOT_FOUND,
             )
 
@@ -2216,27 +2225,67 @@ class DockerContainerJobBackend:
             return b"[truncated]\n" + data[-limit:]
         return data
 
+    @staticmethod
+    def _pre_container_evidence_message(
+        request: ContainerJobActivityRequest,
+    ) -> str:
+        """Describe a terminal outcome reached before a container existed.
+
+        The terminal state and failure class own the outcome, so the fallback
+        never contradicts them by publishing "failed" for an operator
+        cancellation or a timeout.
+        """
+
+        if request.message:
+            return request.message
+        if (
+            request.terminal_state == ContainerJobState.CANCELED
+            or request.failure_class == ContainerJobFailureClass.CANCELED
+        ):
+            return "container job was canceled before a container was created"
+        if (
+            request.terminal_state == ContainerJobState.TIMED_OUT
+            or request.failure_class == ContainerJobFailureClass.TIMEOUT
+        ):
+            return "container job timed out before a container was created"
+        if request.terminal_state == ContainerJobState.SUCCEEDED:
+            return "container job completed before a container was created"
+        return "container job failed before a container was created"
+
     async def publish_evidence(self, request: ContainerJobActivityRequest):
-        ref = request.container_ref or self._name(request)
-        code, stdout, stderr = await self._runner(("logs", ref))
-        # Redact container-emitted secrets before anything is persisted. For a
-        # non-TTY container ``docker logs`` writes container stdout/stderr to the
-        # matching streams, so each is captured as a deterministic artifact.
         limit = self._settings.max_output_bytes
-        stdout_raw = redact_sensitive_text(
-            stdout.decode("utf-8", errors="replace")
-        ).encode("utf-8")
-        stderr_raw = redact_sensitive_text(
-            stderr.decode("utf-8", errors="replace")
-        ).encode("utf-8")
-        combined_raw = stdout_raw + (
-            b"\n[stderr]\n" + stderr_raw if stderr_raw else b""
-        )
+        if request.container_ref is None:
+            # ``container_ref`` is the only authority that a reconcile or create
+            # Activity actually produced a container. A deterministic container
+            # name is not that evidence, so querying it here would replace the
+            # authoritative terminal cause with Docker's derived "No such
+            # container" response.
+            message = redact_sensitive_text(
+                self._pre_container_evidence_message(request)
+            )
+            stdout_raw = b""
+            stderr_raw = b""
+            combined_raw = f"[system]\n{message}\n".encode()
+        else:
+            ref = request.container_ref or self._name(request)
+            code, stdout, stderr = await self._runner(("logs", ref))
+            # Redact container-emitted secrets before anything is persisted. For
+            # a non-TTY container ``docker logs`` writes container stdout/stderr
+            # to the matching streams, so each is captured deterministically.
+            stdout_raw = redact_sensitive_text(
+                stdout.decode("utf-8", errors="replace")
+            ).encode("utf-8")
+            stderr_raw = redact_sensitive_text(
+                stderr.decode("utf-8", errors="replace")
+            ).encode("utf-8")
+            combined_raw = stdout_raw + (
+                b"\n[stderr]\n" + stderr_raw if stderr_raw else b""
+            )
+            if code and not (stdout_raw or stderr_raw):
+                raise RuntimeError("container evidence is unavailable")
         combined = self._bound_tail(combined_raw, limit)
         stdout_bytes = self._bound_tail(stdout_raw, limit)
         stderr_bytes = self._bound_tail(stderr_raw, limit)
-        if code and not (stdout_raw or stderr_raw):
-            raise RuntimeError("container evidence is unavailable")
 
         if self._publish is None:
             return ContainerJobActivityResult()
@@ -2548,9 +2597,15 @@ class DockerContainerJobBackend:
     ) -> dict | None:
         """Observe bounded denial and attachment evidence before cleanup."""
 
-        if request.request.spec.network_mode != "bridge":
+        # Only an actual container reference proves a container exists to
+        # inspect; a deterministic name would make ``docker inspect`` report a
+        # missing container as drifted network evidence.
+        if (
+            request.request.spec.network_mode != "bridge"
+            or request.container_ref is None
+        ):
             return None
-        ref = request.container_ref or self._name(request)
+        ref = request.container_ref
         # Inspect the complete network map, not just the approved network. If
         # daemon state drifted or another trusted client attached a second
         # network, indexing only the approved network would still return a valid

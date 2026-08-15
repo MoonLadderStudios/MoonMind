@@ -20,6 +20,7 @@ with workflow.unsafe.imports_passed_through():
         ContainerJobWorkflowResult,
         TerminalOutcome,
         failure_class_from_exception,
+        failure_message_from_exception,
     )
     from moonmind.workflows.temporal.activity_catalog import (
         build_default_activity_catalog,
@@ -27,6 +28,18 @@ with workflow.unsafe.imports_passed_through():
 
 CATALOG = build_default_activity_catalog()
 _TERMINAL = frozenset({"succeeded", "failed", "canceled", "timed_out"})
+CONTAINER_JOB_TERMINAL_ROOT_CAUSE_MESSAGE_PATCH = (
+    "container-job-terminal-root-cause-message-v1"
+)
+
+
+def _workflow_patch_enabled(patch_id: str) -> bool:
+    try:
+        return workflow.patched(patch_id)
+    except Exception as exc:
+        if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+            return True
+        raise
 
 
 @workflow.defn(name="MoonMind.ContainerJob")
@@ -225,7 +238,16 @@ class MoonMindContainerJobWorkflow:
                 failure_class_from_exception(exc)
                 or ContainerJobFailureClass.INFRASTRUCTURE
             )
-            message = str(exc)[:2048]
+            message = (
+                (
+                    failure_message_from_exception(exc)
+                    if _workflow_patch_enabled(
+                        CONTAINER_JOB_TERMINAL_ROOT_CAUSE_MESSAGE_PATCH
+                    )
+                    else str(exc)
+                )
+                or str(exc)
+            )[:2048]
 
         request.terminal_state = terminal_state
         # Exit metadata is set before publication so the runtime-diagnostics

@@ -35,6 +35,8 @@ class ContainerJobResult:
     job_id: str
     state: str
     exit_code: int | None
+    failure_class: str | None
+    message: str | None
     logs_ref: str | None
     artifacts_ref: str | None
     log_tail: tuple[str, ...] = ()
@@ -379,6 +381,10 @@ def run_container_job(
                 if terminal_payload.get("exitCode") is not None
                 else None
             ),
+            failure_class=(
+                str(terminal_payload.get("failureClass") or "").strip() or None
+            ),
+            message=str(terminal_payload.get("message") or "").strip() or None,
             logs_ref=str(snapshot.get("logsRef") or "").strip() or None,
             artifacts_ref=str(snapshot.get("artifactsRef") or "").strip() or None,
             log_tail=log_tail,

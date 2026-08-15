@@ -274,6 +274,36 @@ async def test_never_without_image_fails_image_not_found_without_pull(tmp_path) 
 
 
 @pytest.mark.asyncio
+async def test_deployment_source_absence_names_operator_remediation(tmp_path) -> None:
+    daemon = FakeDaemon()
+    # The deployment explicitly owns ``never`` for this image source, so an
+    # absent image must name the operator remediation instead of pulling.
+    backend = _backend(
+        daemon,
+        tmp_path,
+        settings=resolve_container_backend_settings(
+            {"MOONMIND_UNREAL_ENGINE_IMAGE_PULL_POLICY": "never"}
+        ),
+    )
+    payload = _request("python:3.13").model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    spec = payload["request"]["spec"]
+    spec.pop("image")
+    spec.pop("pullPolicy")
+    spec["imageSourceRef"] = "tactics-unreal"
+    request = ContainerJobActivityRequest.model_validate(payload)
+
+    with pytest.raises(ImageAcquisitionError) as excinfo:
+        await backend.acquire_image(request)
+
+    assert excinfo.value.failure_class == ContainerJobFailureClass.IMAGE_NOT_FOUND
+    assert "deployment image source 'tactics-unreal' is absent" in str(excinfo.value)
+    assert "provision its configured image" in str(excinfo.value)
+    assert daemon.pulls == []
+
+
+@pytest.mark.asyncio
 async def test_never_preserves_backend_inspect_failure(tmp_path) -> None:
     async def unavailable(args):
         return 1, b"", b"Cannot connect to the Docker daemon"

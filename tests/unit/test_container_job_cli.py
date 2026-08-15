@@ -9,6 +9,7 @@ from moonmind.cli import app
 from moonmind.container_job_cli import (
     ContainerJobMcpClient,
     ContainerJobCliError,
+    ContainerJobResult,
     container_job_submission,
     load_container_job_spec,
     python_test_submission,
@@ -61,7 +62,16 @@ class _FakeClient:
         return {
             "jobId": "container-job:" + "1" * 32,
             "state": state,
-            "terminal": {"exitCode": 0} if state == "succeeded" else None,
+            "terminal": (
+                {"exitCode": 0}
+                if state == "succeeded"
+                else {
+                    "failureClass": "image_not_found",
+                    "message": "deployment image source is absent",
+                }
+                if state == "failed"
+                else None
+            ),
             "logsRef": "artifact:logs" if state == "succeeded" else None,
             "artifactsRef": "artifact:outputs" if state == "succeeded" else None,
         }
@@ -347,3 +357,52 @@ def test_run_generic_job_uses_same_terminal_evidence_path() -> None:
     submitted = client.calls[0][1]
     assert submitted["spec"]["imageSourceRef"] == "tactics-unreal"
     assert submitted["source"]["source"] == "managed_session"
+
+
+def test_failed_job_preserves_authoritative_terminal_cause() -> None:
+    client = _FakeClient(["failed"])
+
+    result = run_container_job(
+        {
+            "imageSourceRef": "tactics-unreal",
+            "command": ["true"],
+            "resources": {"cpuMillis": 1000, "memoryMiB": 512},
+            "timeoutSeconds": 60,
+        },
+        env=_ENV,
+        poll_seconds=0.001,
+        client=client,  # type: ignore[arg-type]
+    )
+
+    assert result.state == "failed"
+    assert result.failure_class == "image_not_found"
+    assert result.message == "deployment image source is absent"
+
+
+def test_container_cli_prints_authoritative_terminal_cause(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec_path = tmp_path / "job.json"
+    spec_path.write_text(
+        '{"imageSourceRef":"tactics-unreal","command":["true"],'
+        '"resources":{"cpuMillis":1000,"memoryMiB":512}}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "moonmind.cli.run_container_job",
+        lambda *_args, **_kwargs: ContainerJobResult(
+            job_id="container-job:" + "1" * 32,
+            state="failed",
+            exit_code=None,
+            failure_class="image_not_found",
+            message="deployment image source is absent",
+            logs_ref="artifact:logs",
+            artifacts_ref=None,
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["container", "run", "--spec", str(spec_path)])
+
+    assert result.exit_code == 1
+    assert "failureClass=image_not_found" in result.output
+    assert "message=deployment image source is absent" in result.output
