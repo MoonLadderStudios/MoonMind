@@ -8,7 +8,10 @@ from unittest.mock import patch
 import signal
 import sys
 
-from moonmind.schemas.agent_runtime_models import ManagedRunRecord
+from moonmind.schemas.agent_runtime_models import (
+    MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+    ManagedRunRecord,
+)
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
@@ -645,6 +648,15 @@ async def test_reconcile_dead_pids(supervisor_env):
     assert reconciled[0].run_id == "run-1"
     assert reconciled[0].status == "failed"
     assert reconciled[0].failure_class == "system_error"
+    assert (
+        reconciled[0].provider_error_code
+        == MANAGED_PROCESS_LOST_DURING_RECONCILIATION
+    )
+    completion = supervisor._build_completion_payload(reconciled[0], {})
+    assert (
+        completion["provider_error_code"]
+        == MANAGED_PROCESS_LOST_DURING_RECONCILIATION
+    )
 
 @pytest.mark.asyncio
 async def test_reconcile_skips_alive_pids(supervisor_env):

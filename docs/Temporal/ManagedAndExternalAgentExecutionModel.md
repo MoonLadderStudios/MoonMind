@@ -14,7 +14,7 @@ with the run rather than rewriting it after registry or credential changes.
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-14
+**Last updated:** 2026-08-17
 **Authority:** Unified Temporal lifecycle and ownership model for true agent execution, including profile-bound Codex execution through Omnigent hosts
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines durable product and runtime contracts.
@@ -384,6 +384,7 @@ Rules:
 - a managed-runtime locator must match the current runtime and AgentRun store identity;
 - legacy `workspacePath` fields are compatibility inputs during the replay window and cannot create new authority;
 - a provider/session workspace string is derived from the trusted resolution result;
+- host-side Git commands trust only the exact resolved workspace for that command, so a repository handed between the worker and runtime UIDs remains usable without a global trust exemption;
 - arbitrary absolute paths from workflow parameters are rejected;
 - cleanup removes only state owned by the matching run or lease.
 
@@ -534,6 +535,12 @@ Each lane reconciles its own side effects:
 - Omnigent reconciles bridge attempts, first-message markers, profile bindings, host leases, deterministic containers, registered hosts, sessions, credential generations, and janitor work.
 
 No lane silently creates replacement authority while the original may still be active.
+When direct-runtime startup reconciliation proves that the recorded PID no
+longer exists, the result carries a typed process-loss code. A one-shot lane may
+perform one replacement attempt with the same immutable request, Provider
+Profile, idempotency key, and authoritative workspace. The replacement inspects
+local and remotely visible side effects before repeating work. A second process
+loss is terminal and retains the workspace for checkpoint or operator recovery.
 
 ---
 

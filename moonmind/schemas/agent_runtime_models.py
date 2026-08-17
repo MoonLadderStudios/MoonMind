@@ -30,6 +30,9 @@ ExternalExecutionStyle = Literal["polling", "streaming_gateway"]
 # ``auto`` selects the run's runtime (and skill) at planning time. It is never a
 # runtime identity: an execution request must always name the resolved runtime.
 AUTO_RUNTIME_SENTINEL = "auto"
+MANAGED_PROCESS_LOST_DURING_RECONCILIATION = (
+    "MANAGED_PROCESS_LOST_DURING_RECONCILIATION"
+)
 AgentRunState = Literal[
     "queued",
     "awaiting_slot",
@@ -1975,6 +1978,7 @@ __all__ = [
     "ManagedRunRecord",
     "ManagedRuntimeProfile",
     "ManagedRuntimeWorkloadMode",
+    "MANAGED_PROCESS_LOST_DURING_RECONCILIATION",
     "MoonMindOpsRuntime",
     "MoonMindOpsRuntimeOperation",
     "OmnigentHostLease",

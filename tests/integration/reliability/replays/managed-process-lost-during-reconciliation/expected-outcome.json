@@ -1,0 +1,8 @@
+{
+  "recoveryMode": "fresh_process",
+  "recoveryReason": "process_lost_during_reconciliation",
+  "maxRecoveries": 1,
+  "workspaceKind": "managed_runtime",
+  "sameExecutionProfile": true,
+  "sameIdempotencyKey": true
+}
