@@ -1,0 +1,23 @@
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 370903
+name: omnigent-fault-lease-replacement-old-host-alive
+metadata:
+  corpus: faultkit-initial
+steps:
+- 'on': ensure_session
+  sideEffect: created
+- 'on': lease_acquire
+- 'on': submit_turn
+  sideEffect: accepted
+- 'on': lease_expire
+  fault: lease_expired
+- 'on': lease_replace
+  sideEffect: replaced
+- 'on': submit_turn
+  sideEffect: accepted
+  generation: 1
+  turn: stale
+- 'on': observe_snapshot
+  return:
+    sessionState: idle
+    turnState: completed

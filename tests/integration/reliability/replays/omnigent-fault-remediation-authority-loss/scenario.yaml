@@ -1,0 +1,20 @@
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 3684
+name: omnigent-fault-remediation-authority-loss
+metadata:
+  corpus: faultkit-initial
+steps:
+- 'on': ensure_session
+  sideEffect: created
+- 'on': submit_turn
+  sideEffect: accepted
+- 'on': observe_snapshot
+  return:
+    sessionState: idle
+    turnState: completed
+- 'on': host_replace
+  sideEffect: replaced
+- 'on': submit_turn
+  sideEffect: accepted
+  generation: 1
+  turn: stale

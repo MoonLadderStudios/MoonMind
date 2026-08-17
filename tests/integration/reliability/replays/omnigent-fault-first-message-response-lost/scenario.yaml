@@ -1,0 +1,15 @@
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 370901
+name: omnigent-fault-first-message-response-lost
+metadata:
+  corpus: faultkit-initial
+steps:
+- 'on': ensure_session
+  sideEffect: created
+- 'on': submit_turn
+  response: drop
+  sideEffect: accepted
+- 'on': reconcile
+  return:
+    sessionState: idle
+    turnState: completed

@@ -1,0 +1,40 @@
+{
+  "expectedClassification": "completed",
+  "expectedDecision": "skip_duplicate_binding_submission",
+  "generalizedInvariant": "at_most_once_submission",
+  "issue": "MoonLadderStudios/MoonMind#3709",
+  "operationalSignal": "duplicate_turn_binding",
+  "scenario": {
+    "metadata": {
+      "corpus": "faultkit-initial"
+    },
+    "name": "omnigent-fault-duplicate-binding",
+    "schemaVersion": "moonmind.omnigent-fault-scenario/v1",
+    "seed": 3696,
+    "steps": [
+      {
+        "on": "ensure_session",
+        "sideEffect": "created"
+      },
+      {
+        "on": "submit_turn",
+        "sideEffect": "accepted"
+      },
+      {
+        "on": "submit_turn",
+        "sideEffect": "accepted"
+      },
+      {
+        "on": "observe_snapshot",
+        "return": {
+          "sessionState": "idle",
+          "turnState": "completed"
+        }
+      }
+    ]
+  },
+  "schemaVersion": "moonmind.omnigent-fault-incident/v1",
+  "slug": "omnigent-fault-duplicate-binding",
+  "sourceReference": "MoonLadderStudios/MoonMind#3696,MoonLadderStudios/MoonMind#3685",
+  "workspaceFixture": null
+}

@@ -1,0 +1,46 @@
+{
+  "expectedClassification": "system_error",
+  "expectedDecision": "fence_former_generation_remediation",
+  "generalizedInvariant": "fencing_safety",
+  "issue": "MoonLadderStudios/MoonMind#3709",
+  "operationalSignal": "former_generation_write_attempt",
+  "scenario": {
+    "metadata": {
+      "corpus": "faultkit-initial"
+    },
+    "name": "omnigent-fault-remediation-authority-loss",
+    "schemaVersion": "moonmind.omnigent-fault-scenario/v1",
+    "seed": 3684,
+    "steps": [
+      {
+        "on": "ensure_session",
+        "sideEffect": "created"
+      },
+      {
+        "on": "submit_turn",
+        "sideEffect": "accepted"
+      },
+      {
+        "on": "observe_snapshot",
+        "return": {
+          "sessionState": "idle",
+          "turnState": "completed"
+        }
+      },
+      {
+        "on": "host_replace",
+        "sideEffect": "replaced"
+      },
+      {
+        "generation": 1,
+        "on": "submit_turn",
+        "sideEffect": "accepted",
+        "turn": "stale"
+      }
+    ]
+  },
+  "schemaVersion": "moonmind.omnigent-fault-incident/v1",
+  "slug": "omnigent-fault-remediation-authority-loss",
+  "sourceReference": "MoonLadderStudios/MoonMind#3684",
+  "workspaceFixture": null
+}

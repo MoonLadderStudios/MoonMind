@@ -1,0 +1,16 @@
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 3694
+name: omnigent-fault-image-authority-drift
+metadata:
+  corpus: faultkit-initial
+steps:
+- 'on': ensure_session
+  sideEffect: created
+- 'on': submit_turn
+  sideEffect: accepted
+- 'on': observe_snapshot
+  response: unknown_schema
+- 'on': observe_snapshot
+  return:
+    sessionState: idle
+    turnState: completed

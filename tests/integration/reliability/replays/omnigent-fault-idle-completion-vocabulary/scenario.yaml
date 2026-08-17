@@ -1,0 +1,14 @@
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 3683
+name: omnigent-fault-idle-completion-vocabulary
+metadata:
+  corpus: faultkit-initial
+steps:
+- 'on': ensure_session
+  sideEffect: created
+- 'on': submit_turn
+  sideEffect: accepted
+- 'on': observe_snapshot
+  return:
+    sessionState: idle
+    turnState: completed

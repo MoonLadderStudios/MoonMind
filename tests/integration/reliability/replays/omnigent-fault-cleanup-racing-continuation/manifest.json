@@ -1,0 +1,44 @@
+{
+  "expectedClassification": "system_error",
+  "expectedDecision": "skip_cleanup_of_replacement_generation",
+  "generalizedInvariant": "cleanup_safety",
+  "issue": "MoonLadderStudios/MoonMind#3709",
+  "operationalSignal": "cleanup_targets_newer_generation",
+  "scenario": {
+    "metadata": {
+      "corpus": "faultkit-initial"
+    },
+    "name": "omnigent-fault-cleanup-racing-continuation",
+    "schemaVersion": "moonmind.omnigent-fault-scenario/v1",
+    "seed": 370902,
+    "steps": [
+      {
+        "on": "ensure_session",
+        "sideEffect": "created"
+      },
+      {
+        "on": "submit_turn",
+        "sideEffect": "accepted"
+      },
+      {
+        "on": "observe_snapshot",
+        "return": {
+          "sessionState": "idle",
+          "turnState": "completed"
+        }
+      },
+      {
+        "on": "host_replace",
+        "sideEffect": "replaced"
+      },
+      {
+        "generation": 3,
+        "on": "cleanup"
+      }
+    ]
+  },
+  "schemaVersion": "moonmind.omnigent-fault-incident/v1",
+  "slug": "omnigent-fault-cleanup-racing-continuation",
+  "sourceReference": "MoonLadderStudios/MoonMind#3709",
+  "workspaceFixture": null
+}

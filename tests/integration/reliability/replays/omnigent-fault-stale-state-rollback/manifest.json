@@ -1,0 +1,43 @@
+{
+  "expectedClassification": "completed",
+  "expectedDecision": "ignore_stale_snapshot_after_terminal",
+  "generalizedInvariant": "monotonic_authority",
+  "issue": "MoonLadderStudios/MoonMind#3709",
+  "operationalSignal": "post_terminal_running_snapshot",
+  "scenario": {
+    "metadata": {
+      "corpus": "faultkit-initial"
+    },
+    "name": "omnigent-fault-stale-state-rollback",
+    "schemaVersion": "moonmind.omnigent-fault-scenario/v1",
+    "seed": 3665,
+    "steps": [
+      {
+        "on": "ensure_session",
+        "sideEffect": "created"
+      },
+      {
+        "on": "submit_turn",
+        "sideEffect": "accepted"
+      },
+      {
+        "on": "observe_snapshot",
+        "return": {
+          "sessionState": "idle",
+          "turnState": "completed"
+        }
+      },
+      {
+        "on": "observe_snapshot",
+        "return": {
+          "sessionState": "running",
+          "turnState": "running"
+        }
+      }
+    ]
+  },
+  "schemaVersion": "moonmind.omnigent-fault-incident/v1",
+  "slug": "omnigent-fault-stale-state-rollback",
+  "sourceReference": "MoonLadderStudios/MoonMind#3665",
+  "workspaceFixture": null
+}

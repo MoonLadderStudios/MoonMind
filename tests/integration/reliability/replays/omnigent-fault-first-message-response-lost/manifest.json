@@ -1,0 +1,37 @@
+{
+  "expectedClassification": "completed",
+  "expectedDecision": "reconcile_ambiguous_submission_not_resubmit",
+  "generalizedInvariant": "no_blind_ambiguity_retry",
+  "issue": "MoonLadderStudios/MoonMind#3709",
+  "operationalSignal": "accepted_turn_without_receipt",
+  "scenario": {
+    "metadata": {
+      "corpus": "faultkit-initial"
+    },
+    "name": "omnigent-fault-first-message-response-lost",
+    "schemaVersion": "moonmind.omnigent-fault-scenario/v1",
+    "seed": 370901,
+    "steps": [
+      {
+        "on": "ensure_session",
+        "sideEffect": "created"
+      },
+      {
+        "on": "submit_turn",
+        "response": "drop",
+        "sideEffect": "accepted"
+      },
+      {
+        "on": "reconcile",
+        "return": {
+          "sessionState": "idle",
+          "turnState": "completed"
+        }
+      }
+    ]
+  },
+  "schemaVersion": "moonmind.omnigent-fault-incident/v1",
+  "slug": "omnigent-fault-first-message-response-lost",
+  "sourceReference": "MoonLadderStudios/MoonMind#3709",
+  "workspaceFixture": null
+}

@@ -1,0 +1,53 @@
+{
+  "expectedClassification": "system_error",
+  "expectedDecision": "defer_lease_release_and_fence_old_host",
+  "generalizedInvariant": "lease_safety",
+  "issue": "MoonLadderStudios/MoonMind#3709",
+  "operationalSignal": "lease_expiry_with_active_consumer",
+  "scenario": {
+    "metadata": {
+      "corpus": "faultkit-initial"
+    },
+    "name": "omnigent-fault-lease-replacement-old-host-alive",
+    "schemaVersion": "moonmind.omnigent-fault-scenario/v1",
+    "seed": 370903,
+    "steps": [
+      {
+        "on": "ensure_session",
+        "sideEffect": "created"
+      },
+      {
+        "on": "lease_acquire"
+      },
+      {
+        "on": "submit_turn",
+        "sideEffect": "accepted"
+      },
+      {
+        "fault": "lease_expired",
+        "on": "lease_expire"
+      },
+      {
+        "on": "lease_replace",
+        "sideEffect": "replaced"
+      },
+      {
+        "generation": 1,
+        "on": "submit_turn",
+        "sideEffect": "accepted",
+        "turn": "stale"
+      },
+      {
+        "on": "observe_snapshot",
+        "return": {
+          "sessionState": "idle",
+          "turnState": "completed"
+        }
+      }
+    ]
+  },
+  "schemaVersion": "moonmind.omnigent-fault-incident/v1",
+  "slug": "omnigent-fault-lease-replacement-old-host-alive",
+  "sourceReference": "MoonLadderStudios/MoonMind#3709",
+  "workspaceFixture": null
+}

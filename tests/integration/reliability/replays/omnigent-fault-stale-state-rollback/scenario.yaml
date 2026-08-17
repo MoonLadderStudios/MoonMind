@@ -1,0 +1,18 @@
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 3665
+name: omnigent-fault-stale-state-rollback
+metadata:
+  corpus: faultkit-initial
+steps:
+- 'on': ensure_session
+  sideEffect: created
+- 'on': submit_turn
+  sideEffect: accepted
+- 'on': observe_snapshot
+  return:
+    sessionState: idle
+    turnState: completed
+- 'on': observe_snapshot
+  return:
+    sessionState: running
+    turnState: running

@@ -1,0 +1,40 @@
+{
+  "expectedClassification": "integration_error",
+  "expectedDecision": "quarantine_unknown_schema_then_reconcile",
+  "generalizedInvariant": "compatibility_safety",
+  "issue": "MoonLadderStudios/MoonMind#3709",
+  "operationalSignal": "unknown_provider_schema_version",
+  "scenario": {
+    "metadata": {
+      "corpus": "faultkit-initial"
+    },
+    "name": "omnigent-fault-image-authority-drift",
+    "schemaVersion": "moonmind.omnigent-fault-scenario/v1",
+    "seed": 3694,
+    "steps": [
+      {
+        "on": "ensure_session",
+        "sideEffect": "created"
+      },
+      {
+        "on": "submit_turn",
+        "sideEffect": "accepted"
+      },
+      {
+        "on": "observe_snapshot",
+        "response": "unknown_schema"
+      },
+      {
+        "on": "observe_snapshot",
+        "return": {
+          "sessionState": "idle",
+          "turnState": "completed"
+        }
+      }
+    ]
+  },
+  "schemaVersion": "moonmind.omnigent-fault-incident/v1",
+  "slug": "omnigent-fault-image-authority-drift",
+  "sourceReference": "MoonLadderStudios/MoonMind#3694",
+  "workspaceFixture": null
+}

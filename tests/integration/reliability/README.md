@@ -42,3 +42,20 @@ inside the hermetic reliability-journey budget while still asserting stable
 session/thread/epoch identity across each continuation turn. Finalization faults
 use the shared fail-first injector so checkpoint or publication retries can be
 tested independently from the exactly-once primary agent execution.
+
+## Programmable fault-injection model suite (#3709)
+
+The `omnigent-fault-*` replay directories are generated from the programmable
+fault-injection model suite in `moonmind/omnigent/faultkit/`. Instead of a
+per-incident bespoke branch, each escaped incident is lifted into a generalized
+invariant plus a minimized declarative `moonmind.omnigent-fault-scenario/v1`
+scenario (stored here as `manifest.json` + `scenario.yaml`). The suite generates
+thousands of unseen lifecycle interleavings from a seed, enforces twelve named
+reliability invariants against both a reconciler-under-test and an independent
+reference model, and minimizes any failing sequence into a safe replay fixture.
+
+* Design: `docs/Omnigent/FaultInjectionReliabilitySuite.md`.
+* Fast generated domain tests: `tests/unit/omnigent/faultkit/`.
+* Hermetic reliability journey (fixed + incident corpus, with diagnostic
+  bundles): `test_omnigent_fault_model_journey.py`.
+* CI corpus policy and budgets: `moonmind/omnigent/faultkit/ci_policy.py`.

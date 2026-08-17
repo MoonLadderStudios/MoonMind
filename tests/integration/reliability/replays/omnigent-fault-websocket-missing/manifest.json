@@ -1,0 +1,46 @@
+{
+  "expectedClassification": "completed",
+  "expectedDecision": "reconcile_from_snapshot_when_stream_unavailable",
+  "generalizedInvariant": "eventual_convergence",
+  "issue": "MoonLadderStudios/MoonMind#3709",
+  "operationalSignal": "event_stream_transport_failure",
+  "scenario": {
+    "metadata": {
+      "corpus": "faultkit-initial"
+    },
+    "name": "omnigent-fault-websocket-missing",
+    "schemaVersion": "moonmind.omnigent-fault-scenario/v1",
+    "seed": 3697,
+    "steps": [
+      {
+        "on": "ensure_session",
+        "sideEffect": "created"
+      },
+      {
+        "on": "submit_turn",
+        "sideEffect": "accepted"
+      },
+      {
+        "emit": [
+          {
+            "id": "r1",
+            "type": "turn.running"
+          }
+        ],
+        "on": "read_events",
+        "response": "error"
+      },
+      {
+        "on": "observe_snapshot",
+        "return": {
+          "sessionState": "idle",
+          "turnState": "completed"
+        }
+      }
+    ]
+  },
+  "schemaVersion": "moonmind.omnigent-fault-incident/v1",
+  "slug": "omnigent-fault-websocket-missing",
+  "sourceReference": "MoonLadderStudios/MoonMind#3697",
+  "workspaceFixture": null
+}

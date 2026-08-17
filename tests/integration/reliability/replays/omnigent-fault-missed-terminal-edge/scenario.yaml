@@ -1,0 +1,19 @@
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 3698
+name: omnigent-fault-missed-terminal-edge
+metadata:
+  corpus: faultkit-initial
+steps:
+- 'on': ensure_session
+  sideEffect: created
+- 'on': submit_turn
+  sideEffect: accepted
+- 'on': read_events
+  emit:
+  - type: turn.running
+    id: r1
+  disconnect: true
+- 'on': observe_snapshot
+  return:
+    sessionState: idle
+    turnState: completed

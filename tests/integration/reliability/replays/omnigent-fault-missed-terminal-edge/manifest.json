@@ -1,0 +1,46 @@
+{
+  "expectedClassification": "completed",
+  "expectedDecision": "derive_terminal_from_reattached_snapshot",
+  "generalizedInvariant": "eventual_convergence",
+  "issue": "MoonLadderStudios/MoonMind#3709",
+  "operationalSignal": "heartbeat_timeout_followed_by_idle_snapshot",
+  "scenario": {
+    "metadata": {
+      "corpus": "faultkit-initial"
+    },
+    "name": "omnigent-fault-missed-terminal-edge",
+    "schemaVersion": "moonmind.omnigent-fault-scenario/v1",
+    "seed": 3698,
+    "steps": [
+      {
+        "on": "ensure_session",
+        "sideEffect": "created"
+      },
+      {
+        "on": "submit_turn",
+        "sideEffect": "accepted"
+      },
+      {
+        "disconnect": true,
+        "emit": [
+          {
+            "id": "r1",
+            "type": "turn.running"
+          }
+        ],
+        "on": "read_events"
+      },
+      {
+        "on": "observe_snapshot",
+        "return": {
+          "sessionState": "idle",
+          "turnState": "completed"
+        }
+      }
+    ]
+  },
+  "schemaVersion": "moonmind.omnigent-fault-incident/v1",
+  "slug": "omnigent-fault-missed-terminal-edge",
+  "sourceReference": "MoonLadderStudios/MoonMind#3698",
+  "workspaceFixture": null
+}

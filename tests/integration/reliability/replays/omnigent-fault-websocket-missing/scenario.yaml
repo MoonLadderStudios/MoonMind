@@ -1,0 +1,19 @@
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 3697
+name: omnigent-fault-websocket-missing
+metadata:
+  corpus: faultkit-initial
+steps:
+- 'on': ensure_session
+  sideEffect: created
+- 'on': submit_turn
+  sideEffect: accepted
+- 'on': read_events
+  response: error
+  emit:
+  - type: turn.running
+    id: r1
+- 'on': observe_snapshot
+  return:
+    sessionState: idle
+    turnState: completed
