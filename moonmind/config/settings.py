@@ -2040,6 +2040,105 @@ class FeatureFlagsSettings(BaseSettings):
             "CONTROL_STOP_CONTINUATION_GENERATION",
         ),
     )
+    omnigent_session_supervisor_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ENABLED",
+            "OMNIGENT_SESSION_SUPERVISOR_ENABLED",
+        ),
+        description=(
+            "Admit new Omnigent sessions to the MoonMind.OmnigentSession "
+            "supervisor (issue #3712). Disabling blocks new admissions only; it "
+            "never stops replay, cancellation, cleanup, or diagnostics for "
+            "already-admitted sessions."
+        ),
+    )
+    omnigent_session_supervisor_shadow: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_SHADOW",
+            "OMNIGENT_SESSION_SUPERVISOR_SHADOW",
+        ),
+        description=(
+            "Compute and record supervisor admission decisions without issuing "
+            "any provider, host, workspace, publication, cleanup, or lease "
+            "mutations (issue #3712 shadow mode)."
+        ),
+    )
+    omnigent_session_supervisor_generation: str = Field(
+        "disabled",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION",
+            "OMNIGENT_SESSION_SUPERVISOR_GENERATION",
+        ),
+        description=(
+            "Frozen feature generation for supervisor admission (issue #3712). "
+            "An admitted workflow keeps the generation recorded in its admission "
+            "snapshot; changing this value never reinterprets already-admitted "
+            "workflows. 'disabled' blocks admission."
+        ),
+    )
+    omnigent_session_supervisor_allowed_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_OWNER_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_OWNER_IDS",
+            "ALLOWED_OWNER_IDS",
+        ),
+        description=(
+            "Exact (non-substring) owner-id allowlist scoping the supervisor "
+            "canary (issue #3712). Empty means no owner restriction."
+        ),
+    )
+    omnigent_session_supervisor_allowed_execution_profile_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
+            "ALLOWED_EXECUTION_PROFILE_REFS",
+        ),
+        description=(
+            "Exact execution-profile-ref allowlist scoping the supervisor canary "
+            "(issue #3712). Empty means no execution-profile restriction."
+        ),
+    )
+    omnigent_session_supervisor_allowed_launch_policy_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_LAUNCH_POLICY_REFS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_LAUNCH_POLICY_REFS",
+            "ALLOWED_LAUNCH_POLICY_REFS",
+        ),
+        description=(
+            "Exact launch-policy-ref allowlist scoping the supervisor canary "
+            "(issue #3712). Empty means no launch-policy restriction."
+        ),
+    )
+    omnigent_session_supervisor_allowed_provider_profile_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_PROVIDER_PROFILE_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_PROVIDER_PROFILE_IDS",
+            "ALLOWED_PROVIDER_PROFILE_IDS",
+        ),
+        description=(
+            "Exact provider-profile-id allowlist scoping the supervisor canary "
+            "(issue #3712). Empty means no provider-profile restriction."
+        ),
+    )
+    omnigent_session_supervisor_rollback_mode: str = Field(
+        "none",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
+            "OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
+        ),
+        description=(
+            "Independently-supported supervisor rollback control (issue #3712). "
+            "One of: none, disable_new_admission, disable_new_selection, "
+            "chat_read_only, complete_stop. Rollback never substitutes direct "
+            "Codex and never mutates immutable active-session authority."
+        ),
+    )
     live_logs_session_timeline_rollout: Literal[
         "off",
         "internal",
