@@ -92,6 +92,30 @@ def _normalized_key(key: Any) -> str:
     return "".join(ch for ch in str(key).strip().lower() if ch.isalnum())
 
 
+def assert_no_unsafe_leaves(payload: Any, *, error_code: str = WORKSPACE_INTENT_UNSAFE_INPUT) -> None:
+    """Fail closed if any string leaf carries a credential body or host authority.
+
+    This is the single canonical guard shared by the workspace-intent record and
+    any other immutable authority contract compiled before host mutation
+    (for example the compiled Omnigent execution intent). It rejects a raw
+    credential body or Docker-daemon/socket transport smuggled into any nested
+    string value so no immutable contract ever persists secret or host-path
+    authority.
+    """
+
+    for leaf in _string_leaves(payload):
+        lowered = leaf.lower()
+        if any(marker in lowered for marker in _CREDENTIAL_VALUE_MARKERS):
+            raise ValueError(
+                f"{error_code}: immutable intent must not carry a raw credential body"
+            )
+        if any(marker in lowered for marker in _UNSAFE_VALUE_MARKERS):
+            raise ValueError(
+                f"{error_code}: immutable intent must not carry Docker-daemon "
+                "authority or socket transports"
+            )
+
+
 def _string_leaves(value: Any) -> list[str]:
     leaves: list[str] = []
     if isinstance(value, dict):
@@ -240,18 +264,7 @@ class WorkspaceIntentRecord(BaseModel):
     @model_validator(mode="after")
     def _finalize(self) -> "WorkspaceIntentRecord":
         dumped = self.model_dump(by_alias=True, mode="json", exclude_none=True)
-        for leaf in _string_leaves(dumped):
-            lowered = leaf.lower()
-            if any(marker in lowered for marker in _CREDENTIAL_VALUE_MARKERS):
-                raise ValueError(
-                    f"{WORKSPACE_INTENT_UNSAFE_INPUT}: workspace intent must not "
-                    "carry a raw credential body"
-                )
-            if any(marker in lowered for marker in _UNSAFE_VALUE_MARKERS):
-                raise ValueError(
-                    f"{WORKSPACE_INTENT_UNSAFE_INPUT}: workspace intent must not "
-                    "carry Docker-daemon authority or socket transports"
-                )
+        assert_no_unsafe_leaves(dumped)
         computed = self.compute_digest()
         if self.intent_digest is None:
             # The model is frozen; stamp the finalized digest through the base

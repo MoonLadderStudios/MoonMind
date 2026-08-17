@@ -55,6 +55,10 @@ from moonmind.omnigent.stock_agents import (
     CLAUDE_STOCK_AGENT_NAME,
     CODEX_STOCK_AGENT_NAME,
 )
+from moonmind.omnigent.execution_intent import (
+    ExecutionIntentCompilationError,
+    compile_execution_intent,
+)
 from moonmind.omnigent.workspace_intent import (
     WorkspaceIntentCompilationError,
     authored_checkout_commit,
@@ -1124,6 +1128,92 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "locatorKind": workspace_intent.workspace_locator.kind,
                         "repositoryMutation": workspace_intent.repository_mutation,
                         "publishMode": workspace_intent.publish_mode,
+                    },
+                )
+                # Compile the complete immutable execution intent from the same
+                # already-validated authority (authored request, resolved
+                # effective launch, and workspace intent) before any lease or
+                # host mutation. The compiled intent unifies runtime/provider,
+                # launch/image, workspace, session, and the typed remediation
+                # controller under one digest so runtime code never re-resolves
+                # or broadens admitted authority. Its ref+digest are bound to the
+                # create journey through a durable lifecycle event, and a retry
+                # deterministically reproduces the same digest.
+                # (MoonLadderStudios/MoonMind#3706.)
+                current_stage = "execution_intent_compilation"
+                await emit(current_stage, "started")
+                request_parameters = (
+                    request.parameters
+                    if isinstance(request.parameters, Mapping)
+                    else {}
+                )
+                remediation_controller = request_parameters.get("remediationLoop")
+                require_remediation = bool(
+                    request_parameters.get("remediationLoopId")
+                    or request_parameters.get("requiresRemediationLoop")
+                )
+                try:
+                    execution_intent = compile_execution_intent(
+                        request,
+                        workspace_intent=workspace_intent,
+                        effective_launch=effective_launch,
+                        provider_runtime=provider_runtime,
+                        provider_profile_id=profile_id,
+                        workflow_id=workflow_id,
+                        step_execution_id=(
+                            step_execution_id or request.idempotency_key
+                        ),
+                        run_id=(
+                            request.step_execution.run_id
+                            if request.step_execution is not None
+                            else None
+                        ),
+                        logical_step_id=(
+                            request.step_execution.logical_step_id
+                            if request.step_execution is not None
+                            else None
+                        ),
+                        remediation_controller=(
+                            remediation_controller
+                            if isinstance(remediation_controller, Mapping)
+                            else None
+                        ),
+                        require_remediation=require_remediation,
+                        model=str(request_parameters.get("model") or "").strip()
+                        or None,
+                        effort=str(request_parameters.get("effort") or "").strip()
+                        or None,
+                    )
+                except ExecutionIntentCompilationError as exc:
+                    raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
+                await self._run_store.record_lifecycle_event(
+                    request.idempotency_key,
+                    event_type="execution_intent_compiled",
+                    event_identity=(
+                        f"execution_intent_compiled:{execution_intent.intent_digest}"
+                    ),
+                    metadata=execution_intent.evidence(),
+                )
+                await emit(
+                    current_stage,
+                    "completed",
+                    metadata={
+                        "executionIntentDigest": execution_intent.intent_digest,
+                        "executionIntentSchemaId": execution_intent.schema_id,
+                        "workspaceIntentDigest": (
+                            execution_intent.workspace.workspace_intent_digest
+                        ),
+                        "effectiveLaunchRef": (
+                            execution_intent.launch.effective_launch_ref
+                        ),
+                        "operationClass": (
+                            execution_intent.workspace.operation_class
+                        ),
+                        "remediationLoopId": (
+                            execution_intent.remediation.loop_id
+                            if execution_intent.remediation
+                            else None
+                        ),
                     },
                 )
             owner_id = deterministic_lease_owner_id(
