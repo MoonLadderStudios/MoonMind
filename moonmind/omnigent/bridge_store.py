@@ -31,6 +31,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
 from moonmind.omnigent.bridge_events import bounded_deduplication_key
 from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
+from moonmind.omnigent.domain import compatibility as _domain_compatibility
+from moonmind.omnigent.domain import session_state as _domain_session_state
+from moonmind.omnigent.domain.failures import (
+    failure_class_for_terminal_status as _domain_failure_class_for_terminal_status,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.utils.logging import redact_sensitive_payload
 
@@ -248,34 +253,18 @@ def _chat_binding_logical_step_id(row: OmnigentBridgeSession) -> str | None:
     return text or None
 
 
-# Bridge lifecycle states owned by the bridge before the provider reports a
-# normalized status (§7.1). ``active`` is the coalesced non-terminal value.
-STATUS_DECLARED = "declared"
-STATUS_CREATING = "creating"
-STATUS_ACTIVE = "active"
+# Bridge lifecycle / status vocabulary is owned canonically by the Omnigent
+# domain layer (MoonLadderStudios/MoonMind#3711). Re-exported here under the
+# existing internal names so this module has exactly one source of truth and no
+# duplicated table.
+STATUS_DECLARED = _domain_session_state.STATUS_DECLARED
+STATUS_CREATING = _domain_session_state.STATUS_CREATING
+STATUS_ACTIVE = _domain_session_state.STATUS_ACTIVE
 
-_LIFECYCLE_STATUSES = frozenset({STATUS_DECLARED, STATUS_CREATING, STATUS_ACTIVE})
-
-# Terminal normalized statuses pass straight through to the session status.
-_TERMINAL_STATUSES = frozenset({"completed", "failed", "canceled", "timed_out"})
-
-# Non-terminal normalized statuses produced by execute.py; all coalesce to
-# ``active`` (§7.1).
-_NON_TERMINAL_NORMALIZED_STATUSES = frozenset(
-    {
-        "created",
-        "launching",
-        "provisioning",
-        "running",
-        "waiting",
-        "idle",
-        "awaiting_approval",
-        "intervention_requested",
-    }
-)
-
-# Provider-native aliases normalized before coalescence, matching execute.py.
-_STATUS_ALIASES = {"cancelled": "canceled", "timeout": "timed_out"}
+_LIFECYCLE_STATUSES = _domain_session_state.LIFECYCLE_STATUSES
+_TERMINAL_STATUSES = _domain_session_state.TERMINAL_STATUSES
+_NON_TERMINAL_NORMALIZED_STATUSES = _domain_session_state.NON_TERMINAL_NORMALIZED_STATUSES
+_STATUS_ALIASES = _domain_compatibility.PROVIDER_STATUS_ALIASES
 
 
 class OmnigentIdempotencyError(RuntimeError):
@@ -398,32 +387,20 @@ def coalesce_bridge_status(value: str) -> str:
     than silently degrading (repository Compatibility Policy).
     """
 
-    raw = str(value).strip().lower()
-    raw = _STATUS_ALIASES.get(raw, raw)
-    if raw in _TERMINAL_STATUSES:
-        return raw
-    if raw in _LIFECYCLE_STATUSES:
-        return raw
-    if raw in _NON_TERMINAL_NORMALIZED_STATUSES:
-        return STATUS_ACTIVE
-    raise ValueError(f"Unsupported normalized status for bridge coalescence: {value!r}")
+    return _domain_session_state.coalesce_session_status(value)
 
 
 def bridge_failure_class(status: str) -> str | None:
     """Map a terminal bridge status to a MoonMind failure class (§17).
 
-    Mirrors ``moonmind.omnigent.execute._failure_class_for`` so ``timed_out`` and
-    ``canceled`` remain ``system_error`` and are never collapsed into ``failed``.
+    Delegates to the canonical Omnigent domain classifier
+    (``moonmind.omnigent.domain.failures``) after normalizing provider-native
+    aliases, so ``timed_out`` and ``canceled`` remain ``system_error`` and are
+    never collapsed into ``failed``. There is exactly one §17 table.
     """
 
-    raw = _STATUS_ALIASES.get(str(status).strip().lower(), str(status).strip().lower())
-    if raw == "completed":
-        return None
-    if raw == "failed":
-        return "execution_error"
-    if raw in {"canceled", "timed_out"}:
-        return "system_error"
-    return "integration_error"
+    canonical = _domain_compatibility.canonicalize_provider_status(status)
+    return _domain_failure_class_for_terminal_status(canonical)
 
 
 class OmnigentBridgeSessionStore:

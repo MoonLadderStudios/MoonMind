@@ -16,6 +16,11 @@ from typing import Any
 from moonmind.omnigent.bridge_artifacts import OmnigentContractError
 from moonmind.omnigent.bridge_security import redact_raw_events
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.omnigent.domain.observations import (
+    is_optional_resource_event as _domain_is_optional_resource_event,
+    is_recognized_event_type as _domain_is_recognized_event_type,
+    normalized_status_for_event_type as _domain_status_for_event_type,
+)
 
 BRIDGE_EVENT_SCHEMA_VERSION = "moonmind.omnigent_bridge.event.v1"
 BRIDGE_EVENT_DEDUPLICATION_KEY_MAX_LENGTH = 128
@@ -36,75 +41,9 @@ _NON_TERMINAL_STATUSES = {
     "waiting",
     "idle",
 }
-_RECOGNIZED_EXACT_EVENT_TYPES = {
-    "",
-    "browser.action_request",
-    "completed",
-    "failed",
-    "host.capabilities",
-    "host.heartbeat",
-    "injection.consumed",
-    "resource.changed_file",
-    "resource.session_file",
-    "response.cancelled",
-    "response.client_task.cancel",
-    "response.compaction.completed",
-    "response.compaction.failed",
-    "response.compaction.in_progress",
-    "response.completed",
-    "response.created",
-    "response.delta",
-    "response.elicitation_request",
-    "response.elicitation_resolved",
-    "response.error",
-    "response.failed",
-    "response.function_call_output.delta",
-    "response.heartbeat",
-    "response.in_progress",
-    "response.incomplete",
-    "response.output",
-    "response.policy_denied",
-    "response.queued",
-    "response.reasoning.started",
-    "response.reasoning_summary_text.delta",
-    "response.reasoning_text.delta",
-    "response.retry",
-    "session.agent_changed",
-    "session.changed_files.invalidated",
-    "session.collaboration_mode",
-    "session.created",
-    "session.final_snapshot",
-    "session.heartbeat",
-    "session.interrupted",
-    "session.mcp_startup",
-    "session.model",
-    "session.model_options",
-    "session.presence",
-    "session.reasoning_effort",
-    "session.resource.created",
-    "session.resource.deleted",
-    "session.sandbox_status",
-    "session.skills",
-    "session.started",
-    "session.status",
-    "session.superseded",
-    "session.terminal.activity",
-    "session.terminal_pending",
-    "session.todos",
-    "session.usage",
-    "stream.done",
-    "stream.resume_gap",
-    "turn.cancelled",
-    "turn.completed",
-    "turn.failed",
-    "turn.started",
-}
-_RECOGNIZED_EVENT_PREFIXES = (
-    "response.output",
-    "session.child",
-    "session.input",
-    "session.item",
-)
+# Recognized provider event-type vocabulary is owned canonically by
+# moonmind.omnigent.domain.observations (MoonLadderStudios/MoonMind#3711) and
+# imported above; no local duplicate is kept.
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,43 +182,12 @@ def _normalize_status(
     allow_optional_resource_drift: bool,
 ) -> str | None:
     event_type = _event_type(payload)
-    if event_type == "stream.done":
-        return None
-    if event_type in {"response.completed", "turn.completed", "completed"}:
-        return "completed"
-    if event_type in {
-        "response.error",
-        "response.failed",
-        "response.incomplete",
-        "response.policy_denied",
-        "turn.failed",
-        "failed",
-    }:
-        return "failed"
-    if event_type in {
-        "response.cancelled",
-        "session.interrupted",
-        "session.superseded",
-        "turn.cancelled",
-    }:
-        return "canceled"
-    if event_type in {"response.elicitation_request", "elicitation_request"}:
-        return "awaiting_approval"
-    if event_type == "browser.action_request":
-        return "intervention_requested"
-    if event_type == "session.created":
-        return "created"
-    if event_type in {
-        "response.created",
-        "response.heartbeat",
-        "response.in_progress",
-        "response.queued",
-        "response.retry",
-        "session.heartbeat",
-        "session.started",
-        "turn.started",
-    }:
-        return "running"
+    # Event-type -> normalized status is owned by the domain observation
+    # vocabulary (MoonLadderStudios/MoonMind#3711). ``mapped`` is True when the
+    # event type alone determines the status (``stream.done`` -> None).
+    mapped, mapped_status = _domain_status_for_event_type(event_type)
+    if mapped:
+        return mapped_status
     if not _is_recognized_event_type(event_type):
         message = f"Unsupported Omnigent event type: {event_type}"
         if allow_optional_resource_drift and _is_optional_resource_event(event_type):
@@ -325,13 +233,11 @@ def _event_type(payload: dict[str, Any]) -> str:
 
 
 def _is_recognized_event_type(event_type: str) -> bool:
-    return event_type in _RECOGNIZED_EXACT_EVENT_TYPES or event_type.startswith(
-        _RECOGNIZED_EVENT_PREFIXES
-    )
+    return _domain_is_recognized_event_type(event_type)
 
 
 def _is_optional_resource_event(event_type: str) -> bool:
-    return event_type.startswith("resource.")
+    return _domain_is_optional_resource_event(event_type)
 
 
 def _has_active_elicitation(payload: dict[str, Any]) -> bool:
