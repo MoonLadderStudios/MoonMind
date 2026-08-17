@@ -405,9 +405,11 @@ When a user selects `Skill` as the Step Type:
 3. The step editor passes `inputSchema`, `uiSchema`, `defaults`, current draft
    values, workflow context, and deployment policy into the shared schema-form
    renderer.
-4. The renderer generates visible fields for required inputs and default-visible
-   optional inputs.
-5. Advanced optional fields may be collapsed but remain discoverable.
+4. In guided mode, the renderer shows root `required` fields plus every field
+   participating in a root `oneOf` / `anyOf` required alternative.
+5. Other Skill properties are available when the user enables Advanced mode;
+   field selection is schema-derived and must not use Skill-name allowlists or
+   bespoke Skill layouts in the frontend.
 6. Local validation runs on change/blur and before Start Workflow.
 7. The draft stores values under `step.skill.inputs`.
 8. The backend validates the values against the same Skill input contract before

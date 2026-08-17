@@ -18398,7 +18398,7 @@ describe("Task Create schema-driven capability inputs", () => {
     expect(within(step).queryByDisplayValue("token=raw-secret")).toBeNull();
   });
 
-  it("renders direct skill inputs through the same schema behavior", async () => {
+  it("shows required Skill inputs by default and reveals optional schema fields in Advanced mode", async () => {
     renderWithClient(<WorkflowStartPage payload={mockPayload} />);
     const step = (await screen.findByText("Step 1")).closest("section") as HTMLElement;
     selectStepType(step, "Skill");
@@ -18407,7 +18407,17 @@ describe("Task Create schema-driven capability inputs", () => {
     });
 
     expect(await within(step).findByLabelText("Repository name")).toBeTruthy();
-    expect(within(step).getByLabelText("Branch")).toBeTruthy();
+    expect(within(step).queryByLabelText("Branch")).toBeNull();
+    expect(
+      within(step).getByTestId("skill-optional-inputs-notice-0").textContent,
+    ).toContain("Advanced mode");
+
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
+
+    expect(await within(step).findByLabelText("Branch")).toBeTruthy();
+    expect(
+      within(step).queryByTestId("skill-optional-inputs-notice-0"),
+    ).toBeNull();
     expect(within(step).getByLabelText("Notes").tagName).toBe("TEXTAREA");
     expect(within(step).getByLabelText("Markdown").tagName).toBe("TEXTAREA");
     expect((within(step).getByLabelText("Effort") as HTMLInputElement).type).toBe("number");
@@ -18488,6 +18498,11 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
     });
+    expect(
+      await within(step).findByTestId("skill-optional-inputs-notice-0"),
+    ).toBeTruthy();
+    expect(within(step).queryByTestId("skill-schema-fallback-0")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
 
     fireEvent.change(await within(step).findByLabelText("Repository name"), {
       target: { value: "MoonLadderStudios/MoonMind" },
@@ -18620,6 +18635,11 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
     });
+    expect(
+      await within(step).findByTestId("skill-optional-inputs-notice-0"),
+    ).toBeTruthy();
+    expect(within(step).queryByTestId("skill-schema-fallback-0")).toBeNull();
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
 
     const unsupported = (await waitFor(() => {
       const input = step.querySelector<HTMLInputElement>(
@@ -18662,6 +18682,7 @@ describe("Task Create schema-driven capability inputs", () => {
                 id: "deployment.skill",
                 inputSchema: {
                   type: "object",
+                  required: ["repository"],
                   properties: {
                     repository: { type: "string", title: "Deployment repository" },
                   },
@@ -18743,6 +18764,7 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
     });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
 
     fireEvent.change(await within(step).findByLabelText("Repository name"), {
       target: { value: "MoonLadderStudios/SavedSchemaRepo" },
@@ -18841,6 +18863,7 @@ describe("Task Create schema-driven capability inputs", () => {
     fireEvent.change(within(step).getByLabelText("Skill (optional)"), {
       target: { value: "schema.skill" },
     });
+    fireEvent.click(screen.getByLabelText("Advanced mode"));
 
     const effortInput = (await within(step).findByLabelText("Effort")) as HTMLInputElement;
     expect(effortInput.value).toBe("2");
