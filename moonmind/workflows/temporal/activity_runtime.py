@@ -1145,6 +1145,23 @@ _EXTERNALLY_BOUND_CATALOG_ACTIVITIES = frozenset(
         "checkpoint_branch.turn.mark_running",
         "checkpoint_branch.turn.persist_terminal",
         "checkpoint_branch.turn.persist_terminal_rejection",
+        # MoonMind.OmnigentSession bounded activities are hosted on the workflow
+        # fleet and bound by ``workflow_registry`` (see #3705), not by this
+        # module's side-effecting activity implementations.
+        "omnigent.resolve_intent",
+        "omnigent.load_reconciliation_inputs",
+        "omnigent.ensure_provider_profile_lease",
+        "omnigent.ensure_host",
+        "omnigent.ensure_provider_session",
+        "omnigent.submit_turn",
+        "omnigent.read_event_batch",
+        "omnigent.observe_snapshot",
+        "omnigent.harvest_evidence",
+        "omnigent.publish_workspace",
+        "omnigent.stop_provider_session",
+        "omnigent.stop_host",
+        "omnigent.release_leases",
+        "omnigent.persist_decision",
     }
 )
 

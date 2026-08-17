@@ -325,6 +325,55 @@ reference to appear in the running image's observed repository digests. The
 mutable Compose input recorded in `Config.Image` remains diagnostic
 configuration, not runtime image authority.
 
+### 7.6 Durable session supervisor (`MoonMind.OmnigentSession`)
+
+Profile-bound Omnigent execution is owned by a dedicated durable child workflow
+rather than one long-running streaming activity:
+
+```text
+MoonMind.UserWorkflow
+  -> MoonMind.AgentRun
+       -> MoonMind.OmnigentSession
+```
+
+`MoonMind.AgentRun` remains the canonical agent lifecycle owner. For an admitted
+profile-bound Omnigent run it starts (or attaches to) the session workflow using
+a deterministic workflow id derived from the canonical session authority, waits
+for a compact terminal result, and enforces its own execution contract without
+duplicating session side-effect logic.
+
+`MoonMind.OmnigentSession` owns one canonical session lifecycle: desired
+lifecycle, provider-session association, current turn attempt and fencing
+generation, reconciliation schedule and deadlines, Provider Profile and host
+lease ownership intent, cancellation/intervention intent, terminality decision,
+ordered cleanup, and the final durable result. Its input carries only compact,
+immutable, versioned authority (canonical session id, compiled execution-intent
+ref/digest, owning Workflow/Step/AgentRun identities, initial turn-attempt id,
+admitted feature generation, compatibility version); credentials, tokens, mutable
+Docker paths, prompts, transcripts, and artifact bodies never enter workflow
+history.
+
+The workflow runs a deterministic reconciliation loop: load the canonical state
+and observation frontier, run a pure reconciler, persist the decision and reason
+codes, execute at most the bounded commands the decision authorizes, record the
+outcome or delivery ambiguity, then sleep until the next deterministic deadline
+or wake on a signal/update. Provider streams and callbacks are observation
+sources that wake reconciliation; a periodic authoritative snapshot deadline
+guarantees convergence when every relevant terminal event is lost. Each bounded
+activity has a bounded StartToClose timeout, executes exactly one durable logical
+command, validates the expected fencing generation, and is safe to retry after a
+crash. Cancellation, timeout, terminal harvesting, cleanup, and lease release are
+distinct durable phases; the Provider Profile lease is released last. Bounded
+Continue-As-New criteria keep Temporal history bounded while carrying forward
+only compact refs, frontier, and fencing generation.
+
+Admission is gated by an explicit Temporal patch boundary plus a frozen feature
+generation and bounded canary policy. Existing `MoonMind.AgentRun` histories
+replay on the legacy profile-bound execution path, and sessions not admitted to
+the supervisor retain their supported legacy owner. Disabling new selection never
+prevents replay, query, cancellation, cleanup, or historical reads for sessions
+already admitted.
+
 ---
 
 ## 8. Provider Profile capacity and cooldown

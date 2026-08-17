@@ -154,6 +154,22 @@ def test_default_catalog_matches_runtime_binding_inventory() -> None:
         "checkpoint_branch.turn.mark_running",
         "checkpoint_branch.turn.persist_terminal",
         "checkpoint_branch.turn.persist_terminal_rejection",
+        # MoonMind.OmnigentSession bounded activities (#3705) are workflow-fleet
+        # local activities bound by ``workflow_registry``.
+        "omnigent.resolve_intent",
+        "omnigent.load_reconciliation_inputs",
+        "omnigent.ensure_provider_profile_lease",
+        "omnigent.ensure_host",
+        "omnigent.ensure_provider_session",
+        "omnigent.submit_turn",
+        "omnigent.read_event_batch",
+        "omnigent.observe_snapshot",
+        "omnigent.harvest_evidence",
+        "omnigent.publish_workspace",
+        "omnigent.stop_provider_session",
+        "omnigent.stop_host",
+        "omnigent.release_leases",
+        "omnigent.persist_decision",
     }
     assert catalog_activity_types - catalog_workflow_local_activity_types == (
         set(_ACTIVITY_HANDLER_ATTRS) - {"mm.tool.execute"}

@@ -4283,6 +4283,9 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.omnigent_oauth_host_janitor import (
         MoonMindOmnigentOAuthHostJanitorWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.omnigent_session import (
+        MoonMindOmnigentSessionWorkflow,
+    )
     assert kwargs["workflows"] == (
         MoonMindUserWorkflow,
         MoonMindContainerJobWorkflow,
@@ -4299,7 +4302,12 @@ async def test_main_async_workflow_fleet(
         MoonMindMergeAutomationWorkflow,
         MoonMindPRResolverWorkflow,
         MoonMindPublicationRecoveryWorkflow,
+        MoonMindOmnigentSessionWorkflow,
     )
+    from moonmind.workflows.temporal.activities.omnigent_session_activities import (
+        OMNIGENT_SESSION_ACTIVITY_HANDLERS,
+    )
+
     assert kwargs["activities"] == (
         resolve_adapter_metadata,
         get_activity_route,
@@ -4308,6 +4316,7 @@ async def test_main_async_workflow_fleet(
         mark_checkpoint_branch_turn_running,
         persist_checkpoint_branch_turn_terminal,
         persist_checkpoint_branch_turn_terminal_rejection,
+        *OMNIGENT_SESSION_ACTIVITY_HANDLERS,
     )
     assert "deployment_config" not in kwargs
     assert "build_id" not in kwargs

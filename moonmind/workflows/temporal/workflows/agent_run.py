@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -36,6 +37,12 @@ with workflow.unsafe.imports_passed_through():
         AgentRuntimeStatusInput,
         AgentRuntimeTerminalCheckpointInput,
         ExternalAgentRunInput,
+    )
+    from moonmind.omnigent.session_reconciler import (
+        OmnigentSessionIntent,
+        OmnigentSessionResult,
+        OmnigentSessionStatus,
+        OmnigentSessionWorkflowInput,
     )
     from moonmind.schemas.temporal_payload_policy import compact_temporal_ref_metadata
     from moonmind.workflows.temporal.agent_result_payloads import (
@@ -295,6 +302,13 @@ MANAGED_SESSION_BRIDGE_EVENTS_ACTIVITY_PATCH_ID = (
 MANAGED_SESSION_REPLACE_ON_LOCATOR_MISMATCH_PATCH_ID = (
     "agent-run-managed-session-replace-on-locator-mismatch-v1"
 )
+# Admit newly selected profile-bound Omnigent runs to the durable
+# ``MoonMind.OmnigentSession`` supervisor child workflow (#3705). Gated so
+# existing AgentRun histories replay on the legacy profile-bound path; new
+# histories record the resolve-intent activity and, when admitted, the child
+# workflow. Admission itself is disabled by default and controlled by a frozen
+# feature generation + bounded canary policy resolved inside the activity.
+OMNIGENT_SESSION_SUPERVISOR_PATCH_ID = "agent-run-omnigent-session-supervisor-v1"
 
 # Module-level activity catalog — deterministic, safe for Temporal replay.
 # Mirrors the pattern used by MoonMind.UserWorkflow (run.py:50).
@@ -687,6 +701,111 @@ class MoonMindAgentRun:
             activity_name,
             args,
             **kwargs,
+        )
+
+    @staticmethod
+    def _omnigent_session_run_status(status: str) -> str:
+        if status == OmnigentSessionStatus.COMPLETED.value:
+            return RunStatus.completed
+        if status == OmnigentSessionStatus.CANCELED.value:
+            return RunStatus.cancelled
+        if status == OmnigentSessionStatus.TIMED_OUT.value:
+            return RunStatus.timed_out
+        return RunStatus.failed
+
+    @staticmethod
+    def _omnigent_session_failure_class(session_failure_class: str | None) -> str | None:
+        # Map the session workflow's failure semantics onto the canonical
+        # AgentRunResult failure taxonomy.
+        return {
+            "execution_failed": "execution_error",
+            "timed_out": "timed_out",
+            "reconciliation_quarantined": "system_error",
+            "delivery_unknown": "integration_error",
+        }.get(session_failure_class or "")
+
+    async def _maybe_execute_omnigent_session(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        timeout_seconds: int,
+    ) -> AgentRunResult | None:
+        """Delegate a newly admitted profile-bound Omnigent run to the durable
+        ``MoonMind.OmnigentSession`` supervisor.
+
+        Returns ``None`` to fall through to the legacy profile-bound execution
+        path — for replay of pre-patch histories, non-omnigent runs, or when the
+        admission policy declines the session (disabled by default). This keeps
+        existing sessions on their supported legacy owner.
+        """
+
+        if not workflow.patched(OMNIGENT_SESSION_SUPERVISOR_PATCH_ID):
+            return None
+        if request.agent_id != "omnigent" or not request.execution_profile_ref:
+            return None
+
+        info = workflow.info()
+        agent_run_id = str(info.workflow_id)
+        parent = getattr(info, "parent", None)
+        owning_workflow_id = (
+            str(parent.workflow_id) if parent is not None else agent_run_id
+        )
+        canonical_session_id = f"{agent_run_id}:omnigent"
+        execution_intent_ref = str(
+            request.instruction_ref
+            or request.idempotency_key
+            or canonical_session_id
+        )
+        execution_intent_digest = hashlib.sha256(
+            f"{execution_intent_ref}:{request.execution_profile_ref}".encode("utf-8")
+        ).hexdigest()[:32]
+        step_execution_id = str(request.correlation_id or agent_run_id)
+        resolve_payload = {
+            "canonicalSessionId": canonical_session_id,
+            "executionIntentRef": execution_intent_ref,
+            "executionIntentDigest": execution_intent_digest,
+            "owningWorkflowId": owning_workflow_id,
+            "stepExecutionId": step_execution_id,
+            "agentRunId": agent_run_id,
+            "executionProfileRef": str(request.execution_profile_ref),
+            "initialTurnAttemptId": f"{canonical_session_id}:turn:1",
+        }
+        resolved = await self._execute_routed_activity(
+            "omnigent.resolve_intent",
+            resolve_payload,
+            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+        )
+        if not isinstance(resolved, Mapping) or not resolved.get("admitted"):
+            return None
+
+        intent = OmnigentSessionIntent.model_validate(dict(resolved["intent"]))
+        child_input = OmnigentSessionWorkflowInput(intent=intent)
+        session_workflow_id = f"{canonical_session_id}:session"
+        raw_result = await workflow.execute_child_workflow(
+            "MoonMind.OmnigentSession",
+            child_input,
+            id=session_workflow_id,
+            task_queue=self._workflow_child_task_queue(),
+            execution_timeout=timedelta(seconds=max(int(timeout_seconds), 60)),
+        )
+        result = OmnigentSessionResult.model_validate(dict(raw_result))
+        self.run_status = self._omnigent_session_run_status(result.status.value)
+        return AgentRunResult(
+            outputRefs=[result.terminal_result_ref]
+            if result.terminal_result_ref
+            else [],
+            summary=result.summary,
+            diagnosticsRef=result.diagnostics_ref,
+            failureClass=self._omnigent_session_failure_class(result.failure_class),
+            metadata={
+                "omnigentSessionStatus": result.status.value,
+                "canonicalSessionId": result.canonical_session_id,
+                "owningWorkflowId": owning_workflow_id,
+                "reasonCodes": list(result.reason_codes),
+                "turnAttempts": result.turn_attempts,
+                "observationCount": result.observation_count,
+                "decisionCount": result.decision_count,
+            },
         )
 
     async def _signal_parent_child_state_changed(
@@ -4874,31 +4993,43 @@ class MoonMindAgentRun:
                             max(int(timeout_seconds), 60),
                             86400,
                         )
-                        act_name = f"integration.{validated_id}.execute"
-                        if (
-                            validated_id == "omnigent"
-                            and request.execution_profile_ref
-                            and workflow.patched(
-                                OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID
-                            )
-                        ):
-                            act_name = "integration.omnigent.profile_bound_execute"
-                        result_payload = await self._execute_routed_activity(
-                            act_name,
+                        session_result = await self._maybe_execute_omnigent_session(
                             request,
-                            start_to_close_timeout=timedelta(seconds=stc_seconds),
-                            schedule_to_close_timeout=timedelta(seconds=stc_seconds),
-                            heartbeat_timeout=STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT,
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            timeout_seconds=stc_seconds,
                         )
-                        self.final_result = (
-                            AgentRunResult(**result_payload)
-                            if isinstance(result_payload, dict)
-                            else result_payload
-                        )
-                        self.run_status = RunStatus.completed
-                        adapter = None
-                        skip_poll_and_fetch = True
+                        if session_result is not None:
+                            # The durable MoonMind.OmnigentSession supervisor owns
+                            # the session lifecycle; run_status is already set by
+                            # the delegation helper.
+                            self.final_result = session_result
+                            adapter = None
+                            skip_poll_and_fetch = True
+                        else:
+                            act_name = f"integration.{validated_id}.execute"
+                            if (
+                                validated_id == "omnigent"
+                                and request.execution_profile_ref
+                                and workflow.patched(
+                                    OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID
+                                )
+                            ):
+                                act_name = "integration.omnigent.profile_bound_execute"
+                            result_payload = await self._execute_routed_activity(
+                                act_name,
+                                request,
+                                start_to_close_timeout=timedelta(seconds=stc_seconds),
+                                schedule_to_close_timeout=timedelta(seconds=stc_seconds),
+                                heartbeat_timeout=STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT,
+                                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+                            )
+                            self.final_result = (
+                                AgentRunResult(**result_payload)
+                                if isinstance(result_payload, dict)
+                                else result_payload
+                            )
+                            self.run_status = RunStatus.completed
+                            adapter = None
+                            skip_poll_and_fetch = True
                     else:
                         # Start via Temporal activity on the integrations fleet
                         # (determinism-safe: no adapter construction in-workflow).
