@@ -689,28 +689,87 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
   }];
 
   it("polls recoverable readiness gates and stops after recovery", () => {
+    const endpointStartingReason = {
+      code: "bridge_endpoint_not_ready",
+      message: "The configured Omnigent endpoint is starting.",
+      remediationHref: "/settings#omnigent",
+    };
     const startingCatalog = {
       ...readyOmnigentCatalog,
       available: false,
-      gateReasons: [{
-        code: "bridge_endpoint_not_ready",
-        message: "The configured Omnigent endpoint is starting.",
-        remediationHref: "/settings#omnigent",
-      }],
+      executionProfiles: readyOmnigentCatalog.executionProfiles.map((profile) => ({
+        ...profile,
+        available: false,
+        gateReasons: [endpointStartingReason],
+      })),
+      gateReasons: [endpointStartingReason],
     };
 
     expect(omnigentReadinessRefetchInterval(startingCatalog)).toBe(
       OMNIGENT_READINESS_REFRESH_MS,
     );
     expect(omnigentReadinessRefetchInterval(readyOmnigentCatalog)).toBe(false);
+    const endpointUnconfiguredReason = {
+      code: "bridge_endpoint_unavailable",
+      message: "Configure the selected Omnigent endpoint.",
+      remediationHref: "/settings#omnigent",
+    };
     expect(omnigentReadinessRefetchInterval({
       ...startingCatalog,
-      gateReasons: [{
-        code: "bridge_endpoint_unavailable",
-        message: "Configure the selected Omnigent endpoint.",
-        remediationHref: "/settings#omnigent",
-      }],
+      gateReasons: [endpointUnconfiguredReason],
+      executionProfiles: startingCatalog.executionProfiles.map((profile) => ({
+        ...profile,
+        gateReasons: [endpointUnconfiguredReason],
+      })),
     })).toBe(false);
+    expect(omnigentReadinessRefetchInterval({
+      ...startingCatalog,
+      gateReasons: [
+        endpointStartingReason,
+        {
+          code: "rollout_gate_disabled",
+          message: "Enable the Omnigent runtime rollout gate.",
+          remediationHref: "/settings#omnigent",
+        },
+      ],
+      executionProfiles: startingCatalog.executionProfiles.map((profile) => ({
+        ...profile,
+        gateReasons: [
+          endpointStartingReason,
+          {
+            code: "rollout_gate_disabled",
+            message: "Enable the Omnigent runtime rollout gate.",
+            remediationHref: "/settings#omnigent",
+          },
+        ],
+      })),
+    })).toBe(false);
+  });
+
+  it("polls a recoverable selected target when another target is available", () => {
+    const selectedTargetRef = "omnigent-claude-static";
+    const catalog = {
+      ...readyOmnigentCatalog,
+      available: true,
+      executionProfiles: [
+        ...readyOmnigentCatalog.executionProfiles,
+        {
+          ref: selectedTargetRef,
+          displayName: "Claude static",
+          available: false,
+          launchPolicies: [],
+          gateReasons: [{
+            code: "static_host_not_ready",
+            message: "Start and validate the selected static Omnigent host.",
+            remediationHref: "/settings#omnigent",
+          }],
+        },
+      ],
+    };
+
+    expect(omnigentReadinessRefetchInterval(catalog, {
+      executionTargetRef: selectedTargetRef,
+    })).toBe(OMNIGENT_READINESS_REFRESH_MS);
   });
 
   it("automatically clears a transient endpoint startup gate", async () => {
@@ -718,15 +777,23 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       const url = String(input);
       if (url === "/api/omnigent/codex-catalog-readiness") {
         readinessRequests += 1;
+        const endpointStartingReason = {
+          code: "bridge_endpoint_not_ready",
+          message: "The configured Omnigent endpoint is starting.",
+          remediationHref: "/settings#omnigent",
+        };
         const body = readinessRequests === 1
           ? {
               ...readyOmnigentCatalog,
               available: false,
-              gateReasons: [{
-                code: "bridge_endpoint_not_ready",
-                message: "The configured Omnigent endpoint is starting.",
-                remediationHref: "/settings#omnigent",
-              }],
+              executionProfiles: readyOmnigentCatalog.executionProfiles.map(
+                (profile) => ({
+                  ...profile,
+                  available: false,
+                  gateReasons: [endpointStartingReason],
+                }),
+              ),
+              gateReasons: [endpointStartingReason],
             }
           : readyOmnigentCatalog;
         return Promise.resolve({ ok: true, json: async () => body } as Response);

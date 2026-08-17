@@ -663,16 +663,37 @@ const OMNIGENT_RECOVERABLE_GATE_CODES = new Set([
   "static_host_not_ready",
 ]);
 
+interface OmnigentReadinessSelection {
+  executionTargetRef?: string;
+  providerProfileRef?: string;
+}
+
 export function omnigentReadinessRefetchInterval(
   catalog: OmnigentCodexCatalogReadiness | undefined,
+  selection: OmnigentReadinessSelection = {},
 ): number | false {
-  if (!catalog || catalog.available) return false;
+  if (!catalog) return false;
+  const executionTargetRef =
+    selection.executionTargetRef || catalog.defaultExecutionProfileRef;
+  const selectedExecutionProfile = (catalog.executionProfiles || []).find(
+    (profile) => profile.ref === executionTargetRef,
+  );
+  const selectedIneligibleProviderProfile = (
+    catalog.ineligibleProviderProfiles || []
+  ).find((profile) => profile.profileId === selection.providerProfileRef);
+  if (
+    selectedExecutionProfile?.available !== false &&
+    !selectedIneligibleProviderProfile &&
+    catalog.available
+  ) {
+    return false;
+  }
   const reasons = [
-    ...(catalog.gateReasons || []),
-    ...(catalog.executionProfiles || []).flatMap((profile) => profile.gateReasons),
-    ...(catalog.ineligibleProviderProfiles || []).flatMap((profile) => profile.gateReasons),
+    ...(selectedExecutionProfile?.gateReasons || catalog.gateReasons || []),
+    ...(selectedIneligibleProviderProfile?.gateReasons || []),
   ];
-  return reasons.some((reason) => OMNIGENT_RECOVERABLE_GATE_CODES.has(reason.code))
+  return reasons.length > 0 &&
+    reasons.every((reason) => OMNIGENT_RECOVERABLE_GATE_CODES.has(reason.code))
     ? OMNIGENT_READINESS_REFRESH_MS
     : false;
 }
@@ -6275,7 +6296,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     refetchOnWindowFocus: true,
     refetchInterval: (query) =>
       runtime === "omnigent"
-        ? omnigentReadinessRefetchInterval(query.state.data)
+        ? omnigentReadinessRefetchInterval(query.state.data, {
+            executionTargetRef: omnigentExecutionTargetRef,
+            providerProfileRef: providerProfile,
+          })
         : false,
   });
 

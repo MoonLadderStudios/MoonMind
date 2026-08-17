@@ -187,6 +187,14 @@ def _reason(code: str) -> GateReason:
     return GateReason(code=code, message=message, remediationHref=href)
 
 
+def _valid_server_url(value: str) -> bool:
+    try:
+        url = httpx.URL(value)
+    except (TypeError, ValueError):
+        return False
+    return url.scheme in {"http", "https"} and bool(url.host)
+
+
 def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]:
     reasons: list[GateReason] = []
     if not config.enabled:
@@ -196,9 +204,8 @@ def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]
     runtime_gate = build_omnigent_gate()
     if not runtime_gate.enabled:
         reasons.append(_reason("rollout_gate_disabled"))
-    if (
-        config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED
-        and not resolved_server_url()
+    if config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED and not _valid_server_url(
+        resolved_server_url()
     ):
         reasons.append(_reason("bridge_endpoint_unavailable"))
     if os.getenv("MOONMIND_WORKSPACE_RESOLVER_ENABLED", "true").lower() not in {
@@ -246,7 +253,7 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
 
     endpoint = resolved_server_url()
     endpoint_ready = False
-    if endpoint:
+    if _valid_server_url(endpoint):
         try:
             async with httpx.AsyncClient(timeout=2.0) as client:
                 response = await client.get(endpoint.rstrip("/") + "/health")
@@ -369,7 +376,7 @@ async def get_omnigent_codex_catalog_readiness(
     if (
         config.enabled
         and config.host_protocol_mode != HOST_PROTOCOL_MODE_EMBEDDED
-        and resolved_server_url()
+        and _valid_server_url(resolved_server_url())
         and not live_readiness.endpoint_ready
     ):
         deployment_reasons.append(_reason("bridge_endpoint_not_ready"))

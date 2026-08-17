@@ -372,6 +372,7 @@ def test_busy_profile_is_eligible_when_queueing_is_permitted(monkeypatch):
     [
         ({"OMNIGENT_ENABLED": "false"}, "rollout_gate_disabled"),
         ({"OMNIGENT_SERVER_URL": ""}, "bridge_endpoint_unavailable"),
+        ({"OMNIGENT_SERVER_URL": "omnigent:8000"}, "bridge_endpoint_unavailable"),
         ({"MOONMIND_WORKSPACE_RESOLVER_ENABLED": "false"}, "workspace_resolver_unavailable"),
         ({"OMNIGENT_IMAGE_REF": "mutable:latest"}, "immutable_image_unavailable"),
     ],
