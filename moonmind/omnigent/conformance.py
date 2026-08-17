@@ -28,10 +28,12 @@ BROWSER_EVIDENCE_VERSION = "moonmind.omnigent.live-evidence/v1"
 SUPPORTED_FIXTURE_VERSION = "moonmind.omnigent.fixture/v1"
 
 _DIGEST_REF = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
-_SECRET = re.compile(
+# Canonical secret matcher shared by evidence validation and redaction.
+SECRET_PATTERN = re.compile(
     r"(?:ghp_|github_pat_|AIza|ATATT|AKIA|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
     r"(?i:token|password|authorization)\s*[:=]\s*[^\s,;]+)"
 )
+_SECRET = SECRET_PATTERN
 REQUIRED_EVIDENCE_CHANNELS = (
     "logs",
     "temporalHistory",
