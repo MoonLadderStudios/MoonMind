@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -853,24 +853,60 @@ class OmnigentBridgeSessionStore:
                     # only generation-scoped routing/capture fields.  Existing
                     # lifecycle events remain immutable evidence and the next
                     # attempt appends its own attempt-qualified transitions.
-                    prior_attempts = list(
-                        (row.metadata_ or {}).get("unpostedAttemptHistory") or []
-                    )
-                    prior_attempts.append(
-                        {
-                            "status": row.status,
-                            "terminalRefs": dict(row.terminal_refs or {}),
-                            "rawEventsRef": row.raw_events_ref,
-                            "normalizedEventsRef": row.normalized_events_ref,
-                            "initialSnapshotRef": row.initial_snapshot_ref,
-                            "finalSnapshotRef": row.final_snapshot_ref,
-                            "captureManifestRef": row.capture_manifest_ref,
-                            "diagnosticsRef": row.diagnostics_ref,
-                            "externalStateRef": row.external_state_ref,
-                            "recordedAt": datetime.now(tz=UTC).isoformat(),
-                        }
-                    )
                     reset_metadata = dict(row.metadata_ or {})
+                    journal = list(reset_metadata.get(BRIDGE_EVENT_JOURNAL_KEY) or [])
+                    terminal_event = next(
+                        (
+                            entry
+                            for entry in reversed(journal)
+                            if isinstance(entry, dict)
+                            and entry.get("type") == "terminal"
+                        ),
+                        {},
+                    )
+                    terminal_metadata = (
+                        terminal_event.get("metadata")
+                        if isinstance(terminal_event, dict)
+                        else None
+                    )
+                    cleanup_complete = bool(
+                        isinstance(terminal_metadata, dict)
+                        and terminal_metadata.get("cleanupCompleted") is True
+                        and terminal_metadata.get("leaseReleased") is True
+                    )
+                    cleanup_authority = reset_metadata.get(EGRESS_CLEANUP_AUTHORITY_KEY)
+                    prior_attempts = list(
+                        reset_metadata.get("unpostedAttemptHistory") or []
+                    )
+                    prior_attempt = {
+                        "status": row.status,
+                        "terminalRefs": dict(row.terminal_refs or {}),
+                        "rawEventsRef": row.raw_events_ref,
+                        "normalizedEventsRef": row.normalized_events_ref,
+                        "initialSnapshotRef": row.initial_snapshot_ref,
+                        "finalSnapshotRef": row.final_snapshot_ref,
+                        "captureManifestRef": row.capture_manifest_ref,
+                        "diagnosticsRef": row.diagnostics_ref,
+                        "externalStateRef": row.external_state_ref,
+                        "recordedAt": datetime.now(tz=UTC).isoformat(),
+                    }
+                    if cleanup_complete and isinstance(cleanup_authority, dict):
+                        # The terminal lifecycle event is the objective handoff
+                        # proving that the old endpoint no longer exists and its
+                        # provider capacity was released. Preserve only compact
+                        # artifact/identity refs for history, then require the
+                        # replacement host to bind fresh live authority.
+                        prior_attempt["egressCleanupAuthority"] = {
+                            key: cleanup_authority.get(key)
+                            for key in (
+                                "hostLeaseRef",
+                                "effectiveLaunchRef",
+                                "launchEvidenceRef",
+                                "phase",
+                            )
+                        }
+                        reset_metadata.pop(EGRESS_CLEANUP_AUTHORITY_KEY, None)
+                    prior_attempts.append(prior_attempt)
                     reset_metadata["unpostedAttemptHistory"] = prior_attempts[-10:]
                     reset_metadata.pop("initialRetrieval", None)
                     row.metadata_ = reset_metadata

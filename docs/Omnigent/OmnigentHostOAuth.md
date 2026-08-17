@@ -256,7 +256,7 @@ On-demand mode starts a lease-owned container only after profile capacity is acq
 
 The host uses the published image selection and explicit image/tag overrides, runs as UID/GID `1000:1000` from `/home/app`, attaches to the configured MoonMind/Omnigent network, and registers with the selected Omnigent endpoint.
 
-A retry inspects the deterministic container and lease before creating anything. It removes a stopped same-lease container only as part of retry-safe replacement and never removes an unrelated container.
+A retry inspects the deterministic container and lease before creating anything. It removes a stopped same-lease container only as part of retry-safe replacement and never removes an unrelated container. After terminal cleanup is proven, MoonMind retires the prior live cleanup authority before restarting the lease; the replacement must publish a fresh endpoint attestation while an unexplained live identity change still fails closed.
 
 ### 8.3 Product selection authority
 

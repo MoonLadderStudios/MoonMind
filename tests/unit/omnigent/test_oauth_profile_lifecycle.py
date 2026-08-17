@@ -2242,24 +2242,62 @@ async def test_host_preflight_rejects_git_workspace_ownership_mismatch(tmp_path)
 
     await runtime._exec_check("mm-host-lease-1")
 
-    assert [call.args for call in runtime._run.await_args_list] == [
+    assert [
+        (call.args, call.kwargs) for call in runtime._run.await_args_list
+    ] == [
         (
-            "docker",
-            "exec",
-            "mm-host-lease-1",
-            "/opt/moonmind/check-runner-projections.sh",
+            (
+                "docker",
+                "exec",
+                "mm-host-lease-1",
+                "/opt/moonmind/check-runner-projections.sh",
+            ),
+            {"check": False},
         ),
         (
-            "docker",
-            "exec",
-            "mm-host-lease-1",
-            "git",
-            "-C",
-            "/workspaces/run",
-            "status",
-            "--porcelain",
+            (
+                "docker",
+                "exec",
+                "mm-host-lease-1",
+                "git",
+                "-C",
+                "/workspaces/run",
+                "status",
+                "--porcelain",
+            ),
+            {"check": False},
         ),
     ]
+
+
+@pytest.mark.asyncio
+async def test_host_preflight_waits_for_container_exec_readiness(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(
+        side_effect=[
+            (1, "", "container is not running"),
+            (1, "", "container is restarting"),
+            (0, "", ""),
+            (0, "", ""),
+        ]
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime.asyncio.sleep",
+        sleep,
+    )
+
+    await runtime._exec_check("mm-host-lease-1")
+
+    assert runtime._run.await_count == 4
+    assert sleep.await_count == 2
 
 
 def test_github_write_probe_uses_publish_or_skill_side_effect() -> None:

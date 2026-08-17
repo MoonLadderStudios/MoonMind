@@ -108,6 +108,169 @@ def _request(idempotency_key: str = "idem-1", *, with_step: bool = False):
     )
 
 
+def _effective_launch() -> dict:
+    return {
+        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
+        "launchPolicyRef": "codex-static@1",
+        "policyAuthority": {
+            "policyId": "codex-static",
+            "policyVersion": 1,
+            "policyRef": "codex-static@1",
+            "policyDigest": "sha256:" + "1" * 64,
+            "snapshotRef": "policy:sha256:" + "2" * 64,
+            "validation": {"valid": True},
+        },
+        "enforcedEgress": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_stopped_lease_retry_retires_and_rebinds_cleanup_authority(
+    store,
+) -> None:
+    request = _request("stopped-lease-retry")
+    launch = _effective_launch()
+    await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=4,
+        host_binding_ref="binding-1",
+        host_lease_ref="lease-1",
+        omnigent_host_id="host-1",
+        effective_launch_snapshot=launch,
+    )
+    await store.bind_egress_cleanup_authority(
+        request=request,
+        host_lease_ref="lease-1",
+        egress_evidence={
+            "attachmentIdentity": "host-container-1",
+            "endpointIdentity": "endpoint-1",
+            "validationResult": "passed",
+        },
+        launch_evidence_ref="artifact://launch-egress-1",
+    )
+    await store.record_lifecycle_event(
+        request.idempotency_key,
+        event_type="terminal",
+        status="failed",
+        metadata={"cleanupCompleted": True, "leaseReleased": True},
+    )
+
+    reopened = await store.get_or_create(
+        request=request,
+        endpoint_ref="embedded",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+
+    assert reopened.status == STATUS_DECLARED
+    history = reopened.metadata_["unpostedAttemptHistory"][-1]
+    assert history["egressCleanupAuthority"] == {
+        "hostLeaseRef": "lease-1",
+        "effectiveLaunchRef": launch["snapshotRef"],
+        "launchEvidenceRef": "artifact://launch-egress-1",
+        "phase": "attested",
+    }
+
+    await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=4,
+        host_binding_ref="binding-1",
+        host_lease_ref="lease-1",
+        omnigent_host_id="host-2",
+        effective_launch_snapshot=launch,
+    )
+    assert await store.get_egress_cleanup_authority(host_lease_ref="lease-1") is None
+
+    await store.bind_egress_cleanup_authority(
+        request=request,
+        host_lease_ref="lease-1",
+        egress_evidence={
+            "attachmentIdentity": "host-container-2",
+            "endpointIdentity": "endpoint-2",
+            "validationResult": "passed",
+        },
+        launch_evidence_ref="artifact://launch-egress-2",
+    )
+    rebound = await store.get_egress_cleanup_authority(host_lease_ref="lease-1")
+    assert rebound is not None
+    assert rebound["egressEvidence"]["endpointIdentity"] == "endpoint-2"
+
+
+@pytest.mark.asyncio
+async def test_unposted_retry_preserves_live_cleanup_authority_without_cleanup_proof(
+    store,
+) -> None:
+    request = _request("ambiguous-cleanup-retry")
+    launch = _effective_launch()
+    await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=4,
+        host_binding_ref="binding-1",
+        host_lease_ref="lease-1",
+        omnigent_host_id="host-1",
+        effective_launch_snapshot=launch,
+    )
+    await store.bind_egress_cleanup_authority(
+        request=request,
+        host_lease_ref="lease-1",
+        egress_evidence={
+            "attachmentIdentity": "host-container-1",
+            "endpointIdentity": "endpoint-1",
+            "validationResult": "passed",
+        },
+        launch_evidence_ref="artifact://launch-egress-1",
+    )
+    await store.record_lifecycle_event(
+        request.idempotency_key,
+        event_type="terminal",
+        status="failed",
+        metadata={"cleanupCompleted": False, "leaseReleased": False},
+    )
+    await store.get_or_create(
+        request=request,
+        endpoint_ref="embedded",
+        agent_id=None,
+        agent_name=None,
+        target_metadata={},
+    )
+    await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=4,
+        host_binding_ref="binding-1",
+        host_lease_ref="lease-1",
+        omnigent_host_id="host-2",
+        effective_launch_snapshot=launch,
+    )
+
+    authority = await store.get_egress_cleanup_authority(host_lease_ref="lease-1")
+    assert authority is not None
+    assert authority["egressEvidence"]["endpointIdentity"] == "endpoint-1"
+    with pytest.raises(OmnigentIdempotencyError):
+        await store.bind_egress_cleanup_authority(
+            request=request,
+            host_lease_ref="lease-1",
+            egress_evidence={
+                "attachmentIdentity": "host-container-2",
+                "endpointIdentity": "endpoint-2",
+                "validationResult": "passed",
+            },
+            launch_evidence_ref="artifact://launch-egress-2",
+        )
+
+
 @pytest.mark.asyncio
 async def test_egress_cleanup_authority_round_trips_and_terminal_refs_persist(
     store,
