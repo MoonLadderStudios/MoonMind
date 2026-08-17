@@ -3535,6 +3535,18 @@ function schemaAlternativeRequiredGroups(
     .filter((group) => group.length > 0);
 }
 
+function schemaGuidedInputNames(
+  schema: Record<string, unknown> | undefined,
+): Set<string> {
+  const names = schemaRequired(schema);
+  for (const group of schemaAlternativeRequiredGroups(schema)) {
+    for (const name of group) {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
 function capabilityFieldLabel(name: string, schema: Record<string, unknown>): string {
   return String(schema.title || name)
     .trim()
@@ -12161,11 +12173,34 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   step.skillInputContractDigest,
                   selectedSkillDetail?.contractDigest,
                 ) || step.skillInputContractNotice;
-              const visibleSkillSchemaFields = schemaContractHasFields(
+              const selectedSkillHasInputFields = schemaContractHasFields(
                 selectedSkillDetail,
-              )
-                ? Object.entries(schemaProperties(selectedSkillDetail?.inputSchema))
+              );
+              const availableSkillSchemaFields = selectedSkillHasInputFields
+                ? Object.entries(
+                    schemaProperties(selectedSkillDetail?.inputSchema),
+                  ).filter(([name]) => {
+                    const uiSchema = capabilityFieldUiSchema(
+                      selectedSkillDetail?.uiSchema,
+                      name,
+                    );
+                    return capabilityFieldVisible(
+                      uiSchema,
+                      step.presetInputValues,
+                      selectedSkillDetail?.defaults,
+                    );
+                  })
                 : [];
+              const guidedSkillInputNames = schemaGuidedInputNames(
+                selectedSkillDetail?.inputSchema,
+              );
+              const visibleSkillSchemaFields = showAdvancedStepOptions
+                ? availableSkillSchemaFields
+                : availableSkillSchemaFields.filter(([name]) =>
+                    guidedSkillInputNames.has(name),
+                  );
+              const hiddenOptionalSkillInputCount =
+                availableSkillSchemaFields.length - visibleSkillSchemaFields.length;
               const toolSearchText = toolSearchTextByStep[step.localId] || "";
               const trustedToolDefinitions = trustedToolsQuery.data || [];
               const toolChoiceGroups = groupedToolChoices(
@@ -12645,7 +12680,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           </span>
                         )}
                       </div>
-                      {selectedSkillDetail && visibleSkillSchemaFields.length === 0 ? (
+                      {selectedSkillDetail && !selectedSkillHasInputFields ? (
                         <div
                           className="notice small"
                           data-testid={`skill-schema-fallback-${index}`}
@@ -12659,6 +12694,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                             This Skill does not publish structured input fields.
                           </span>
                         </div>
+                      ) : null}
+
+                      {selectedSkillHasInputFields &&
+                      !showAdvancedStepOptions &&
+                      hiddenOptionalSkillInputCount > 0 ? (
+                        <p
+                          className="small"
+                          data-testid={`skill-optional-inputs-notice-${index}`}
+                        >
+                          Optional Skill inputs are hidden. Advanced mode shows
+                          customization fields.
+                        </p>
                       ) : null}
 
                       {showSkillArgsField ? (
@@ -13522,9 +13569,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             role="note"
           >
             <p className="small">
-              Adds skill args and required capabilities to each step. Optional
-              worker routing overrides; runtime, publish mode, skills, and
-              presets already add the common capabilities automatically.
+              Shows optional Skill inputs, skill args, required capabilities,
+              and worker routing overrides. Runtime, publish mode, skills, and
+              presets already add common capabilities automatically.
             </p>
           </div>
         ) : null}

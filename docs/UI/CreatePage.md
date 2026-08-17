@@ -166,6 +166,13 @@ The frontend renders fields by reading `inputSchema`, optional `uiSchema`, and e
 
 The Create page must not hard-code a form for each preset or skill. New presets should be able to add new fields by updating their manifest, provided the fields use standard schema constructs or already-registered widgets.
 
+For Skill steps, guided mode shows fields named by the root `required` contract
+and every field participating in a root `oneOf` / `anyOf` required alternative,
+so the user can satisfy the contract without opening advanced controls. Other
+Skill properties remain available only in Advanced mode. This disclosure rule is
+derived from the selected Skill schema and must not use Skill-name allowlists or
+capability-specific frontend layouts.
+
 ## UI Schema and Widget Hints
 
 Validation belongs in `inputSchema`. Presentation belongs in `uiSchema` or namespaced schema hints.
