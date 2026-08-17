@@ -161,6 +161,11 @@ _REASONS: dict[str, tuple[str, str]] = {
     "bridge_disabled": ("Enable the Omnigent bridge in deployment settings.", "/settings#omnigent"),
     "bridge_conformance_gated": ("Complete Omnigent bridge conformance checks.", "/settings#omnigent"),
     "bridge_endpoint_unavailable": ("Configure the selected Omnigent endpoint.", "/settings#omnigent"),
+    "bridge_endpoint_not_ready": (
+        "The configured Omnigent endpoint is starting or temporarily unavailable. "
+        "MoonMind will retry automatically.",
+        "/settings#omnigent",
+    ),
     "rollout_gate_disabled": ("Enable the Omnigent runtime rollout gate.", "/settings#omnigent"),
     "host_auth_unavailable": ("Configure or rotate Omnigent bridge credentials.", "/settings#omnigent"),
     "no_eligible_codex_oauth_profile": ("Connect and validate a compatible OAuth Provider Profile for the selected execution target.", "/settings#provider-profiles"),
@@ -367,7 +372,7 @@ async def get_omnigent_codex_catalog_readiness(
         and resolved_server_url()
         and not live_readiness.endpoint_ready
     ):
-        deployment_reasons.append(_reason("bridge_endpoint_unavailable"))
+        deployment_reasons.append(_reason("bridge_endpoint_not_ready"))
     auth: dict[str, Any] | None = None
     if config.enabled and config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED:
         try:

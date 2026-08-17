@@ -28,7 +28,9 @@ import {
   CAPABILITY_CATALOG,
   capabilityChipProvenanceLabel,
   LIQUID_GL_OPTIONS,
+  OMNIGENT_READINESS_REFRESH_MS,
   buildEditParametersPatch,
+  omnigentReadinessRefetchInterval,
   preferredTemplate,
   previewModelTier,
   deriveExplicitWorkflowTitle,
@@ -685,6 +687,79 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       validationResult: { ready: true },
     }],
   }];
+
+  it("polls recoverable readiness gates and stops after recovery", () => {
+    const startingCatalog = {
+      ...readyOmnigentCatalog,
+      available: false,
+      gateReasons: [{
+        code: "bridge_endpoint_not_ready",
+        message: "The configured Omnigent endpoint is starting.",
+        remediationHref: "/settings#omnigent",
+      }],
+    };
+
+    expect(omnigentReadinessRefetchInterval(startingCatalog)).toBe(
+      OMNIGENT_READINESS_REFRESH_MS,
+    );
+    expect(omnigentReadinessRefetchInterval(readyOmnigentCatalog)).toBe(false);
+    expect(omnigentReadinessRefetchInterval({
+      ...startingCatalog,
+      gateReasons: [{
+        code: "bridge_endpoint_unavailable",
+        message: "Configure the selected Omnigent endpoint.",
+        remediationHref: "/settings#omnigent",
+      }],
+    })).toBe(false);
+  });
+
+  it("automatically clears a transient endpoint startup gate", async () => {
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        readinessRequests += 1;
+        const body = readinessRequests === 1
+          ? {
+              ...readyOmnigentCatalog,
+              available: false,
+              gateReasons: [{
+                code: "bridge_endpoint_not_ready",
+                message: "The configured Omnigent endpoint is starting.",
+                remediationHref: "/settings#omnigent",
+              }],
+            }
+          : readyOmnigentCatalog;
+        return Promise.resolve({ ok: true, json: async () => body } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({ ok: true, json: async () => [{ profile_id: "oauth-1", account_label: "Codex OAuth", provider_id: "openai" }] } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => readyAgentProfiles } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+
+    expect((await screen.findAllByText(/endpoint is starting/)).length).toBeGreaterThan(0);
+    await waitFor(
+      () => expect(readinessRequests).toBeGreaterThanOrEqual(2),
+      { timeout: OMNIGENT_READINESS_REFRESH_MS + 1_500 },
+    );
+    await waitFor(() => {
+      expect(screen.queryAllByText(/endpoint is starting/)).toHaveLength(0);
+      expect(
+        screen.queryByText(/Codex via Omnigent cannot be submitted/),
+      ).toBeNull();
+    });
+  });
 
   it("keeps an unready runtime selectable and explicitly revalidates stale readiness", async () => {
     renderWorkflowStartPage(mockPayload);

@@ -615,7 +615,7 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
                     {OMNIGENT_EGRESS_PROFILE.ref}
                 ),
             ),
-            "bridge_endpoint_unavailable",
+            "bridge_endpoint_not_ready",
         ),
         (
             catalog.LiveDeploymentReadiness(endpoint_ready=True, backend_ready=True),

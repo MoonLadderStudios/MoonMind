@@ -651,6 +651,32 @@ interface OmnigentCodexCatalogReadiness {
   };
 }
 
+export const OMNIGENT_READINESS_REFRESH_MS = 2_000;
+
+const OMNIGENT_RECOVERABLE_GATE_CODES = new Set([
+  "bridge_conformance_gated",
+  "bridge_endpoint_not_ready",
+  "immutable_image_unavailable",
+  "no_eligible_codex_oauth_profile",
+  "on_demand_backend_unavailable",
+  "profile_capacity_unavailable",
+  "static_host_not_ready",
+]);
+
+export function omnigentReadinessRefetchInterval(
+  catalog: OmnigentCodexCatalogReadiness | undefined,
+): number | false {
+  if (!catalog || catalog.available) return false;
+  const reasons = [
+    ...(catalog.gateReasons || []),
+    ...(catalog.executionProfiles || []).flatMap((profile) => profile.gateReasons),
+    ...(catalog.ineligibleProviderProfiles || []).flatMap((profile) => profile.gateReasons),
+  ];
+  return reasons.some((reason) => OMNIGENT_RECOVERABLE_GATE_CODES.has(reason.code))
+    ? OMNIGENT_READINESS_REFRESH_MS
+    : false;
+}
+
 interface ProviderModelEffortTier {
   label?: string | null;
   model?: string | null;
@@ -6247,6 +6273,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
     staleTime: 0,
     refetchOnWindowFocus: true,
+    refetchInterval: (query) =>
+      runtime === "omnigent"
+        ? omnigentReadinessRefetchInterval(query.state.data)
+        : false,
   });
 
   const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
