@@ -11,7 +11,13 @@ from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, Worker, UnsandboxedWorkflowRunner
 from temporalio.client import WorkflowFailureError
 from temporalio.service import RPCError
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult, AgentRunStatus, ProfileSelector
+from moonmind.schemas.agent_runtime_models import (
+    MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+    AgentExecutionRequest,
+    AgentRunResult,
+    AgentRunStatus,
+    ProfileSelector,
+)
 from moonmind.schemas.workload_models import WorkloadRequest
 from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
 from moonmind.workloads.registry import RunnerProfileRegistry
@@ -288,6 +294,23 @@ async def mock_agent_runtime_status(request: dict) -> dict:
             "status": status,
             "metadata": metadata,
         }
+    if _managed_status_mode == "process_lost_then_completed":
+        status = "failed" if len(_managed_launch_requests) == 1 else "completed"
+        return {
+            "runId": request.get("runId")
+            or request.get("run_id")
+            or "test-managed-run",
+            "agentKind": "managed",
+            "agentId": request.get("agentId")
+            or request.get("agent_id")
+            or "claude_code",
+            "status": status,
+            "metadata": {
+                "runtimeId": "claude_code",
+                "finishedAt": datetime.now(tz=UTC).isoformat(),
+                "exitCode": 0 if status == "completed" else None,
+            },
+        }
     return {
         "status": "running",
         "container_id": request.get("container_id", "test-container-001"),
@@ -333,6 +356,28 @@ async def mock_agent_runtime_fetch_result(request: dict) -> dict:
                         "after a profile cooldown."
                     ),
                 },
+            },
+        }
+    if _managed_status_mode == "process_lost_then_completed":
+        if _managed_fetch_result_count == 1:
+            return {
+                "summary": "Managed worker restarted while the process was running.",
+                "failureClass": "system_error",
+                "providerErrorCode": (
+                    MANAGED_PROCESS_LOST_DURING_RECONCILIATION
+                ),
+                "metadata": {
+                    "normalizedStatus": "failed",
+                    "fetchRunId": request.get("runId")
+                    or request.get("run_id"),
+                },
+            }
+        return {
+            "summary": "Replacement process recovered the durable workspace.",
+            "metadata": {
+                "normalizedStatus": "completed",
+                "fetchRunId": request.get("runId")
+                or request.get("run_id"),
             },
         }
     return {
@@ -1934,6 +1979,94 @@ async def test_agent_run_reconciles_managed_completion_during_no_progress_grace(
         )
     finally:
         _managed_status_mode = "default"
+
+
+@pytest.mark.asyncio
+async def test_agent_run_relaunches_lost_managed_process_in_same_workspace():
+    global _managed_status_mode, _managed_status_poll_count, _managed_fetch_result_count
+    _managed_launch_requests.clear()
+    _managed_status_mode = "process_lost_then_completed"
+    _managed_status_poll_count = 0
+    _managed_fetch_result_count = 0
+
+    try:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            async with (
+                Worker(
+                    env.client,
+                    task_queue="agent-run-task-queue",
+                    workflows=[MoonMindAgentRun, MockProviderProfileManager],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.artifacts",
+                    activities=[
+                        mock_provider_profile_list,
+                        mock_provider_profile_ensure_manager,
+                        mock_provider_profile_reset_manager,
+                        mock_provider_profile_manager_state,
+                    ],
+                ),
+                Worker(
+                    env.client,
+                    task_queue="mm.activity.agent_runtime",
+                    activities=[
+                        mock_agent_runtime_build_launch_context,
+                        mock_agent_runtime_launch,
+                        mock_agent_runtime_status,
+                        mock_agent_runtime_fetch_result,
+                        mock_publish_artifacts,
+                        mock_cancel,
+                    ],
+                ),
+            ):
+                manager_id = "provider-profile-manager:claude_code"
+                await env.client.start_workflow(
+                    MockProviderProfileManager.run,
+                    {"runtime_id": "claude_code"},
+                    id=manager_id,
+                    task_queue="agent-run-task-queue",
+                )
+
+                handle = await env.client.start_workflow(
+                    MoonMindAgentRun.run,
+                    AgentExecutionRequest(
+                        agent_kind="managed",
+                        agent_id="claude_code",
+                        execution_profile_ref="default-managed",
+                        instruction_ref="Implement the requested change.",
+                        correlation_id="managed-process-loss:corr",
+                        idempotency_key="managed-process-loss:idem",
+                        parameters={"model": "test-model"},
+                    ),
+                    id="test-agent-managed-process-loss-recovery",
+                    task_queue="agent-run-task-queue",
+                )
+                result = await asyncio.wait_for(handle.result(), timeout=15)
+
+        assert result.failure_class is None
+        assert result.summary == (
+            "Replacement process recovered the durable workspace."
+        )
+        assert result.metadata["managedProcessLossRecoveryOutcome"] == "recovered"
+        assert result.metadata["managedProcessLossRecoveryCount"] == 1
+        assert len(_managed_launch_requests) == 2
+        first_launch = _managed_launch_requests[0]
+        first = first_launch["request"]
+        replacement = _managed_launch_requests[1]["request"]
+        assert replacement["executionProfileRef"] == first["executionProfileRef"]
+        assert replacement["parameters"] == first["parameters"]
+        assert replacement["idempotencyKey"] == first["idempotencyKey"]
+        assert replacement["workspaceSpec"]["workspaceLocator"] == {
+            "kind": "managed_runtime",
+            "runtimeId": "claude_code",
+            "agentRunId": first_launch["run_id"],
+            "relativePath": "repo",
+        }
+    finally:
+        _managed_status_mode = "default"
+
 
 @pytest.mark.asyncio
 async def test_agent_run_reconciles_managed_quota_after_no_progress_cancel(

@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 CompletionCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 from moonmind.schemas.agent_runtime_models import (
+    MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     ManagedRunRecord,
 )
 
@@ -740,6 +741,9 @@ class ManagedRunSupervisor:
                     "failed",
                     finished_at=datetime.now(tz=UTC),
                     failure_class="system_error",
+                    provider_error_code=(
+                        MANAGED_PROCESS_LOST_DURING_RECONCILIATION
+                    ),
                     error_message=(
                         f"Process {record.pid} not found during reconciliation"
                     ),

@@ -15,6 +15,7 @@ with workflow.unsafe.imports_passed_through():
 
     from moonmind.schemas.agent_runtime_models import (
         AUTO_RUNTIME_SENTINEL,
+        MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
         AgentExecutionRequest,
         AgentRunHandle,
         AgentRunResult,
@@ -89,6 +90,9 @@ TERMINAL_CONTRACT_CHECKPOINT_ON_FAILURE_PATCH_ID = (
 TERMINAL_CONTRACT_RUNTIME_FAILURE_AUTHORITY_PATCH_ID = (
     "agent-run-terminal-contract-runtime-failure-authority-v1"
 )
+MANAGED_PROCESS_LOSS_RECOVERY_PATCH_ID = (
+    "agent-run-managed-process-loss-recovery-v1"
+)
 CODEX_TURN_RUNTIME_SELECTION_PATCH_ID = (
     "agent-run-codex-turn-runtime-selection-v1"
 )
@@ -101,6 +105,7 @@ PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID = (
     "agent-run-parent-execution-artifact-handoff-v1"
 )
 _MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
+_MAX_MANAGED_PROCESS_LOSS_RECOVERIES = 1
 _RETRYABLE_TERMINAL_CONTRACT_FAILURE_CODES = frozenset(
     {
         "INCOMPLETE_TERMINAL_CONTRACT",
@@ -128,6 +133,17 @@ def _terminal_contract_fresh_process_instruction(missing: list[str]) -> str:
         + " The prior one-shot process exited, so continue in this replacement "
         "process using the existing authoritative workspace. Finish all work in "
         "this process; do not schedule a wake-up or other deferred callback."
+    )
+
+
+def _managed_process_loss_recovery_instruction() -> str:
+    return (
+        "The prior managed process was lost when its worker restarted before "
+        "MoonMind received authoritative terminal evidence. Continue in this "
+        "replacement process using the existing authoritative workspace. "
+        "Inspect the workspace and remotely visible side effects first, and "
+        "reuse completed work instead of duplicating it. Finish all remaining "
+        "work in this process; do not schedule a wake-up or deferred callback."
     )
 
 # Map canonical AgentRunState literals to workflow-usable status constants.
@@ -549,6 +565,7 @@ class MoonMindAgentRun:
         self._provider_cooldown_retry_counts: dict[str, int] = {}
         self._terminal_result_payload_compacted_for_history: bool = False
         self._terminal_contract_fresh_process_history: list[dict[str, Any]] = []
+        self._managed_process_loss_recovery_history: list[dict[str, Any]] = []
         self.runtime_selection_updated_event = asyncio.Event()
         self._pending_runtime_selection_update: dict[str, Any] | None = None
         self._managed_session_detached_for_runtime_selection: bool = False
@@ -2403,6 +2420,101 @@ class MoonMindAgentRun:
             }
         )
         return evaluated.model_copy(update={"metadata": metadata})
+
+    def _managed_process_loss_recovery_request(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        result: AgentRunResult,
+    ) -> AgentExecutionRequest | None:
+        """Build one bounded replacement after startup reconciliation loses a PID."""
+
+        if (
+            request.agent_kind != "managed"
+            or request.managed_session is not None
+            or not self.run_id
+            or result.failure_class != "system_error"
+            or result.provider_error_code
+            != MANAGED_PROCESS_LOST_DURING_RECONCILIATION
+            or len(self._managed_process_loss_recovery_history)
+            >= _MAX_MANAGED_PROCESS_LOSS_RECOVERIES
+        ):
+            return None
+
+        runtime_id = self._managed_runtime_id(request.agent_id)
+        capabilities = resolve_runtime_execution_capabilities(runtime_id)
+        if capabilities.workspace_authority != "managed_runtime":
+            return None
+
+        attempt = len(self._managed_process_loss_recovery_history) + 1
+        self._managed_process_loss_recovery_history.append(
+            {
+                "attempt": attempt,
+                "mode": "fresh_process",
+                "reason": "process_lost_during_reconciliation",
+                "outcome": "requested",
+            }
+        )
+        workspace_spec = dict(request.workspace_spec or {})
+        workspace_spec["workspaceLocator"] = {
+            "kind": "managed_runtime",
+            "runtimeId": capabilities.runtime_id,
+            "agentRunId": self.run_id,
+            "relativePath": "repo",
+        }
+        instruction = str(request.instruction_ref or "").rstrip()
+        recovery_instruction = _managed_process_loss_recovery_instruction()
+        if instruction:
+            instruction = f"{instruction}\n\n{recovery_instruction}"
+        else:
+            instruction = recovery_instruction
+        return request.model_copy(
+            update={
+                "instruction_ref": instruction,
+                "workspace_spec": workspace_spec,
+            }
+        )
+
+    def _with_managed_process_loss_recovery_history(
+        self,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        if not self._managed_process_loss_recovery_history:
+            return result
+
+        history = [
+            dict(item) for item in self._managed_process_loss_recovery_history
+        ]
+        if history[-1]["outcome"] == "requested":
+            if result.failure_class is None:
+                history[-1]["outcome"] = "recovered"
+                self._managed_process_loss_recovery_history[-1]["outcome"] = (
+                    "recovered"
+                )
+            elif (
+                result.provider_error_code
+                == MANAGED_PROCESS_LOST_DURING_RECONCILIATION
+            ):
+                history[-1]["outcome"] = "process_lost_again"
+            else:
+                history[-1]["outcome"] = "replacement_failed"
+
+        recovery_outcome = history[-1]["outcome"]
+        if (
+            recovery_outcome == "process_lost_again"
+            and len(history) >= _MAX_MANAGED_PROCESS_LOSS_RECOVERIES
+        ):
+            recovery_outcome = "exhausted"
+
+        metadata = dict(result.metadata or {})
+        metadata.update(
+            {
+                "managedProcessLossRecoveryCount": len(history),
+                "managedProcessLossRecoveryHistory": history,
+                "managedProcessLossRecoveryOutcome": recovery_outcome,
+            }
+        )
+        return result.model_copy(update={"metadata": metadata})
 
     def _fresh_process_terminal_contract_request(
         self,
@@ -5352,6 +5464,40 @@ class MoonMindAgentRun:
                                 )
 
                 if self.final_result is not None:
+                    if workflow.patched(
+                        MANAGED_PROCESS_LOSS_RECOVERY_PATCH_ID
+                    ):
+                        self.final_result = (
+                            self._with_managed_process_loss_recovery_history(
+                                self.final_result
+                            )
+                        )
+                        recovery_request = (
+                            self._managed_process_loss_recovery_request(
+                                request=request,
+                                result=self.final_result,
+                            )
+                        )
+                        if recovery_request is not None:
+                            active_profile_id = str(
+                                request.execution_profile_ref
+                                or self._assigned_profile_id
+                                or ""
+                            ).strip()
+                            if manager_handle and active_profile_id:
+                                await manager_handle.signal(
+                                    "release_slot",
+                                    self._release_slot_payload(
+                                        profile_id=active_profile_id,
+                                        request=request,
+                                    ),
+                                )
+                            request = recovery_request
+                            self.completion_event.clear()
+                            self.final_result = None
+                            self._assigned_profile_id = None
+                            self.run_status = RunStatus.launching
+                            continue
                     self.final_result = await self._evaluate_terminal_contract(
                         request=request,
                         result=self.final_result,

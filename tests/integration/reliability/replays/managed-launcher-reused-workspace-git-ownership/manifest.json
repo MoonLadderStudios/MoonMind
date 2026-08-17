@@ -1,0 +1,11 @@
+{
+  "failureShapeId": "managed-launcher-reused-workspace-git-ownership",
+  "incidentWorkflowId": "mm:921a8a3b-d2eb-5e00-99dc-c01a676783b9",
+  "runtime": "claude_code",
+  "repository": "MoonLadderStudios/MoonMind",
+  "repositoryOwnerUid": 1000,
+  "launcherUid": 0,
+  "targetBranch": "github-issue-implement-moonladderstudios-97b98c29",
+  "preparedCommitSha": "49ed3d9af7e54e047a47bc9a0e3be8b8c33284d0",
+  "observedFailure": "fatal: detected dubious ownership in repository"
+}

@@ -68,6 +68,7 @@ from moonmind.schemas.managed_session_models import (
     SendCodexManagedSessionTurnRequest,
 )
 from moonmind.schemas.agent_runtime_models import (
+    MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     AgentExecutionRequest,
     AgentRunResult,
     AgentRuntimeStepExecutionLaunch,
@@ -103,6 +104,7 @@ from moonmind.workflows.temporal.activity_catalog import build_default_activity_
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexManagedSessionRuntime,
 )
+from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
@@ -189,6 +191,128 @@ pytestmark = [
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+async def test_managed_launcher_reuses_runtime_owned_workspace_with_exact_git_trust(
+    tmp_path: Path,
+) -> None:
+    replay_id = "managed-launcher-reused-workspace-git-ownership"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    run_id = "reused-workspace"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(run_store)
+    repo_path = (tmp_path / "workspaces" / run_id / "repo").resolve()
+    repo_path.mkdir(parents=True)
+    commands: list[tuple[object, ...]] = []
+    safe_prefix = (
+        "git",
+        "-c",
+        f"safe.directory={repo_path}",
+        "-C",
+        str(repo_path),
+    )
+
+    async def checked_command(*command: object, **_kwargs: object) -> None:
+        commands.append(command)
+        if command[: len(safe_prefix)] != safe_prefix:
+            raise RuntimeError(manifest["observedFailure"])
+
+    async def command_result(
+        *command: object, **_kwargs: object
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[: len(safe_prefix)] != safe_prefix:
+            raise RuntimeError(manifest["observedFailure"])
+        return 0, manifest["preparedCommitSha"], ""
+
+    launcher._run_checked_command = checked_command  # type: ignore[method-assign]
+    launcher._run_command = command_result  # type: ignore[method-assign]
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId=manifest["runtime"],
+        executionProfileRef="claude_anthropic_oauth",
+        correlationId="replay-correlation",
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:step-6",
+        workspaceSpec={
+            "repository": manifest["repository"],
+            "targetBranch": manifest["targetBranch"],
+            "resolvedRepositoryTarget": {
+                "remoteTipExpectation": {"kind": "read_only"},
+                "preparedRevision": {
+                    "kind": "git_commit",
+                    "commitSha": manifest["preparedCommitSha"],
+                },
+            },
+        },
+    )
+
+    resolved = await launcher._prepare_workspace_path(
+        run_id=run_id,
+        request=request,
+        workspace_path=None,
+    )
+
+    assert expected["safeDirectoryScope"] == "exact_reused_workspace"
+    assert expected["checkoutMode"] == "pinned_branch_reset"
+    assert expected["workspaceReused"] is True
+    assert resolved == str(repo_path)
+    assert all(command[: len(safe_prefix)] == safe_prefix for command in commands)
+
+
+async def test_lost_managed_process_retries_once_over_authoritative_workspace() -> None:
+    replay_id = "managed-process-lost-during-reconciliation"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    agent_run = MoonMindAgentRun()
+    agent_run.run_id = manifest["agentRunId"]
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId=manifest["runtime"],
+        executionProfileRef=manifest["executionProfileRef"],
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:implement",
+        instructionRef="Implement the selected issue and publish the result.",
+        workspaceSpec={"repository": "MoonLadderStudios/MoonMind"},
+    )
+    failure = AgentRunResult(
+        summary=f"Process {manifest['lostPid']} not found during reconciliation",
+        failureClass=manifest["failureClass"],
+        providerErrorCode=MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+    )
+
+    recovery = agent_run._managed_process_loss_recovery_request(
+        request=request,
+        result=failure,
+    )
+
+    assert recovery is not None
+    assert expected["recoveryMode"] == "fresh_process"
+    assert expected["maxRecoveries"] == 1
+    assert recovery.workspace_spec["workspaceLocator"]["kind"] == expected[
+        "workspaceKind"
+    ]
+    assert (
+        recovery.execution_profile_ref == request.execution_profile_ref
+    ) is expected["sameExecutionProfile"]
+    assert (
+        recovery.idempotency_key == request.idempotency_key
+    ) is expected["sameIdempotencyKey"]
+    assert agent_run._managed_process_loss_recovery_history == [
+        {
+            "attempt": 1,
+            "mode": expected["recoveryMode"],
+            "reason": expected["recoveryReason"],
+            "outcome": "requested",
+        }
+    ]
+    assert (
+        agent_run._managed_process_loss_recovery_request(
+            request=recovery,
+            result=failure,
+        )
+        is None
+    )
 
 
 async def test_omnigent_server_image_authority_drift_reconciles_before_launch(

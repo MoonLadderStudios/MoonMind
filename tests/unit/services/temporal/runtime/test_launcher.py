@@ -131,6 +131,66 @@ async def test_prepare_workspace_clones_candidate_and_checks_out_pinned_revision
 
 
 @pytest.mark.asyncio
+async def test_prepare_workspace_trusts_reused_runtime_owned_repository(tmp_path):
+    store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(store)
+    run_id = "reused-workspace"
+    repo_path = (tmp_path / "workspaces" / run_id / "repo").resolve()
+    repo_path.mkdir(parents=True)
+    head_sha = "49ed3d9af7e54e047a47bc9a0e3be8b8c33284d0"
+    checked_calls: list[tuple[object, ...]] = []
+    run_calls: list[tuple[object, ...]] = []
+
+    async def fake_checked(*args, **_kwargs):
+        checked_calls.append(args)
+
+    async def fake_run(*args, **_kwargs):
+        run_calls.append(args)
+        return 0, f"{head_sha}\n", ""
+
+    launcher._run_checked_command = fake_checked
+    launcher._run_command = fake_run
+    request = _make_request(
+        workspace_spec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetBranch": "github-issue-implement-moonladderstudios-97b98c29",
+            "resolvedRepositoryTarget": {
+                "remoteTipExpectation": {"kind": "read_only"},
+                "preparedRevision": {
+                    "kind": "git_commit",
+                    "commitSha": head_sha,
+                },
+            },
+        }
+    )
+
+    resolved = await launcher._prepare_workspace_path(
+        run_id=run_id,
+        request=request,
+        workspace_path=None,
+    )
+
+    safe_prefix = (
+        "git",
+        "-c",
+        f"safe.directory={repo_path}",
+        "-C",
+        str(repo_path),
+    )
+    assert checked_calls == [
+        (
+            *safe_prefix,
+            "checkout",
+            "-B",
+            "github-issue-implement-moonladderstudios-97b98c29",
+            head_sha,
+        )
+    ]
+    assert run_calls == [(*safe_prefix, "rev-parse", "HEAD")]
+    assert resolved == str(repo_path)
+
+
+@pytest.mark.asyncio
 async def test_repository_readiness_blocks_before_workspace_mutation(tmp_path):
     store = ManagedRunStore(tmp_path / "managed_runs")
     readiness = AsyncMock(
@@ -2213,6 +2273,16 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
         async def communicate(self) -> tuple[bytes, bytes]:
             return self._stdout_bytes, self._stderr_bytes
 
+    expected_workspace = str(
+        (tmp_path / "workspaces" / "workspace-run-1" / "repo").resolve()
+    )
+    safe_prefix = (
+        "git",
+        "-c",
+        f"safe.directory={expected_workspace}",
+        "-C",
+        expected_workspace,
+    )
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     async def _fake_create_subprocess_exec(*args, **kwargs):
@@ -2221,7 +2291,7 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
             repo_path = Path(str(args[-1]))
             repo_path.mkdir(parents=True, exist_ok=True)
             return _FakeProcess(pid=1001)
-        if args[:2] == ("git", "-C") and args[3:] == (
+        if args[: len(safe_prefix)] == safe_prefix and args[len(safe_prefix):] == (
             "checkout",
             "feature/test",
         ):
@@ -2233,7 +2303,7 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
                     b"file(s) known to git"
                 ),
             )
-        if args[:2] == ("git", "-C") and args[3:] == (
+        if args[: len(safe_prefix)] == safe_prefix and args[len(safe_prefix):] == (
             "checkout",
             "-b",
             "feature/test",
@@ -2255,9 +2325,6 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
     )
     await process.wait()
 
-    expected_workspace = str(
-        (tmp_path / "workspaces" / "workspace-run-1" / "repo").resolve()
-    )
     assert record.workspace_path == expected_workspace
     assert record.live_stream_capable is True
     assert process.pid == 2001
@@ -2271,8 +2338,8 @@ async def test_launch_prepares_workspace_from_repository_spec(tmp_path, monkeypa
     checkout_call = next(
         args
         for args, _ in calls
-        if args[:2] == ("git", "-C")
-        and args[3:] == ("checkout", "-b", "feature/test")
+        if args[: len(safe_prefix)] == safe_prefix
+        and args[len(safe_prefix):] == ("checkout", "-b", "feature/test")
     )
     assert checkout_call[-2:] == ("-b", "feature/test")
 
@@ -2444,6 +2511,21 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
         async def communicate(self) -> tuple[bytes, bytes]:
             return self._stdout_bytes, self._stderr_bytes
 
+    expected_workspace = str(
+        (
+            tmp_path
+            / "workspaces"
+            / "workspace-run-existing-branch"
+            / "repo"
+        ).resolve()
+    )
+    safe_prefix = (
+        "git",
+        "-c",
+        f"safe.directory={expected_workspace}",
+        "-C",
+        expected_workspace,
+    )
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     async def _fake_create_subprocess_exec(*args, **kwargs):
@@ -2452,7 +2534,7 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
             repo_path = Path(str(args[-1]))
             repo_path.mkdir(parents=True, exist_ok=True)
             return _FakeProcess(pid=1001)
-        if args[:2] == ("git", "-C") and args[3:] == (
+        if args[: len(safe_prefix)] == safe_prefix and args[len(safe_prefix):] == (
             "checkout",
             "main",
         ):
@@ -2476,7 +2558,8 @@ async def test_launch_reuses_existing_new_branch_when_present(tmp_path, monkeypa
     checkout_call = next(
         args
         for args, _ in calls
-        if args[:2] == ("git", "-C") and args[3:] == ("checkout", "main")
+        if args[: len(safe_prefix)] == safe_prefix
+        and args[len(safe_prefix):] == ("checkout", "main")
     )
     assert checkout_call[-1] == "main"
     assert "-b" not in checkout_call

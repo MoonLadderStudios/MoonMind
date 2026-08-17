@@ -1036,18 +1036,33 @@ class ManagedRuntimeLauncher:
 
         if branch:
             checkout_ok = await self._run_git_command(
-                ["-C", str(run_workspace), "checkout", branch],
+                self._workspace_git_command(
+                    run_workspace,
+                    "checkout",
+                    branch,
+                )[1:],
                 allow_failure=True,
                 env=command_env,
             )
             if not checkout_ok:
                 await self._run_git_command(
-                    ["-C", str(run_workspace), "fetch", "origin", branch],
+                    self._workspace_git_command(
+                        run_workspace,
+                        "fetch",
+                        "origin",
+                        branch,
+                    )[1:],
                     allow_failure=True,
                     env=command_env,
                 )
                 await self._run_git_command(
-                    ["-C", str(run_workspace), "checkout", "-B", branch, f"origin/{branch}"],
+                    self._workspace_git_command(
+                        run_workspace,
+                        "checkout",
+                        "-B",
+                        branch,
+                        f"origin/{branch}",
+                    )[1:],
                     allow_failure=True,
                     env=command_env,
                 )
@@ -1128,6 +1143,23 @@ class ManagedRuntimeLauncher:
         raise RuntimeError(
             f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
         )
+
+    @staticmethod
+    def _workspace_git_command(
+        workspace_path: Path,
+        *args: str,
+    ) -> list[str]:
+        """Build a Git command that trusts only the resolved owned workspace."""
+
+        resolved_workspace = str(workspace_path.resolve())
+        return [
+            "git",
+            "-c",
+            f"safe.directory={resolved_workspace}",
+            "-C",
+            resolved_workspace,
+            *args,
+        ]
 
     async def _ensure_claude_workspace_trust_config(
         self,
@@ -1369,12 +1401,13 @@ class ManagedRuntimeLauncher:
 
         new_branch = str(workspace_spec.get("targetBranch") or "").strip()
         if new_branch:
-            returncode, stdout_text, stderr_text = await self._run_command(
-                "git",
-                "-C",
-                str(repo_path),
+            checkout_command = self._workspace_git_command(
+                repo_path,
                 "checkout",
                 new_branch,
+            )
+            returncode, stdout_text, stderr_text = await self._run_command(
+                *checkout_command,
                 env=command_env,
             )
             if returncode != 0:
@@ -1391,26 +1424,19 @@ class ManagedRuntimeLauncher:
                     )
                     detail = redactor.scrub(stderr_text or stdout_text or "no output")
                     rendered_cmd = " ".join(
-                        shlex.quote(part)
-                        for part in [
-                            "git",
-                            "-C",
-                            str(repo_path),
-                            "checkout",
-                            new_branch,
-                        ]
+                        shlex.quote(part) for part in checkout_command
                     )
                     rendered_cmd = redactor.scrub(rendered_cmd)
                     raise RuntimeError(
                         f"Command failed with exit code {returncode}: {rendered_cmd}; {detail}"
                     )
                 await self._run_checked_command(
-                    "git",
-                    "-C",
-                    str(repo_path),
-                    "checkout",
-                    "-b",
-                    new_branch,
+                    *self._workspace_git_command(
+                        repo_path,
+                        "checkout",
+                        "-b",
+                        new_branch,
+                    ),
                     env=command_env,
                 )
 
@@ -1440,7 +1466,7 @@ class ManagedRuntimeLauncher:
         target_branch = self._normalize_clone_branch(
             str(workspace_spec.get("targetBranch") or "")
         )
-        checkout_args = ["git", "-C", str(repo_path), "checkout"]
+        checkout_args = self._workspace_git_command(repo_path, "checkout")
         if target_branch:
             checkout_args.extend(["-B", target_branch, commit_sha])
         else:
@@ -1450,7 +1476,8 @@ class ManagedRuntimeLauncher:
             env=dict(git_env) if git_env is not None else None,
         )
         returncode, stdout_text, _stderr_text = await self._run_command(
-            "git", "-C", str(repo_path), "rev-parse", "HEAD"
+            *self._workspace_git_command(repo_path, "rev-parse", "HEAD"),
+            env=dict(git_env) if git_env is not None else None,
         )
         observed_sha = stdout_text.strip()
         if returncode != 0 or not observed_sha.startswith(commit_sha):
