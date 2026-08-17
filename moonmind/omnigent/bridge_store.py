@@ -869,10 +869,17 @@ class OmnigentBridgeSessionStore:
                         if isinstance(terminal_event, dict)
                         else None
                     )
+                    terminal_refs = dict(row.terminal_refs or {})
                     cleanup_complete = bool(
-                        isinstance(terminal_metadata, dict)
-                        and terminal_metadata.get("cleanupCompleted") is True
-                        and terminal_metadata.get("leaseReleased") is True
+                        (
+                            isinstance(terminal_metadata, dict)
+                            and terminal_metadata.get("cleanupCompleted") is True
+                            and terminal_metadata.get("leaseReleased") is True
+                        )
+                        or (
+                            terminal_refs.get("cleanupState") == "completed"
+                            and terminal_refs.get("leaseReleaseState") == "released"
+                        )
                     )
                     cleanup_authority = reset_metadata.get(EGRESS_CLEANUP_AUTHORITY_KEY)
                     prior_attempts = list(
@@ -891,11 +898,11 @@ class OmnigentBridgeSessionStore:
                         "recordedAt": datetime.now(tz=UTC).isoformat(),
                     }
                     if cleanup_complete and isinstance(cleanup_authority, dict):
-                        # The terminal lifecycle event is the objective handoff
-                        # proving that the old endpoint no longer exists and its
-                        # provider capacity was released. Preserve only compact
-                        # artifact/identity refs for history, then require the
-                        # replacement host to bind fresh live authority.
+                        # The terminal lifecycle event or host-scoped janitor
+                        # result is the objective handoff proving that the old
+                        # endpoint no longer exists and provider capacity was
+                        # released. Preserve only compact artifact/identity refs
+                        # for history, then require fresh live authority.
                         prior_attempt["egressCleanupAuthority"] = {
                             key: cleanup_authority.get(key)
                             for key in (
