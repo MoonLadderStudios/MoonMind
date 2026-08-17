@@ -40,8 +40,132 @@ _ARTIFACT_FIELDS = {
 
 
 class OmnigentRecoveryMode(str, Enum):
+    """The single typed recovery/continuation decision boundary.
+
+    Every checkpoint resume, same-session continuation, and linked branch is
+    classified into exactly one of these outcomes (MoonLadderStudios/MoonMind#3707).
+    ``BRANCH_REQUIRED`` and ``RESUME_UNAVAILABLE`` were previously expressed only as
+    ad-hoc ``recoveryAction`` strings in the Temporal activity layer; they are now
+    part of the canonical enum so continuation, checkpoint, and remediation consumers
+    share one vocabulary. The string values are unchanged so in-flight histories and
+    persisted ``recoveryAction`` payloads keep deserializing.
+    """
+
     LIVE_REATTACH = "live_reattach"
     COLD_RESTORE = "cold_restore"
+    BRANCH_REQUIRED = "branch_required"
+    RESUME_UNAVAILABLE = "resume_unavailable"
+
+
+# The immutable dimensions that, when changed against a compiled intent, force an
+# explicit branch instead of silently mutating the existing session. This is the
+# canonical home for the tuple; the Temporal activity layer imports it so the
+# continuation, checkpoint, and branch paths cannot drift apart.
+IMMUTABLE_RECOVERY_DIMENSIONS: tuple[str, ...] = (
+    "instructionDigest",
+    "runtimeId",
+    "model",
+    "effort",
+    "providerProfileId",
+    "launchPolicyRef",
+    "repositoryBranch",
+    "publishMode",
+)
+
+
+class RecoveryDecision(BaseModel):
+    """Compact, caller-independent recovery classification.
+
+    Kept small so the request/history can retain the exact terminal rationale
+    without persisting mutable host details.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    mode: OmnigentRecoveryMode
+    reason_codes: list[str] = Field(default_factory=list, alias="reasonCodes", max_length=20)
+
+    def as_recovery_action(self) -> dict[str, Any]:
+        """Render the durable ``recoveryAction`` payload used across the boundary."""
+
+        return {"recoveryAction": self.mode.value, "reasonCodes": list(self.reason_codes)}
+
+
+def decide_recovery(
+    recovery: Mapping[str, Any],
+    *,
+    live_authority: Mapping[str, Any] | None = None,
+    cold_restore_authorized: bool | None = None,
+    live_reattach_authorized: bool | None = None,
+) -> RecoveryDecision:
+    """Classify recovery from bounded, caller-independent authority evidence.
+
+    Immutable input changes always win over live/cold availability so a changed
+    dimension can never silently mutate the existing session. Availability is
+    authority-sensitive and must be supplied by the trusted caller after it has
+    re-resolved current profile, lease, host, session, cursor, and first-message
+    state; payload booleans are deliberately ignored because callers may request
+    recovery but cannot attest authority.
+    """
+
+    source = recovery.get("immutableSource")
+    requested = recovery.get("immutableRequested")
+    if not isinstance(source, Mapping) or not isinstance(requested, Mapping):
+        return RecoveryDecision(
+            mode=OmnigentRecoveryMode.RESUME_UNAVAILABLE,
+            reasonCodes=["immutable_authority_missing"],
+        )
+    missing = [
+        dimension
+        for dimension in IMMUTABLE_RECOVERY_DIMENSIONS
+        if dimension not in source or dimension not in requested
+    ]
+    if missing:
+        return RecoveryDecision(
+            mode=OmnigentRecoveryMode.RESUME_UNAVAILABLE,
+            reasonCodes=[f"immutable_{dimension}_missing" for dimension in missing[:20]],
+        )
+    changed = [
+        dimension
+        for dimension in IMMUTABLE_RECOVERY_DIMENSIONS
+        if source[dimension] != requested[dimension]
+    ]
+    if changed:
+        return RecoveryDecision(
+            mode=OmnigentRecoveryMode.BRANCH_REQUIRED,
+            reasonCodes=[f"immutable_{dimension}_changed" for dimension in changed[:20]],
+        )
+    live_valid = bool(
+        live_reattach_authorized is True
+        and live_authority
+        and live_authority.get("provider_lease")
+        and live_authority["provider_lease"].get("active") is True
+        and live_authority.get("host_registered") is True
+        and live_authority.get("session_valid") is True
+        and live_authority.get("first_message_consistent") is True
+        and live_authority.get("current_credential_generation")
+        == live_authority.get("checkpoint_credential_generation")
+    )
+    if live_valid:
+        return RecoveryDecision(
+            mode=OmnigentRecoveryMode.LIVE_REATTACH,
+            reasonCodes=["all_authority_valid"],
+        )
+    if cold_restore_authorized is True:
+        return RecoveryDecision(
+            mode=OmnigentRecoveryMode.COLD_RESTORE,
+            reasonCodes=["live_authority_unavailable"],
+        )
+    reasons = recovery.get("unavailableReasonCodes")
+    bounded_reasons = (
+        [str(reason)[:120] for reason in reasons[:20]]
+        if isinstance(reasons, list) and reasons
+        else ["checkpoint_authority_unavailable"]
+    )
+    return RecoveryDecision(
+        mode=OmnigentRecoveryMode.RESUME_UNAVAILABLE,
+        reasonCodes=bounded_reasons,
+    )
 
 
 class OmnigentCheckpointValidation(BaseModel):
@@ -520,10 +644,13 @@ OmnigentRestoreMaterial.model_rebuild()
 
 __all__ = [
     "CandidateWorkspaceAuthority",
+    "IMMUTABLE_RECOVERY_DIMENSIONS",
     "OmnigentCheckpointIdentity",
     "OmnigentCheckpointValidation",
     "OmnigentRecoveryMode",
     "OmnigentRestoreMaterial",
+    "RecoveryDecision",
+    "decide_recovery",
     "materialize_cold_restore_inputs",
     "recovery_mode",
     "validate_restore_material",

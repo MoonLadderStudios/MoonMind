@@ -9,19 +9,8 @@ from typing import Any
 
 from temporalio import activity
 
+from moonmind.omnigent.checkpoints import decide_recovery
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
-
-
-_IMMUTABLE_RECOVERY_DIMENSIONS = (
-    "instructionDigest",
-    "runtimeId",
-    "model",
-    "effort",
-    "providerProfileId",
-    "launchPolicyRef",
-    "repositoryBranch",
-    "publishMode",
-)
 
 
 class _OnDemandTemporalArtifactService:
@@ -67,76 +56,21 @@ def _checkpoint_recovery_decision(
     cold_restore_authorized: bool | None = None,
     live_reattach_authorized: bool | None = None,
 ) -> dict[str, Any]:
-    """Classify recovery from bounded, caller-independent authority evidence.
+    """Classify recovery through the canonical typed decision boundary.
 
     The decision is intentionally compact so the request/history can retain the
-    exact terminal rationale without persisting mutable host details. Immutable
-    input changes always win over live/cold availability.
+    exact terminal rationale without persisting mutable host details. The logic
+    now lives in :func:`moonmind.omnigent.checkpoints.decide_recovery` so the
+    continuation, checkpoint, and branch paths share one vocabulary; the emitted
+    ``recoveryAction`` string space is unchanged for in-flight compatibility.
     """
 
-    source = recovery.get("immutableSource")
-    requested = recovery.get("immutableRequested")
-    if not isinstance(source, dict) or not isinstance(requested, dict):
-        return {
-            "recoveryAction": "resume_unavailable",
-            "reasonCodes": ["immutable_authority_missing"],
-        }
-    missing = [
-        dimension
-        for dimension in _IMMUTABLE_RECOVERY_DIMENSIONS
-        if dimension not in source or dimension not in requested
-    ]
-    if missing:
-        return {
-            "recoveryAction": "resume_unavailable",
-            "reasonCodes": [
-                f"immutable_{dimension}_missing" for dimension in missing[:20]
-            ],
-        }
-    changed = [
-        dimension
-        for dimension in _IMMUTABLE_RECOVERY_DIMENSIONS
-        if source[dimension] != requested[dimension]
-    ]
-    if changed:
-        return {
-            "recoveryAction": "branch_required",
-            "reasonCodes": [
-                f"immutable_{dimension}_changed" for dimension in changed[:20]
-            ],
-        }
-    # Availability is authority-sensitive and must be supplied by the trusted
-    # Activity after it has re-resolved current profile, lease, host, session,
-    # cursor, and first-message state.  Payload booleans are deliberately
-    # ignored: callers may request recovery, but cannot attest authority.
-    live_valid = bool(
-        live_reattach_authorized is True
-        and live_authority
-        and live_authority.get("provider_lease")
-        and live_authority["provider_lease"].get("active") is True
-        and live_authority.get("host_registered") is True
-        and live_authority.get("session_valid") is True
-        and live_authority.get("first_message_consistent") is True
-        and live_authority.get("current_credential_generation")
-        == live_authority.get("checkpoint_credential_generation")
-    )
-    if live_valid:
-        return {
-            "recoveryAction": "live_reattach",
-            "reasonCodes": ["all_authority_valid"],
-        }
-    if cold_restore_authorized is True:
-        return {
-            "recoveryAction": "cold_restore",
-            "reasonCodes": ["live_authority_unavailable"],
-        }
-    reasons = recovery.get("unavailableReasonCodes")
-    bounded_reasons = (
-        [str(reason)[:120] for reason in reasons[:20]]
-        if isinstance(reasons, list) and reasons
-        else ["checkpoint_authority_unavailable"]
-    )
-    return {"recoveryAction": "resume_unavailable", "reasonCodes": bounded_reasons}
+    return decide_recovery(
+        recovery,
+        live_authority=live_authority,
+        cold_restore_authorized=cold_restore_authorized,
+        live_reattach_authorized=live_reattach_authorized,
+    ).as_recovery_action()
 
 
 def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
