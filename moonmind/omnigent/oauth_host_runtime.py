@@ -187,6 +187,8 @@ _MAX_RESTORE_TOTAL_BYTES = 256 * 1024 * 1024
 # keep the wait bounded but large enough for that authoritative online edge.
 _HOST_REGISTRATION_ATTEMPTS = 91
 _HOST_REGISTRATION_INTERVAL_SECONDS = 2
+_HOST_EXEC_PREFLIGHT_ATTEMPTS = 11
+_HOST_EXEC_PREFLIGHT_INTERVAL_SECONDS = 1
 _DEFAULT_PUBLISH_GIT_USER_NAME = "MoonMind Worker"
 _DEFAULT_PUBLISH_GIT_USER_EMAIL = "moonmind-worker@users.noreply.github.com"
 # Restore payloads are read through the durable artifact contract as raw bytes,
@@ -3435,18 +3437,37 @@ class OmnigentOAuthHostRuntime:
         )
 
     async def _exec_check(self, container_name: str) -> None:
-        await self._run(
-            "docker", "exec", container_name, "/opt/moonmind/check-runner-projections.sh"
-        )
-        await self._run(
-            "docker",
-            "exec",
-            container_name,
-            "git",
-            "-C",
-            "/workspaces/run",
-            "status",
-            "--porcelain",
+        # ``docker run -d`` returns before the container is guaranteed to
+        # accept ``docker exec``. Keep this readiness check local to the live
+        # container so a short startup race does not tear down an otherwise
+        # valid host and consume the activity-level retry budget.
+        for attempt in range(_HOST_EXEC_PREFLIGHT_ATTEMPTS):
+            projections = await self._run(
+                "docker",
+                "exec",
+                container_name,
+                "/opt/moonmind/check-runner-projections.sh",
+                check=False,
+            )
+            if projections[0] == 0:
+                workspace = await self._run(
+                    "docker",
+                    "exec",
+                    container_name,
+                    "git",
+                    "-C",
+                    "/workspaces/run",
+                    "status",
+                    "--porcelain",
+                    check=False,
+                )
+                if workspace[0] == 0:
+                    return
+            if attempt + 1 < _HOST_EXEC_PREFLIGHT_ATTEMPTS:
+                await asyncio.sleep(_HOST_EXEC_PREFLIGHT_INTERVAL_SECONDS)
+        raise OmnigentOAuthHostError(
+            "OAuth host runtime command failed",
+            code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
         )
 
     async def _resolve_exact_host(

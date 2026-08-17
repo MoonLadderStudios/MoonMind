@@ -2812,6 +2812,136 @@ async def test_unposted_terminal_bridge_reopens_for_temporal_activity_retry(
     ]
 
 
+async def test_cleaned_up_host_retry_rebinds_fresh_endpoint_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:4e1c43a5 at host readiness and cleanup-authority handoffs."""
+
+    replay_id = "omnigent-cleanup-authority-retry"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(
+        side_effect=[
+            (1, "", "container is not running"),
+            (1, "", "container is restarting"),
+            (0, "", ""),
+            (0, "", ""),
+        ]
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr(oauth_host_runtime_module.asyncio, "sleep", sleep)
+
+    await runtime._exec_check("mm-host-replay")
+
+    assert runtime._run.await_count == expected["preflightAttemptCount"] + 1
+    assert sleep.await_count == expected["preflightSleepCount"]
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    store = OmnigentBridgeSessionStore(sessions)
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=manifest["idempotencyKey"],
+    )
+    policy_authority = {
+        "policyId": "codex-static",
+        "policyVersion": 1,
+        "policyRef": "codex-static@1",
+        "policyDigest": "sha256:" + "1" * 64,
+        "snapshotRef": "policy:sha256:" + "2" * 64,
+        "validation": {"valid": True},
+    }
+    launch = {
+        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
+        "launchPolicyRef": "codex-static@1",
+        "policyAuthority": policy_authority,
+        "enforcedEgress": True,
+    }
+    try:
+        await store.bind_profile_authorization(
+            request=request,
+            endpoint_ref="embedded",
+            provider_profile_id="profile-replay",
+            provider_lease_id="provider-lease-1",
+            credential_generation=1,
+            host_binding_ref="binding-replay",
+            host_lease_ref="host-lease-replay",
+            omnigent_host_id="host-1",
+            effective_launch_snapshot=launch,
+        )
+        await store.bind_egress_cleanup_authority(
+            request=request,
+            host_lease_ref="host-lease-replay",
+            egress_evidence={
+                "attachmentIdentity": "host-container-replay",
+                "endpointIdentity": manifest["firstEndpointIdentity"],
+                "validationResult": "passed",
+            },
+            launch_evidence_ref="artifact://launch-1",
+        )
+        await store.record_lifecycle_event(
+            request.idempotency_key,
+            event_type="terminal",
+            status="failed",
+            metadata={"cleanupCompleted": True, "leaseReleased": True},
+        )
+
+        reopened = await store.get_or_create(
+            request=request,
+            endpoint_ref="embedded",
+            agent_id=None,
+            agent_name=None,
+            target_metadata={},
+        )
+        await store.bind_profile_authorization(
+            request=request,
+            endpoint_ref="embedded",
+            provider_profile_id="profile-replay",
+            provider_lease_id="provider-lease-1",
+            credential_generation=1,
+            host_binding_ref="binding-replay",
+            host_lease_ref="host-lease-replay",
+            omnigent_host_id="host-2",
+            effective_launch_snapshot=launch,
+        )
+        await store.bind_egress_cleanup_authority(
+            request=request,
+            host_lease_ref="host-lease-replay",
+            egress_evidence={
+                "attachmentIdentity": "host-container-replay",
+                "endpointIdentity": manifest["replacementEndpointIdentity"],
+                "validationResult": "passed",
+            },
+            launch_evidence_ref="artifact://launch-2",
+        )
+        active = await store.get_egress_cleanup_authority(
+            host_lease_ref="host-lease-replay"
+        )
+    finally:
+        await engine.dispose()
+
+    assert reopened.status == expected["reopenedStatus"]
+    archived = reopened.metadata_["unpostedAttemptHistory"][-1]
+    assert archived["egressCleanupAuthority"]["phase"] == expected[
+        "archivedAuthorityPhase"
+    ]
+    assert active is not None
+    assert active["egressEvidence"]["endpointIdentity"] == expected[
+        "activeEndpointIdentity"
+    ]
+
+
 async def test_abandoned_omnigent_host_cleanup_releases_provider_capacity() -> None:
     """Replay mm:651a14f6 after cancellation killed its coordinator Activity."""
 
