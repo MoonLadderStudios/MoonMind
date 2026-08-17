@@ -407,6 +407,16 @@ class OmnigentBridgeSession(Base):
             "chat_binding_id",
             unique=True,
         ),
+        # MoonLadderStudios/MoonMind#3704: revisions and fencing generations are
+        # strictly positive so a legacy or malformed row can never masquerade as
+        # universally current authority.
+        CheckConstraint(
+            "revision >= 1", name="ck_omnigent_bridge_sessions_revision"
+        ),
+        CheckConstraint(
+            "supervisor_generation >= 1",
+            name="ck_omnigent_bridge_sessions_supervisor_generation",
+        ),
     )
 
     bridge_session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -439,6 +449,19 @@ class OmnigentBridgeSession(Base):
     workspace: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(
         String(64), nullable=False, default="declared", server_default="declared"
+    )
+
+    # MoonLadderStudios/MoonMind#3704: monotonic optimistic-concurrency revision
+    # for the canonical session-state aggregate. Every lifecycle-changing write
+    # advances this via compare-and-swap so a stale activity, former worker, or
+    # delayed callback cannot overwrite newer authority. ``supervisor_generation``
+    # fences the current session supervisor: a superseded supervisor holds an
+    # older generation and can no longer mutate durable authority.
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    supervisor_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
     )
 
     first_message_state: Mapped[str] = mapped_column(
@@ -882,6 +905,10 @@ __all__ = [
     "RecurringWorkflowScopeType",
     "OmnigentBridgeSession",
     "OmnigentBridgeSessionEvent",
+    "OmnigentTurnAttempt",
+    "OmnigentCommand",
+    "OmnigentFencingGeneration",
+    "OmnigentCleanupAuthority",
     "WorkflowCheckpointBranch",
     "WorkflowCheckpointBranchTurn",
     "WorkflowCheckpointBranchGitBinding",
@@ -3301,6 +3328,254 @@ def _validate_omnigent_oauth_host_lease_generation(
         raise ValueError(
             "host lease credential_generation must match binding and profile"
         )
+
+
+class OmnigentTurnAttempt(Base):
+    """Optimistic-concurrency authority for one turn-attempt submission.
+
+    Source design: docs/Omnigent/ConcurrencyAndFencing.md
+    (MoonLadderStudios/MoonMind#3704).
+
+    A turn attempt records the exact session revision it observed and carries its
+    own monotonic ``revision``. ``observation_frontier`` is the highest provider
+    event/snapshot sequence durably retained; a delayed event at or below the
+    frontier is kept as an observation but may never regress current lifecycle
+    state.
+    """
+
+    __tablename__ = "omnigent_turn_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "bridge_session_id",
+            "attempt_index",
+            name="uq_omnigent_turn_attempt_index",
+        ),
+        Index("ix_omnigent_turn_attempts_session", "bridge_session_id"),
+        Index("ix_omnigent_turn_attempts_status", "status"),
+        CheckConstraint("revision >= 1", name="ck_omnigent_turn_attempt_revision"),
+        CheckConstraint(
+            "fencing_generation >= 1",
+            name="ck_omnigent_turn_attempt_fencing_generation",
+        ),
+        CheckConstraint(
+            "observation_frontier >= 0",
+            name="ck_omnigent_turn_attempt_observation_frontier",
+        ),
+    )
+
+    turn_attempt_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    bridge_session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_bridge_sessions.bridge_session_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    attempt_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="preparing", server_default="preparing"
+    )
+    session_revision_observed: Mapped[int] = mapped_column(Integer, nullable=False)
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    observation_frontier: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    terminal: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", mutable_json_dict(), nullable=False, default=dict
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentCommand(Base):
+    """Durable ledger for one logical lifecycle command.
+
+    Source design: docs/Omnigent/ConcurrencyAndFencing.md
+    (MoonLadderStudios/MoonMind#3704).
+
+    Every logical command carries a command id, payload digest, the expected
+    session/turn revisions, the relevant fencing generations, an idempotency
+    identity, a low-cardinality owner identity class, and its delivery state plus
+    provider receipt when available. Command handlers claim the row before the
+    side effect and record delivery before committing a result. When a provider
+    side effect may already have occurred the row is marked ``delivery_unknown``
+    and reconciled instead of blindly re-issued.
+    """
+
+    __tablename__ = "omnigent_commands"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", name="uq_omnigent_commands_idempotency_key"
+        ),
+        Index("ix_omnigent_commands_session", "bridge_session_id"),
+        Index("ix_omnigent_commands_turn", "turn_attempt_id"),
+        Index("ix_omnigent_commands_delivery_state", "delivery_state"),
+        CheckConstraint("revision >= 1", name="ck_omnigent_commands_revision"),
+        CheckConstraint(
+            "delivery_state IN ('pending','claimed','dispatched','delivered',"
+            "'delivery_unknown','reconciled')",
+            name="ck_omnigent_commands_delivery_state",
+        ),
+    )
+
+    command_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    bridge_session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_bridge_sessions.bridge_session_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    turn_attempt_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_turn_attempts.turn_attempt_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    command_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    expected_session_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    expected_turn_revision: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    fencing_generations: Mapped[dict[str, Any]] = mapped_column(
+        _json_variant(), nullable=False, default=dict
+    )
+    owner_class: Mapped[str] = mapped_column(String(64), nullable=False)
+    claim_owner: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    claim_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    delivery_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    provider_receipt: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    outcome: Mapped[Optional[str]] = mapped_column(String(48), nullable=True)
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentFencingGeneration(Base):
+    """Universal fencing-generation registry for every side-effect owner.
+
+    Source design: docs/Omnigent/ConcurrencyAndFencing.md
+    (MoonLadderStudios/MoonMind#3704).
+
+    Each ``scope_key`` names one fencing owner (session supervisor, host
+    replacement, provider-session epoch, workspace publication, cleanup, ...).
+    Acquiring the scope returns a strictly newer generation; the prior owner can
+    no longer mutate provider, host, workspace, cleanup, or durable state.
+    """
+
+    __tablename__ = "omnigent_fencing_generations"
+    __table_args__ = (
+        Index("ix_omnigent_fencing_generations_kind", "scope_kind"),
+        CheckConstraint(
+            "generation >= 1", name="ck_omnigent_fencing_generation_positive"
+        ),
+    )
+
+    scope_key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    scope_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentCleanupAuthority(Base):
+    """Durable cleanup authority fenced against replacement generations.
+
+    Source design: docs/Omnigent/ConcurrencyAndFencing.md
+    (MoonLadderStudios/MoonMind#3704).
+
+    Cleanup is fenced against the host, provider-session, workspace, and lease
+    generations current when it was claimed. Exactly one janitor may claim
+    cleanup; a former janitor cannot complete cleanup or release resources that
+    now belong to a replacement generation.
+    """
+
+    __tablename__ = "omnigent_cleanup_authority"
+    __table_args__ = (
+        UniqueConstraint(
+            "bridge_session_id", name="uq_omnigent_cleanup_authority_session"
+        ),
+        Index("ix_omnigent_cleanup_authority_status", "status"),
+        CheckConstraint(
+            "revision >= 1", name="ck_omnigent_cleanup_authority_revision"
+        ),
+        CheckConstraint(
+            "status IN ('pending','claimed','completed','abandoned')",
+            name="ck_omnigent_cleanup_authority_status",
+        ),
+    )
+
+    cleanup_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    bridge_session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_bridge_sessions.bridge_session_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    host_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    provider_session_epoch: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    workspace_generation: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
+    lease_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    claim_owner: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    claim_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default=text("1")
+    )
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
 
 class AgentSkillSourceKind(str, enum.Enum):
     """Source provenance for a resolved skill."""

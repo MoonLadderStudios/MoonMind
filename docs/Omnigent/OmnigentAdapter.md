@@ -17,6 +17,7 @@ The normal product selection and request-compilation boundary for **Codex via Om
 
 - [`docs/Omnigent/OmnigentBridge.md`](./OmnigentBridge.md)
 - [`docs/Omnigent/OmnigentHostOAuth.md`](./OmnigentHostOAuth.md)
+- [`docs/Omnigent/ConcurrencyAndFencing.md`](./ConcurrencyAndFencing.md)
 - [`docs/Omnigent/CombinedStackValidationAndRollback.md`](./CombinedStackValidationAndRollback.md)
 - [`docs/Omnigent/ConformanceAndLiveSmoke.md`](./ConformanceAndLiveSmoke.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
