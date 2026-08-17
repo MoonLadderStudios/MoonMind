@@ -651,6 +651,53 @@ interface OmnigentCodexCatalogReadiness {
   };
 }
 
+export const OMNIGENT_READINESS_REFRESH_MS = 2_000;
+
+const OMNIGENT_RECOVERABLE_GATE_CODES = new Set([
+  "bridge_conformance_gated",
+  "bridge_endpoint_not_ready",
+  "immutable_image_unavailable",
+  "no_eligible_codex_oauth_profile",
+  "on_demand_backend_unavailable",
+  "profile_capacity_unavailable",
+  "static_host_not_ready",
+]);
+
+interface OmnigentReadinessSelection {
+  executionTargetRef?: string;
+  providerProfileRef?: string;
+}
+
+export function omnigentReadinessRefetchInterval(
+  catalog: OmnigentCodexCatalogReadiness | undefined,
+  selection: OmnigentReadinessSelection = {},
+): number | false {
+  if (!catalog) return false;
+  const executionTargetRef =
+    selection.executionTargetRef || catalog.defaultExecutionProfileRef;
+  const selectedExecutionProfile = (catalog.executionProfiles || []).find(
+    (profile) => profile.ref === executionTargetRef,
+  );
+  const selectedIneligibleProviderProfile = (
+    catalog.ineligibleProviderProfiles || []
+  ).find((profile) => profile.profileId === selection.providerProfileRef);
+  if (
+    selectedExecutionProfile?.available !== false &&
+    !selectedIneligibleProviderProfile &&
+    catalog.available
+  ) {
+    return false;
+  }
+  const reasons = [
+    ...(selectedExecutionProfile?.gateReasons || catalog.gateReasons || []),
+    ...(selectedIneligibleProviderProfile?.gateReasons || []),
+  ];
+  return reasons.length > 0 &&
+    reasons.every((reason) => OMNIGENT_RECOVERABLE_GATE_CODES.has(reason.code))
+    ? OMNIGENT_READINESS_REFRESH_MS
+    : false;
+}
+
 interface ProviderModelEffortTier {
   label?: string | null;
   model?: string | null;
@@ -6247,6 +6294,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
     staleTime: 0,
     refetchOnWindowFocus: true,
+    refetchInterval: (query) =>
+      runtime === "omnigent"
+        ? omnigentReadinessRefetchInterval(query.state.data, {
+            executionTargetRef: omnigentExecutionTargetRef,
+            providerProfileRef: providerProfile,
+          })
+        : false,
   });
 
   const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
