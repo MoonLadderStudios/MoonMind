@@ -1,32 +1,22 @@
 [
   {
-    "id": 3807043073,
+    "id": 3808359979,
     "disposition": "addressed",
-    "rationale": "Heartbeat renewal now uses a conditional SQL update over heartbeat-owning states, making it mutually exclusive with the cleanup claim CAS."
+    "rationale": "Removed both legacy managed-session network aliases and updated every remaining test and caller to use MOONMIND_CONTROL_PLANE_NETWORK."
   },
   {
-    "id": 3807043083,
+    "id": 3808359988,
     "disposition": "addressed",
-    "rationale": "Cleanup claims now renew expires_at for the bounded cleanup ownership window in the same atomic update."
+    "rationale": "The lifecycle conformance now launches its health probe through DockerCodexManagedSessionController before testing API reachability from the resulting managed-session container."
   },
   {
-    "id": 3807043091,
+    "id": 3808359994,
     "disposition": "addressed",
-    "rationale": "A typed cleanup-ownership loss now routes coordinator finalization to janitor-required waiting without host stop or Provider Profile release."
+    "rationale": "The lifecycle conformance exports project-specific names for the control-plane, Docker-proxy, sandbox-egress, restricted-egress, and Omnigent-egress networks."
   },
   {
-    "id": 3807043093,
-    "disposition": "addressed",
-    "rationale": "Lease-scoped drain, stop, remove, eviction, and stale-reconciliation actions now share the atomic cleanup claim before side effects."
-  },
-  {
-    "id": 3807043100,
-    "disposition": "addressed",
-    "rationale": "Orphan cleanup now reloads the host lease identified by the container label and leaves lease-owned containers to the fenced cleanup path."
-  },
-  {
-    "id": 4964716657,
+    "id": 4966282554,
     "disposition": "not-applicable",
-    "rationale": "Informational Codex review envelope; its five child threads contain the complete actionable feedback."
+    "rationale": "This review body is an informational summary whose actionable findings are represented and addressed by the three linked review comments."
   }
 ]
