@@ -1,0 +1,33 @@
+{
+  "invariant": "isolated Omnigent skills may create and verify children of their current workflow through an execution-scoped bearer and exact API routes while all broader execution control routes remain denied",
+  "allowedRoutes": [
+    {
+      "acl": "moonmind_execution_create",
+      "method": "POST",
+      "pathRegex": "^/api/executions$"
+    },
+    {
+      "acl": "moonmind_execution_describe",
+      "method": "GET",
+      "pathRegex": "-i ^/api/executions/([a-z0-9._~:-]|%3a)+$"
+    }
+  ],
+  "requiredHeaderAcls": [
+    "moonmind_execution_fanout",
+    "moonmind_execution_bearer"
+  ],
+  "rejectedEncodedChildSuffixes": [
+    "%2Fcaptured-evidence",
+    "%2fsteps"
+  ],
+  "deniedAclCombinations": [
+    {
+      "acl": "moonmind_execution_create",
+      "method": "GET"
+    },
+    {
+      "acl": "moonmind_execution_describe",
+      "method": "POST"
+    }
+  ]
+}

@@ -99,9 +99,10 @@ def _mixed_pr_set() -> list[dict[str, Any]]:
 class _FakeAsyncClient:
     submissions: list[dict[str, Any]] = []
     workflow_ids: set[str] = set()
+    headers: dict[str, str] = {}
 
-    def __init__(self, **_kwargs: Any) -> None:
-        pass
+    def __init__(self, **kwargs: Any) -> None:
+        _FakeAsyncClient.headers = dict(kwargs.get("headers") or {})
 
     async def __aenter__(self) -> "_FakeAsyncClient":
         return self
@@ -149,9 +150,11 @@ def _run_main(
 ) -> dict[str, Any]:
     _FakeAsyncClient.submissions = []
     _FakeAsyncClient.workflow_ids = set()
+    _FakeAsyncClient.headers = {}
     monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
     monkeypatch.delenv("MOONMIND_WORKER_TOKEN", raising=False)
     monkeypatch.delenv("MOONMIND_WORKER_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", raising=False)
     for env_key in (
         "MOONMIND_TASK_WORKFLOW_ID",
         "MOONMIND_WORKFLOW_ID",
@@ -226,6 +229,31 @@ def test_end_to_end_mixed_pr_set(monkeypatch: Any, tmp_path: Path) -> None:
         assert body["payload"]["idempotencyKey"].startswith(
             "batch-dependabot-resolver:MoonLadderStudios/MoonMind:pr:"
         )
+
+
+def test_end_to_end_forwards_scoped_execution_fanout_bearer(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    module = _load_module()
+
+    summary = _run_main(
+        module,
+        ["--repo", "MoonLadderStudios/MoonMind"],
+        monkeypatch,
+        tmp_path,
+        extra_env={
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "fanout-test-capability",
+            "MOONMIND_TASK_WORKFLOW_ID": "mm:parent",
+            "MOONMIND_AGENT_RUN_ID": "agent-run-1",
+        },
+    )
+
+    assert summary["status"] == "queued"
+    assert _FakeAsyncClient.headers["Authorization"] == (
+        "Bearer fanout-test-capability"
+    )
+    assert _FakeAsyncClient.headers["X-MoonMind-Execution-Fanout"] == "v1"
+    assert _FakeAsyncClient.headers["X-MoonMind-Task-Workflow-Id"] == "mm:parent"
 
 
 def test_end_to_end_inherits_runtime_selection_from_parent_context(

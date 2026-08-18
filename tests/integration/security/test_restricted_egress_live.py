@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.execution_profiles import compile_effective_launch
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
@@ -30,11 +31,15 @@ from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_NETWORK_REF,
     OMNIGENT_EGRESS_PROFILE,
+    OMNIGENT_PROXY_URL,
     PROXY_URL,
     attest_docker_egress,
 )
 from moonmind.security.egress_conformance_evidence import (
     parse_and_verify_conformance_evidence,
+)
+from moonmind.security.execution_fanout_capabilities import (
+    mint_execution_fanout_capability,
 )
 from moonmind.security.outbound_scan import scan_outbound_text
 from moonmind.schemas.agent_runtime_models import (
@@ -110,6 +115,8 @@ def _probe(
     url: str,
     *,
     proxy: bool = True,
+    network_ref: str = EGRESS_NETWORK_REF,
+    proxy_url: str = PROXY_URL,
     environment: tuple[str, ...] = (),
     curl_args: tuple[str, ...] = (),
     docker_args: tuple[str, ...] = (),
@@ -122,7 +129,7 @@ def _probe(
         "--label",
         "moonmind.test.scope=MoonLadderStudios/MoonMind#3625",
         "--network",
-        EGRESS_NETWORK_REF,
+        network_ref,
         "--cap-drop",
         "ALL",
         "--security-opt",
@@ -132,13 +139,13 @@ def _probe(
     if proxy:
         args += [
             "--env",
-            f"HTTP_PROXY={PROXY_URL}",
+            f"HTTP_PROXY={proxy_url}",
             "--env",
-            f"HTTPS_PROXY={PROXY_URL}",
+            f"HTTPS_PROXY={proxy_url}",
             "--env",
-            f"http_proxy={PROXY_URL}",
+            f"http_proxy={proxy_url}",
             "--env",
-            f"https_proxy={PROXY_URL}",
+            f"https_proxy={proxy_url}",
             "--env",
             "NO_PROXY=",
             "--env",
@@ -155,6 +162,121 @@ def _probe(
         url,
     ]
     return _docker(*args)
+
+
+def test_omnigent_proxy_allows_only_scoped_execution_fanout_routes() -> None:
+    """The portable fan-out path reaches the API without broad control access."""
+
+    fanout_token = mint_execution_fanout_capability(
+        secret=str(settings.security.JWT_SECRET_KEY),
+        parent_workflow_id=f"mm:egress-parent-{uuid.uuid4().hex}",
+        agent_run_id="egress-agent-run",
+        step_id="egress-step",
+        session_id="egress-session",
+        runtime_id="codex_cli",
+        source_kind="omnigent",
+        lifetime_seconds=60,
+    )
+    capability_headers = (
+        "-H",
+        f"Authorization: Bearer {fanout_token}",
+        "-H",
+        "X-MoonMind-Execution-Fanout: v1",
+    )
+    create = _probe(
+        "http://api:8000/api/executions",
+        network_ref=OMNIGENT_EGRESS_PROFILE.network_ref,
+        proxy_url=OMNIGENT_PROXY_URL,
+        curl_args=(
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/json",
+            *capability_headers,
+            "--data",
+            "{}",
+        ),
+    )
+    assert create.returncode == 0, create.stderr[-1000:]
+    assert create.stdout == "422"
+
+    describe = _probe(
+        "http://api:8000/api/executions/mm%3Aegress-probe-not-found",
+        network_ref=OMNIGENT_EGRESS_PROFILE.network_ref,
+        proxy_url=OMNIGENT_PROXY_URL,
+        curl_args=(
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            *capability_headers,
+        ),
+    )
+    assert describe.returncode == 0, describe.stderr[-1000:]
+    assert describe.stdout == "403"
+
+    for path in (
+        "/api/executions/mm%3Aegress-parent%2Fcaptured-evidence",
+        "/api/executions/mm%3Aegress-parent%2fsteps",
+    ):
+        encoded_child_route = _probe(
+            f"http://api:8000{path}",
+            network_ref=OMNIGENT_EGRESS_PROFILE.network_ref,
+            proxy_url=OMNIGENT_PROXY_URL,
+            curl_args=(
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                *capability_headers,
+            ),
+        )
+        assert encoded_child_route.returncode == 0, encoded_child_route.stderr[-1000:]
+        assert encoded_child_route.stdout == "403"
+
+    for method, path in (
+        ("POST", "/api/executions"),
+        ("GET", "/api/executions/mm%3Aegress-probe-not-found"),
+    ):
+        missing_capability = _probe(
+            f"http://api:8000{path}",
+            network_ref=OMNIGENT_EGRESS_PROFILE.network_ref,
+            proxy_url=OMNIGENT_PROXY_URL,
+            curl_args=(
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "-X",
+                method,
+            ),
+        )
+        assert missing_capability.returncode == 0, missing_capability.stderr[-1000:]
+        assert missing_capability.stdout == "403"
+
+    for method, path in (
+        ("GET", "/api/executions"),
+        ("POST", "/api/executions/mm%3Aegress-probe/cancel"),
+    ):
+        denied = _probe(
+            f"http://api:8000{path}",
+            network_ref=OMNIGENT_EGRESS_PROFILE.network_ref,
+            proxy_url=OMNIGENT_PROXY_URL,
+            curl_args=(
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "-X",
+                method,
+            ),
+        )
+        assert denied.returncode == 0, denied.stderr[-1000:]
+        assert denied.stdout == "403"
 
 
 def _exec_sh(container_name: str, script: str) -> subprocess.CompletedProcess[str]:

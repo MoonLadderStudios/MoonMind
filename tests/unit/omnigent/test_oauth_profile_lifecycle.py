@@ -96,6 +96,9 @@ from moonmind.schemas.workspace_locator_models import (
 from moonmind.security.container_job_capabilities import (
     verify_container_job_session_capability,
 )
+from moonmind.security.execution_fanout_capabilities import (
+    verify_execution_fanout_capability,
+)
 from moonmind.security.egress import (
     EGRESS_CONFIG_DIGEST,
     ENFORCER_IMPLEMENTATION,
@@ -1072,6 +1075,7 @@ def test_runtime_script_snapshot_materializes_owned_step_identity(tmp_path) -> N
             "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
             "MOONMIND_RUNTIME_ID": "codex_cli",
             "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "must-not-be-persisted",
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "also-must-not-be-persisted",
         },
     )
 
@@ -1087,6 +1091,9 @@ def test_runtime_script_snapshot_materializes_owned_step_identity(tmp_path) -> N
     )
     assert "must-not-be-persisted" not in profile.read_text(encoding="utf-8")
     assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in profile.read_text(
+        encoding="utf-8"
+    )
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in profile.read_text(
         encoding="utf-8"
     )
     assert profile.stat().st_mode & 0o777 == 0o444
@@ -1416,6 +1423,7 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     assert runtime_profile_environment["MOONMIND_TASK_WORKFLOW_ID"] == "workflow-1"
     assert runtime_profile_environment["MOONMIND_AGENT_RUN_ID"] == "step-1"
     assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in runtime_profile_environment
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in runtime_profile_environment
     assert state["launches"] == 1
     assert state["manifest_checks"] == 2
 
@@ -1641,6 +1649,7 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         container_job_environment={
             "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "scoped-test-token",
             "MOONMIND_CONTAINER_JOBS_MCP_URL": "http://api:8000/mcp/container",
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "fanout-test-token",
         },
         effective_launch=effective_launch,
         egress_attestation=_egress_attestation(),
@@ -1698,10 +1707,12 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH="
         "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
         "MOONMIND_STEP_EXECUTION_ID,MOONMIND_CONTAINER_JOBS_BEARER_TOKEN,"
-        "MOONMIND_CONTAINER_JOBS_MCP_URL"
+        "MOONMIND_CONTAINER_JOBS_MCP_URL,"
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"
     ) in commands[2]
     assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in commands[2]
     assert "scoped-test-token" not in commands[2]
+    assert "fanout-test-token" not in commands[2]
     assert (
         "MOONMIND_CONTAINER_JOBS_MCP_URL=http://api:8000/mcp/container"
         in commands[2]
@@ -1709,6 +1720,9 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     launch_environment = runtime._run.await_args_list[2].kwargs["env"]
     assert launch_environment["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"] == (
         "scoped-test-token"
+    )
+    assert launch_environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"] == (
+        "fanout-test-token"
     )
     assert "NO_PROXY=localhost,127.0.0.1" in commands[2]
     assert "no_proxy=localhost,127.0.0.1" in commands[2]
@@ -1770,6 +1784,13 @@ def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
     assert capability.agent_run_id == "agent-run-1"
     assert capability.session_id == "host-lease-1"
     assert capability.workspace_id == "sandbox-1"
+    fanout = verify_execution_fanout_capability(
+        environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
+        secret="test-container-capability-secret",
+    )
+    assert fanout.parent_workflow_id == "workflow-1"
+    assert fanout.agent_run_id == "agent-run-1"
+    assert fanout.session_id == "host-lease-1"
 
 
 @pytest.mark.asyncio

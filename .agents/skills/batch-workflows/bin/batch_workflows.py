@@ -884,6 +884,10 @@ def _read_worker_token() -> str | None:
     return None
 
 
+def _read_execution_fanout_token() -> str | None:
+    return _text(os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN")) or None
+
+
 def _submit_jobs_via_http(
     submissions: list[ChildSubmission],
     *,
@@ -893,6 +897,10 @@ def _submit_jobs_via_http(
     created: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     headers: dict[str, str] = {"Content-Type": "application/json"}
+    fanout_token = _read_execution_fanout_token()
+    if fanout_token:
+        headers["Authorization"] = f"Bearer {fanout_token}"
+        headers["X-MoonMind-Execution-Fanout"] = "v1"
     if worker_token:
         headers["X-MoonMind-Worker-Token"] = worker_token
     task_workflow_id = _task_workflow_id_from_env()
