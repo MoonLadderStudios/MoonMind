@@ -45,6 +45,21 @@ TURN_STATES: frozenset[str] = frozenset(
     }
 )
 
+# Monotonic delivery order for the turn lifecycle (#3704). A guarded turn write
+# may only advance the state forward or leave it unchanged; an out-of-order
+# provider observation must never regress durable attempt authority even when its
+# revision and fencing generation are current. ``delivery_unknown`` follows
+# ``dispatching`` because it records an ambiguous dispatch that later resolves to
+# ``accepted``/``running`` (forward) or a terminal.
+TURN_STATE_ORDER: dict[str, int] = {
+    TURN_STATE_PREPARED: 0,
+    TURN_STATE_DISPATCHING: 1,
+    TURN_STATE_DELIVERY_UNKNOWN: 2,
+    TURN_STATE_ACCEPTED: 3,
+    TURN_STATE_RUNNING: 4,
+    TURN_STATE_TERMINAL: 5,
+}
+
 # Chat-binding alias resolution states.
 ALIAS_STATE_ACTIVE = "active"
 ALIAS_STATE_QUARANTINED = "quarantined"
@@ -235,7 +250,11 @@ class FencingConflictError(ControlPlaneConflictError):
 
 class NotCommandOwnerError(ControlPlaneConflictError):
     """Raised when a caller that does not own a claimed command tries to
-    record its delivery or result."""
+    record its delivery or result.
+
+    Ownership is the per-claim ``claim_token`` the winning claimant received, not
+    the low-cardinality ``owner_class`` metric label: a racing loser that shares
+    an ``owner_class`` is refused so it cannot settle a command it never won."""
 
     outcome = ControlPlaneOutcome.NOT_OWNER
 
@@ -376,6 +395,7 @@ class CommandRecord:
     fencing_generation: int = 0
     status: str = COMMAND_STATE_PENDING
     owner_class: Optional[str] = None
+    claim_token: Optional[str] = None
     provider_receipt_id: Optional[str] = None
     delivery_ambiguous: bool = False
     result_ref: Optional[str] = None
@@ -443,6 +463,7 @@ class CleanupAuthorityRecord:
     generation: int = 0
     state: str = CLEANUP_STATE_UNCLAIMED
     owner_class: Optional[str] = None
+    claim_token: Optional[str] = None
     fenced_host_generation: Optional[int] = None
     fenced_profile_generation: Optional[int] = None
     fenced_provider_epoch: Optional[str] = None

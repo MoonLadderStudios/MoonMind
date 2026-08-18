@@ -44,8 +44,10 @@ from .records import (
     COMMAND_STATE_FAILED,
     COMMAND_STATE_PENDING,
     COMMAND_TERMINAL_STATES,
+    TURN_STATE_ORDER,
     TURN_STATE_PREPARED,
     TURN_STATE_TERMINAL,
+    TURN_STATES,
     CasResult,
     ChatBindingAliasRecord,
     CleanupAuthorityRecord,
@@ -216,6 +218,7 @@ def _command_record(row: OmnigentCommand) -> CommandRecord:
         fencing_generation=row.fencing_generation,
         status=row.status,
         owner_class=row.owner_class,
+        claim_token=row.claim_token,
         provider_receipt_id=row.provider_receipt_id,
         delivery_ambiguous=row.delivery_ambiguous,
         result_ref=row.result_ref,
@@ -233,6 +236,7 @@ def _cleanup_record(row: OmnigentCleanupAuthority) -> CleanupAuthorityRecord:
         generation=row.generation,
         state=row.state,
         owner_class=row.owner_class,
+        claim_token=row.claim_token,
         fenced_host_generation=row.fenced_host_generation,
         fenced_profile_generation=row.fenced_profile_generation,
         fenced_provider_epoch=row.fenced_provider_epoch,
@@ -280,13 +284,16 @@ class _RepositoryBase:
     async def _insert(self, obj: Any, *, on_conflict: Callable[[IntegrityError], Exception]):
         """Insert a row, translating an integrity conflict to a domain error.
 
-        The insert runs inside a savepoint so a translated conflict leaves the
-        surrounding transaction usable (fail closed, don't poison the txn).
+        The row is added *inside* the savepoint so the INSERT is only ever
+        emitted after the SAVEPOINT is established: a losing unique-key insert
+        then rolls back to the savepoint and leaves the surrounding transaction
+        usable (fail closed, don't poison the txn) instead of aborting the outer
+        PostgreSQL transaction (#3704).
         """
 
-        self._session.add(obj)
         try:
             async with self._session.begin_nested():
+                self._session.add(obj)
                 await self._session.flush()
         except IntegrityError as exc:  # pragma: no cover - exercised via tests
             raise on_conflict(exc) from exc
@@ -882,10 +889,18 @@ class TurnAttemptRepository(_RepositoryBase):
     def _check_turn_fence(
         row: OmnigentTurnAttempt,
         *,
+        session_fencing_generation: int,
         expected_revision: int,
         expected_fencing_generation: int,
     ) -> Optional[ControlPlaneOutcome]:
-        if row.fencing_generation != expected_fencing_generation:
+        # Turn writes are guarded by the owning session's SESSION_SUPERVISOR
+        # generation, not the turn's creation-time value. A turn row has no way to
+        # bind the current session generation at creation, so comparing against
+        # the turn's own stored generation would fence the new supervisor out
+        # while letting a superseded one keep mutating the attempt. Validate
+        # against the live session generation instead, then stamp it on apply so
+        # the record reflects the guarding authority (#3704).
+        if session_fencing_generation != expected_fencing_generation:
             telemetry.record_fencing_conflict(scope=FencingScope.SESSION_SUPERVISOR)
             return ControlPlaneOutcome.FENCING_CONFLICT
         if row.revision != expected_revision:
@@ -916,6 +931,12 @@ class TurnAttemptRepository(_RepositoryBase):
         """
 
         row = await self._load_turn_for_update(turn_attempt_id)
+        session_row = await self._session.get(OmnigentSession, row.session_id)
+        session_generation = (
+            session_row.fencing_generation
+            if session_row is not None
+            else row.fencing_generation
+        )
         wants_terminal = terminal_state is not _UNSET
         if row.terminal_state is not None:
             if wants_terminal and terminal_state == row.terminal_state:
@@ -928,6 +949,7 @@ class TurnAttemptRepository(_RepositoryBase):
             )
         conflict = self._check_turn_fence(
             row,
+            session_fencing_generation=session_generation,
             expected_revision=expected_revision,
             expected_fencing_generation=expected_fencing_generation,
         )
@@ -937,7 +959,25 @@ class TurnAttemptRepository(_RepositoryBase):
             row.state = TURN_STATE_TERMINAL
             row.terminal_state = terminal_state
         elif state is not _UNSET:
+            if state not in TURN_STATES:
+                raise ValueError(
+                    f"Unknown turn state {state!r}; must be one of "
+                    f"{sorted(TURN_STATES)}"
+                )
+            # Enforce the documented monotonic delivery order (#3704): an
+            # out-of-order provider observation must never regress durable
+            # attempt authority even when its revision and fence are current. A
+            # regressive state is an idempotent no-op that leaves the
+            # already-advanced authority intact (re-asserting the current state
+            # is still allowed to refresh provider markers).
+            if TURN_STATE_ORDER[state] < TURN_STATE_ORDER.get(row.state, -1):
+                return CasResult(
+                    ControlPlaneOutcome.ALREADY_APPLIED, _turn_record(row)
+                )
             row.state = state
+        # A guarded turn write always advances against the live session
+        # generation; stamp it so the record reflects the guarding authority.
+        row.fencing_generation = session_generation
         if attempt_outcome is not _UNSET:
             row.attempt_outcome = attempt_outcome
         if provider_turn_id is not _UNSET:
@@ -1048,9 +1088,9 @@ class ObservationRepository(_RepositoryBase):
             payload_ref=payload_ref,
             bounded_index_=dict(bounded_index or {}),
         )
-        self._session.add(row)
         try:
             async with self._session.begin_nested():
+                self._session.add(row)
                 await self._session.flush()
         except IntegrityError:
             # Concurrent append with the same dedup identity: return the winner.
@@ -1145,9 +1185,9 @@ class CommandRepository(_RepositoryBase):
             owner_class=owner_class,
             retry_policy_=dict(retry_policy or {}),
         )
-        self._session.add(row)
         try:
             async with self._session.begin_nested():
+                self._session.add(row)
                 await self._session.flush()
         except IntegrityError:
             existing = await self.get_by_idempotency_key(idempotency_key)
@@ -1216,26 +1256,64 @@ class CommandRepository(_RepositoryBase):
         command_id: str,
         *,
         owner_class: str,
+        claim_token: str,
     ) -> CasResult:
         """Claim exclusive execution authority for a logical command.
 
-        Exactly one caller wins the ``pending -> claimed`` transition and
-        receives :attr:`ControlPlaneOutcome.APPLIED`; concurrent activity retries
-        of the same logical command observe :attr:`ALREADY_APPLIED` and must
-        reconcile from the recorded delivery state instead of executing the side
-        effect a second time (#3704). The claim compare-and-swaps on the command
-        revision so the win is atomic under a real row lock.
+        ``claim_token`` is the caller's durable claimant identity (for example a
+        worker/activity identity), not a per-call nonce; ``owner_class`` remains a
+        low-cardinality metric label. Outcomes (#3704):
+
+        * ``pending`` and the command still targets current session authority ->
+          the caller wins ``pending -> claimed`` and receives :attr:`APPLIED`,
+          recording its ``claim_token``.
+        * ``pending`` but the command's recorded session-supervisor generation is
+          superseded -> :attr:`FENCING_CONFLICT`; a stale command must not be
+          executed after ownership changed.
+        * already ``claimed`` by the *same* ``claim_token`` -> :attr:`APPLIED`
+          again, so a durable owner whose worker crashed after claiming but
+          before delivering can safely resume rather than stranding a side effect
+          that is known not to have run.
+        * already ``claimed`` by a *different* ``claim_token`` -> :attr:`NOT_OWNER`;
+          a racing claimant did not win execution authority and must reconcile.
+        * settled or parked (terminal / delivery-unknown) -> :attr:`ALREADY_APPLIED`.
+
+        The claim compare-and-swaps under a real row lock so the win is atomic.
         """
 
         row = await self._load_command_for_update(command_id)
         if row.status == COMMAND_STATE_PENDING:
+            session_row = await self._session.get(OmnigentSession, row.session_id)
+            # A command records the session-supervisor generation it was created
+            # under. That generation only advances when a supervisor is replaced,
+            # so a command whose generation is *older* than the live session was
+            # authored by a superseded supervisor and must not be executed after
+            # ownership changed (#3704).
+            if (
+                session_row is not None
+                and row.fencing_generation < session_row.fencing_generation
+            ):
+                telemetry.record_fencing_conflict(
+                    scope=FencingScope.SESSION_SUPERVISOR
+                )
+                return CasResult(
+                    ControlPlaneOutcome.FENCING_CONFLICT, _command_record(row)
+                )
             row.status = COMMAND_STATE_CLAIMED
             row.owner_class = owner_class
+            row.claim_token = claim_token
             row.revision = row.revision + 1
             await self._session.flush()
             await self._session.refresh(row)
             return CasResult(ControlPlaneOutcome.APPLIED, _command_record(row))
-        # Already claimed or beyond: this caller must not execute again.
+        if row.status == COMMAND_STATE_CLAIMED:
+            if row.claim_token == claim_token:
+                # Same durable claimant resuming its own outstanding claim.
+                return CasResult(ControlPlaneOutcome.APPLIED, _command_record(row))
+            # A different claimant races a live claim: it did not win authority.
+            telemetry.record_duplicate_command_suppressed()
+            return CasResult(ControlPlaneOutcome.NOT_OWNER, _command_record(row))
+        # Settled (applied/failed) or parked delivery-unknown: do not re-execute.
         telemetry.record_duplicate_command_suppressed()
         return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row))
 
@@ -1244,6 +1322,7 @@ class CommandRepository(_RepositoryBase):
         command_id: str,
         *,
         owner_class: str,
+        claim_token: str,
         outcome: ControlPlaneOutcome,
         provider_receipt_id: Optional[str] = None,
         result_ref: Optional[str] = None,
@@ -1260,19 +1339,44 @@ class CommandRepository(_RepositoryBase):
           did not land against current authority; the command fails and is
           retried against fresh state.
 
-        Only the claiming ``owner_class`` may record delivery; a stale worker is
-        refused (:class:`NotCommandOwnerError`). Recording delivery on a command
-        that already settled is idempotent.
+        Only the winning claimant may record delivery: both the ``owner_class``
+        and the per-claim ``claim_token`` must match, so a racing loser that
+        shares an ``owner_class`` cannot settle the command
+        (:class:`NotCommandOwnerError`). A command parked as delivery-unknown may
+        still be reconciled by its owner. Recording a delivery that *matches* an
+        already-settled terminal is idempotent (:attr:`ALREADY_APPLIED`); a
+        delivery that *contradicts* the settled terminal (for example ``APPLIED``
+        reported after the command already failed) is refused as an
+        immutable-authority conflict and never reported as success (#3704).
         """
 
         row = await self._load_command_for_update(command_id)
         if row.status in COMMAND_TERMINAL_STATES:
-            return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row))
-        if row.status != COMMAND_STATE_CLAIMED or row.owner_class != owner_class:
+            settled_applied = row.status == COMMAND_STATE_APPLIED
+            confirms_apply = outcome in (
+                ControlPlaneOutcome.APPLIED,
+                ControlPlaneOutcome.DELIVERY_UNKNOWN,
+            )
+            # Idempotent replay only when the new outcome agrees with the settled
+            # terminal; a contradictory terminal delivery is a hard conflict.
+            if settled_applied == confirms_apply:
+                return CasResult(
+                    ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row)
+                )
+            return CasResult(
+                ControlPlaneOutcome.IMMUTABLE_AUTHORITY_CONFLICT,
+                _command_record(row),
+            )
+        if (
+            row.status not in (COMMAND_STATE_CLAIMED, COMMAND_STATE_DELIVERY_UNKNOWN)
+            or row.owner_class != owner_class
+            or row.claim_token != claim_token
+        ):
             raise NotCommandOwnerError(
-                f"Command {command_id!r} is not claimed by {owner_class!r} "
+                f"Command {command_id!r} is not claimed by this claimant "
                 f"(status={row.status!r}, owner={row.owner_class!r})"
             )
+        was_delivery_unknown = row.status == COMMAND_STATE_DELIVERY_UNKNOWN
         if provider_receipt_id is not None:
             row.provider_receipt_id = provider_receipt_id
         if result_ref is not None:
@@ -1280,14 +1384,25 @@ class CommandRepository(_RepositoryBase):
         if outcome is ControlPlaneOutcome.APPLIED:
             row.status = COMMAND_STATE_APPLIED
             row.delivery_ambiguous = False
+            if was_delivery_unknown:
+                # A previously parked delivery-ambiguous command is now confirmed
+                # at the authoritative delivery boundary: this is the reconciled
+                # event, counted separately from its creation (#3704).
+                telemetry.record_delivery_unknown_reconciled()
             result_outcome = ControlPlaneOutcome.APPLIED
         elif outcome is ControlPlaneOutcome.DELIVERY_UNKNOWN:
             row.status = COMMAND_STATE_DELIVERY_UNKNOWN
             row.delivery_ambiguous = True
-            telemetry.record_delivery_unknown_reconciled()
+            if not was_delivery_unknown:
+                telemetry.record_delivery_unknown_created()
             result_outcome = ControlPlaneOutcome.DELIVERY_UNKNOWN
         else:
+            # REVISION_CONFLICT / FENCING_CONFLICT (or any non-delivery outcome):
+            # the side effect did not land against current authority. Settle the
+            # command failed and route the conflict through bounded telemetry so
+            # the command-execution surface is observable (#3704).
             row.status = COMMAND_STATE_FAILED
+            telemetry.record_outcome(outcome, scope=FencingScope.SESSION_SUPERVISOR)
             result_outcome = outcome
         row.revision = row.revision + 1
         await self._session.flush()
@@ -1456,9 +1571,12 @@ class CleanupAuthorityRepository(_RepositoryBase):
         if row is not None:
             return row
         row = OmnigentCleanupAuthority(session_id=session_id)
-        self._session.add(row)
         try:
+            # Add inside the savepoint so the INSERT is only emitted after the
+            # SAVEPOINT exists: a losing concurrent lazy-create rolls back to the
+            # savepoint instead of aborting the outer transaction (#3704).
             async with self._session.begin_nested():
+                self._session.add(row)
                 await self._session.flush()
         except IntegrityError:
             # Concurrent lazy-create: reload the winner under the row lock.
@@ -1474,31 +1592,72 @@ class CleanupAuthorityRepository(_RepositoryBase):
         session_id: str,
         *,
         owner_class: str,
-        fenced_host_generation: Optional[int] = None,
-        fenced_profile_generation: Optional[int] = None,
-        fenced_provider_epoch: Optional[str] = None,
+        claim_token: str,
     ) -> CasResult:
         """Claim exclusive cleanup authority for a session.
 
-        Exactly one janitor wins the ``unclaimed -> claimed`` transition and
-        receives :attr:`APPLIED`; a concurrent janitor observes a live claim and
-        receives :attr:`NOT_OWNER` (a cleanup-claim conflict counter is emitted).
-        A completed cleanup is idempotent (:attr:`ALREADY_APPLIED`). The claim
-        records the host/profile/provider generations it is fenced against so
-        :meth:`complete_cleanup` can prove they were not superseded.
+        ``claim_token`` is the winning janitor's durable identity; ``owner_class``
+        stays a low-cardinality metric label. The claim locks the session row in
+        the same transaction and derives the host / Provider Profile lease
+        generations and provider-session epoch it is fenced against directly from
+        that live authority, so a claim can never silently record ``None`` fences
+        while authority-bearing leases exist and thereby skip fencing at
+        completion (#3704). Outcomes:
+
+        * ``unclaimed`` -> the janitor wins and receives :attr:`APPLIED`.
+        * ``claimed`` by the same ``claim_token`` -> :attr:`APPLIED` (idempotent
+          resume of the janitor's own outstanding claim).
+        * ``claimed`` by a different janitor whose recorded fences match current
+          authority (a live claim) -> :attr:`NOT_OWNER` (a cleanup-claim conflict
+          counter is emitted); exactly one owner may hold a live claim.
+        * ``claimed`` by a different janitor whose recorded fences are *stale*
+          (superseded by a newer host/profile/provider generation) -> a fenced
+          takeover that advances the generation and re-owns the claim, so a
+          cleanup fenced out at completion cannot strand the resource forever.
+        * ``complete`` -> idempotent (:attr:`ALREADY_APPLIED`).
         """
 
         row = await self._load_for_update(session_id)
         if row.state == CLEANUP_STATE_COMPLETE:
             return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _cleanup_record(row))
+        session_row = await self._session.get(
+            OmnigentSession, session_id, with_for_update=True
+        )
+        cur_host = session_row.host_lease_generation if session_row else None
+        cur_profile = (
+            session_row.provider_profile_generation if session_row else None
+        )
+        cur_epoch = session_row.provider_session_ref if session_row else None
         if row.state == CLEANUP_STATE_CLAIMED:
-            telemetry.record_cleanup_claim_conflict()
-            return CasResult(ControlPlaneOutcome.NOT_OWNER, _cleanup_record(row))
+            if row.claim_token == claim_token:
+                return CasResult(ControlPlaneOutcome.APPLIED, _cleanup_record(row))
+            stale = (
+                (
+                    row.fenced_host_generation is not None
+                    and row.fenced_host_generation != cur_host
+                )
+                or (
+                    row.fenced_profile_generation is not None
+                    and row.fenced_profile_generation != cur_profile
+                )
+                or (
+                    row.fenced_provider_epoch is not None
+                    and row.fenced_provider_epoch != cur_epoch
+                )
+            )
+            if not stale:
+                telemetry.record_cleanup_claim_conflict()
+                return CasResult(
+                    ControlPlaneOutcome.NOT_OWNER, _cleanup_record(row)
+                )
+            # else: the prior claim was fenced out by a newer generation; fall
+            # through to re-own it as a fenced takeover (advances generation).
         row.state = CLEANUP_STATE_CLAIMED
         row.owner_class = owner_class
-        row.fenced_host_generation = fenced_host_generation
-        row.fenced_profile_generation = fenced_profile_generation
-        row.fenced_provider_epoch = fenced_provider_epoch
+        row.claim_token = claim_token
+        row.fenced_host_generation = cur_host
+        row.fenced_profile_generation = cur_profile
+        row.fenced_provider_epoch = cur_epoch
         row.generation = row.generation + 1
         row.revision = row.revision + 1
         await self._session.flush()
@@ -1511,15 +1670,21 @@ class CleanupAuthorityRepository(_RepositoryBase):
         *,
         generation: int,
         owner_class: str,
+        claim_token: str,
         session_repository: "SessionRepository",
     ) -> CasResult:
         """Complete a claimed cleanup, re-validating lease fencing.
 
-        Only the current owner of the claimed generation may complete cleanup; a
-        former janitor whose generation was superseded is refused
-        (:attr:`NOT_OWNER`). Before settling, the recorded host / Provider Profile
-        lease generations are re-checked against the live session: if a
-        replacement lease has been acquired since the claim, completion is fenced
+        Only the exact winning claimant may complete cleanup: the claimed
+        ``generation``, ``owner_class``, and per-claim ``claim_token`` must all
+        match, so a racing janitor that shares an ``owner_class`` (and therefore
+        received the winner's record on its losing claim) cannot complete a
+        cleanup it never won (:attr:`NOT_OWNER`). The session is loaded *for
+        update* in the same transaction so its authority cannot advance between
+        this check and completion (consistent lock order: cleanup row, then
+        session). Before settling, the recorded host / Provider Profile lease
+        generations and provider-session epoch are re-checked against the locked
+        session: if any was superseded since the claim, completion is fenced
         (:attr:`FENCING_CONFLICT`) so a former owner cannot release a resource
         that now belongs to a newer generation (#3704).
         """
@@ -1531,10 +1696,11 @@ class CleanupAuthorityRepository(_RepositoryBase):
             row.state != CLEANUP_STATE_CLAIMED
             or row.generation != generation
             or row.owner_class != owner_class
+            or row.claim_token != claim_token
         ):
             telemetry.record_cleanup_claim_conflict()
             return CasResult(ControlPlaneOutcome.NOT_OWNER, _cleanup_record(row))
-        session = await session_repository.get(session_id)
+        session = await session_repository.load_for_update(session_id)
         if session is not None:
             if (
                 row.fenced_profile_generation is not None
@@ -1551,6 +1717,18 @@ class CleanupAuthorityRepository(_RepositoryBase):
                 and session.host_lease_generation != row.fenced_host_generation
             ):
                 telemetry.record_fencing_conflict(scope=FencingScope.HOST_LEASE)
+                return CasResult(
+                    ControlPlaneOutcome.FENCING_CONFLICT, _cleanup_record(row)
+                )
+            if (
+                row.fenced_provider_epoch is not None
+                and session.provider_session_ref != row.fenced_provider_epoch
+            ):
+                # The provider session captured at claim time was replaced; a new
+                # provider epoch owns cleanup and the former janitor is fenced.
+                telemetry.record_fencing_conflict(
+                    scope=FencingScope.SESSION_SUPERVISOR
+                )
                 return CasResult(
                     ControlPlaneOutcome.FENCING_CONFLICT, _cleanup_record(row)
                 )

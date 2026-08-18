@@ -895,6 +895,11 @@ class OmnigentCommand(Base):
     # cardinality class, never a high-cardinality identity, so it is safe for
     # metric labels (#3704).
     owner_class: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Per-claim fencing token identifying the exact claimant that won execution
+    # authority. Unlike the low-cardinality ``owner_class`` (a safe metric label),
+    # this uniquely binds delivery/result settlement to the winning claimant so a
+    # racing loser that shares an ``owner_class`` cannot settle the command (#3704).
+    claim_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     provider_receipt_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     delivery_ambiguous: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
@@ -1029,6 +1034,11 @@ class OmnigentCleanupAuthority(Base):
         String(32), nullable=False, default="unclaimed", server_default="unclaimed"
     )
     owner_class: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Per-claim fencing token identifying the exact janitor that won cleanup
+    # authority. ``owner_class`` stays a low-cardinality metric label; this token
+    # binds completion to the winning claimant so a racing janitor sharing an
+    # ``owner_class`` cannot complete a cleanup it never won (#3704).
+    claim_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     fenced_host_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     fenced_profile_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     fenced_provider_epoch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)

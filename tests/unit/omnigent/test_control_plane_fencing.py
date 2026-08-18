@@ -212,19 +212,153 @@ async def test_command_claimed_once_and_delivery_confirmed(store) -> None:
             idempotency_key="cmd-1",
             payload_digest="digest",
         )
-        first = await repos.commands.claim_command("c1", owner_class="supervisor")
-        second = await repos.commands.claim_command("c1", owner_class="supervisor")
+        # Exactly one claimant wins execution authority; a racing worker that
+        # shares an owner_class but presents a different claim token does NOT win
+        # and must not settle the command.
+        first = await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-a"
+        )
+        racing = await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-b"
+        )
         confirmed = await repos.commands.record_command_delivery(
-            "c1", owner_class="supervisor", outcome=ControlPlaneOutcome.APPLIED
+            "c1",
+            owner_class="supervisor",
+            claim_token="worker-a",
+            outcome=ControlPlaneOutcome.APPLIED,
         )
     assert first.outcome is ControlPlaneOutcome.APPLIED
-    assert second.outcome is ControlPlaneOutcome.ALREADY_APPLIED
+    assert racing.outcome is ControlPlaneOutcome.NOT_OWNER
     assert confirmed.outcome is ControlPlaneOutcome.APPLIED
     assert confirmed.record.status == "applied"
     assert confirmed.record.delivery_ambiguous is False
-    # The duplicate claim is suppressed telemetry, not a re-execution.
+    # The racing claim is suppressed telemetry, not a re-execution.
     assert (
         telemetry.snapshot()[(telemetry.DUPLICATE_COMMAND_SUPPRESSED, "session")] == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_command_delivery_bound_to_winning_claim_token(store) -> None:
+    # A racing worker with the same owner_class but a different claim token
+    # cannot settle a command it never won (#3704: fencing token, not the
+    # low-cardinality metric label, authorizes settlement).
+    await _new_session(store)
+    async with store.transaction() as repos:
+        await repos.commands.record(
+            command_id="c1",
+            session_id="s1",
+            command_type="ensure_host",
+            idempotency_key="cmd-1",
+            payload_digest="digest",
+        )
+        await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-a"
+        )
+    with pytest.raises(NotCommandOwnerError):
+        async with store.transaction() as repos:
+            await repos.commands.record_command_delivery(
+                "c1",
+                owner_class="supervisor",
+                claim_token="worker-b",
+                outcome=ControlPlaneOutcome.APPLIED,
+            )
+
+
+@pytest.mark.asyncio
+async def test_command_same_claimant_resumes_after_crash(store) -> None:
+    # A durable claimant that committed pending->claimed but crashed before
+    # recording delivery can resume its own outstanding claim (same claim token)
+    # instead of the side effect being permanently stranded (#3704).
+    await _new_session(store)
+    async with store.transaction() as repos:
+        await repos.commands.record(
+            command_id="c1",
+            session_id="s1",
+            command_type="ensure_host",
+            idempotency_key="cmd-1",
+            payload_digest="digest",
+        )
+        first = await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-a"
+        )
+        resume = await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-a"
+        )
+    assert first.outcome is ControlPlaneOutcome.APPLIED
+    assert resume.outcome is ControlPlaneOutcome.APPLIED
+
+
+@pytest.mark.asyncio
+async def test_command_claim_fenced_when_supervisor_superseded(store) -> None:
+    # A command authored under an older session-supervisor generation must not be
+    # claimed/executed after a replacement supervisor advanced the generation.
+    created = await _new_session(store)
+    async with store.transaction() as repos:
+        await repos.commands.record(
+            command_id="c1",
+            session_id="s1",
+            command_type="ensure_host",
+            idempotency_key="cmd-1",
+            payload_digest="digest",
+            fencing_generation=0,
+        )
+        await repos.sessions.acquire_fencing_generation(
+            "s1", FencingScope.SESSION_SUPERVISOR, expected_revision=created.revision
+        )
+        fenced = await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-a"
+        )
+    assert fenced.outcome is ControlPlaneOutcome.FENCING_CONFLICT
+    assert (
+        telemetry.snapshot()[(telemetry.FENCING_CONFLICTS, "session_supervisor")] == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_command_rejects_contradictory_applied_delivery(store) -> None:
+    # A delayed provider result reporting APPLIED after the command already
+    # settled failed must not be accepted as confirmed delivery (#3704): it is an
+    # immutable-authority conflict, not a success.
+    await _new_session(store)
+    async with store.transaction() as repos:
+        await repos.commands.record(
+            command_id="c1",
+            session_id="s1",
+            command_type="ensure_host",
+            idempotency_key="cmd-1",
+            payload_digest="digest",
+        )
+        await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-a"
+        )
+        failed = await repos.commands.record_command_delivery(
+            "c1",
+            owner_class="supervisor",
+            claim_token="worker-a",
+            outcome=ControlPlaneOutcome.FENCING_CONFLICT,
+        )
+        contradictory = await repos.commands.record_command_delivery(
+            "c1",
+            owner_class="supervisor",
+            claim_token="worker-a",
+            outcome=ControlPlaneOutcome.APPLIED,
+        )
+        # Re-reporting the same terminal (failure) is idempotent.
+        idempotent = await repos.commands.record_command_delivery(
+            "c1",
+            owner_class="supervisor",
+            claim_token="worker-a",
+            outcome=ControlPlaneOutcome.REVISION_CONFLICT,
+        )
+    assert failed.outcome is ControlPlaneOutcome.FENCING_CONFLICT
+    assert failed.record.status == "failed"
+    assert contradictory.outcome is ControlPlaneOutcome.IMMUTABLE_AUTHORITY_CONFLICT
+    assert contradictory.applied is False
+    assert idempotent.outcome is ControlPlaneOutcome.ALREADY_APPLIED
+    # The conflict-settled delivery emits command-execution fencing telemetry.
+    assert (
+        telemetry.snapshot()[(telemetry.FENCING_CONFLICTS, "session_supervisor")] == 1
     )
 
 
@@ -242,16 +376,21 @@ async def test_delivery_unknown_is_parked_and_not_reissued(store) -> None:
             idempotency_key="cmd-1",
             payload_digest="digest",
         )
-        claimed = await repos.commands.claim_command("c1", owner_class="supervisor")
+        claimed = await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-a"
+        )
         ambiguous = await repos.commands.record_command_delivery(
             "c1",
             owner_class="supervisor",
+            claim_token="worker-a",
             outcome=ControlPlaneOutcome.DELIVERY_UNKNOWN,
             provider_receipt_id="rcpt-ambiguous",
         )
         # A later reconcile attempt must observe the parked command as already
         # claimed and must NOT re-execute the side effect.
-        reclaim = await repos.commands.claim_command("c1", owner_class="supervisor")
+        reclaim = await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-a"
+        )
         parked = await repos.commands.get("c1")
 
     assert claimed.outcome is ControlPlaneOutcome.APPLIED
@@ -263,16 +402,52 @@ async def test_delivery_unknown_is_parked_and_not_reissued(store) -> None:
     assert parked.status == "delivery_unknown"
     assert parked.delivery_ambiguous is True
     assert parked.provider_receipt_id == "rcpt-ambiguous"
-    # (c) the delivery-unknown reconciliation counter is emitted exactly once
-    # (the only bounded counter otherwise unasserted across the suite).
-    assert (
-        telemetry.snapshot()[(telemetry.DELIVERY_UNKNOWN_RECONCILED, "session")] == 1
-    )
+    # (c) parking counts delivery-unknown *creation*, NOT reconciliation: the
+    # side effect has not yet been confirmed (#3704).
+    snap = telemetry.snapshot()
+    assert snap[(telemetry.DELIVERY_UNKNOWN_CREATED, "session")] == 1
+    assert snap.get((telemetry.DELIVERY_UNKNOWN_RECONCILED, "session"), 0) == 0
     # (d) the reconcile-time re-claim is suppressed, not a second execution.
     assert reclaim.outcome is ControlPlaneOutcome.ALREADY_APPLIED
     assert (
         telemetry.snapshot()[(telemetry.DUPLICATE_COMMAND_SUPPRESSED, "session")] == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_delivery_unknown_reconciled_only_on_confirmation(store) -> None:
+    # The reconciled counter is emitted only when a parked delivery-ambiguous
+    # command is later confirmed at the authoritative delivery boundary (#3704).
+    await _new_session(store)
+    async with store.transaction() as repos:
+        await repos.commands.record(
+            command_id="c1",
+            session_id="s1",
+            command_type="ensure_host",
+            idempotency_key="cmd-1",
+            payload_digest="digest",
+        )
+        await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-a"
+        )
+        await repos.commands.record_command_delivery(
+            "c1",
+            owner_class="supervisor",
+            claim_token="worker-a",
+            outcome=ControlPlaneOutcome.DELIVERY_UNKNOWN,
+        )
+        confirmed = await repos.commands.record_command_delivery(
+            "c1",
+            owner_class="supervisor",
+            claim_token="worker-a",
+            outcome=ControlPlaneOutcome.APPLIED,
+        )
+    assert confirmed.outcome is ControlPlaneOutcome.APPLIED
+    assert confirmed.record.status == "applied"
+    assert confirmed.record.delivery_ambiguous is False
+    snap = telemetry.snapshot()
+    assert snap[(telemetry.DELIVERY_UNKNOWN_CREATED, "session")] == 1
+    assert snap[(telemetry.DELIVERY_UNKNOWN_RECONCILED, "session")] == 1
 
 
 @pytest.mark.asyncio
@@ -286,11 +461,16 @@ async def test_delivery_non_owner_is_rejected(store) -> None:
             idempotency_key="cmd-1",
             payload_digest="digest",
         )
-        await repos.commands.claim_command("c1", owner_class="supervisor")
+        await repos.commands.claim_command(
+            "c1", owner_class="supervisor", claim_token="worker-a"
+        )
     with pytest.raises(NotCommandOwnerError):
         async with store.transaction() as repos:
             await repos.commands.record_command_delivery(
-                "c1", owner_class="other", outcome=ControlPlaneOutcome.APPLIED
+                "c1",
+                owner_class="other",
+                claim_token="worker-a",
+                outcome=ControlPlaneOutcome.APPLIED,
             )
 
 
@@ -301,15 +481,20 @@ async def test_delivery_non_owner_is_rejected(store) -> None:
 async def test_cleanup_claim_and_complete_happy_path(store) -> None:
     await _new_session(store)
     async with store.transaction() as repos:
-        claim = await repos.cleanup.claim_cleanup("s1", owner_class="janitor")
+        claim = await repos.cleanup.claim_cleanup(
+            "s1", owner_class="janitor", claim_token="janitor-a"
+        )
         assert claim.outcome is ControlPlaneOutcome.APPLIED
-        # A second janitor cannot claim a live cleanup.
-        conflict = await repos.cleanup.claim_cleanup("s1", owner_class="janitor-2")
+        # A second janitor cannot steal a live claim (fences still current).
+        conflict = await repos.cleanup.claim_cleanup(
+            "s1", owner_class="janitor", claim_token="janitor-b"
+        )
         assert conflict.outcome is ControlPlaneOutcome.NOT_OWNER
         done = await repos.cleanup.complete_cleanup(
             "s1",
             generation=claim.record.generation,
             owner_class="janitor",
+            claim_token="janitor-a",
             session_repository=repos.sessions,
         )
     assert done.outcome is ControlPlaneOutcome.APPLIED
@@ -318,17 +503,37 @@ async def test_cleanup_claim_and_complete_happy_path(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_cleanup_complete_bound_to_winning_claim_token(store) -> None:
+    # A janitor that shares an owner_class but never won the claim cannot
+    # complete cleanup, even presenting the winner's generation (#3704).
+    await _new_session(store)
+    async with store.transaction() as repos:
+        claim = await repos.cleanup.claim_cleanup(
+            "s1", owner_class="janitor", claim_token="janitor-a"
+        )
+        loser = await repos.cleanup.complete_cleanup(
+            "s1",
+            generation=claim.record.generation,
+            owner_class="janitor",
+            claim_token="janitor-b",
+            session_repository=repos.sessions,
+        )
+    assert loser.outcome is ControlPlaneOutcome.NOT_OWNER
+    assert loser.record.state == "claimed"
+
+
+@pytest.mark.asyncio
 async def test_cleanup_complete_fenced_against_renewed_lease(store) -> None:
     created = await _new_session(store)
     async with store.transaction() as repos:
-        leased = await repos.sessions.acquire_fencing_generation(
+        await repos.sessions.acquire_fencing_generation(
             "s1", FencingScope.HOST_LEASE, expected_revision=created.revision
         )
+        # The claim derives its host fence from the live session (generation 1).
         claim = await repos.cleanup.claim_cleanup(
-            "s1",
-            owner_class="janitor",
-            fenced_host_generation=leased.host_lease_generation,
+            "s1", owner_class="janitor", claim_token="janitor-a"
         )
+    assert claim.record.fenced_host_generation == 1
     # Renew the host lease under a strictly newer generation.
     async with store.transaction() as repos:
         current = await repos.sessions.get("s1")
@@ -340,9 +545,27 @@ async def test_cleanup_complete_fenced_against_renewed_lease(store) -> None:
             "s1",
             generation=claim.record.generation,
             owner_class="janitor",
+            claim_token="janitor-a",
             session_repository=repos.sessions,
         )
     assert fenced.outcome is ControlPlaneOutcome.FENCING_CONFLICT
+    # The stranded (fenced-out) claim can be taken over by a janitor fenced
+    # against the current lease so cleanup is not permanently stuck (#3704).
+    async with store.transaction() as repos:
+        takeover = await repos.cleanup.claim_cleanup(
+            "s1", owner_class="janitor", claim_token="janitor-b"
+        )
+        assert takeover.outcome is ControlPlaneOutcome.APPLIED
+        assert takeover.record.generation == claim.record.generation + 1
+        done = await repos.cleanup.complete_cleanup(
+            "s1",
+            generation=takeover.record.generation,
+            owner_class="janitor",
+            claim_token="janitor-b",
+            session_repository=repos.sessions,
+        )
+    assert done.outcome is ControlPlaneOutcome.APPLIED
+    assert done.record.state == "complete"
 
 
 # --- Legacy compatibility / bounded migration policy -------------------------
@@ -381,7 +604,11 @@ async def test_absent_cleanup_authority_is_unclaimed(store) -> None:
     # Completing a cleanup that was never claimed is refused.
     async with store.transaction() as repos:
         result = await repos.cleanup.complete_cleanup(
-            "s1", generation=1, owner_class="janitor", session_repository=repos.sessions
+            "s1",
+            generation=1,
+            owner_class="janitor",
+            claim_token="janitor-a",
+            session_repository=repos.sessions,
         )
     assert result.outcome is ControlPlaneOutcome.NOT_OWNER
     assert isinstance(result.record, CleanupAuthorityRecord)

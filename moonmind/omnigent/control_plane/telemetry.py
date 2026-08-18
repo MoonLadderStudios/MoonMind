@@ -32,6 +32,13 @@ logger = logging.getLogger("moonmind.omnigent.control_plane.concurrency")
 REVISION_CONFLICTS = "revision_conflicts"
 FENCING_CONFLICTS = "fencing_conflicts"
 DUPLICATE_COMMAND_SUPPRESSED = "duplicate_command_suppressed"
+# Delivery-ambiguity is counted in two distinct phases so operational metrics do
+# not report an unresolved ambiguity as a successful reconciliation (#3704):
+#   * ``delivery_unknown_created``    - a command was parked as delivery-ambiguous
+#     (the side effect *may* have occurred); reconciliation has not confirmed it.
+#   * ``delivery_unknown_reconciled`` - a previously parked delivery-ambiguous
+#     command was confirmed at the authoritative delivery boundary.
+DELIVERY_UNKNOWN_CREATED = "delivery_unknown_created"
 DELIVERY_UNKNOWN_RECONCILED = "delivery_unknown_reconciled"
 STALE_OBSERVATION_RETAINED = "stale_observation_retained"
 CLEANUP_CLAIM_CONFLICTS = "cleanup_claim_conflicts"
@@ -41,6 +48,7 @@ CONFLICT_METRICS: frozenset[str] = frozenset(
         REVISION_CONFLICTS,
         FENCING_CONFLICTS,
         DUPLICATE_COMMAND_SUPPRESSED,
+        DELIVERY_UNKNOWN_CREATED,
         DELIVERY_UNKNOWN_RECONCILED,
         STALE_OBSERVATION_RETAINED,
         CLEANUP_CLAIM_CONFLICTS,
@@ -75,6 +83,10 @@ def record_duplicate_command_suppressed() -> None:
     _record(DUPLICATE_COMMAND_SUPPRESSED)
 
 
+def record_delivery_unknown_created() -> None:
+    _record(DELIVERY_UNKNOWN_CREATED)
+
+
 def record_delivery_unknown_reconciled() -> None:
     _record(DELIVERY_UNKNOWN_RECONCILED)
 
@@ -99,7 +111,10 @@ def record_outcome(outcome: ControlPlaneOutcome, *, scope: FencingScope) -> None
     elif outcome is ControlPlaneOutcome.FENCING_CONFLICT:
         record_fencing_conflict(scope=scope)
     elif outcome is ControlPlaneOutcome.DELIVERY_UNKNOWN:
-        record_delivery_unknown_reconciled()
+        # Routing a fresh DELIVERY_UNKNOWN outcome records its *creation*; the
+        # reconciled counter is emitted only when a parked command is later
+        # confirmed at the authoritative delivery boundary (#3704).
+        record_delivery_unknown_created()
 
 
 def snapshot() -> Mapping[tuple[str, str], int]:

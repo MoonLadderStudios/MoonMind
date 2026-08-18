@@ -323,13 +323,18 @@ async def test_postgres_two_janitors_cannot_both_claim_cleanup(pg_store) -> None
             provider_session_ref="psess-1",
         )
 
-    async def _claim():
+    async def _claim(token):
         async with pg_store.transaction() as repos:
-            return await repos.cleanup.claim_cleanup("s1", owner_class="janitor")
+            return await repos.cleanup.claim_cleanup(
+                "s1", owner_class="janitor", claim_token=token
+            )
 
-    results = await asyncio.gather(_claim(), _claim(), return_exceptions=True)
+    results = await asyncio.gather(
+        _claim("janitor-a"), _claim("janitor-b"), return_exceptions=True
+    )
     outcomes = [r.outcome for r in results if not isinstance(r, Exception)]
-    # Exactly one janitor claims; the other observes the live claim.
+    # Exactly one janitor claims; the other (distinct claim token) observes the
+    # live claim and is refused.
     assert outcomes.count(ControlPlaneOutcome.APPLIED) == 1
     assert outcomes.count(ControlPlaneOutcome.NOT_OWNER) == 1
 
@@ -347,15 +352,15 @@ async def test_postgres_former_janitor_cannot_release_replacement_lease(pg_store
             provider_session_ref="psess-1",
         )
         current = await repos.sessions.get("s1")
-        leased = await repos.sessions.acquire_fencing_generation(
+        await repos.sessions.acquire_fencing_generation(
             "s1", FencingScope.HOST_LEASE, expected_revision=current.revision
         )
+        # The claim derives its host fence from the live session (generation 1).
         claim = await repos.cleanup.claim_cleanup(
-            "s1",
-            owner_class="janitor",
-            fenced_host_generation=leased.host_lease_generation,
+            "s1", owner_class="janitor", claim_token="janitor-a"
         )
     assert claim.outcome is ControlPlaneOutcome.APPLIED
+    assert claim.record.fenced_host_generation == 1
 
     # Host lease is renewed (a replacement generation).
     async with pg_store.transaction() as repos:
@@ -369,22 +374,28 @@ async def test_postgres_former_janitor_cannot_release_replacement_lease(pg_store
             "s1",
             generation=claim.record.generation,
             owner_class="janitor",
+            claim_token="janitor-a",
             session_repository=repos.sessions,
         )
     assert completion.outcome is ControlPlaneOutcome.FENCING_CONFLICT
 
-    # A janitor fenced against the current lease completes cleanup.
+    # The fenced-out claim is not stuck forever: a janitor fenced against the
+    # current lease takes it over (advancing the generation) and completes.
     async with pg_store.transaction() as repos:
-        current = await repos.sessions.get("s1")
-        reclaim = await repos.cleanup.claim_cleanup(
-            "s1",
-            owner_class="janitor",
-            fenced_host_generation=current.host_lease_generation,
+        takeover = await repos.cleanup.claim_cleanup(
+            "s1", owner_class="janitor", claim_token="janitor-b"
         )
-        # Reclaim on a claimed cleanup is refused; move it back to unclaimed by
-        # completing the outstanding claim first is not possible for the stale
-        # owner, so the current owner remains the original claim generation.
-    assert reclaim.outcome is ControlPlaneOutcome.NOT_OWNER
+        assert takeover.outcome is ControlPlaneOutcome.APPLIED
+        assert takeover.record.generation == claim.record.generation + 1
+        completed = await repos.cleanup.complete_cleanup(
+            "s1",
+            generation=takeover.record.generation,
+            owner_class="janitor",
+            claim_token="janitor-b",
+            session_repository=repos.sessions,
+        )
+    assert completed.outcome is ControlPlaneOutcome.APPLIED
+    assert completed.record.state == "complete"
 
 
 @pytest.mark.asyncio
@@ -406,14 +417,20 @@ async def test_postgres_command_claimed_and_executed_once(pg_store) -> None:
             payload_digest="digest",
         )
 
-    async def _claim():
+    async def _claim(token):
         async with pg_store.transaction() as repos:
-            return await repos.commands.claim_command("c1", owner_class="supervisor")
+            return await repos.commands.claim_command(
+                "c1", owner_class="supervisor", claim_token=token
+            )
 
-    results = await asyncio.gather(_claim(), _claim(), return_exceptions=True)
+    results = await asyncio.gather(
+        _claim("worker-a"), _claim("worker-b"), return_exceptions=True
+    )
     outcomes = [r.outcome for r in results if not isinstance(r, Exception)]
+    # Exactly one worker wins execution authority; the racing worker (distinct
+    # claim token) is refused rather than granted a false success.
     assert outcomes.count(ControlPlaneOutcome.APPLIED) == 1
-    assert outcomes.count(ControlPlaneOutcome.ALREADY_APPLIED) == 1
+    assert outcomes.count(ControlPlaneOutcome.NOT_OWNER) == 1
 
 
 @pytest.mark.asyncio

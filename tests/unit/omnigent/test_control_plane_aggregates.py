@@ -277,20 +277,23 @@ async def test_command_claim_and_delivery_unknown(store) -> None:
         assert recorded.status == "pending"
         assert recorded.revision == 1
         # Exactly one caller may claim execution authority.
-        claim = await repos.commands.claim_command("c1", owner_class="session_supervisor")
+        claim = await repos.commands.claim_command(
+            "c1", owner_class="session_supervisor", claim_token="worker-a"
+        )
         assert claim.outcome is ControlPlaneOutcome.APPLIED
         assert claim.record.status == "claimed"
-        # A concurrent activity retry observes the existing claim and must not
-        # execute the side effect again.
+        # A concurrent worker that shares the owner_class but presents a different
+        # claim token does not win authority and must not execute the side effect.
         reclaim = await repos.commands.claim_command(
-            "c1", owner_class="session_supervisor"
+            "c1", owner_class="session_supervisor", claim_token="worker-b"
         )
-        assert reclaim.outcome is ControlPlaneOutcome.ALREADY_APPLIED
+        assert reclaim.outcome is ControlPlaneOutcome.NOT_OWNER
         # A possibly-delivered provider side effect is parked as ambiguous rather
         # than blindly reissued.
         delivered = await repos.commands.record_command_delivery(
             "c1",
             owner_class="session_supervisor",
+            claim_token="worker-a",
             outcome=ControlPlaneOutcome.DELIVERY_UNKNOWN,
             provider_receipt_id="rcpt-1",
             result_ref="art://result",
@@ -321,13 +324,16 @@ async def test_command_delivery_rejects_non_owner(store) -> None:
             idempotency_key="cmd-1",
             payload_digest="digest",
         )
-        await repos.commands.claim_command("c1", owner_class="session_supervisor")
+        await repos.commands.claim_command(
+            "c1", owner_class="session_supervisor", claim_token="worker-a"
+        )
     # A worker that does not own the claim cannot record its delivery.
     with pytest.raises(NotCommandOwnerError):
         async with store.transaction() as repos:
             await repos.commands.record_command_delivery(
                 "c1",
                 owner_class="stale_worker",
+                claim_token="worker-a",
                 outcome=ControlPlaneOutcome.APPLIED,
             )
 
