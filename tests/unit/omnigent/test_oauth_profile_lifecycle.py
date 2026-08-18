@@ -1672,7 +1672,8 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
     assert (
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH="
         "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
-        "MOONMIND_STEP_EXECUTION_ID,MOONMIND_CONTAINER_JOBS_BEARER_TOKEN,"
+        "MOONMIND_ACTIVE_SKILLS_DIR,MOONMIND_STEP_EXECUTION_ID,"
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN,"
         "MOONMIND_CONTAINER_JOBS_MCP_URL"
     ) in commands[2]
     assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in commands[2]
@@ -1823,7 +1824,7 @@ async def test_on_demand_claude_host_uses_claude_runtime_adapter(tmp_path) -> No
     assert (
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH="
         "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
-        "MOONMIND_STEP_EXECUTION_ID"
+        "MOONMIND_ACTIVE_SKILLS_DIR,MOONMIND_STEP_EXECUTION_ID"
     ) in launch_command
     assert "NO_PROXY=localhost,127.0.0.1" in launch_command
     assert "no_proxy=localhost,127.0.0.1" in launch_command

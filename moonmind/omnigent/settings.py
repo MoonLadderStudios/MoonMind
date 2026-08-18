@@ -10,6 +10,7 @@ OMNIGENT_DISABLED_MESSAGE = (
     "agentId=omnigent requires OMNIGENT_ENABLED=true with "
     "OMNIGENT_SERVER_URL configured"
 )
+OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR = "/opt/moonmind-skills"
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
@@ -158,6 +159,7 @@ def resolved_proxy_forward_headers(
 
 
 __all__ = [
+    "OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR",
     "OMNIGENT_DISABLED_MESSAGE",
     "OmnigentRuntimeGate",
     "build_omnigent_gate",

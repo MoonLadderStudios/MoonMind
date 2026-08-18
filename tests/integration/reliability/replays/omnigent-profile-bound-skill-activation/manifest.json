@@ -1,0 +1,9 @@
+{
+  "incidentWorkflowId": "mm:b56b53bd-54fa-4f8f-b380-a1ed5cf00d64",
+  "incidentRunId": "01a0113e-9610-7abc-9d4b-28a277e5e56a",
+  "failedChildWorkflowId": "mm:b56b53bd-54fa-4f8f-b380-a1ed5cf00d64:agent:node-1:execution4:retry3",
+  "selectedSkill": "fix-comments",
+  "resolvedSkillsetRef": "art_01M08MWN10S1D4529AWVGM5TG0",
+  "firstMessage": "Execute skill 'fix-comments'",
+  "failureShape": "the immutable fix-comments snapshot was verified and mounted at /opt/moonmind-skills, but the runner environment and actual first message did not identify that active path, so the agent reported that the selected Skill was not installed"
+}
