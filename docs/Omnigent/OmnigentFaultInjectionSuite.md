@@ -131,8 +131,19 @@ replay corpus.
   `tests/integration/reliability/test_omnigent_fault_corpus.py` runs the fixed
   declarative corpus and a fixed deterministic seed corpus. Fully hermetic — no
   network, credentials, Docker, or Temporal server.
-- **Rotating seed coverage** (main/schedule): the generated corpus scaled to a
-  larger seed range.
+- **Rotating seed coverage** (main/schedule): the `omnigent-fault-rotating-seeds`
+  job in `.github/workflows/pytest-unit-tests.yml` runs
+  `tests/unit/omnigent/faultlab/test_rotating_seed_corpus.py` over a larger,
+  date-rotated seed window on `schedule`, `main` pushes, and `workflow_dispatch`
+  only — never as a required PR gate. The window is selected by namespaced env
+  vars (`MOONMIND_FAULTLAB_ROTATING_SEEDS`, `MOONMIND_FAULTLAB_SEED_OFFSET`,
+  `MOONMIND_FAULTLAB_SEED_COUNT`) resolved by
+  `moonmind/omnigent/faultlab/ci_seeds.py`; with those vars unset every consumer
+  falls back to the fixed PR corpus. The sweep is bounded by an explicit
+  scenario-count window and a wall-time budget
+  (`MOONMIND_FAULTLAB_TIME_BUDGET_SECONDS`), and every failure writes a
+  reproduction-complete, secret-safe diagnostic bundle to
+  `MOONMIND_FAULTLAB_DIAGNOSTICS_DIR` for upload.
 - **Repository/concurrency, Temporal, API/browser, and exact-image layers**
   consume the same scenarios and provider ledger. The framework is intentionally
   layer-neutral so those bindings are thin adapters; they are tracked as follow-up
