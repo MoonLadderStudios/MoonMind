@@ -354,6 +354,13 @@ Cleanup is idempotent across activity retry and worker failure:
   the observed lease status and heartbeat and moves it to `draining`; a
   concurrent heartbeat or state transition defeats the claim and defers cleanup
   to a later reconciliation pass;
+- heartbeat renewal is itself conditional on a heartbeat-owning state, so a
+  cleanup claim and heartbeat cannot both succeed; the claim renews a bounded
+  cleanup-ownership expiry, and the coordinator relinquishes cleanup and
+  Provider Profile release when that authority is lost;
+- orphan discovery resolves the container's durable host-lease label and reloads
+  that lease before removal; any lease-owned container stays on the fenced lease
+  cleanup path even when it appeared after the janitor's initial snapshot;
 - expired, missing-after-materialization, orphaned, and stale-generation hosts
   are reconciled by the host janitor;
 - cleanup failure leaves explicit `janitorRequired` evidence and does not falsely release credential capacity;

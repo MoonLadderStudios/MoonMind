@@ -50,6 +50,7 @@ from moonmind.omnigent.execution_profiles import (
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.oauth_hosts import (
+    HOST_CLEANUP_CLAIMED_ERROR_CODE,
     HOST_PROFILE_BUSY_ERROR_CODE,
     OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
@@ -3206,6 +3207,9 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
         )
         assert claimed is not None
         assert claimed.status == "draining"
+        assert 89 <= (
+            claimed.expires_at - claimed.last_heartbeat_at
+        ).total_seconds() <= 90
         assert (
             await repository.claim_host_lease_cleanup(
                 first.lease_id,
@@ -3214,8 +3218,27 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
             )
             is None
         )
-        with pytest.raises(OmnigentOAuthHostError, match="active host lease"):
+        with pytest.raises(OmnigentOAuthHostError) as heartbeat_error:
             await repository.heartbeat_host_lease(first.lease_id)
+        assert heartbeat_error.value.code == HOST_CLEANUP_CLAIMED_ERROR_CODE
+
+        await repository.mark_host_lease_stopped(first.lease_id)
+        restarted = await repository.restart_host_lease(first.lease_id)
+        heartbeat_result, cleanup_result = await asyncio.gather(
+            repository.heartbeat_host_lease(first.lease_id),
+            repository.claim_host_lease_cleanup(
+                first.lease_id,
+                expected_status="starting",
+                expected_last_heartbeat_at=restarted.last_heartbeat_at,
+            ),
+            return_exceptions=True,
+        )
+        heartbeat_won = not isinstance(heartbeat_result, BaseException)
+        cleanup_won = (
+            not isinstance(cleanup_result, BaseException)
+            and cleanup_result is not None
+        )
+        assert heartbeat_won is not cleanup_won
     finally:
         await engine.dispose()
 
@@ -3380,6 +3403,14 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
 
         async def create_or_get_host_lease(self, **_kwargs):
             actions.append("host_lease_created")
+            return self.lease
+
+        async def get_host_lease(self, _lease_id):
+            return self.lease
+
+        async def claim_host_lease_cleanup(self, _lease_id, **_kwargs):
+            self.lease = self.lease.model_copy(update={"status": "draining"})
+            actions.append("host_draining")
             return self.lease
 
         async def transition_host_lease(
@@ -3593,6 +3624,13 @@ async def _drive_authority_chain_coordinator(
             })
 
         async def create_or_get_host_lease(self, **_kwargs):
+            return self.lease
+
+        async def get_host_lease(self, _lease_id):
+            return self.lease
+
+        async def claim_host_lease_cleanup(self, _lease_id, **_kwargs):
+            self.lease = self.lease.model_copy(update={"status": "draining"})
             return self.lease
 
         async def transition_host_lease(
@@ -4199,6 +4237,13 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
         async def create_or_get_host_lease(self, **_kwargs):
             return self.lease
 
+        async def get_host_lease(self, _lease_id):
+            return self.lease
+
+        async def claim_host_lease_cleanup(self, _lease_id, **_kwargs):
+            self.lease = self.lease.model_copy(update={"status": "draining"})
+            return self.lease
+
         async def transition_host_lease(
             self, _lease_id, *, expected_status, new_status, fields=None
         ):
@@ -4744,6 +4789,13 @@ async def _run_coordinator_failure_case(
                 raise error
             return self.lease
 
+        async def get_host_lease(self, _lease_id):
+            return self.lease
+
+        async def claim_host_lease_cleanup(self, _lease_id, **_kwargs):
+            self.lease = self.lease.model_copy(update={"status": "draining"})
+            return self.lease
+
         async def transition_host_lease(
             self, _lease_id, *, expected_status, new_status, fields=None
         ):
@@ -4992,6 +5044,29 @@ async def test_cancelled_attempt_defers_host_and_profile_cleanup_to_retry_or_jan
         and payload["status"] == "waiting"
         for event_type, payload in events
     )
+
+
+@pytest.mark.asyncio
+async def test_janitor_cleanup_claim_relinquishes_coordinator_cleanup() -> None:
+    events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at="session_create",
+        code=HOST_CLEANUP_CLAIMED_ERROR_CODE,
+        injected_error=OmnigentOAuthHostError(
+            "host lease cleanup is owned by the janitor",
+            code=HOST_CLEANUP_CLAIMED_ERROR_CODE,
+        ),
+    )
+
+    cleanup_event = next(
+        payload
+        for event_type, payload in events
+        if event_type == "host_cleanup" and payload["status"] == "waiting"
+    )
+    assert cleanup_event["code"] == HOST_CLEANUP_CLAIMED_ERROR_CODE
+    assert cleanup_event["metadata"]["janitorRequired"] is True
+    assert "host_stop" not in owner_calls
+    assert "host_remove" not in owner_calls
+    assert "provider_released" not in actions
 
 
 @pytest.mark.asyncio

@@ -242,10 +242,12 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
             )]
 
         async def claim_host_lease_cleanup(
-            self, lease_id, *, expected_status, expected_last_heartbeat_at
+            self, lease_id, *, expected_status, expected_last_heartbeat_at,
+            ttl_seconds,
         ):
             assert lease_id == "host-lease-1"
             assert expected_status == "ready"
+            assert ttl_seconds == 90
             return SimpleNamespace(
                 lease_id=lease_id,
                 provider_profile_id="profile-1",

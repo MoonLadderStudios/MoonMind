@@ -1,12 +1,32 @@
 [
   {
-    "id": 3803594905,
+    "id": 3807043073,
     "disposition": "addressed",
-    "rationale": "Updated PINNED_OMNIGENT_COMMIT to the PR submodule commit and refreshed the native compatibility fixture hashes anchored to that pinned source for contract verification."
+    "rationale": "Heartbeat renewal now uses a conditional SQL update over heartbeat-owning states, making it mutually exclusive with the cleanup claim CAS."
   },
   {
-    "id": 4960451954,
+    "id": 3807043083,
+    "disposition": "addressed",
+    "rationale": "Cleanup claims now renew expires_at for the bounded cleanup ownership window in the same atomic update."
+  },
+  {
+    "id": 3807043091,
+    "disposition": "addressed",
+    "rationale": "A typed cleanup-ownership loss now routes coordinator finalization to janitor-required waiting without host stop or Provider Profile release."
+  },
+  {
+    "id": 3807043093,
+    "disposition": "addressed",
+    "rationale": "Lease-scoped drain, stop, remove, eviction, and stale-reconciliation actions now share the atomic cleanup claim before side effects."
+  },
+  {
+    "id": 3807043100,
+    "disposition": "addressed",
+    "rationale": "Orphan cleanup now reloads the host lease identified by the container label and leaves lease-owned containers to the fenced cleanup path."
+  },
+  {
+    "id": 4964716657,
     "disposition": "not-applicable",
-    "rationale": "Informational bot review summary comment with no standalone code or test action required."
+    "rationale": "Informational Codex review envelope; its five child threads contain the complete actionable feedback."
   }
 ]
