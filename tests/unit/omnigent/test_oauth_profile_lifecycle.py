@@ -1066,12 +1066,28 @@ def test_runtime_script_snapshot_materializes_owned_step_identity(tmp_path) -> N
     target = runtime._prepare_runtime_scripts(
         "workspace-key",
         current_step_execution_id=execution_id,
+        runtime_environment={
+            "MOONMIND_URL": "http://api:8000",
+            "MOONMIND_AGENT_RUN_ID": execution_id,
+            "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
+            "MOONMIND_RUNTIME_ID": "codex_cli",
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "must-not-be-persisted",
+        },
     )
 
     profile = target / "moonmind-execution.sh"
     assert profile.read_text(encoding="utf-8") == (
         "# Generated for one MoonMind-owned Omnigent host lease.\n"
         f"export MOONMIND_STEP_EXECUTION_ID='{execution_id}'\n"
+        "export MOONMIND_ACTIVE_SKILLS_DIR='/opt/moonmind-skills'\n"
+        "export MOONMIND_URL='http://api:8000'\n"
+        f"export MOONMIND_AGENT_RUN_ID='{execution_id}'\n"
+        "export MOONMIND_TASK_WORKFLOW_ID='workflow-1'\n"
+        "export MOONMIND_RUNTIME_ID='codex_cli'\n"
+    )
+    assert "must-not-be-persisted" not in profile.read_text(encoding="utf-8")
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in profile.read_text(
+        encoding="utf-8"
     )
     assert profile.stat().st_mode & 0o777 == 0o444
     with pytest.raises(OmnigentOAuthHostError) as mismatch:
@@ -1391,6 +1407,15 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     assert cleanup_authority_store.bind_calls[1]["launch_evidence_ref"] == first[
         "egressEvidenceRef"
     ]
+    runtime_profile_environment = (
+        runtime._prepare_daemon_runtime_scripts.call_args.kwargs[
+            "runtime_environment"
+        ]
+    )
+    assert runtime_profile_environment["MOONMIND_URL"] == "http://api:8000"
+    assert runtime_profile_environment["MOONMIND_TASK_WORKFLOW_ID"] == "workflow-1"
+    assert runtime_profile_environment["MOONMIND_AGENT_RUN_ID"] == "step-1"
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in runtime_profile_environment
     assert state["launches"] == 1
     assert state["manifest_checks"] == 2
 

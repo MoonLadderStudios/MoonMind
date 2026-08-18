@@ -26,6 +26,7 @@ from api_service.services.omnigent_policies import (
     bootstrap_document,
     seed_bootstrap_policies,
 )
+from moonmind.config.settings import settings
 from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
 from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
@@ -3323,6 +3324,56 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
         if value.startswith("OMNIGENT_RUNNER_ENV_PASSTHROUGH=")
     )
     assert passthrough.split(",") == expected["passthroughNames"]
+
+
+async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:2d8480da at the Omnigent runner-to-Codex shell boundary."""
+
+    replay_id = "omnigent-codex-moonmind-env-handoff"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    monkeypatch.setenv("MOONMIND_URL", manifest["moonmindUrl"])
+    monkeypatch.setattr(
+        settings.security,
+        "JWT_SECRET_KEY",
+        "replay-container-capability-key",
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=REPO_ROOT / "services" / "omnigent" / "scripts",
+        workspace_root=tmp_path,
+    )
+    runtime_environment = runtime._container_job_environment(
+        binding=_oauth_binding().model_copy(
+            update={
+                "static_host_id": None,
+                "host_launch_profile_ref": "codex-oauth-v1",
+            }
+        ),
+        host_lease=_oauth_host_lease(),
+        workspace_locator=manifest["workspaceLocator"],
+        current_workflow_id=manifest["incidentWorkflowId"],
+        current_step_execution_id=manifest["stepExecutionId"],
+        timeout_seconds=3600,
+    )
+    runtime_scripts = runtime._prepare_runtime_scripts(
+        manifest["incidentWorkflowId"],
+        current_step_execution_id=manifest["stepExecutionId"],
+        runtime_environment=runtime_environment,
+    )
+    profile = (runtime_scripts / "moonmind-execution.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for name in expected["toolShellEnvironmentNames"]:
+        assert f"export {name}=" in profile
+    assert f"'{manifest['moonmindUrl']}'" in profile
+    assert f"'{manifest['incidentWorkflowId']}'" in profile
+    assert expected["excludedSecretName"] not in profile
+    assert runtime_environment[expected["excludedSecretName"]] not in profile
 
 
 async def test_omnigent_codex_remote_bridge_has_loopback_only_proxy_bypass() -> None:
