@@ -61,7 +61,7 @@ def resolve_execution_fanout_capability(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={
                 "code": "unsupported_execution_fanout_capability",
-                "message": "The execution fan-out capability version is unsupported.",
+                "message": "The requested execution fan-out format is not recognized.",
             },
         )
     try:
