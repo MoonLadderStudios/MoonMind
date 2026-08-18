@@ -28,12 +28,12 @@ from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
-    OmnigentRecoveryMode,
     OmnigentRestoreMaterial,
     materialize_cold_restore_inputs,
     recovery_mode,
     validate_cold_restore_target,
 )
+from moonmind.omnigent.control_plane.turn_contract import RecoveryMode
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.remediation_workspace import (
@@ -2320,7 +2320,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             session_valid=session_valid,
             first_message_consistent=first_message_consistent,
         )
-        if mode == OmnigentRecoveryMode.LIVE_REATTACH:
+        if mode == RecoveryMode.LIVE_REATTACH:
             if request.execution_profile_ref != checkpoint.provider_profile_id:
                 raise ValueError("live reattach Provider Profile mismatch")
             profile = await self._resolve_profile(checkpoint.provider_profile_id)

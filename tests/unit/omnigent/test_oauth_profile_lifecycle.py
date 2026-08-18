@@ -30,13 +30,13 @@ from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
-    OmnigentRecoveryMode,
     materialize_cold_restore_inputs,
     recovery_mode,
     validate_branch_identity,
     validate_cold_restore_target,
     validate_restore_material,
 )
+from moonmind.omnigent.control_plane.turn_contract import RecoveryMode
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
 from moonmind.omnigent.effective_capabilities import (
     CAPABILITY_NAMES,
@@ -2768,7 +2768,7 @@ def test_checkpoint_live_reattach_requires_every_original_authority() -> None:
             session_valid=True,
             first_message_consistent=True,
         )
-        == OmnigentRecoveryMode.LIVE_REATTACH
+        == RecoveryMode.LIVE_REATTACH
     )
     assert (
         recovery_mode(
@@ -2783,8 +2783,52 @@ def test_checkpoint_live_reattach_requires_every_original_authority() -> None:
             session_valid=True,
             first_message_consistent=True,
         )
-        == OmnigentRecoveryMode.COLD_RESTORE
+        == RecoveryMode.COLD_RESTORE
     )
+
+
+def test_checkpoint_recovery_routes_through_canonical_contract() -> None:
+    """checkpoints.recovery_mode delegates to the one canonical recovery
+    contract (turn_contract.decide_recovery) rather than a parallel decision.
+
+    It must return the canonical ``RecoveryMode`` and, because a checkpoint
+    carries no changed immutable dimensions and always has a cold fallback, it
+    must only ever yield ``LIVE_REATTACH`` or ``COLD_RESTORE`` -- never
+    ``BRANCH_REQUIRED`` or ``RESUME_UNAVAILABLE`` (MoonLadderStudios/MoonMind#3707).
+    """
+
+    checkpoint = _checkpoint()
+    live_lease = {"active": True, "leaseId": "provider-lease-1"}
+    live_host = {"status": "assigned", "leaseId": "host-lease-1", "credentialGeneration": 3}
+
+    # Every original authority valid -> canonical live reattach.
+    live = recovery_mode(
+        checkpoint,
+        provider_lease=live_lease,
+        host_lease=live_host,
+        host_registered=True,
+        session_valid=True,
+        first_message_consistent=True,
+    )
+    assert isinstance(live, RecoveryMode)
+    assert live is RecoveryMode.LIVE_REATTACH
+
+    # Any single missing authority still resolves to the cold fallback, not to
+    # resume_unavailable -- the canonical decision keeps the cold path reachable.
+    for degraded in (
+        {"first_message_consistent": False},
+        {"session_valid": False},
+        {"host_registered": False},
+    ):
+        kwargs = dict(
+            provider_lease=live_lease,
+            host_lease=live_host,
+            host_registered=True,
+            session_valid=True,
+            first_message_consistent=True,
+        )
+        kwargs.update(degraded)
+        assert recovery_mode(checkpoint, **kwargs) is RecoveryMode.COLD_RESTORE
 
 
 def test_cold_restore_and_branch_preserve_profile_and_exclusive_identity() -> None:

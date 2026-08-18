@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping
 from urllib.parse import urlparse
 
@@ -19,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 # strings, so we can defer this import until after the models are declared and then
 # rebuild them. See the bottom of the file.
 if TYPE_CHECKING:
+    from moonmind.omnigent.control_plane.turn_contract import RecoveryMode
     from moonmind.schemas.workspace_locator_models import WorkspaceLocator
 
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
@@ -37,11 +37,6 @@ _ARTIFACT_FIELDS = {
     "instructionRef",
     "contextRef",
 }
-
-
-class OmnigentRecoveryMode(str, Enum):
-    LIVE_REATTACH = "live_reattach"
-    COLD_RESTORE = "cold_restore"
 
 
 class OmnigentCheckpointValidation(BaseModel):
@@ -436,8 +431,30 @@ def recovery_mode(
     host_registered: bool,
     session_valid: bool,
     first_message_consistent: bool,
-) -> OmnigentRecoveryMode:
-    """Select live reattach only when every original authority is still valid."""
+) -> "RecoveryMode":
+    """Select live reattach only when every original authority is still valid.
+
+    The checkpoint-specific authority evidence (provider/host lease identity,
+    credential generation, and session/first-message consistency) is mapped onto
+    the canonical :class:`RecoveryEvidence` and resolved through the one
+    evidence-gated recovery contract (:func:`decide_recovery`) so live reattach
+    and cold restore share a single decision boundary instead of a parallel
+    module (MoonLadderStudios/MoonMind#3707). A checkpoint recovery carries no
+    changed immutable dimensions and always has a cold-restore fallback here, so
+    the decision is either ``LIVE_REATTACH`` or ``COLD_RESTORE``; the explicit
+    branch-from-checkpoint path owns branch-required.
+
+    The import is function-local so this module (which is imported into the
+    Temporal workflow sandbox via ``moonmind.schemas.temporal_models``) does not
+    pull the control-plane store into the deterministic import graph; recovery is
+    only ever decided at the coordinator/Activity boundary.
+    """
+
+    from moonmind.omnigent.control_plane.turn_contract import (
+        ImmutableSessionDimensions,
+        RecoveryEvidence,
+        decide_recovery,
+    )
 
     provider_active = bool(provider_lease and provider_lease.get("active"))
     provider_ref_matches = bool(
@@ -462,24 +479,40 @@ def recovery_mode(
         )
         == checkpoint.credential_generation
     )
-    if all(
-        (
-            checkpoint.validation.valid,
-            checkpoint.validation.live_reattach_available,
-            provider_active,
-            provider_ref_matches,
-            host_active,
-            host_ref_matches,
-            generation_matches,
-            host_registered,
-            session_valid,
-            first_message_consistent,
-            checkpoint.omnigent_host_id,
-            checkpoint.omnigent_session_id,
-        )
-    ):
-        return OmnigentRecoveryMode.LIVE_REATTACH
-    return OmnigentRecoveryMode.COLD_RESTORE
+
+    evidence = RecoveryEvidence(
+        # Equal (empty) dimensions keep ``decide_recovery`` from returning
+        # branch_required here; a checkpoint recovery never changes immutable
+        # authority, and the branch decision belongs to branch_from_checkpoint.
+        intent_dimensions=ImmutableSessionDimensions(),
+        session_dimensions=ImmutableSessionDimensions(),
+        provider_profile_lease_current=(
+            checkpoint.validation.valid
+            and checkpoint.validation.live_reattach_available
+            and provider_active
+            and provider_ref_matches
+        ),
+        host_available=(
+            host_active
+            and host_ref_matches
+            and host_registered
+            and bool(checkpoint.omnigent_host_id)
+        ),
+        provider_session_reachable=(
+            session_valid and bool(checkpoint.omnigent_session_id)
+        ),
+        # ``live_reattach_available`` is validated to imply a present bridge-event
+        # cursor and first-message id (see the model validator above).
+        cursor_present=checkpoint.validation.live_reattach_available,
+        first_message_consistent=first_message_consistent,
+        credential_generation_current=generation_matches,
+        # Cold restore is always the fallback for a checkpoint that is not live;
+        # ``validate_cold_restore_target`` re-checks cold-restore authority before
+        # it is used, so a non-live checkpoint deterministically resolves to cold.
+        workspace_artifact_valid=True,
+        session_evidence_valid=True,
+    )
+    return decide_recovery(evidence).mode
 
 
 def validate_cold_restore_target(
@@ -522,7 +555,6 @@ __all__ = [
     "CandidateWorkspaceAuthority",
     "OmnigentCheckpointIdentity",
     "OmnigentCheckpointValidation",
-    "OmnigentRecoveryMode",
     "OmnigentRestoreMaterial",
     "materialize_cold_restore_inputs",
     "recovery_mode",
