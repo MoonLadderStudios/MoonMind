@@ -1,0 +1,12 @@
+[
+  {
+    "id": 3803594905,
+    "disposition": "addressed",
+    "rationale": "Updated PINNED_OMNIGENT_COMMIT to the PR submodule commit and refreshed the native compatibility fixture hashes anchored to that pinned source for contract verification."
+  },
+  {
+    "id": 4960451954,
+    "disposition": "not-applicable",
+    "rationale": "Informational bot review summary comment with no standalone code or test action required."
+  }
+]
