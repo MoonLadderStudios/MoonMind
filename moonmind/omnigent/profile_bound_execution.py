@@ -8,7 +8,7 @@ import json
 import math
 import os
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import select
 from temporalio import activity
@@ -47,6 +47,8 @@ from moonmind.omnigent.execution_profiles import (
 )
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_hosts import (
+    HEARTBEAT_HOST_STATES,
+    HOST_CLEANUP_CLAIMED_ERROR_CODE,
     HOST_PROFILE_BUSY_ERROR_CODE,
     OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
@@ -88,6 +90,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
 
 
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
+HeartbeatResult = TypeVar("HeartbeatResult")
 HOST_LEASE_HEARTBEAT_INTERVAL_SECONDS = 30.0
 # The deployment janitor reconciles abandoned OAuth hosts on a five-minute
 # cadence.  Cover one complete cadence plus scheduling slack so an exact rerun
@@ -668,12 +671,12 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     async def _execute_with_host_lease_heartbeat(
         self,
-        execution: Awaitable[AgentRunResult],
+        execution: Awaitable[HeartbeatResult],
         *,
         host_lease_ref: str,
         ttl_seconds: int,
-    ) -> AgentRunResult:
-        """Keep the durable host lease live for the full provider execution."""
+    ) -> HeartbeatResult:
+        """Keep the durable host lease live for one owned runtime operation."""
 
         async def heartbeat() -> None:
             while True:
@@ -706,6 +709,28 @@ class OmnigentProfileBoundExecutionCoordinator:
                 heartbeat_task,
                 return_exceptions=True,
             )
+
+    async def _claim_host_cleanup(
+        self, host_lease_ref: str
+    ) -> OmnigentHostLease | None:
+        """Acquire cleanup authority after the final operation heartbeat."""
+
+        for _attempt in range(3):
+            current = await self._hosts.get_host_lease(host_lease_ref)
+            if current is None:
+                raise OmnigentOAuthHostError("host lease does not exist")
+            if current.status not in HEARTBEAT_HOST_STATES:
+                return None
+            claimed = await self._hosts.claim_host_lease_cleanup(
+                current.lease_id,
+                expected_status=current.status,
+                expected_last_heartbeat_at=current.last_heartbeat_at,
+                ttl_seconds=90,
+            )
+            if claimed is not None:
+                return claimed
+            await asyncio.sleep(0)
+        return None
 
     async def _create_host_lease_after_profile_idle(
         self,
@@ -1243,7 +1268,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 if remediation_resolution is not None
                 else workspace_intent.workspace_locator_payload()
             )
-            preflight = await self._runtime.prepare_host(
+            preflight_operation = self._runtime.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
                 workspace_key=(
@@ -1321,6 +1346,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                     if remediation_resolution is not None
                     else self._attachment_refs(request)
                 ),
+            )
+            preflight = await self._execute_with_host_lease_heartbeat(
+                preflight_operation,
+                host_lease_ref=host_lease.lease_id,
+                ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
             )
             await emit(current_stage, "completed")
             workspace_resolution = preflight.get("workspaceResolution")
@@ -1871,6 +1901,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                 attempt_cleanup_deferred_code = "activity_cancelled"
             elif isinstance(exc, OmnigentSessionStillRunningError):
                 attempt_cleanup_deferred_code = "ambiguous_terminal_state"
+            elif (
+                isinstance(exc, OmnigentOAuthHostError)
+                and exc.code == HOST_CLEANUP_CLAIMED_ERROR_CODE
+            ):
+                # The janitor won the durable cleanup claim. Its draining lease
+                # and Provider Profile release are now one authority chain; the
+                # coordinator must not enter a second finally-cleanup path.
+                attempt_cleanup_deferred_code = HOST_CLEANUP_CLAIMED_ERROR_CODE
             terminal_status = "failed"
             if bridge_ready:
                 code, failure_class, remediation = _failure_evidence(exc)
@@ -1926,6 +1964,20 @@ class OmnigentProfileBoundExecutionCoordinator:
         finally:
             safe_to_release_provider = host_lease is None
             if host_lease is not None and binding is not None:
+                if attempt_cleanup_deferred_code is None:
+                    try:
+                        claimed_cleanup_lease = await self._claim_host_cleanup(
+                            host_lease.lease_id
+                        )
+                    except Exception as claim_exc:
+                        attempt_cleanup_deferred_code = type(claim_exc).__name__
+                    else:
+                        if claimed_cleanup_lease is None:
+                            attempt_cleanup_deferred_code = (
+                                HOST_CLEANUP_CLAIMED_ERROR_CODE
+                            )
+                        else:
+                            host_lease = claimed_cleanup_lease
                 if attempt_cleanup_deferred_code is not None:
                     # A Temporal timeout or ambiguous terminal observation can
                     # schedule a retry against the same durable bridge. Leave the

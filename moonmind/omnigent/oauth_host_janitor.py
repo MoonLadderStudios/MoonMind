@@ -9,7 +9,11 @@ from moonmind.omnigent.oauth_host_runtime import (
     OmnigentEgressEvidenceRequestIdentity,
     OmnigentOAuthHostRuntime,
 )
-from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+from moonmind.omnigent.oauth_hosts import (
+    CLEANUP_CLAIMABLE_HOST_STATES,
+    OmnigentOAuthHostError,
+    OmnigentOAuthHostRepository,
+)
 from moonmind.provider_profiles.lease_client import (
     CredentialLease,
     CredentialLeasePurpose,
@@ -38,6 +42,18 @@ class OmnigentOAuthHostJanitor:
         self._artifact_gateway = artifact_gateway
         self._heartbeat_timeout = timedelta(
             seconds=max(30, heartbeat_timeout_seconds)
+        )
+
+    async def _claim_cleanup(self, lease: Any) -> Any | None:
+        """Claim the observed lease generation before cleanup side effects."""
+
+        if lease.status not in CLEANUP_CLAIMABLE_HOST_STATES:
+            return lease
+        return await self._repository.claim_host_lease_cleanup(
+            lease.lease_id,
+            expected_status=lease.status,
+            expected_last_heartbeat_at=lease.last_heartbeat_at,
+            ttl_seconds=int(self._heartbeat_timeout.total_seconds()),
         )
 
     async def _release_provider_lease(self, *, binding: Any, lease: Any) -> bool:
@@ -215,9 +231,12 @@ class OmnigentOAuthHostJanitor:
                 return self._action_result(
                     action_kind, request_id, profile_id, lease, before_state
                 )
-            lease = await self._repository.transition_host_lease(
-                lease.lease_id, expected_status=before_state, new_status="draining"
-            )
+            claimed = await self._claim_cleanup(lease)
+            if claimed is None:
+                raise OmnigentOAuthHostError(
+                    "host lease changed concurrently before cleanup claim"
+                )
+            lease = claimed
         elif action_kind == "host.restart":
             raise ValueError(
                 "host.restart is unsupported until the owning launch path can "
@@ -238,6 +257,16 @@ class OmnigentOAuthHostJanitor:
             "provider_profile.evict_stale_lease",
             "host_lease.reconcile_stale",
         }:
+            if lease.status == "draining" and not stale:
+                raise OmnigentOAuthHostError(
+                    "host lease cleanup is already owned by another worker"
+                )
+            claimed = await self._claim_cleanup(lease)
+            if claimed is None:
+                raise OmnigentOAuthHostError(
+                    "host lease changed concurrently before cleanup claim"
+                )
+            lease = claimed
             try:
                 # Even an already-absent attachment crosses ``stop_host``: that
                 # owner publishes independently resolvable terminal evidence
@@ -368,16 +397,43 @@ class OmnigentOAuthHostJanitor:
                 lease.container_name
                 and not await self._runtime.container_exists(lease.container_name)
             )
+            # ``allocating`` and ``starting`` precede the container
+            # materialization authority handoff. A deterministic container name
+            # exists on the lease during that window, but the container is not
+            # required to exist yet. Absence alone is therefore not cleanup
+            # evidence until the coordinator crosses into ready/assigned. A
+            # stale/expired lease or an explicit durable reconciliation signal
+            # still permits cleanup of an abandoned launch.
+            missing_requires_cleanup = bool(
+                missing and lease.status not in {"allocating", "starting"}
+            )
             if (
                 not force
                 and not expired
-                and not missing
+                and not missing_requires_cleanup
                 and not stale
                 and not terminal_cleanup
                 and not terminal_provider_cleanup
                 and not reconciliation_action
             ):
                 continue
+            # A fresh draining lease already has a cleanup owner. Let that owner
+            # finish; only a stale/expired pass may recover an abandoned drain.
+            if (
+                lease.status == "draining"
+                and not force
+                and not expired
+                and not stale
+            ):
+                continue
+            if lease.status in CLEANUP_CLAIMABLE_HOST_STATES:
+                claimed = await self._claim_cleanup(lease)
+                if claimed is None:
+                    # The coordinator advanced state or heartbeat authority
+                    # after this janitor pass observed it. Reconcile from the
+                    # next durable scan; never clean from the stale snapshot.
+                    continue
+                lease = claimed
             binding = await self._repository.validate_binding(lease.binding_ref)
             if lease.omnigent_session_id:
                 try:
@@ -450,10 +506,20 @@ class OmnigentOAuthHostJanitor:
         for container_name in await self._runtime.list_managed_containers():
             if container_name in known_containers:
                 continue
-            # No lease can resume or publish authority for an orphan. The runtime
-            # revalidates the deployment ownership label and objective absence,
-            # so remove the credential-bearing resource instead of repeatedly
-            # reporting an action that has no durable consumer.
+            host_lease_ref = await self._runtime.managed_container_host_lease_ref(
+                container_name
+            )
+            if host_lease_ref:
+                live_lease = await self._repository.get_host_lease(host_lease_ref)
+                if live_lease is not None:
+                    # The lease may have been created after the initial scan.
+                    # Leave every lease-owned container to the claimed cleanup
+                    # path on the next pass; raw orphan removal has no authority
+                    # to race a coordinator or cleanup owner.
+                    continue
+            # No durable lease can resume or publish authority for a true orphan.
+            # The runtime revalidates the deployment ownership label before
+            # removing the credential-bearing resource.
             await self._runtime.remove_container(container_name)
             actions.append(
                 {
