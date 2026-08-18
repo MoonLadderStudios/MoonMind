@@ -128,6 +128,9 @@ Progress" with a single batch run.
      duplicate child workflows.
    - Submits via the internal Temporal execution API (`POST /api/executions`);
      `MOONMIND_URL` must point at the MoonMind API from the managed session.
+   - When MoonMind supplies `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN`, forwards
+     it as the execution-scoped bearer and marks create and describe calls as
+     fan-out v1.
 
    If provider-specific input validation fails before a trustworthy target list
    can be written, still invoke the same helper exactly once with

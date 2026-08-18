@@ -23,7 +23,17 @@ logger = logging.getLogger(__name__)
 
 from functools import lru_cache
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    status,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -41,7 +51,13 @@ from temporalio.client import Client
 from temporalio.service import RPCError
 
 from api_service.api.dependencies import resolve_template_scope_for_user
-from api_service.auth_providers import get_current_user
+from api_service.api.execution_fanout import (
+    EXECUTION_FANOUT_HEADER,
+    enforce_fanout_child_visibility,
+    resolve_execution_fanout_capability,
+    resolve_execution_request_authority,
+)
+from api_service.auth_providers import get_current_user, get_current_user_optional
 from api_service.core import sync as execution_sync
 from api_service.db import models as db_models
 from api_service.db.base import async_session_maker, get_async_session
@@ -252,8 +268,10 @@ from moonmind.workflows.executions.checkpoint_promotion import (
     bounded_checkpoint_metric_tags,
 )
 from moonmind.workflows.executions.runtime_inheritance import (
+    ExecutionPrincipal,
     RuntimeInheritanceError,
     apply_inherited_runtime_to_payload,
+    extract_inheritance_directive,
     resolve_child_runtime_inheritance,
 )
 from moonmind.workflows.temporal.publication_recovery import (
@@ -10561,14 +10579,16 @@ async def _create_execution_from_workflow_request(
     # consumes targetRuntime / task.runtime fields.  When inheritance applies,
     # we stamp the parent's effective runtime onto the request payload so the
     # rest of the create path sees it exactly as it would an explicit request.
-    principal = await resolve_execution_principal(
-        user=user,
-        service=service,
-        request=(principal_context or {}).get("request"),
-        workflow_id_header=(principal_context or {}).get("workflow_id_header"),
-        run_id_header=(principal_context or {}).get("run_id_header"),
-        agent_run_id_header=(principal_context or {}).get("agent_run_id_header"),
-    )
+    principal = (principal_context or {}).get("verified_principal")
+    if not isinstance(principal, ExecutionPrincipal):
+        principal = await resolve_execution_principal(
+            user=user,
+            service=service,
+            request=(principal_context or {}).get("request"),
+            workflow_id_header=(principal_context or {}).get("workflow_id_header"),
+            run_id_header=(principal_context or {}).get("run_id_header"),
+            agent_run_id_header=(principal_context or {}).get("agent_run_id_header"),
+        )
     try:
         inherited = await resolve_child_runtime_inheritance(
             request_payload=payload,
@@ -11015,6 +11035,8 @@ async def _create_execution_from_workflow_request(
         "stepCount": step_count,
         "runtimeCutover": cutover_selection.as_dict(),
     }
+    if principal.is_workflow_principal:
+        initial_parameters["parentWorkflowId"] = principal.workflow_id
     if isinstance(payload.get("omnigent"), Mapping):
         initial_parameters["omnigent"] = dict(payload["omnigent"])
     # Context retrieval (RAG) authoring: initial ContextPack overrides (#3513)
@@ -13148,14 +13170,61 @@ async def record_remediation_approval_decision(
         ) from exc
     return RemediationApprovalDecisionResponse.model_validate(result)
 
+def _validate_execution_fanout_create_request(
+    request_body: Mapping[str, Any],
+    *,
+    parent_workflow_id: str,
+) -> None:
+    """Require the bounded child shape accepted from an isolated runtime."""
+
+    def _reject(message: str, *, code: str = "invalid_execution_fanout_request") -> None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={"code": code, "message": message},
+        )
+
+    request_type = str(request_body.get("type") or "").strip().lower()
+    if request_type not in {"task", "workflow"}:
+        _reject("Execution fan-out accepts task or workflow child requests only.")
+    payload = request_body.get("payload")
+    if not isinstance(payload, Mapping):
+        _reject("Execution fan-out requires a payload object.")
+    task_node = payload.get("task")
+    workflow_node = payload.get("workflow")
+    if isinstance(task_node, Mapping) == isinstance(workflow_node, Mapping):
+        _reject("Execution fan-out requires exactly one child task or workflow.")
+    child = task_node if isinstance(task_node, Mapping) else workflow_node
+    assert isinstance(child, Mapping)
+    if request_body.get("schedule") is not None or payload.get("schedule") is not None:
+        _reject("Execution fan-out cannot create recurring or delayed schedules.")
+    try:
+        directive, requested_parent = extract_inheritance_directive(payload, child)
+    except RuntimeInheritanceError as exc:
+        _reject(str(exc), code=exc.code)
+    if directive != "caller":
+        _reject('Execution fan-out requires runtimeInheritance="caller".')
+    if requested_parent and requested_parent != parent_workflow_id:
+        _reject(
+            "Execution fan-out parentWorkflowId must match the capability parent.",
+            code="execution_fanout_parent_mismatch",
+        )
+    idempotency_key = str(
+        child.get("idempotencyKey") or payload.get("idempotencyKey") or ""
+    ).strip()
+    if not idempotency_key:
+        _reject("Execution fan-out requires an idempotencyKey.")
+
+
 @router.post("", response_model=ExecutionModel | ScheduleCreatedResponse, status_code=status.HTTP_201_CREATED)
 async def create_execution(
     payload: dict[str, Any] = Body(...),
     service: TemporalExecutionService = Depends(_get_service),
     session: AsyncSession = Depends(get_async_session),
-    user: User = Depends(get_current_user()),
+    user: User | None = Depends(get_current_user_optional()),
     _submit_enabled: None = Depends(_ensure_submit_enabled),
     principal_context: dict[str, Any] = Depends(execution_principal_dependency),
+    authorization: str | None = Header(None, alias="Authorization"),
+    execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),
 ) -> ExecutionModel | ScheduleCreatedResponse:
     from moonmind.config.settings import settings
 
@@ -13169,6 +13238,27 @@ async def create_execution(
                 "Enable Temporal submission to proceed.",
             },
         )
+
+    capability = resolve_execution_fanout_capability(
+        marker=execution_fanout,
+        authorization=authorization,
+    )
+    if capability is not None:
+        _validate_execution_fanout_create_request(
+            payload,
+            parent_workflow_id=capability.parent_workflow_id,
+        )
+    authority = await resolve_execution_request_authority(
+        user=user,
+        service=service,
+        capability=capability,
+    )
+    user = authority.user
+    if authority.principal is not None:
+        principal_context = {
+            **principal_context,
+            "verified_principal": authority.principal,
+        }
 
     try:
         if "type" in payload and "payload" in payload:
@@ -15765,10 +15855,37 @@ async def describe_execution(
     response: Response,
     source: Optional[str] = Query(None),
     service: TemporalExecutionService = Depends(_get_service),
-    user: User = Depends(get_current_user()),
+    user: User | None = Depends(get_current_user_optional()),
     session: AsyncSession = Depends(get_async_session),
     temporal_client: Client = Depends(get_temporal_client),
+    authorization: str | None = Header(None, alias="Authorization"),
+    execution_fanout: str | None = Header(None, alias=EXECUTION_FANOUT_HEADER),
 ) -> ExecutionModel:
+    capability = resolve_execution_fanout_capability(
+        marker=execution_fanout,
+        authorization=authorization,
+    )
+    authority = await resolve_execution_request_authority(
+        user=user,
+        service=service,
+        capability=capability,
+    )
+    user = authority.user
+    if capability is not None:
+        if source is not None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "invalid_execution_fanout_describe_request",
+                    "message": "Execution fan-out describe does not accept source overrides.",
+                },
+            )
+        await enforce_fanout_child_visibility(
+            service=service,
+            workflow_id=workflow_id,
+            authority=authority,
+        )
+
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
 
     source_is_temporal = source == "temporal"

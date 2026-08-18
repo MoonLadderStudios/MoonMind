@@ -602,6 +602,10 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
     _read_worker_token = module["_read_worker_token"]
 
     monkeypatch.setenv("MOONMIND_WORKER_TOKEN", "test-token-abc")
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "fanout-test-capability"
+    )
+    captured_headers: dict[str, str] = {}
 
     fake_response = MagicMock()
     fake_response.raise_for_status = MagicMock()
@@ -620,7 +624,7 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
 
     class FakeAsyncClient:
         def __init__(self, **kwargs: Any) -> None:
-            pass
+            captured_headers.update(dict(kwargs.get("headers") or {}))
 
         async def __aenter__(self) -> "FakeAsyncClient":
             return self
@@ -652,6 +656,8 @@ def test_submit_jobs_posts_to_api(monkeypatch: Any) -> None:
     mock_post.assert_awaited_once()
     call_path = mock_post.await_args[0][0]
     assert call_path == "/api/executions"
+    assert captured_headers["Authorization"] == "Bearer fanout-test-capability"
+    assert captured_headers["X-MoonMind-Execution-Fanout"] == "v1"
 
 def test_submit_jobs_rejects_create_without_workflow_id(monkeypatch: Any) -> None:
     """The create response must carry the canonical workflow identity."""

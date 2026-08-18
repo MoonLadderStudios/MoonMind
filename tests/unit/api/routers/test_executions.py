@@ -81,6 +81,9 @@ from api_service.db.models import (
 )
 from api_service.services.recurring_workflows_service import RecurringWorkflowValidationError
 from moonmind.config.settings import settings
+from moonmind.security.execution_fanout_capabilities import (
+    mint_execution_fanout_capability,
+)
 from moonmind.workflows.temporal.publication_recovery import (
     publication_operation_key,
     publication_recovery_workflow_id,
@@ -8103,6 +8106,115 @@ def test_create_task_shaped_execution_inherits_caller_runtime(
         "effort": "high",
         "executionProfileRef": "codex_default",
     }
+
+
+def _execution_fanout_token(*, parent_workflow_id: str = "mm:parent-task") -> str:
+    return mint_execution_fanout_capability(
+        secret=str(settings.security.JWT_SECRET_KEY),
+        parent_workflow_id=parent_workflow_id,
+        agent_run_id="agent-run-1",
+        step_id="step-1",
+        session_id="session-1",
+        runtime_id="codex_cli",
+        source_kind="omnigent",
+        lifetime_seconds=300,
+    )
+
+
+def test_create_task_shaped_execution_accepts_scoped_fanout_bearer(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, service, user = client
+    for dependency in tuple(test_client.app.dependency_overrides):
+        if getattr(dependency, "__name__", "") == "_current_user_fallback":
+            test_client.app.dependency_overrides[dependency] = lambda: None
+    service.create_execution.return_value = _build_execution_record(
+        owner_id=str(user.id)
+    )
+    service.describe_execution.return_value = SimpleNamespace(
+        workflow_id="mm:parent-task",
+        owner_id=user.id,
+        owner_type="user",
+        parameters={
+            "targetRuntime": "codex",
+            "model": "gpt-5.4",
+            "effort": "high",
+            "workflow": {"runtime": {"executionProfileRef": "codex_default"}},
+        },
+        memo={},
+        search_attributes={},
+    )
+
+    response = test_client.post(
+        "/api/executions",
+        headers={
+            "Authorization": f"Bearer {_execution_fanout_token()}",
+            "X-MoonMind-Execution-Fanout": "v1",
+        },
+        json={
+            "type": "workflow",
+            "payload": {
+                "runtimeInheritance": "caller",
+                "repository": "MoonLadderStudios/MoonMind",
+                "workflow": {
+                    "title": "feature/example",
+                    "instructions": "Resolve PR #42.",
+                    "idempotencyKey": "parent:pr:42",
+                    "skill": {"name": "pr-resolver"},
+                    "inputs": {"repo": "MoonLadderStudios/MoonMind", "pr": "42"},
+                },
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    initial_parameters = service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+    assert initial_parameters["parentWorkflowId"] == "mm:parent-task"
+    assert initial_parameters["targetRuntime"] == "codex_cli"
+    assert service.create_execution.await_args.kwargs["owner_id"] == user.id
+
+
+@pytest.mark.parametrize(
+    "request_body, expected_message",
+    [
+        (
+            {"workflowType": "MoonMind.UserWorkflow"},
+            "task or workflow child requests only",
+        ),
+        (
+            {
+                "type": "workflow",
+                "schedule": {"cron": "0 * * * *"},
+                "payload": {
+                    "runtimeInheritance": "caller",
+                    "workflow": {"idempotencyKey": "child-1"},
+                },
+            },
+            "cannot create recurring or delayed schedules",
+        ),
+    ],
+)
+def test_execution_fanout_rejects_non_child_or_scheduled_shapes(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    request_body: dict[str, Any],
+    expected_message: str,
+) -> None:
+    test_client, service, _user = client
+
+    response = test_client.post(
+        "/api/executions",
+        headers={
+            "Authorization": f"Bearer {_execution_fanout_token()}",
+            "X-MoonMind-Execution-Fanout": "v1",
+        },
+        json=request_body,
+    )
+
+    assert response.status_code == 422
+    assert expected_message in response.json()["detail"]["message"]
+    service.create_execution.assert_not_awaited()
 
 
 def test_create_task_shaped_execution_rejects_caller_inheritance_for_user(

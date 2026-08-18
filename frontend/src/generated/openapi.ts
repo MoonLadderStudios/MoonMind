@@ -17747,6 +17747,8 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                Authorization?: string | null;
+                "X-MoonMind-Execution-Fanout"?: string | null;
                 "X-MoonMind-Task-Workflow-Id"?: string | null;
                 "X-MoonMind-Agent-Run-Id"?: string | null;
                 "X-MoonMind-Agent-Run-Identifier"?: string | null;
@@ -18420,7 +18422,10 @@ export interface operations {
             query?: {
                 source?: string | null;
             };
-            header?: never;
+            header?: {
+                Authorization?: string | null;
+                "X-MoonMind-Execution-Fanout"?: string | null;
+            };
             path: {
                 workflow_id: string;
             };
