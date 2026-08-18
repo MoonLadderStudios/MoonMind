@@ -891,11 +891,20 @@ class OmnigentCommand(Base):
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="pending", server_default="pending"
     )
+    # Owner identity class (e.g. "session_supervisor", "janitor"): a low
+    # cardinality class, never a high-cardinality identity, so it is safe for
+    # metric labels (#3704).
+    owner_class: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     provider_receipt_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     delivery_ambiguous: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     result_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    # Own monotonic state_version so a claim/delivery/result transition is a
+    # revision-fenced compare-and-swap, not a blind field overwrite (#3704).
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     retry_policy_: Mapped[dict[str, Any]] = mapped_column(
         "retry_policy", mutable_json_dict(), nullable=False, default=dict
     )
@@ -984,6 +993,56 @@ class OmnigentChatBindingAlias(Base):
     diagnostic_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentCleanupAuthority(Base):
+    """Durable cleanup / janitor authority for one canonical session.
+
+    Source: MoonLadderStudios/MoonMind#3704 ([Omnigent control plane 3/11]).
+    Cleanup must be fenced against the host, Provider Profile lease, and
+    provider-session generations it was claimed against, so a janitor cannot
+    stop or release resources that now belong to a replacement generation. The
+    ``generation`` is a strictly increasing token; each claim bumps it. Exactly
+    one owner may hold ``claimed`` (a claim compare-and-swaps against the current
+    ``revision``), and a former owner cannot complete cleanup after a newer
+    generation is claimed.
+    """
+
+    __tablename__ = "omnigent_cleanup_authority"
+    __table_args__ = (
+        Index("ix_omnigent_cleanup_authority_state", "state"),
+    )
+
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        primary_key=True,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unclaimed", server_default="unclaimed"
+    )
+    owner_class: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    fenced_host_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fenced_profile_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fenced_provider_epoch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )
 
 

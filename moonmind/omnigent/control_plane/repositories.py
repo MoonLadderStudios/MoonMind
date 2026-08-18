@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
     OmnigentChatBindingAlias,
+    OmnigentCleanupAuthority,
     OmnigentCommand,
     OmnigentObservation,
     OmnigentReconciliationDecision,
@@ -30,17 +31,34 @@ from api_service.db.models import (
     OmnigentTurnAttempt,
 )
 
+from . import telemetry
 from .records import (
     ALIAS_STATE_ACTIVE,
     ALIAS_STATE_QUARANTINED,
+    CLEANUP_STATE_CLAIMED,
+    CLEANUP_STATE_COMPLETE,
+    CLEANUP_STATE_UNCLAIMED,
+    COMMAND_STATE_APPLIED,
+    COMMAND_STATE_CLAIMED,
+    COMMAND_STATE_DELIVERY_UNKNOWN,
+    COMMAND_STATE_FAILED,
+    COMMAND_STATE_PENDING,
+    COMMAND_TERMINAL_STATES,
     TURN_STATE_PREPARED,
     TURN_STATE_TERMINAL,
+    CasResult,
     ChatBindingAliasRecord,
+    CleanupAuthorityRecord,
     CommandIdempotencyConflictError,
     CommandRecord,
     ConflictingSessionAuthorityError,
+    ControlPlaneOutcome,
     DecisionRecord,
+    FencingConflictError,
+    FencingScope,
+    NotCommandOwnerError,
     ObservationRecord,
+    RevisionConflictError,
     SessionRecord,
     TerminalSessionOverwriteError,
     TurnAttemptRecord,
@@ -57,6 +75,41 @@ _UNSET: Any = object()
 _POST_TERMINAL_MUTABLE_FIELDS: frozenset[str] = frozenset(
     {"cleanup_state", "historical_read_state"}
 )
+
+
+def _raise_for_session_conflict(session_id: str, result: CasResult) -> None:
+    """Translate a fail-closed session CAS outcome into a typed exception.
+
+    Convenience for callers of the raising wrappers (:meth:`update_lifecycle`);
+    the returned-outcome path stays available for reconcilers that converge on a
+    conflict rather than raising.
+    """
+
+    if result.outcome is ControlPlaneOutcome.REVISION_CONFLICT:
+        raise RevisionConflictError(
+            f"Session {session_id!r} lost update: expected revision did not "
+            f"match current authority (revision {result.record.revision})"
+        )
+    if result.outcome is ControlPlaneOutcome.FENCING_CONFLICT:
+        raise FencingConflictError(
+            f"Session {session_id!r} write fenced: presented fencing generation "
+            f"is superseded (current {result.record.fencing_generation})"
+        )
+
+
+def _raise_for_turn_conflict(turn_attempt_id: str, result: CasResult) -> None:
+    """Translate a fail-closed turn CAS outcome into a typed exception."""
+
+    if result.outcome is ControlPlaneOutcome.REVISION_CONFLICT:
+        raise RevisionConflictError(
+            f"Turn attempt {turn_attempt_id!r} lost update: expected revision "
+            f"did not match current authority (revision {result.record.revision})"
+        )
+    if result.outcome is ControlPlaneOutcome.FENCING_CONFLICT:
+        raise FencingConflictError(
+            f"Turn attempt {turn_attempt_id!r} write fenced: presented fencing "
+            f"generation is superseded (current {result.record.fencing_generation})"
+        )
 
 
 # --- ORM -> record converters ------------------------------------------------
@@ -162,10 +215,28 @@ def _command_record(row: OmnigentCommand) -> CommandRecord:
         expected_session_revision=row.expected_session_revision,
         fencing_generation=row.fencing_generation,
         status=row.status,
+        owner_class=row.owner_class,
         provider_receipt_id=row.provider_receipt_id,
         delivery_ambiguous=row.delivery_ambiguous,
         result_ref=row.result_ref,
+        revision=row.revision,
         retry_policy=dict(row.retry_policy_ or {}),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _cleanup_record(row: OmnigentCleanupAuthority) -> CleanupAuthorityRecord:
+    ensure_supported_schema_version("OmnigentCleanupAuthority", row.schema_version)
+    return CleanupAuthorityRecord(
+        session_id=row.session_id,
+        generation=row.generation,
+        state=row.state,
+        owner_class=row.owner_class,
+        fenced_host_generation=row.fenced_host_generation,
+        fenced_profile_generation=row.fenced_profile_generation,
+        fenced_provider_epoch=row.fenced_provider_epoch,
+        revision=row.revision,
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -298,6 +369,18 @@ class SessionRepository(_RepositoryBase):
         row = await self._load(session_id)
         return _session_record(row) if row is not None else None
 
+    async def load_for_update(self, session_id: str) -> Optional[SessionRecord]:
+        """Load a session under a row lock for a read-decide-write sequence.
+
+        The returned record is a durable snapshot the caller uses to compute the
+        expected revision / fencing generation for a subsequent
+        :meth:`compare_and_swap_session` in the *same* transaction. On PostgreSQL
+        the lock serializes concurrent reconcilers on this session (#3704).
+        """
+
+        row = await self._load(session_id, for_update=True)
+        return _session_record(row) if row is not None else None
+
     async def get_by_scope(
         self, moonmind_workflow_id: str, provider_session_ref: str
     ) -> Optional[SessionRecord]:
@@ -387,10 +470,53 @@ class SessionRepository(_RepositoryBase):
         await self._session.refresh(row)
         return _session_record(row)
 
-    async def update_lifecycle(
+    @staticmethod
+    def _check_session_fence(
+        row: OmnigentSession,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+        expected_provider_profile_generation: Optional[int],
+        expected_host_lease_generation: Optional[int],
+    ) -> Optional[ControlPlaneOutcome]:
+        """Validate optimistic-concurrency and fencing authority for a write.
+
+        Returns ``None`` when the caller holds current authority, or the stable
+        conflict outcome otherwise. Fencing generations are checked before the
+        revision so a superseded owner is fenced out even if its revision happens
+        to match, and each generation is attributed to its own fencing scope for
+        telemetry. Emitting the counter here keeps every fenced write path
+        observable from one place (#3704).
+        """
+
+        if row.fencing_generation != expected_fencing_generation:
+            telemetry.record_fencing_conflict(scope=FencingScope.SESSION_SUPERVISOR)
+            return ControlPlaneOutcome.FENCING_CONFLICT
+        if (
+            expected_provider_profile_generation is not None
+            and row.provider_profile_generation != expected_provider_profile_generation
+        ):
+            telemetry.record_fencing_conflict(scope=FencingScope.PROVIDER_PROFILE_LEASE)
+            return ControlPlaneOutcome.FENCING_CONFLICT
+        if (
+            expected_host_lease_generation is not None
+            and row.host_lease_generation != expected_host_lease_generation
+        ):
+            telemetry.record_fencing_conflict(scope=FencingScope.HOST_LEASE)
+            return ControlPlaneOutcome.FENCING_CONFLICT
+        if row.revision != expected_revision:
+            telemetry.record_revision_conflict(scope=FencingScope.SESSION_SUPERVISOR)
+            return ControlPlaneOutcome.REVISION_CONFLICT
+        return None
+
+    async def compare_and_swap_session(
         self,
         session_id: str,
         *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+        expected_provider_profile_generation: Optional[int] = None,
+        expected_host_lease_generation: Optional[int] = None,
         desired_state: Any = _UNSET,
         observed_state: Any = _UNSET,
         reconciled_state: Any = _UNSET,
@@ -401,15 +527,16 @@ class SessionRepository(_RepositoryBase):
         historical_read_state: Any = _UNSET,
         next_reconciliation_deadline: Any = _UNSET,
         last_decision_ref: Any = _UNSET,
-        expected_revision: Optional[int] = None,
-    ) -> SessionRecord:
-        """Update mutable lifecycle fields.
+    ) -> CasResult:
+        """Fenced lifecycle write returning a stable :class:`ControlPlaneOutcome`.
 
-        Never clears or rewrites session terminality: a terminal session cannot
-        be moved back to a nonterminal state by an ordinary update (use
-        :meth:`mark_terminal`). Once terminal, only the cleanup/archive fields in
-        :data:`_POST_TERMINAL_MUTABLE_FIELDS` may still advance so the normal
-        terminal-then-cleanup journey can record completion.
+        The caller declares the revision and fencing generations it observed;
+        lease-owner writers additionally declare the lease generation relevant to
+        their side effect. A revision/fencing conflict is a benign convergence
+        signal (returned as a :class:`CasResult`, not raised) so the reconciler
+        reloads and retries against fresh authority. A terminal-authority
+        violation is not a benign convergence case and still fails closed
+        (raised), because immutable authority must never be silently regressed.
         """
 
         row = await self._load(session_id, for_update=True)
@@ -417,11 +544,15 @@ class SessionRepository(_RepositoryBase):
             raise ConflictingSessionAuthorityError(
                 f"Unknown canonical session {session_id!r}"
             )
-        if expected_revision is not None and row.revision != expected_revision:
-            raise ConflictingSessionAuthorityError(
-                f"Session {session_id!r} revision {row.revision} != expected "
-                f"{expected_revision} (fencing)"
-            )
+        conflict = self._check_session_fence(
+            row,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            expected_provider_profile_generation=expected_provider_profile_generation,
+            expected_host_lease_generation=expected_host_lease_generation,
+        )
+        if conflict is not None:
+            return CasResult(conflict, _session_record(row))
         provided = [
             (name, value)
             for name, value in (
@@ -456,16 +587,166 @@ class SessionRepository(_RepositoryBase):
         row.revision = row.revision + 1
         await self._session.flush()
         await self._session.refresh(row)
+        return CasResult(ControlPlaneOutcome.APPLIED, _session_record(row))
+
+    async def update_lifecycle(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+        expected_provider_profile_generation: Optional[int] = None,
+        expected_host_lease_generation: Optional[int] = None,
+        desired_state: Any = _UNSET,
+        observed_state: Any = _UNSET,
+        reconciled_state: Any = _UNSET,
+        active_turn_attempt_id: Any = _UNSET,
+        provider_event_cursor: Any = _UNSET,
+        snapshot_frontier: Any = _UNSET,
+        cleanup_state: Any = _UNSET,
+        historical_read_state: Any = _UNSET,
+        next_reconciliation_deadline: Any = _UNSET,
+        last_decision_ref: Any = _UNSET,
+    ) -> SessionRecord:
+        """Update mutable lifecycle fields under a mandatory revision/fencing guard.
+
+        Convenience wrapper over :meth:`compare_and_swap_session` for callers that
+        want fail-closed exceptions instead of a returned outcome. The expected
+        revision and session-supervisor fencing generation are mandatory (#3704):
+        a lifecycle-changing write must always declare the authority it observed.
+        Never clears or rewrites session terminality; once terminal, only the
+        cleanup/archive fields in :data:`_POST_TERMINAL_MUTABLE_FIELDS` may
+        advance so the normal terminal-then-cleanup journey can record completion.
+        """
+
+        result = await self.compare_and_swap_session(
+            session_id,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            expected_provider_profile_generation=expected_provider_profile_generation,
+            expected_host_lease_generation=expected_host_lease_generation,
+            desired_state=desired_state,
+            observed_state=observed_state,
+            reconciled_state=reconciled_state,
+            active_turn_attempt_id=active_turn_attempt_id,
+            provider_event_cursor=provider_event_cursor,
+            snapshot_frontier=snapshot_frontier,
+            cleanup_state=cleanup_state,
+            historical_read_state=historical_read_state,
+            next_reconciliation_deadline=next_reconciliation_deadline,
+            last_decision_ref=last_decision_ref,
+        )
+        _raise_for_session_conflict(session_id, result)
+        return result.record
+
+    async def acquire_fencing_generation(
+        self,
+        session_id: str,
+        scope: FencingScope,
+        *,
+        expected_revision: int,
+    ) -> SessionRecord:
+        """Acquire a strictly newer fencing generation for ``scope``.
+
+        A newly acquired owner (session supervisor, Provider Profile lease, or
+        host lease) receives ``current + 1`` so every former owner of that scope
+        is fenced out of subsequent writes. The acquisition compare-and-swaps on
+        the session revision so two racing replacements cannot both win: exactly
+        one advances the generation and the loser observes a revision conflict and
+        reloads. ``CLEANUP`` authority is durable in its own aggregate; acquire it
+        through :class:`CleanupAuthorityRepository` instead.
+        """
+
+        if scope is FencingScope.CLEANUP:
+            raise ValueError(
+                "cleanup fencing is owned by CleanupAuthorityRepository, not "
+                "acquire_fencing_generation"
+            )
+        row = await self._load(session_id, for_update=True)
+        if row is None:
+            raise ConflictingSessionAuthorityError(
+                f"Unknown canonical session {session_id!r}"
+            )
+        if row.revision != expected_revision:
+            telemetry.record_revision_conflict(scope=scope)
+            raise RevisionConflictError(
+                f"Session {session_id!r} revision {row.revision} != expected "
+                f"{expected_revision}; cannot acquire {scope.value} generation"
+            )
+        if scope is FencingScope.SESSION_SUPERVISOR:
+            row.fencing_generation = row.fencing_generation + 1
+        elif scope is FencingScope.PROVIDER_PROFILE_LEASE:
+            row.provider_profile_generation = (row.provider_profile_generation or 0) + 1
+        elif scope is FencingScope.HOST_LEASE:
+            row.host_lease_generation = (row.host_lease_generation or 0) + 1
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
         return _session_record(row)
+
+    async def advance_observation_frontier(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+        provider_event_cursor: Any = _UNSET,
+        snapshot_frontier: Any = _UNSET,
+    ) -> CasResult:
+        """Advance the provider event / snapshot frontier under a fencing guard.
+
+        A delayed event or callback must prove it belongs to the current provider
+        epoch (the session-supervisor fencing generation) before it advances the
+        durable frontier. A stale-epoch write is fenced (``fencing_conflict``) and
+        the caller retains it as an append-only observation without regressing
+        current lifecycle state; a lost update returns ``revision_conflict``. The
+        stale-retention counter is emitted so operators can see how often delayed
+        results arrive after supersession (#3704).
+        """
+
+        row = await self._load(session_id, for_update=True)
+        if row is None:
+            raise ConflictingSessionAuthorityError(
+                f"Unknown canonical session {session_id!r}"
+            )
+        conflict = self._check_session_fence(
+            row,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            expected_provider_profile_generation=None,
+            expected_host_lease_generation=None,
+        )
+        if conflict is ControlPlaneOutcome.FENCING_CONFLICT:
+            telemetry.record_stale_observation_retained()
+            return CasResult(conflict, _session_record(row))
+        if conflict is not None:
+            return CasResult(conflict, _session_record(row))
+        if provider_event_cursor is not _UNSET:
+            row.provider_event_cursor = provider_event_cursor
+        if snapshot_frontier is not _UNSET:
+            row.snapshot_frontier = snapshot_frontier
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return CasResult(ControlPlaneOutcome.APPLIED, _session_record(row))
 
     async def mark_terminal(
         self,
         session_id: str,
         terminal_state: str,
         *,
+        expected_revision: int,
+        expected_fencing_generation: int,
         terminal_evidence_ref: Optional[str] = None,
-        expected_revision: Optional[int] = None,
     ) -> SessionRecord:
+        """Record the canonical session terminal under a mandatory fencing guard.
+
+        Recording the same terminal twice is idempotent (``already_applied``); a
+        contradictory terminal fails closed. A stale writer that presents an old
+        revision or a superseded fencing generation is refused so a delayed
+        activity cannot terminalize a session that a newer owner has moved on.
+        """
+
         row = await self._load(session_id, for_update=True)
         if row is None:
             raise ConflictingSessionAuthorityError(
@@ -479,10 +760,23 @@ class SessionRepository(_RepositoryBase):
                 f"({row.terminal_state!r}); refusing to overwrite with "
                 f"{terminal_state!r}"
             )
-        if expected_revision is not None and row.revision != expected_revision:
-            raise ConflictingSessionAuthorityError(
+        conflict = self._check_session_fence(
+            row,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            expected_provider_profile_generation=None,
+            expected_host_lease_generation=None,
+        )
+        if conflict is ControlPlaneOutcome.FENCING_CONFLICT:
+            raise FencingConflictError(
+                f"Session {session_id!r} fencing generation "
+                f"{row.fencing_generation} != expected "
+                f"{expected_fencing_generation}; refusing terminal write"
+            )
+        if conflict is ControlPlaneOutcome.REVISION_CONFLICT:
+            raise RevisionConflictError(
                 f"Session {session_id!r} revision {row.revision} != expected "
-                f"{expected_revision} (fencing)"
+                f"{expected_revision}; refusing terminal write"
             )
         row.terminal_state = terminal_state
         if terminal_evidence_ref is not None:
@@ -572,48 +866,149 @@ class TurnAttemptRepository(_RepositoryBase):
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_turn_record(r) for r in rows]
 
+    async def _load_turn_for_update(
+        self, turn_attempt_id: str
+    ) -> OmnigentTurnAttempt:
+        row = await self._session.get(
+            OmnigentTurnAttempt, turn_attempt_id, with_for_update=True
+        )
+        if row is None:
+            raise TurnIdempotencyConflictError(
+                f"Unknown turn attempt {turn_attempt_id!r}"
+            )
+        return row
+
+    @staticmethod
+    def _check_turn_fence(
+        row: OmnigentTurnAttempt,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+    ) -> Optional[ControlPlaneOutcome]:
+        if row.fencing_generation != expected_fencing_generation:
+            telemetry.record_fencing_conflict(scope=FencingScope.SESSION_SUPERVISOR)
+            return ControlPlaneOutcome.FENCING_CONFLICT
+        if row.revision != expected_revision:
+            telemetry.record_revision_conflict(scope=FencingScope.SESSION_SUPERVISOR)
+            return ControlPlaneOutcome.REVISION_CONFLICT
+        return None
+
+    async def compare_and_swap_turn(
+        self,
+        turn_attempt_id: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+        state: Any = _UNSET,
+        provider_turn_id: Any = _UNSET,
+        provider_item_id: Any = _UNSET,
+        terminal_state: Any = _UNSET,
+        attempt_outcome: Any = _UNSET,
+        terminal_evidence_ref: Any = _UNSET,
+    ) -> CasResult:
+        """Fenced turn-attempt write returning a stable outcome.
+
+        Turn-attempt submission and terminal state are independently mutable
+        surfaces (#3704): a delayed activity result must present the revision and
+        fencing generation it observed or be refused. A conflict is a benign
+        convergence signal; a terminal attempt cannot be moved back to a
+        nonterminal state or overwritten with a contradictory terminal.
+        """
+
+        row = await self._load_turn_for_update(turn_attempt_id)
+        wants_terminal = terminal_state is not _UNSET
+        if row.terminal_state is not None:
+            if wants_terminal and terminal_state == row.terminal_state:
+                return CasResult(
+                    ControlPlaneOutcome.ALREADY_APPLIED, _turn_record(row)
+                )
+            raise TurnIdempotencyConflictError(
+                f"Turn attempt {turn_attempt_id!r} already terminal "
+                f"({row.terminal_state!r}); refusing to overwrite"
+            )
+        conflict = self._check_turn_fence(
+            row,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+        )
+        if conflict is not None:
+            return CasResult(conflict, _turn_record(row))
+        if wants_terminal:
+            row.state = TURN_STATE_TERMINAL
+            row.terminal_state = terminal_state
+        elif state is not _UNSET:
+            row.state = state
+        if attempt_outcome is not _UNSET:
+            row.attempt_outcome = attempt_outcome
+        if provider_turn_id is not _UNSET:
+            row.provider_turn_id = provider_turn_id
+        if provider_item_id is not _UNSET:
+            row.provider_item_id = provider_item_id
+        if terminal_evidence_ref is not _UNSET:
+            row.terminal_evidence_ref = terminal_evidence_ref
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return CasResult(ControlPlaneOutcome.APPLIED, _turn_record(row))
+
     async def advance_state(
         self,
         turn_attempt_id: str,
         state: str,
         *,
+        expected_revision: int,
+        expected_fencing_generation: int,
         provider_turn_id: Optional[str] = None,
         provider_item_id: Optional[str] = None,
     ) -> TurnAttemptRecord:
-        row = await self._session.get(OmnigentTurnAttempt, turn_attempt_id)
-        if row is None:
-            raise TurnIdempotencyConflictError(f"Unknown turn attempt {turn_attempt_id!r}")
-        row.state = state
-        if provider_turn_id is not None:
-            row.provider_turn_id = provider_turn_id
-        if provider_item_id is not None:
-            row.provider_item_id = provider_item_id
-        row.revision = row.revision + 1
-        await self._session.flush()
-        await self._session.refresh(row)
-        return _turn_record(row)
+        """Advance the turn delivery state under a mandatory fencing guard."""
+
+        result = await self.compare_and_swap_turn(
+            turn_attempt_id,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            state=state,
+            provider_turn_id=(
+                provider_turn_id if provider_turn_id is not None else _UNSET
+            ),
+            provider_item_id=(
+                provider_item_id if provider_item_id is not None else _UNSET
+            ),
+        )
+        _raise_for_turn_conflict(turn_attempt_id, result)
+        return result.record
 
     async def mark_terminal(
         self,
         turn_attempt_id: str,
         terminal_state: str,
         *,
+        expected_revision: int,
+        expected_fencing_generation: int,
         attempt_outcome: Optional[str] = None,
         terminal_evidence_ref: Optional[str] = None,
     ) -> TurnAttemptRecord:
-        row = await self._session.get(OmnigentTurnAttempt, turn_attempt_id)
-        if row is None:
-            raise TurnIdempotencyConflictError(f"Unknown turn attempt {turn_attempt_id!r}")
-        row.state = TURN_STATE_TERMINAL
-        row.terminal_state = terminal_state
-        if attempt_outcome is not None:
-            row.attempt_outcome = attempt_outcome
-        if terminal_evidence_ref is not None:
-            row.terminal_evidence_ref = terminal_evidence_ref
-        row.revision = row.revision + 1
-        await self._session.flush()
-        await self._session.refresh(row)
-        return _turn_record(row)
+        """Record the attempt terminal under a mandatory fencing guard.
+
+        A terminal attempt never terminalizes the canonical session (that
+        authority lives on :class:`OmnigentSession`); recording the same attempt
+        terminal twice is idempotent.
+        """
+
+        result = await self.compare_and_swap_turn(
+            turn_attempt_id,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            terminal_state=terminal_state,
+            attempt_outcome=(
+                attempt_outcome if attempt_outcome is not None else _UNSET
+            ),
+            terminal_evidence_ref=(
+                terminal_evidence_ref if terminal_evidence_ref is not None else _UNSET
+            ),
+        )
+        _raise_for_turn_conflict(turn_attempt_id, result)
+        return result.record
 
 
 # --- ObservationRepository ---------------------------------------------------
@@ -713,6 +1108,7 @@ class CommandRepository(_RepositoryBase):
         turn_attempt_id: Optional[str] = None,
         expected_session_revision: Optional[int] = None,
         fencing_generation: int = 0,
+        owner_class: Optional[str] = None,
         retry_policy: Optional[dict[str, Any]] = None,
     ) -> CommandRecord:
         """Record a logical command. Idempotent on ``idempotency_key``.
@@ -720,7 +1116,9 @@ class CommandRepository(_RepositoryBase):
         A reused key must describe the same logical command. If the immutable
         identity ``(session_id, command_type, turn_attempt_id, payload_digest)``
         differs from the stored command, fail closed rather than returning a
-        receipt/status for unrelated input.
+        receipt/status for unrelated input. A reuse that matches an existing
+        command is a suppressed duplicate dispatch (telemetry counter), not a new
+        journal row.
         """
 
         existing = await self.get_by_idempotency_key(idempotency_key)
@@ -733,6 +1131,7 @@ class CommandRepository(_RepositoryBase):
                 turn_attempt_id=turn_attempt_id,
                 payload_digest=payload_digest,
             )
+            telemetry.record_duplicate_command_suppressed()
             return existing
         row = OmnigentCommand(
             command_id=command_id,
@@ -743,6 +1142,7 @@ class CommandRepository(_RepositoryBase):
             turn_attempt_id=turn_attempt_id,
             expected_session_revision=expected_session_revision,
             fencing_generation=fencing_generation,
+            owner_class=owner_class,
             retry_policy_=dict(retry_policy or {}),
         )
         self._session.add(row)
@@ -760,6 +1160,7 @@ class CommandRepository(_RepositoryBase):
                     turn_attempt_id=turn_attempt_id,
                     payload_digest=payload_digest,
                 )
+                telemetry.record_duplicate_command_suppressed()
                 return existing
             raise
         await self._session.refresh(row)
@@ -802,28 +1203,96 @@ class CommandRepository(_RepositoryBase):
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         return _command_record(row) if row is not None else None
 
-    async def update_status(
-        self,
-        command_id: str,
-        status: str,
-        *,
-        provider_receipt_id: Optional[str] = None,
-        delivery_ambiguous: Optional[bool] = None,
-        result_ref: Optional[str] = None,
-    ) -> CommandRecord:
-        row = await self._session.get(OmnigentCommand, command_id)
+    async def _load_command_for_update(self, command_id: str) -> OmnigentCommand:
+        row = await self._session.get(
+            OmnigentCommand, command_id, with_for_update=True
+        )
         if row is None:
             raise KeyError(f"Unknown command {command_id!r}")
-        row.status = status
+        return row
+
+    async def claim_command(
+        self,
+        command_id: str,
+        *,
+        owner_class: str,
+    ) -> CasResult:
+        """Claim exclusive execution authority for a logical command.
+
+        Exactly one caller wins the ``pending -> claimed`` transition and
+        receives :attr:`ControlPlaneOutcome.APPLIED`; concurrent activity retries
+        of the same logical command observe :attr:`ALREADY_APPLIED` and must
+        reconcile from the recorded delivery state instead of executing the side
+        effect a second time (#3704). The claim compare-and-swaps on the command
+        revision so the win is atomic under a real row lock.
+        """
+
+        row = await self._load_command_for_update(command_id)
+        if row.status == COMMAND_STATE_PENDING:
+            row.status = COMMAND_STATE_CLAIMED
+            row.owner_class = owner_class
+            row.revision = row.revision + 1
+            await self._session.flush()
+            await self._session.refresh(row)
+            return CasResult(ControlPlaneOutcome.APPLIED, _command_record(row))
+        # Already claimed or beyond: this caller must not execute again.
+        telemetry.record_duplicate_command_suppressed()
+        return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row))
+
+    async def record_command_delivery(
+        self,
+        command_id: str,
+        *,
+        owner_class: str,
+        outcome: ControlPlaneOutcome,
+        provider_receipt_id: Optional[str] = None,
+        result_ref: Optional[str] = None,
+    ) -> CasResult:
+        """Record the delivery result of a claimed command's side effect.
+
+        ``outcome`` is the caller's interpretation of the side effect:
+
+        * :attr:`APPLIED` — the side effect is confirmed; the command settles.
+        * :attr:`DELIVERY_UNKNOWN` — the provider side effect may already have
+          occurred; the command is parked as delivery-ambiguous so the reconciler
+          reconciles instead of blindly reissuing it.
+        * :attr:`REVISION_CONFLICT` / :attr:`FENCING_CONFLICT` — the side effect
+          did not land against current authority; the command fails and is
+          retried against fresh state.
+
+        Only the claiming ``owner_class`` may record delivery; a stale worker is
+        refused (:class:`NotCommandOwnerError`). Recording delivery on a command
+        that already settled is idempotent.
+        """
+
+        row = await self._load_command_for_update(command_id)
+        if row.status in COMMAND_TERMINAL_STATES:
+            return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row))
+        if row.status != COMMAND_STATE_CLAIMED or row.owner_class != owner_class:
+            raise NotCommandOwnerError(
+                f"Command {command_id!r} is not claimed by {owner_class!r} "
+                f"(status={row.status!r}, owner={row.owner_class!r})"
+            )
         if provider_receipt_id is not None:
             row.provider_receipt_id = provider_receipt_id
-        if delivery_ambiguous is not None:
-            row.delivery_ambiguous = delivery_ambiguous
         if result_ref is not None:
             row.result_ref = result_ref
+        if outcome is ControlPlaneOutcome.APPLIED:
+            row.status = COMMAND_STATE_APPLIED
+            row.delivery_ambiguous = False
+            result_outcome = ControlPlaneOutcome.APPLIED
+        elif outcome is ControlPlaneOutcome.DELIVERY_UNKNOWN:
+            row.status = COMMAND_STATE_DELIVERY_UNKNOWN
+            row.delivery_ambiguous = True
+            telemetry.record_delivery_unknown_reconciled()
+            result_outcome = ControlPlaneOutcome.DELIVERY_UNKNOWN
+        else:
+            row.status = COMMAND_STATE_FAILED
+            result_outcome = outcome
+        row.revision = row.revision + 1
         await self._session.flush()
         await self._session.refresh(row)
-        return _command_record(row)
+        return CasResult(result_outcome, _command_record(row))
 
 
 # --- DecisionRepository ------------------------------------------------------
@@ -962,6 +1431,136 @@ class ChatBindingAliasRepository(_RepositoryBase):
         return _alias_record(row) if row is not None else None
 
 
+# --- CleanupAuthorityRepository ----------------------------------------------
+
+
+class CleanupAuthorityRepository(_RepositoryBase):
+    """Durable cleanup / janitor authority repository.
+
+    Source: MoonLadderStudios/MoonMind#3704. Cleanup is fenced against the host,
+    Provider Profile lease, and provider-session generations it was claimed
+    against so a former janitor cannot stop or release resources that now belong
+    to a replacement generation. Exactly one owner may hold ``claimed``.
+    """
+
+    async def get(self, session_id: str) -> Optional[CleanupAuthorityRecord]:
+        row = await self._session.get(OmnigentCleanupAuthority, session_id)
+        return _cleanup_record(row) if row is not None else None
+
+    async def _load_for_update(self, session_id: str) -> OmnigentCleanupAuthority:
+        """Load (or lazily create) the cleanup-authority row under a row lock."""
+
+        row = await self._session.get(
+            OmnigentCleanupAuthority, session_id, with_for_update=True
+        )
+        if row is not None:
+            return row
+        row = OmnigentCleanupAuthority(session_id=session_id)
+        self._session.add(row)
+        try:
+            async with self._session.begin_nested():
+                await self._session.flush()
+        except IntegrityError:
+            # Concurrent lazy-create: reload the winner under the row lock.
+            row = await self._session.get(
+                OmnigentCleanupAuthority, session_id, with_for_update=True
+            )
+            assert row is not None
+            return row
+        return row
+
+    async def claim_cleanup(
+        self,
+        session_id: str,
+        *,
+        owner_class: str,
+        fenced_host_generation: Optional[int] = None,
+        fenced_profile_generation: Optional[int] = None,
+        fenced_provider_epoch: Optional[str] = None,
+    ) -> CasResult:
+        """Claim exclusive cleanup authority for a session.
+
+        Exactly one janitor wins the ``unclaimed -> claimed`` transition and
+        receives :attr:`APPLIED`; a concurrent janitor observes a live claim and
+        receives :attr:`NOT_OWNER` (a cleanup-claim conflict counter is emitted).
+        A completed cleanup is idempotent (:attr:`ALREADY_APPLIED`). The claim
+        records the host/profile/provider generations it is fenced against so
+        :meth:`complete_cleanup` can prove they were not superseded.
+        """
+
+        row = await self._load_for_update(session_id)
+        if row.state == CLEANUP_STATE_COMPLETE:
+            return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _cleanup_record(row))
+        if row.state == CLEANUP_STATE_CLAIMED:
+            telemetry.record_cleanup_claim_conflict()
+            return CasResult(ControlPlaneOutcome.NOT_OWNER, _cleanup_record(row))
+        row.state = CLEANUP_STATE_CLAIMED
+        row.owner_class = owner_class
+        row.fenced_host_generation = fenced_host_generation
+        row.fenced_profile_generation = fenced_profile_generation
+        row.fenced_provider_epoch = fenced_provider_epoch
+        row.generation = row.generation + 1
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return CasResult(ControlPlaneOutcome.APPLIED, _cleanup_record(row))
+
+    async def complete_cleanup(
+        self,
+        session_id: str,
+        *,
+        generation: int,
+        owner_class: str,
+        session_repository: "SessionRepository",
+    ) -> CasResult:
+        """Complete a claimed cleanup, re-validating lease fencing.
+
+        Only the current owner of the claimed generation may complete cleanup; a
+        former janitor whose generation was superseded is refused
+        (:attr:`NOT_OWNER`). Before settling, the recorded host / Provider Profile
+        lease generations are re-checked against the live session: if a
+        replacement lease has been acquired since the claim, completion is fenced
+        (:attr:`FENCING_CONFLICT`) so a former owner cannot release a resource
+        that now belongs to a newer generation (#3704).
+        """
+
+        row = await self._load_for_update(session_id)
+        if row.state == CLEANUP_STATE_COMPLETE and row.generation == generation:
+            return CasResult(ControlPlaneOutcome.ALREADY_APPLIED, _cleanup_record(row))
+        if (
+            row.state != CLEANUP_STATE_CLAIMED
+            or row.generation != generation
+            or row.owner_class != owner_class
+        ):
+            telemetry.record_cleanup_claim_conflict()
+            return CasResult(ControlPlaneOutcome.NOT_OWNER, _cleanup_record(row))
+        session = await session_repository.get(session_id)
+        if session is not None:
+            if (
+                row.fenced_profile_generation is not None
+                and session.provider_profile_generation != row.fenced_profile_generation
+            ):
+                telemetry.record_fencing_conflict(
+                    scope=FencingScope.PROVIDER_PROFILE_LEASE
+                )
+                return CasResult(
+                    ControlPlaneOutcome.FENCING_CONFLICT, _cleanup_record(row)
+                )
+            if (
+                row.fenced_host_generation is not None
+                and session.host_lease_generation != row.fenced_host_generation
+            ):
+                telemetry.record_fencing_conflict(scope=FencingScope.HOST_LEASE)
+                return CasResult(
+                    ControlPlaneOutcome.FENCING_CONFLICT, _cleanup_record(row)
+                )
+        row.state = CLEANUP_STATE_COMPLETE
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return CasResult(ControlPlaneOutcome.APPLIED, _cleanup_record(row))
+
+
 # --- Unit of work ------------------------------------------------------------
 
 
@@ -975,6 +1574,7 @@ class ControlPlaneRepositories:
     commands: CommandRepository
     decisions: DecisionRepository
     chat_binding_aliases: ChatBindingAliasRepository
+    cleanup: CleanupAuthorityRepository
 
     @classmethod
     def bind(cls, session: AsyncSession) -> "ControlPlaneRepositories":
@@ -985,6 +1585,7 @@ class ControlPlaneRepositories:
             commands=CommandRepository(session),
             decisions=DecisionRepository(session),
             chat_binding_aliases=ChatBindingAliasRepository(session),
+            cleanup=CleanupAuthorityRepository(session),
         )
 
 
@@ -1057,8 +1658,14 @@ class OmnigentControlPlaneStore:
                 step_execution_id=step_execution_id,
                 instruction_digest=instruction_digest,
             )
+            # The freshly created session is at revision 1, fencing generation 0;
+            # the establishing owner declares that authority to bind the first
+            # active turn attempt (#3704 lifecycle writes are always fenced).
             await repos.sessions.update_lifecycle(
-                session_id, active_turn_attempt_id=first_turn_attempt_id
+                session_id,
+                expected_revision=1,
+                expected_fencing_generation=0,
+                active_turn_attempt_id=first_turn_attempt_id,
             )
             refreshed = await repos.sessions.get(session_id)
         assert refreshed is not None
