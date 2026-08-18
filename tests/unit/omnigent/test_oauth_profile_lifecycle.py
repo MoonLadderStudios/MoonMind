@@ -3198,6 +3198,23 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
             new_status="starting",
         )
         assert starting.status == "starting"
+        claimed = await repository.claim_host_lease_cleanup(
+            first.lease_id,
+            expected_status="starting",
+            expected_last_heartbeat_at=starting.last_heartbeat_at,
+        )
+        assert claimed is not None
+        assert claimed.status == "draining"
+        assert (
+            await repository.claim_host_lease_cleanup(
+                first.lease_id,
+                expected_status="starting",
+                expected_last_heartbeat_at=starting.last_heartbeat_at,
+            )
+            is None
+        )
+        with pytest.raises(OmnigentOAuthHostError, match="active host lease"):
+            await repository.heartbeat_host_lease(first.lease_id)
     finally:
         await engine.dispose()
 
@@ -3323,6 +3340,8 @@ async def test_coordinator_waits_for_canceled_host_cleanup_before_rerun(
 async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     actions: list[str] = []
     lifecycle: list[tuple[str, str | None]] = []
+    preflight_heartbeat_observed = asyncio.Event()
+    heartbeat_calls: list[str] = []
     provider_lease = SimpleNamespace(
         profile_id="codex",
         runtime_id="codex_cli",
@@ -3380,8 +3399,15 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         async def mark_host_lease_failed(self, *_args, **_kwargs):
             actions.append("host_failed")
 
+        async def heartbeat_host_lease(self, lease_id, *, ttl_seconds):
+            assert ttl_seconds == 5400
+            heartbeat_calls.append(lease_id)
+            preflight_heartbeat_observed.set()
+            return self.lease
+
     class Runtime:
         async def prepare_host(self, **_kwargs):
+            await preflight_heartbeat_observed.wait()
             actions.append("preflight")
             return {
                 "hostId": "host-1",
@@ -3462,6 +3488,8 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
     )
     assert result.summary == "done"
+    assert heartbeat_calls
+    assert set(heartbeat_calls) == {"host-lease-1"}
     assert actions[0] == "bridge_envelope_created"
     assert actions[-1] == "terminal"
     assert actions.index("host_stopped") < actions.index("profile_lease_release")

@@ -10,6 +10,7 @@ from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
 class _Repository:
     def __init__(self, lease):
         self.lease = lease
+        self.cleanup_claims: list[str] = []
         self.stopped: list[str] = []
         self.order: list[str] = []
 
@@ -36,6 +37,21 @@ class _Repository:
         self.order.append("lease_released")
         self.stopped.append(lease_id)
         self.lease.status = "stopped"
+        return self.lease
+
+    async def claim_host_lease_cleanup(
+        self, lease_id, *, expected_status, expected_last_heartbeat_at
+    ):
+        assert lease_id == self.lease.lease_id
+        if (
+            self.lease.status != expected_status
+            or self.lease.last_heartbeat_at != expected_last_heartbeat_at
+        ):
+            return None
+        self.order.append("cleanup_claimed")
+        self.cleanup_claims.append(lease_id)
+        self.lease.status = "draining"
+        self.lease.last_heartbeat_at = datetime.now(UTC)
         return self.lease
 
     async def transition_host_lease(
@@ -326,7 +342,7 @@ async def test_stale_lease_eviction_rejects_fresh_lease() -> None:
 @pytest.mark.asyncio
 async def test_janitor_reconciles_stale_heartbeat_after_restart() -> None:
     repository = _Repository(_lease(heartbeat_age=121))
-    runtime = _Runtime()
+    runtime = _Runtime(repository.order)
 
     result = await OmnigentOAuthHostJanitor(
         repository=repository,
@@ -338,6 +354,77 @@ async def test_janitor_reconciles_stale_heartbeat_after_restart() -> None:
     assert result["actions"][-1]["action"] == "stale_heartbeat_cleanup"
     assert repository.stopped == ["lease-1"]
     assert runtime.stopped == 1
+    assert repository.order[:2] == ["cleanup_claimed", "host_stopped"]
+
+
+@pytest.mark.asyncio
+async def test_janitor_ignores_missing_container_during_fresh_launch() -> None:
+    lease = _lease()
+    lease.status = "starting"
+    lease.omnigent_session_id = None
+    repository = _Repository(lease)
+    runtime = _Runtime(repository.order)
+
+    async def missing_container(_name):
+        return False
+
+    runtime.container_exists = missing_container
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        heartbeat_timeout_seconds=90,
+    ).run()
+
+    assert result == {"status": "completed", "actions": [], "count": 0}
+    assert repository.cleanup_claims == []
+    assert repository.stopped == []
+    assert runtime.stopped == 0
+
+
+@pytest.mark.asyncio
+async def test_janitor_claims_missing_container_after_launch_boundary() -> None:
+    repository = _Repository(_lease())
+    runtime = _Runtime(repository.order)
+
+    async def missing_container(_name):
+        return False
+
+    runtime.container_exists = missing_container
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+    ).run()
+
+    assert result["actions"][-1]["action"] == "missing_container_repair"
+    assert repository.cleanup_claims == ["lease-1"]
+    assert repository.order[:2] == ["cleanup_claimed", "host_stopped"]
+
+
+@pytest.mark.asyncio
+async def test_janitor_reloads_after_cleanup_claim_conflict() -> None:
+    repository = _Repository(_lease(heartbeat_age=121))
+    runtime = _Runtime(repository.order)
+
+    async def lost_claim(*_args, **_kwargs):
+        repository.lease.last_heartbeat_at = datetime.now(UTC)
+        return None
+
+    repository.claim_host_lease_cleanup = lost_claim
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        heartbeat_timeout_seconds=90,
+    ).run()
+
+    assert result == {"status": "completed", "actions": [], "count": 0}
+    assert repository.stopped == []
+    assert runtime.stopped == 0
 
 
 @pytest.mark.asyncio
@@ -367,6 +454,7 @@ async def test_janitor_consumes_durable_runner_exit_cleanup_handoff() -> None:
     assert lease_client.released[0].owner_id == "provider-lease-1"
     assert lease_client.released[0].runtime_id == "codex_cli"
     assert repository.order == [
+        "cleanup_claimed",
         "host_stopped",
         "lease_released",
         "provider_released",
@@ -455,7 +543,11 @@ async def test_janitor_reconciles_each_durable_embedded_abandonment_class(
     ).run()
 
     assert result["actions"][-1]["action"] == action
-    assert repository.order == ["host_stopped", "lease_released"]
+    assert repository.order == [
+        "cleanup_claimed",
+        "host_stopped",
+        "lease_released",
+    ]
 
 
 @pytest.mark.asyncio

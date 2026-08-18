@@ -9,7 +9,10 @@ from moonmind.omnigent.oauth_host_runtime import (
     OmnigentEgressEvidenceRequestIdentity,
     OmnigentOAuthHostRuntime,
 )
-from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+from moonmind.omnigent.oauth_hosts import (
+    CLEANUP_CLAIMABLE_HOST_STATES,
+    OmnigentOAuthHostRepository,
+)
 from moonmind.provider_profiles.lease_client import (
     CredentialLease,
     CredentialLeasePurpose,
@@ -368,16 +371,47 @@ class OmnigentOAuthHostJanitor:
                 lease.container_name
                 and not await self._runtime.container_exists(lease.container_name)
             )
+            # ``allocating`` and ``starting`` precede the container
+            # materialization authority handoff. A deterministic container name
+            # exists on the lease during that window, but the container is not
+            # required to exist yet. Absence alone is therefore not cleanup
+            # evidence until the coordinator crosses into ready/assigned. A
+            # stale/expired lease or an explicit durable reconciliation signal
+            # still permits cleanup of an abandoned launch.
+            missing_requires_cleanup = bool(
+                missing and lease.status not in {"allocating", "starting"}
+            )
             if (
                 not force
                 and not expired
-                and not missing
+                and not missing_requires_cleanup
                 and not stale
                 and not terminal_cleanup
                 and not terminal_provider_cleanup
                 and not reconciliation_action
             ):
                 continue
+            # A fresh draining lease already has a cleanup owner. Let that owner
+            # finish; only a stale/expired pass may recover an abandoned drain.
+            if (
+                lease.status == "draining"
+                and not force
+                and not expired
+                and not stale
+            ):
+                continue
+            if lease.status in CLEANUP_CLAIMABLE_HOST_STATES:
+                claimed = await self._repository.claim_host_lease_cleanup(
+                    lease.lease_id,
+                    expected_status=lease.status,
+                    expected_last_heartbeat_at=lease.last_heartbeat_at,
+                )
+                if claimed is None:
+                    # The coordinator advanced state or heartbeat authority
+                    # after this janitor pass observed it. Reconcile from the
+                    # next durable scan; never clean from the stale snapshot.
+                    continue
+                lease = claimed
             binding = await self._repository.validate_binding(lease.binding_ref)
             if lease.omnigent_session_id:
                 try:

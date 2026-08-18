@@ -39,6 +39,8 @@ from moonmind.utils.logging import redact_sensitive_text
 ACTIVE_HOST_STATES = frozenset(
     {"allocating", "starting", "ready", "assigned", "draining"}
 )
+HEARTBEAT_HOST_STATES = ACTIVE_HOST_STATES - {"draining"}
+CLEANUP_CLAIMABLE_HOST_STATES = HEARTBEAT_HOST_STATES
 TERMINAL_HOST_STATES = frozenset({"stopped", "failed"})
 HOST_PROFILE_BUSY_ERROR_CODE = "OMNIGENT_OAUTH_HOST_PROFILE_BUSY"
 
@@ -530,12 +532,55 @@ class OmnigentOAuthHostRepository:
         now = datetime.now(UTC)
         async with self._session_factory() as session:
             record = await session.get(OmnigentOAuthHostLeaseRecord, lease_id)
-            if record is None or record.status not in ACTIVE_HOST_STATES:
+            if record is None or record.status not in HEARTBEAT_HOST_STATES:
                 raise OmnigentOAuthHostError("active host lease does not exist")
             record.last_heartbeat_at = now
             record.expires_at = now + timedelta(seconds=max(60, ttl_seconds))
             await session.commit()
             await session.refresh(record)
+            return self._lease_model(record)
+
+    async def claim_host_lease_cleanup(
+        self,
+        lease_id: str,
+        *,
+        expected_status: str,
+        expected_last_heartbeat_at: datetime,
+    ) -> OmnigentHostLease | None:
+        """Fence a janitor cleanup against a concurrently live lease owner.
+
+        The heartbeat timestamp is part of the compare-and-swap because status
+        alone cannot distinguish a genuinely stale lease from one heartbeated
+        after the janitor observed it. Returning ``None`` tells the caller to
+        reload and reconcile instead of executing cleanup from stale evidence.
+        """
+
+        if expected_status not in CLEANUP_CLAIMABLE_HOST_STATES:
+            raise ValueError(
+                f"host lease status {expected_status!r} cannot be claimed for cleanup"
+            )
+        now = datetime.now(UTC)
+        async with self._session_factory() as session:
+            result = await session.execute(
+                update(OmnigentOAuthHostLeaseRecord)
+                .where(
+                    OmnigentOAuthHostLeaseRecord.lease_id == lease_id,
+                    OmnigentOAuthHostLeaseRecord.status == expected_status,
+                    OmnigentOAuthHostLeaseRecord.last_heartbeat_at
+                    == expected_last_heartbeat_at,
+                )
+                .values(
+                    status="draining",
+                    last_heartbeat_at=now,
+                    draining_at=now,
+                )
+            )
+            if result.rowcount != 1:
+                await session.rollback()
+                return None
+            await session.commit()
+            record = await session.get(OmnigentOAuthHostLeaseRecord, lease_id)
+            assert record is not None
             return self._lease_model(record)
 
     async def restart_host_lease(
@@ -742,6 +787,8 @@ def validate_preflight_result(
 
 __all__ = [
     "ACTIVE_HOST_STATES",
+    "CLEANUP_CLAIMABLE_HOST_STATES",
+    "HEARTBEAT_HOST_STATES",
     "HOST_PROFILE_BUSY_ERROR_CODE",
     "HostPreflightFailure",
     "OmnigentOAuthHostError",

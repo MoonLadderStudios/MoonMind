@@ -346,7 +346,16 @@ Cleanup is idempotent across activity retry and worker failure:
 
 - on-demand cleanup stops and removes the deterministic container and its lease-owned Omnigent state volume;
 - static cleanup stops or drains the dedicated Codex host according to policy;
-- expired, missing, orphaned, and stale-generation hosts are reconciled by the host janitor;
+- container absence is cleanup evidence only after the lease crosses the
+  materialization boundary into `ready` or `assigned`; an `allocating` or
+  `starting` lease is cleanup-eligible only when it is expired, stale, or named
+  by explicit durable reconciliation evidence;
+- before stopping a host or releasing capacity, the janitor atomically claims
+  the observed lease status and heartbeat and moves it to `draining`; a
+  concurrent heartbeat or state transition defeats the claim and defers cleanup
+  to a later reconciliation pass;
+- expired, missing-after-materialization, orphaned, and stale-generation hosts
+  are reconciled by the host janitor;
 - cleanup failure leaves explicit `janitorRequired` evidence and does not falsely release credential capacity;
 - Provider Profile release is the final lifecycle action.
 

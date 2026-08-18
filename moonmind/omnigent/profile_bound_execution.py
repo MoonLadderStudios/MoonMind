@@ -8,7 +8,7 @@ import json
 import math
 import os
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import Any, TypeVar
 
 from sqlalchemy import select
 from temporalio import activity
@@ -88,6 +88,7 @@ from moonmind.workflows.executions.runtime_capabilities import (
 
 
 ExecutionRunner = Callable[..., Awaitable[AgentRunResult]]
+HeartbeatResult = TypeVar("HeartbeatResult")
 HOST_LEASE_HEARTBEAT_INTERVAL_SECONDS = 30.0
 # The deployment janitor reconciles abandoned OAuth hosts on a five-minute
 # cadence.  Cover one complete cadence plus scheduling slack so an exact rerun
@@ -668,12 +669,12 @@ class OmnigentProfileBoundExecutionCoordinator:
 
     async def _execute_with_host_lease_heartbeat(
         self,
-        execution: Awaitable[AgentRunResult],
+        execution: Awaitable[HeartbeatResult],
         *,
         host_lease_ref: str,
         ttl_seconds: int,
-    ) -> AgentRunResult:
-        """Keep the durable host lease live for the full provider execution."""
+    ) -> HeartbeatResult:
+        """Keep the durable host lease live for one owned runtime operation."""
 
         async def heartbeat() -> None:
             while True:
@@ -1243,7 +1244,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 if remediation_resolution is not None
                 else workspace_intent.workspace_locator_payload()
             )
-            preflight = await self._runtime.prepare_host(
+            preflight_operation = self._runtime.prepare_host(
                 binding=binding,
                 host_lease=host_lease,
                 workspace_key=(
@@ -1321,6 +1322,11 @@ class OmnigentProfileBoundExecutionCoordinator:
                     if remediation_resolution is not None
                     else self._attachment_refs(request)
                 ),
+            )
+            preflight = await self._execute_with_host_lease_heartbeat(
+                preflight_operation,
+                host_lease_ref=host_lease.lease_id,
+                ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
             )
             await emit(current_stage, "completed")
             workspace_resolution = preflight.get("workspaceResolution")

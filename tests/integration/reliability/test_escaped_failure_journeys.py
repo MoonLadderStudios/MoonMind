@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -2942,6 +2942,93 @@ async def test_cleaned_up_host_retry_rebinds_fresh_endpoint_authority(
     assert active["egressEvidence"]["endpointIdentity"] == expected[
         "activeEndpointIdentity"
     ]
+
+
+async def test_fresh_omnigent_launch_is_not_reaped_before_materialization() -> None:
+    """Replay mm:4ce41531 at the coordinator-to-janitor authority handoff."""
+
+    replay_id = "omnigent-fresh-launch-janitor-race"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    now = datetime.now(timezone.utc)
+    lease = SimpleNamespace(
+        lease_id="host-lease-fresh-launch",
+        provider_profile_id="profile-replay",
+        provider_lease_id="provider-lease-fresh-launch",
+        binding_ref="binding-replay",
+        container_name="host-container-fresh-launch",
+        omnigent_session_id=None,
+        last_heartbeat_at=now
+        - timedelta(seconds=manifest["heartbeatAgeSeconds"]),
+        expires_at=now + timedelta(hours=1),
+        status=manifest["leaseStatusAtJanitorScan"],
+    )
+    cleanup_claims: list[str] = []
+    stopped: list[str] = []
+    released: list[str] = []
+    cleanup_records: list[dict] = []
+
+    class Repository:
+        async def list_active_host_leases(self):
+            return [lease]
+
+        async def list_terminal_host_leases_with_active_provider_capacity(self):
+            return []
+
+        async def get_binding_for_profile(self, _profile_id):
+            return None
+
+        async def claim_host_lease_cleanup(self, lease_id, **_kwargs):
+            cleanup_claims.append(lease_id)
+            return lease
+
+        async def validate_binding(self, _binding_ref):
+            raise AssertionError("fresh launch must not enter cleanup")
+
+        async def mark_host_lease_stopped(self, lease_id):
+            stopped.append(lease_id)
+            return lease
+
+    class Runtime:
+        async def container_exists(self, name):
+            assert name == lease.container_name
+            return False
+
+        async def list_managed_containers(self):
+            return []
+
+        async def stop_host(self, **_kwargs):
+            stopped.append(lease.lease_id)
+            return {}
+
+    class LeaseClient:
+        async def release_lease(self, provider_lease):
+            released.append(provider_lease.lease_id)
+
+    class RunStore:
+        async def cleanup_required_host_lease_refs(self):
+            return set()
+
+        async def embedded_reconciliation_host_lease_refs(self, **_kwargs):
+            return {}
+
+        async def record_terminal_cleanup(self, **kwargs):
+            cleanup_records.append(kwargs)
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=Repository(),
+        runtime=Runtime(),
+        client=SimpleNamespace(),
+        run_store=RunStore(),
+        lease_client=LeaseClient(),
+        heartbeat_timeout_seconds=manifest["heartbeatTimeoutSeconds"],
+    ).run()
+
+    assert result["count"] == expected["janitorActionCount"]
+    assert len(cleanup_claims) == expected["cleanupClaimCount"]
+    assert len(stopped) == expected["hostStopCount"]
+    assert len(released) == expected["providerLeaseReleaseCount"]
+    assert bool(cleanup_records) is expected["durableCleanupFailureRecorded"]
 
 
 async def test_abandoned_omnigent_host_cleanup_releases_provider_capacity() -> None:
