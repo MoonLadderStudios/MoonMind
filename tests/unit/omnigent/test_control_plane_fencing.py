@@ -229,6 +229,53 @@ async def test_command_claimed_once_and_delivery_confirmed(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_delivery_unknown_is_parked_and_not_reissued(store) -> None:
+    # Acceptance criterion 5: a provider side effect that *may* already have
+    # occurred is recorded as delivery-ambiguous so the reconciler reconciles
+    # instead of blindly reissuing the command a second time (#3704).
+    await _new_session(store)
+    async with store.transaction() as repos:
+        await repos.commands.record(
+            command_id="c1",
+            session_id="s1",
+            command_type="ensure_host",
+            idempotency_key="cmd-1",
+            payload_digest="digest",
+        )
+        claimed = await repos.commands.claim_command("c1", owner_class="supervisor")
+        ambiguous = await repos.commands.record_command_delivery(
+            "c1",
+            owner_class="supervisor",
+            outcome=ControlPlaneOutcome.DELIVERY_UNKNOWN,
+            provider_receipt_id="rcpt-ambiguous",
+        )
+        # A later reconcile attempt must observe the parked command as already
+        # claimed and must NOT re-execute the side effect.
+        reclaim = await repos.commands.claim_command("c1", owner_class="supervisor")
+        parked = await repos.commands.get("c1")
+
+    assert claimed.outcome is ControlPlaneOutcome.APPLIED
+    # (a) the delivery outcome is the stable DELIVERY_UNKNOWN.
+    assert ambiguous.outcome is ControlPlaneOutcome.DELIVERY_UNKNOWN
+    # (b) the persisted record is parked as delivery-ambiguous.
+    assert ambiguous.record.status == "delivery_unknown"
+    assert ambiguous.record.delivery_ambiguous is True
+    assert parked.status == "delivery_unknown"
+    assert parked.delivery_ambiguous is True
+    assert parked.provider_receipt_id == "rcpt-ambiguous"
+    # (c) the delivery-unknown reconciliation counter is emitted exactly once
+    # (the only bounded counter otherwise unasserted across the suite).
+    assert (
+        telemetry.snapshot()[(telemetry.DELIVERY_UNKNOWN_RECONCILED, "session")] == 1
+    )
+    # (d) the reconcile-time re-claim is suppressed, not a second execution.
+    assert reclaim.outcome is ControlPlaneOutcome.ALREADY_APPLIED
+    assert (
+        telemetry.snapshot()[(telemetry.DUPLICATE_COMMAND_SUPPRESSED, "session")] == 1
+    )
+
+
+@pytest.mark.asyncio
 async def test_delivery_non_owner_is_rejected(store) -> None:
     await _new_session(store)
     async with store.transaction() as repos:
