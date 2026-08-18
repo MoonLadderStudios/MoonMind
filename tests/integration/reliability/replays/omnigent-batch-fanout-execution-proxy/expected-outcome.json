@@ -1,0 +1,25 @@
+{
+  "invariant": "isolated Omnigent skills may create and verify child workflows through exact execution API routes while all broader execution control routes remain denied by the proxy",
+  "allowedRoutes": [
+    {
+      "acl": "moonmind_execution_create",
+      "method": "POST",
+      "pathRegex": "^/api/executions$"
+    },
+    {
+      "acl": "moonmind_execution_describe",
+      "method": "GET",
+      "pathRegex": "^/api/executions/[^/?]+$"
+    }
+  ],
+  "deniedAclCombinations": [
+    {
+      "acl": "moonmind_execution_create",
+      "method": "GET"
+    },
+    {
+      "acl": "moonmind_execution_describe",
+      "method": "POST"
+    }
+  ]
+}

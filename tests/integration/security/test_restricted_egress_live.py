@@ -30,6 +30,7 @@ from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     EGRESS_NETWORK_REF,
     OMNIGENT_EGRESS_PROFILE,
+    OMNIGENT_PROXY_URL,
     PROXY_URL,
     attest_docker_egress,
 )
@@ -110,6 +111,8 @@ def _probe(
     url: str,
     *,
     proxy: bool = True,
+    network_ref: str = EGRESS_NETWORK_REF,
+    proxy_url: str = PROXY_URL,
     environment: tuple[str, ...] = (),
     curl_args: tuple[str, ...] = (),
     docker_args: tuple[str, ...] = (),
@@ -122,7 +125,7 @@ def _probe(
         "--label",
         "moonmind.test.scope=MoonLadderStudios/MoonMind#3625",
         "--network",
-        EGRESS_NETWORK_REF,
+        network_ref,
         "--cap-drop",
         "ALL",
         "--security-opt",
@@ -132,13 +135,13 @@ def _probe(
     if proxy:
         args += [
             "--env",
-            f"HTTP_PROXY={PROXY_URL}",
+            f"HTTP_PROXY={proxy_url}",
             "--env",
-            f"HTTPS_PROXY={PROXY_URL}",
+            f"HTTPS_PROXY={proxy_url}",
             "--env",
-            f"http_proxy={PROXY_URL}",
+            f"http_proxy={proxy_url}",
             "--env",
-            f"https_proxy={PROXY_URL}",
+            f"https_proxy={proxy_url}",
             "--env",
             "NO_PROXY=",
             "--env",
@@ -155,6 +158,59 @@ def _probe(
         url,
     ]
     return _docker(*args)
+
+
+def test_omnigent_proxy_allows_only_scoped_execution_fanout_routes() -> None:
+    """The portable fan-out path reaches the API without broad control access."""
+
+    create = _probe(
+        "http://api:8000/api/executions",
+        network_ref=OMNIGENT_EGRESS_PROFILE.network_ref,
+        proxy_url=OMNIGENT_PROXY_URL,
+        curl_args=(
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "-X",
+            "POST",
+            "-H",
+            "Content-Type: application/json",
+            "--data",
+            "{}",
+        ),
+    )
+    assert create.returncode == 0, create.stderr[-1000:]
+    assert create.stdout in {"401", "422"}
+
+    describe = _probe(
+        "http://api:8000/api/executions/mm%3Aegress-probe-not-found",
+        network_ref=OMNIGENT_EGRESS_PROFILE.network_ref,
+        proxy_url=OMNIGENT_PROXY_URL,
+        curl_args=("-o", "/dev/null", "-w", "%{http_code}"),
+    )
+    assert describe.returncode == 0, describe.stderr[-1000:]
+    assert describe.stdout in {"401", "404"}
+
+    for method, path in (
+        ("GET", "/api/executions"),
+        ("POST", "/api/executions/mm%3Aegress-probe/cancel"),
+    ):
+        denied = _probe(
+            f"http://api:8000{path}",
+            network_ref=OMNIGENT_EGRESS_PROFILE.network_ref,
+            proxy_url=OMNIGENT_PROXY_URL,
+            curl_args=(
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                "-X",
+                method,
+            ),
+        )
+        assert denied.returncode == 0, denied.stderr[-1000:]
+        assert denied.stdout == "403"
 
 
 def _exec_sh(container_name: str, script: str) -> subprocess.CompletedProcess[str]:

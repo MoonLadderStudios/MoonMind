@@ -3374,6 +3374,44 @@ async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment
     assert runtime_environment[expected["excludedSecretName"]] not in profile
 
 
+async def test_omnigent_batch_fanout_crosses_only_scoped_execution_proxy_routes(
+) -> None:
+    """Replay mm:2d8480da at the Omnigent-to-MoonMind API proxy boundary."""
+
+    replay_id = "omnigent-batch-fanout-execution-proxy"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    squid_config = (
+        REPO_ROOT / "docker" / "sandbox-egress-proxy" / "squid.conf"
+    ).read_text(encoding="utf-8")
+    proxy_environment = dict(
+        value.split("=", 1) for value in omnigent_proxy_env()
+    )
+
+    assert manifest["terminalFailureCode"] == "CHILD_WORKFLOW_QUEUE_FAILED"
+    assert manifest["matchedPrs"] == 10
+    assert manifest["attempts"] == 4
+    assert "api" not in proxy_environment["NO_PROXY"].split(",")
+
+    for route in expected["allowedRoutes"]:
+        acl = f"acl {route['acl']} urlpath_regex {route['pathRegex']}"
+        allow = (
+            "http_access allow omnigent_listener moonmind_api "
+            f"moonmind_api_port {route['acl']} {route['method']}"
+        )
+        assert acl in squid_config
+        assert allow in squid_config
+        assert squid_config.index(allow) < squid_config.index(
+            "http_access deny omnigent_control"
+        )
+
+    for denied in expected["deniedAclCombinations"]:
+        assert (
+            "http_access allow omnigent_listener moonmind_api "
+            f"moonmind_api_port {denied['acl']} {denied['method']}"
+        ) not in squid_config
+
+
 async def test_omnigent_codex_remote_bridge_has_loopback_only_proxy_bypass() -> None:
     """Replay mm:b99b4a69 at the Codex TUI-to-app-server boundary."""
 
