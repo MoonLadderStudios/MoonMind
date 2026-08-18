@@ -1,0 +1,19 @@
+{
+  "invariant": "the lease-owned Codex tool-shell profile restores non-secret MoonMind API and execution identity after Omnigent harness filtering without persisting scoped bearer credentials",
+  "toolShellEnvironmentNames": [
+    "MOONMIND_STEP_EXECUTION_ID",
+    "MOONMIND_ACTIVE_SKILLS_DIR",
+    "MOONMIND_URL",
+    "MOONMIND_AGENT_RUN_ID",
+    "MOONMIND_TASK_WORKFLOW_ID",
+    "MOONMIND_STEP_ID",
+    "MOONMIND_RUNTIME_ID",
+    "MOONMIND_CONTAINER_JOBS_MCP_URL",
+    "MOONMIND_CONTAINER_JOBS_SOURCE_KIND",
+    "MOONMIND_CONTAINER_JOBS_SESSION_ID",
+    "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND",
+    "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID",
+    "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH"
+  ],
+  "excludedSecretName": "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"
+}

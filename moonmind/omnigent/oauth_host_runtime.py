@@ -167,6 +167,24 @@ _RUNNER_GITHUB_ENV_NAMES = (
     "GH_NO_UPDATE_NOTIFIER",
     "GH_NO_EXTENSION_UPDATE_NOTIFIER",
 )
+# Omnigent deliberately filters the environment again when its runner launches
+# a provider harness.  Codex tool shells are login shells, so this exact
+# non-secret subset is also materialized through the lease-owned profile under
+# ``/etc/profile.d``.  Keep credential-bearing values (notably the scoped
+# container-job bearer) out of the generated file.
+_RUNTIME_EXECUTION_PROFILE_ENV_NAMES = (
+    "MOONMIND_URL",
+    "MOONMIND_AGENT_RUN_ID",
+    "MOONMIND_TASK_WORKFLOW_ID",
+    "MOONMIND_STEP_ID",
+    "MOONMIND_RUNTIME_ID",
+    "MOONMIND_CONTAINER_JOBS_MCP_URL",
+    "MOONMIND_CONTAINER_JOBS_SOURCE_KIND",
+    "MOONMIND_CONTAINER_JOBS_SESSION_ID",
+    "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND",
+    "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID",
+    "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH",
+)
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _PLACEHOLDER_DIGEST = "0" * 64
 _SAFE_NETWORK = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
@@ -456,6 +474,7 @@ class OmnigentOAuthHostRuntime:
             daemon_runtime_scripts = self._prepare_daemon_runtime_scripts(
                 workspace_key,
                 current_step_execution_id=current_step_execution_id,
+                runtime_environment=container_job_environment,
                 daemon_workspace_root=daemon_workspace_root,
             )
             if "gh" in {item.strip().lower() for item in required_capabilities}:
@@ -1596,6 +1615,7 @@ class OmnigentOAuthHostRuntime:
         workspace_key: str,
         *,
         current_step_execution_id: str,
+        runtime_environment: Mapping[str, str] | None = None,
     ) -> Path:
         """Snapshot MoonMind host scripts under the daemon-mapped run root."""
 
@@ -1628,9 +1648,31 @@ class OmnigentOAuthHostRuntime:
                 "Omnigent step execution identity is missing or unsafe",
                 code="OMNIGENT_STEP_EXECUTION_ID_INVALID",
             )
+        profile_environment = {
+            "MOONMIND_STEP_EXECUTION_ID": execution_id,
+            "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
+        }
+        supplied_environment = dict(runtime_environment or {})
+        for name in _RUNTIME_EXECUTION_PROFILE_ENV_NAMES:
+            value = str(supplied_environment.get(name) or "").strip()
+            if value:
+                profile_environment[name] = value
+        for value in profile_environment.values():
+            if any(character in value for character in ("\0", "\r", "\n")):
+                raise OmnigentOAuthHostError(
+                    "Omnigent runtime execution profile contains an unsafe value",
+                    code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
+                )
+
+        def shell_single_quote(value: str) -> str:
+            return "'" + value.replace("'", "'\"'\"'") + "'"
+
         execution_profile_payload = (
             "# Generated for one MoonMind-owned Omnigent host lease.\n"
-            f"export MOONMIND_STEP_EXECUTION_ID='{execution_id}'\n"
+            + "".join(
+                f"export {name}={shell_single_quote(value)}\n"
+                for name, value in profile_environment.items()
+            )
         )
 
         digest = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()[:24]
@@ -1698,12 +1740,14 @@ class OmnigentOAuthHostRuntime:
         workspace_key: str,
         *,
         current_step_execution_id: str,
+        runtime_environment: Mapping[str, str] | None = None,
         daemon_workspace_root: Path | str | None = None,
     ) -> Path:
         return daemon_visible_workspace_path(
             self._prepare_runtime_scripts(
                 workspace_key,
                 current_step_execution_id=current_step_execution_id,
+                runtime_environment=runtime_environment,
             ),
             daemon_root=daemon_workspace_root,
         )
