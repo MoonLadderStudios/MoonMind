@@ -259,7 +259,60 @@ async def test_command_idempotency_key_reuse_with_different_payload_fails_closed
 
 
 @pytest.mark.asyncio
-async def test_command_carries_delivery_and_fencing_state(store) -> None:
+async def test_command_claim_and_delivery_unknown(store) -> None:
+    from moonmind.omnigent.control_plane import ControlPlaneOutcome
+
+    async with store.transaction() as repos:
+        await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
+        )
+        recorded = await repos.commands.record(
+            command_id="c1",
+            session_id="s1",
+            command_type="ensure_host",
+            idempotency_key="cmd-1",
+            payload_digest="digest",
+            fencing_generation=3,
+        )
+        assert recorded.status == "pending"
+        assert recorded.revision == 1
+        # Exactly one caller may claim execution authority.
+        claim = await repos.commands.claim_command(
+            "c1", owner_class="session_supervisor", claim_token="worker-a"
+        )
+        assert claim.outcome is ControlPlaneOutcome.APPLIED
+        assert claim.record.status == "claimed"
+        # A concurrent worker that shares the owner_class but presents a different
+        # claim token does not win authority and must not execute the side effect.
+        reclaim = await repos.commands.claim_command(
+            "c1", owner_class="session_supervisor", claim_token="worker-b"
+        )
+        assert reclaim.outcome is ControlPlaneOutcome.NOT_OWNER
+        # A possibly-delivered provider side effect is parked as ambiguous rather
+        # than blindly reissued.
+        delivered = await repos.commands.record_command_delivery(
+            "c1",
+            owner_class="session_supervisor",
+            claim_token="worker-a",
+            outcome=ControlPlaneOutcome.DELIVERY_UNKNOWN,
+            provider_receipt_id="rcpt-1",
+            result_ref="art://result",
+        )
+    assert delivered.outcome is ControlPlaneOutcome.DELIVERY_UNKNOWN
+    assert delivered.record.status == "delivery_unknown"
+    assert delivered.record.delivery_ambiguous is True
+    assert delivered.record.provider_receipt_id == "rcpt-1"
+    assert delivered.record.fencing_generation == 3
+    assert delivered.record.result_ref == "art://result"
+
+
+@pytest.mark.asyncio
+async def test_command_delivery_rejects_non_owner(store) -> None:
+    from moonmind.omnigent.control_plane import (
+        ControlPlaneOutcome,
+        NotCommandOwnerError,
+    )
+
     async with store.transaction() as repos:
         await repos.sessions.create(
             session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
@@ -270,20 +323,19 @@ async def test_command_carries_delivery_and_fencing_state(store) -> None:
             command_type="ensure_host",
             idempotency_key="cmd-1",
             payload_digest="digest",
-            fencing_generation=3,
         )
-        updated = await repos.commands.update_status(
-            "c1",
-            "delivery_unknown",
-            provider_receipt_id="rcpt-1",
-            delivery_ambiguous=True,
-            result_ref="art://result",
+        await repos.commands.claim_command(
+            "c1", owner_class="session_supervisor", claim_token="worker-a"
         )
-    assert updated.status == "delivery_unknown"
-    assert updated.delivery_ambiguous is True
-    assert updated.provider_receipt_id == "rcpt-1"
-    assert updated.fencing_generation == 3
-    assert updated.result_ref == "art://result"
+    # A worker that does not own the claim cannot record its delivery.
+    with pytest.raises(NotCommandOwnerError):
+        async with store.transaction() as repos:
+            await repos.commands.record_command_delivery(
+                "c1",
+                owner_class="stale_worker",
+                claim_token="worker-a",
+                outcome=ControlPlaneOutcome.APPLIED,
+            )
 
 
 @pytest.mark.asyncio
@@ -292,17 +344,31 @@ async def test_terminal_session_not_overwritten_by_nonterminal_update(store) -> 
         await repos.sessions.create(
             session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
         )
-        await repos.sessions.mark_terminal("s1", "completed")
-    # A nonterminal lifecycle update on a terminal session fails closed.
+        # Fresh session is revision 1 / fencing generation 0; the terminal write
+        # advances it to revision 2.
+        await repos.sessions.mark_terminal(
+            "s1", "completed", expected_revision=1, expected_fencing_generation=0
+        )
+    # A nonterminal lifecycle update on a terminal session fails closed even when
+    # the caller presents current authority.
     with pytest.raises(TerminalSessionOverwriteError):
         async with store.transaction() as repos:
-            await repos.sessions.update_lifecycle("s1", observed_state="running")
+            await repos.sessions.update_lifecycle(
+                "s1",
+                expected_revision=2,
+                expected_fencing_generation=0,
+                observed_state="running",
+            )
     # A conflicting terminal state also fails closed; the same one is idempotent.
     with pytest.raises(TerminalSessionOverwriteError):
         async with store.transaction() as repos:
-            await repos.sessions.mark_terminal("s1", "failed")
+            await repos.sessions.mark_terminal(
+                "s1", "failed", expected_revision=2, expected_fencing_generation=0
+            )
     async with store.transaction() as repos:
-        idempotent = await repos.sessions.mark_terminal("s1", "completed")
+        idempotent = await repos.sessions.mark_terminal(
+            "s1", "completed", expected_revision=2, expected_fencing_generation=0
+        )
     assert idempotent.terminal_state == "completed"
 
 
@@ -312,12 +378,18 @@ async def test_terminal_session_allows_cleanup_and_archive_transitions(store) ->
         await repos.sessions.create(
             session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
         )
-        await repos.sessions.mark_terminal("s1", "completed")
+        await repos.sessions.mark_terminal(
+            "s1", "completed", expected_revision=1, expected_fencing_generation=0
+        )
     # The terminal-then-cleanup journey (no separate cleanup writer exists) must
     # still record cleanup/archive progress on the terminal session.
     async with store.transaction() as repos:
         cleaned = await repos.sessions.update_lifecycle(
-            "s1", cleanup_state="released", historical_read_state="archived"
+            "s1",
+            expected_revision=2,
+            expected_fencing_generation=0,
+            cleanup_state="released",
+            historical_read_state="archived",
         )
     assert cleaned.terminal_state == "completed"
     assert cleaned.cleanup_state == "released"
@@ -326,7 +398,11 @@ async def test_terminal_session_allows_cleanup_and_archive_transitions(store) ->
     with pytest.raises(TerminalSessionOverwriteError):
         async with store.transaction() as repos:
             await repos.sessions.update_lifecycle(
-                "s1", cleanup_state="purged", observed_state="running"
+                "s1",
+                expected_revision=3,
+                expected_fencing_generation=0,
+                cleanup_state="purged",
+                observed_state="running",
             )
 
 
@@ -357,7 +433,11 @@ async def test_attempt_terminality_is_separate_from_session_terminality(store) -
             turn_attempt_id="t1", session_id="s1", idempotency_key="idem-1"
         )
         await repos.turn_attempts.mark_terminal(
-            "t1", "completed", attempt_outcome="ok"
+            "t1",
+            "completed",
+            expected_revision=1,
+            expected_fencing_generation=0,
+            attempt_outcome="ok",
         )
         session = await repos.sessions.get("s1")
         turn = await repos.turn_attempts.get("t1")
@@ -695,8 +775,12 @@ async def test_chat_binding_resolution_uses_canonical_aggregate(session_factory)
     # historical read: the canonical aggregate still answers projection reads.
     async with store.transaction() as repos:
         session_id = (await repos.chat_binding_aliases.resolve("cb-old")).session_id
+        current = await repos.sessions.get(session_id)
         await repos.sessions.update_lifecycle(
-            session_id, historical_read_state="archived"
+            session_id,
+            expected_revision=current.revision,
+            expected_fencing_generation=current.fencing_generation,
+            historical_read_state="archived",
         )
 
     async with store.transaction() as repos:

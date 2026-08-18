@@ -380,8 +380,15 @@ async def run_backfill(
                 )
                 report.sessions_written += 1
                 if planned.terminal_state:
+                    # Freshly created canonical row: revision 1, fencing
+                    # generation 0. The migration declares that authority so the
+                    # terminal write is fenced like any other lifecycle write
+                    # (#3704), not an unguarded overwrite.
                     await repos.sessions.mark_terminal(
-                        planned.session_id, planned.terminal_state
+                        planned.session_id,
+                        planned.terminal_state,
+                        expected_revision=1,
+                        expected_fencing_generation=0,
                     )
 
         for planned_turn in plan.turn_attempts:
