@@ -1243,6 +1243,21 @@ class CommandRepository(_RepositoryBase):
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         return _command_record(row) if row is not None else None
 
+    async def list_for_session(self, session_id: str) -> list[CommandRecord]:
+        """Return this session's commands in creation order (read-only).
+
+        Used by the operator session-timeline projection (#3708) to surface the
+        active or delivery-unknown command; it never claims or mutates a command.
+        """
+
+        stmt = (
+            select(OmnigentCommand)
+            .where(OmnigentCommand.session_id == session_id)
+            .order_by(OmnigentCommand.created_at, OmnigentCommand.command_id)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_command_record(r) for r in rows]
+
     async def _load_command_for_update(self, command_id: str) -> OmnigentCommand:
         row = await self._session.get(
             OmnigentCommand, command_id, with_for_update=True
