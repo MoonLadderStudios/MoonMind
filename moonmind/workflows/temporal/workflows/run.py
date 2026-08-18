@@ -729,6 +729,9 @@ RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH = (
 RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
     "run-agent-required-capabilities-propagation-v1"
 )
+RUN_COMPILED_OMNIGENT_EXECUTION_INTENT_PATCH = (
+    "run-compiled-omnigent-execution-intent-v1"
+)
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
@@ -20256,10 +20259,51 @@ class MoonMindRunWorkflow:
                 "source": "validated_temporal_parent",
             }
 
+        compiled_intent_required = bool(
+            agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            and self._workflow_patch_enabled(
+                RUN_COMPILED_OMNIGENT_EXECUTION_INTENT_PATCH
+            )
+        )
+        remediation_loop_payload: dict[str, Any] | None = None
+        remediation_spec = self._remediation_loop_spec
+        if compiled_intent_required and remediation_spec is not None:
+            remediation_loop_payload = {
+                "schemaVersion": "v1",
+                "enabled": True,
+                "loopId": remediation_spec.loop_id,
+                "verifierOwner": remediation_spec.verification_tool.name,
+                "remediatorOwner": remediation_spec.remediation_tool.name,
+                "maxAttempts": remediation_spec.budgets.hard_max_attempts,
+                "maxBranches": remediation_spec.budgets.hard_max_attempts,
+                "gateResultRef": parameters.get("gateResultRef"),
+                "remainingWorkRef": parameters.get("remainingWorkRef"),
+                "checkpointBranchBehavior": "branch_on_immutable_change",
+                "reattachPolicy": (
+                    "live_reattach"
+                    if remediation_workspace is not None
+                    else "cold_restore"
+                ),
+                "immutableDimensions": [
+                    "instructionDigest",
+                    "model",
+                    "effort",
+                    "providerProfileId",
+                    "launchPolicyRef",
+                    "repositoryBranch",
+                    "publishMode",
+                ],
+            }
+
         return AgentExecutionRequest(
             agent_kind=agent_kind,
             agent_id=agent_id,
             execution_profile_ref=execution_profile_ref,
+            execution_intent_requirement=(
+                "required" if compiled_intent_required else "legacy_history"
+            ),
+            remediation_loop=remediation_loop_payload,
             correlation_id=correlation_id,
             idempotency_key=idempotency_key,
             instruction_ref=request_instruction_ref,

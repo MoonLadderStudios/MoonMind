@@ -9,7 +9,10 @@ with incomplete capability authority).
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
@@ -20,7 +23,10 @@ from moonmind.omnigent.execution_intent import (
     compile_execution_intent,
     derive_execution_intent_from_request,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    CompiledExecutionIntentBinding,
+)
 from moonmind.schemas.omnigent_execution_intent import (
     EXECUTION_INTENT_CONTRADICTORY_AUTHORITY,
     EXECUTION_INTENT_MAX_PAYLOAD_BYTES,
@@ -34,6 +40,9 @@ from moonmind.schemas.omnigent_execution_intent import (
     RepositoryOperationClass,
     SessionMode,
     classify_execution_intent_schema,
+)
+from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _bind_checkpoint_execution_intent,
 )
 
 _FIXED_CREATED_AT = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
@@ -58,8 +67,8 @@ def _resolved(**overrides) -> ResolvedExecutionAuthority:
         providerProfileRef="provider://pp",
         providerProfileId="pp-1",
         credentialGeneration="gen-3",
-        providerRuntime="claude-code",
-        providerHarness="omnigent-host",
+        providerRuntime="claude_code",
+        providerHarness="claude-native",
         compatibilityProfile="compat://v1",
         allowedModels=(),
         defaultModel="claude-opus-4-8",
@@ -267,6 +276,33 @@ def test_model_not_eligible_for_profile_is_contradictory():
     assert exc.value.code == EXECUTION_INTENT_CONTRADICTORY_AUTHORITY
 
 
+def test_effort_not_eligible_for_profile_is_contradictory():
+    request = _request(parameters={"effort": "high"})
+    with pytest.raises(ExecutionIntentCompilationError) as exc:
+        _compile(request, resolved=_resolved(allowedEfforts=("medium",)))
+    assert exc.value.code == EXECUTION_INTENT_CONTRADICTORY_AUTHORITY
+
+
+def test_provider_profile_and_harness_conflicts_are_rejected():
+    with pytest.raises(ExecutionIntentCompilationError) as profile_exc:
+        _compile(
+            _request(executionProfileRef="different-provider-profile"),
+        )
+    assert profile_exc.value.code == EXECUTION_INTENT_CONTRADICTORY_AUTHORITY
+
+    with pytest.raises(ExecutionIntentCompilationError) as harness_exc:
+        _compile(
+            _request(
+                parameters={
+                    "omnigent": {
+                        "agent": {"harnessOverride": "codex-native"}
+                    }
+                }
+            )
+        )
+    assert harness_exc.value.code == EXECUTION_INTENT_CONTRADICTORY_AUTHORITY
+
+
 def test_operation_class_not_permitted_is_contradictory():
     request = _request(parameters={"publishMode": "pr"})
     with pytest.raises(ExecutionIntentCompilationError):
@@ -305,6 +341,26 @@ def test_identity_mismatch_between_launch_and_resolved_is_contradictory():
     with pytest.raises(ExecutionIntentCompilationError) as exc:
         _compile(request)
     assert exc.value.code == EXECUTION_INTENT_CONTRADICTORY_AUTHORITY
+
+
+def test_typed_step_lineage_preserves_continuation_and_checkpoint_source():
+    launch = {
+        "schemaVersion": "v1",
+        "workflowId": "wf-1",
+        "runId": "run-1",
+        "logicalStepId": "ls-1",
+        "executionOrdinal": 2,
+        "stepExecutionId": "wf-1:run-1:ls-1:execution:2",
+        "reason": "runtime_recovered",
+        "runtimeContextPolicy": "fresh_agent_run",
+        "branch": {"sourceCheckpointRef": "artifact://checkpoint/source"},
+    }
+    intent = _compile(
+        _request(stepExecution=launch),
+        resolved=_resolved(stepExecutionId="wf-1:run-1:ls-1:execution:2"),
+    )
+    assert intent.identity.lineage_kind.value == "continuation"
+    assert intent.identity.source_execution_ref == "artifact://checkpoint/source"
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +433,78 @@ def test_capability_and_chat_bootstrap_consume_same_authority():
     assert view["providerProfileId"] == intent.runtime.provider_profile_id
 
 
+def test_runtime_binding_rejects_digest_or_runtime_identity_mismatch():
+    intent = _compile()
+    runtime_view = intent.compact_runtime_view()
+    binding = CompiledExecutionIntentBinding(
+        intentSchema=intent.schema_id,
+        artifactRef="artifact://compiled-intent",
+        intentDigest=intent.intent_digest,
+        runtimeView=runtime_view,
+    )
+    request = _request(compiledExecutionIntent=binding)
+    assert request.compiled_execution_intent == binding
+
+    with pytest.raises(ValidationError, match="intentDigest must match"):
+        _request(
+            compiledExecutionIntent={
+                **binding.model_dump(by_alias=True, mode="json"),
+                "runtimeView": {
+                    **runtime_view,
+                    "intentDigest": "sha256:" + "0" * 64,
+                },
+            }
+        )
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        CompiledExecutionIntentBinding(
+            intentSchema=intent.schema_id,
+            artifactRef="artifact://compiled-intent",
+            intentDigest=intent.intent_digest,
+            runtimeView={**runtime_view, "untypedAuthority": "forbidden"},
+        )
+
+
+def test_typed_remediation_authority_wins_over_legacy_annotations():
+    request = _request(
+        remediationLoop={
+            "loopId": "typed-loop",
+            "verifierOwner": "typed-verifier",
+            "remediatorOwner": "typed-remediator",
+            "maxAttempts": 4,
+            "maxBranches": 2,
+        },
+        parameters={
+            "annotations": {
+                "remediationLoop": {
+                    "enabled": True,
+                    "verifierOwner": "legacy-verifier",
+                    "remediatorOwner": "legacy-remediator",
+                    "maxAttempts": 9,
+                }
+            }
+        },
+    )
+    intent = _compile(request)
+    assert intent.remediation.remediation_loop_enabled is True
+    assert intent.remediation.verifier_owner == "typed-verifier"
+    assert intent.remediation.remediator_owner == "typed-remediator"
+    assert intent.remediation.max_attempts == 4
+    assert intent.remediation.max_branches == 2
+
+
+def test_reconciler_view_is_derived_from_the_same_compiled_authority():
+    intent = _compile()
+    reconciler = intent.reconciler_view()
+    assert reconciler.session_id == intent.identity.canonical_session_seed
+    assert reconciler.provider == intent.runtime.provider_runtime
+    assert reconciler.max_turn_attempts == intent.timing.max_attempts
+    assert reconciler.reconcile_interval_seconds == (
+        intent.timing.reconcile_cadence_seconds
+    )
+    assert reconciler.turn_prompt_digest == intent.identity.instruction_digest
+
+
 def test_activity_retry_does_not_reresolve_authority():
     request = _request(parameters={"model": "claude-opus-4-8"})
     resolved = _resolved()
@@ -389,6 +517,57 @@ def test_activity_retry_does_not_reresolve_authority():
         request, resolved=resolved, created_at=datetime(2030, 5, 5, tzinfo=UTC)
     )
     assert first.intent_digest == retry.intent_digest
+
+
+@pytest.mark.asyncio
+async def test_live_reattach_rehydrates_the_checkpoint_bound_intent() -> None:
+    intent = _compile()
+    artifact_ref = "artifact://compiled-intent"
+    service = SimpleNamespace(
+        read=AsyncMock(
+            return_value=(
+                SimpleNamespace(artifact_id="compiled-intent"),
+                json.dumps(
+                    intent.model_dump(by_alias=True, mode="json")
+                ).encode("utf-8"),
+            )
+        )
+    )
+    checkpoint = SimpleNamespace(
+        compiled_execution_intent_ref=artifact_ref,
+        compiled_execution_intent_digest=intent.intent_digest,
+        step_execution_id=intent.identity.step_execution_id,
+        provider_profile_id=intent.runtime.provider_profile_id,
+        effective_launch_ref=intent.launch.effective_launch_snapshot_ref,
+    )
+
+    rebound = await _bind_checkpoint_execution_intent(
+        request=_request(executionIntentRequirement="required"),
+        checkpoint=checkpoint,
+        artifact_service=service,
+    )
+
+    assert rebound.compiled_execution_intent is not None
+    assert rebound.compiled_execution_intent.artifact_ref == artifact_ref
+    assert rebound.compiled_execution_intent.intent_digest == intent.intent_digest
+
+
+@pytest.mark.asyncio
+async def test_live_reattach_rejects_legacy_checkpoint_without_intent_authority():
+    service = SimpleNamespace(read=AsyncMock())
+    checkpoint = SimpleNamespace(
+        compiled_execution_intent_ref=None,
+        compiled_execution_intent_digest=None,
+    )
+
+    with pytest.raises(ValueError, match="legacy checkpoint"):
+        await _bind_checkpoint_execution_intent(
+            request=_request(executionIntentRequirement="required"),
+            checkpoint=checkpoint,
+            artifact_service=service,
+        )
+
+    service.read.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +599,28 @@ def test_incident_3684_remediation_survives_annotation_stripping():
     rehydrated = CompiledOmnigentExecutionIntent.model_validate(dumped)
     assert rehydrated.remediation.remediation_loop_enabled is True
     assert rehydrated.intent_digest == intent.intent_digest
+
+
+def test_current_admission_never_grants_remediation_from_free_form_annotations():
+    request = _request(
+        executionIntentRequirement="required",
+        parameters={
+            "annotations": {
+                "remediationLoop": {
+                    "enabled": True,
+                    "verifierOwner": "annotation-verifier",
+                    "remediatorOwner": "annotation-remediator",
+                }
+            }
+        },
+    )
+    intent = _compile(
+        request,
+        resolved=_resolved(remediationLoopPermitted=False),
+    )
+    assert intent.remediation.remediation_loop_enabled is False
+    assert intent.remediation.verifier_owner == "verifier://default"
+    assert intent.remediation.remediator_owner == "remediator://default"
 
 
 def test_incident_repository_target_omitted_blocks_admission():

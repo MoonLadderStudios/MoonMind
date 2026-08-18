@@ -15588,6 +15588,10 @@ class TemporalCheckpointActivities:
             idempotencyKey=capture["idempotencyKey"],
             terminalRef=capture.get("terminalRef"),
             diagnosticsRef=capture.get("diagnosticsRef"),
+            compiledExecutionIntentRef=capture.get("compiledExecutionIntentRef"),
+            compiledExecutionIntentDigest=capture.get(
+                "compiledExecutionIntentDigest"
+            ),
             effectiveLaunchRef=capture.get("effectiveLaunchRef"),
             executionProfileRef=capture["executionProfileRef"],
             launchPolicyRef=capture["launchPolicyRef"],

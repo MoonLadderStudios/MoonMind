@@ -31,6 +31,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_AUTO_PUBLISH_TERMINAL_CONTRACT_PATCH,
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH,
+    RUN_COMPILED_OMNIGENT_EXECUTION_INTENT_PATCH,
     RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
     RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH,
     RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH,
@@ -1570,6 +1571,120 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             {"id": "step-1", "instructions": "Do part A"},
             {"id": "step-2", "instructions": "Do part B"}
         ])
+
+    def test_compiled_omnigent_intent_requirement_is_replay_safe(self) -> None:
+        wf = MoonMindRunWorkflow()
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="test-wf-id",
+            run_id="test-run-id",
+            parent=None,
+        )
+        node_inputs = {
+            "runtime": {
+                "mode": "omnigent",
+                "executionProfileRef": "provider-profile-1",
+            },
+            "instructions": "Implement the step.",
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_COMPILED_OMNIGENT_EXECUTION_INTENT_PATCH
+            ),
+        ):
+            current = wf._build_agent_execution_request(
+                node_inputs=node_inputs,
+                node_id="omnigent-step",
+                tool_name="omnigent",
+            )
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=False,
+        ):
+            replay = wf._build_agent_execution_request(
+                node_inputs=node_inputs,
+                node_id="omnigent-step",
+                tool_name="omnigent",
+            )
+
+        self.assertEqual(current.execution_intent_requirement, "required")
+        self.assertEqual(replay.execution_intent_requirement, "legacy_history")
+
+    def test_validated_remediation_controller_becomes_typed_runtime_intent(
+        self,
+    ) -> None:
+        from moonmind.workflows.temporal.remediation_loop import RemediationLoopSpec
+
+        wf = MoonMindRunWorkflow()
+        wf._remediation_loop_spec = RemediationLoopSpec.model_validate(
+            {
+                "loopId": "loop-typed",
+                "remediationTool": {
+                    "name": "remediate-issue",
+                    "inputs": {"instructions": "Fix remaining gaps."},
+                },
+                "verificationTool": {
+                    "name": "github-issue-verify",
+                    "inputs": {"instructions": "Verify the issue."},
+                },
+                "workspacePolicy": "continue_from_loop_head",
+                "budgets": {"hardMaxAttempts": 3},
+                "terminalPolicy": {
+                    "fullyImplemented": "advance",
+                    "additionalWorkNeeded": "continue_when_allowed",
+                    "blocked": "stop",
+                    "noDetermination": "retry_evidence_or_stop",
+                    "failedUnrecoverable": "stop",
+                },
+                "sideEffectPolicy": "workflow_owned",
+                "publicationPolicy": "evaluate_after_terminal",
+            }
+        )
+        info = SimpleNamespace(
+            namespace="default",
+            workflow_id="test-wf-id",
+            run_id="test-run-id",
+            parent=None,
+        )
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_COMPILED_OMNIGENT_EXECUTION_INTENT_PATCH
+            ),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "provider-profile-1",
+                    },
+                    "instructions": "Remediate the issue.",
+                },
+                node_id="remediation-step",
+                tool_name="omnigent",
+            )
+
+        assert request.remediation_loop is not None
+        self.assertEqual(request.remediation_loop.loop_id, "loop-typed")
+        self.assertEqual(
+            request.remediation_loop.verifier_owner,
+            "github-issue-verify",
+        )
+        self.assertEqual(request.remediation_loop.remediator_owner, "remediate-issue")
+        self.assertEqual(request.remediation_loop.max_attempts, 3)
+        self.assertNotIn("remediationLoop", request.parameters.get("annotations", {}))
 
     def test_build_agent_execution_request_propagates_runtime_command_metadata(self) -> None:
         from unittest.mock import patch

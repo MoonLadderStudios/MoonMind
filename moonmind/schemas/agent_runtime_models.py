@@ -88,6 +88,142 @@ ProviderProfileDisabledReason = Literal[
 ProviderProfileAuthMethod = Literal["oauth_volume", "secret_ref", "manual"]
 
 
+class AgentRemediationLoopIntent(BaseModel):
+    """Typed workflow-owned remediation authority carried to the runtime.
+
+    The deterministic workflow compiles this projection from its validated
+    remediation controller.  Runtime admission therefore never depends on the
+    original free-form plan annotation surviving another transformation.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
+    enabled: bool = True
+    loop_id: str = Field(..., alias="loopId", min_length=1)
+    verifier_owner: str = Field(..., alias="verifierOwner", min_length=1)
+    remediator_owner: str = Field(..., alias="remediatorOwner", min_length=1)
+    max_attempts: int = Field(..., alias="maxAttempts", ge=1)
+    max_branches: int = Field(..., alias="maxBranches", ge=1)
+    gate_result_ref: str | None = Field(None, alias="gateResultRef")
+    remaining_work_ref: str | None = Field(None, alias="remainingWorkRef")
+    checkpoint_branch_behavior: str = Field(
+        "branch_on_immutable_change",
+        alias="checkpointBranchBehavior",
+        min_length=1,
+    )
+    reattach_policy: Literal["live_reattach", "cold_restore"] = Field(
+        "cold_restore", alias="reattachPolicy"
+    )
+    immutable_dimensions: tuple[str, ...] = Field(
+        default_factory=tuple, alias="immutableDimensions"
+    )
+
+
+class CompiledExecutionIntentRuntimeView(BaseModel):
+    """Strict adapter view derived from the immutable execution authority.
+
+    Runtime and Temporal payloads carry this bounded projection instead of a
+    generic dictionary.  It is not an independently authored authority source:
+    every field is derived from the artifact-backed intent and remains bound to
+    that document by ``intentDigest``.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    schema_id: Literal[
+        "moonmind.omnigent.compiled-execution-intent/v1"
+    ] = Field(alias="schema")
+    intent_digest: str = Field(
+        ..., alias="intentDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    workflow_id: str = Field(..., alias="workflowId", min_length=1)
+    step_execution_id: str = Field(..., alias="stepExecutionId", min_length=1)
+    agent_run_id: str = Field(..., alias="agentRunId", min_length=1)
+    canonical_session_seed: str = Field(
+        ..., alias="canonicalSessionSeed", min_length=1
+    )
+    task_input_snapshot_ref: str = Field(
+        ..., alias="taskInputSnapshotRef", min_length=1
+    )
+    task_input_snapshot_digest: str = Field(
+        ...,
+        alias="taskInputSnapshotDigest",
+        min_length=1,
+    )
+    agent_kind: Literal["external"] = Field("external", alias="agentKind")
+    agent_id: Literal["omnigent"] = Field("omnigent", alias="agentId")
+    execution_profile_ref: str = Field(
+        ..., alias="executionProfileRef", min_length=1
+    )
+    execution_profile_version: str = Field(
+        ..., alias="executionProfileVersion", min_length=1
+    )
+    agent_profile_ref: str = Field(..., alias="agentProfileRef", min_length=1)
+    agent_profile_digest: str = Field(
+        ..., alias="agentProfileDigest", min_length=1
+    )
+    provider_profile_id: str = Field(
+        ..., alias="providerProfileId", min_length=1
+    )
+    credential_generation: str = Field(
+        ..., alias="credentialGeneration", min_length=1
+    )
+    model: str = Field(..., min_length=1)
+    effort: str | None = None
+    launch_policy_ref: str = Field(..., alias="launchPolicyRef", min_length=1)
+    launch_policy_digest: str = Field(
+        ..., alias="launchPolicyDigest", min_length=1
+    )
+    effective_launch_snapshot_ref: str = Field(
+        ..., alias="effectiveLaunchSnapshotRef", min_length=1
+    )
+    effective_launch_snapshot_digest: str = Field(
+        ..., alias="effectiveLaunchSnapshotDigest", min_length=1
+    )
+    host_image_digest: str = Field(..., alias="hostImageDigest", min_length=1)
+    server_image_digest: str = Field(..., alias="serverImageDigest", min_length=1)
+    operation_class: Literal[
+        "read_only", "controlled_mutation", "publication", "pull_request"
+    ] = Field(alias="operationClass")
+    base_branch: str = Field(..., alias="baseBranch", min_length=1)
+    target_branch: str | None = Field(None, alias="targetBranch")
+    checkout_commit: str | None = Field(None, alias="checkoutCommit")
+    remediation_loop_enabled: bool = Field(alias="remediationLoopEnabled")
+    session_mode: Literal["fresh", "authorized_reuse"] = Field(alias="sessionMode")
+    claims_full_authority: bool = Field(alias="claimsFullAuthority")
+
+
+class CompiledExecutionIntentBinding(BaseModel):
+    """Compact ref+digest binding for the artifact-backed execution authority."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    schema_version: Literal["v1"] = Field("v1", alias="schemaVersion")
+    intent_schema: Literal[
+        "moonmind.omnigent.compiled-execution-intent/v1"
+    ] = Field(alias="intentSchema")
+    artifact_ref: str = Field(..., alias="artifactRef", min_length=1)
+    intent_digest: str = Field(
+        ..., alias="intentDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    runtime_view: CompiledExecutionIntentRuntimeView = Field(alias="runtimeView")
+
+    @model_validator(mode="after")
+    def _runtime_view_matches_binding(self) -> "CompiledExecutionIntentBinding":
+        if self.runtime_view.schema_id != self.intent_schema:
+            raise ValueError(
+                "compiledExecutionIntent.runtimeView schema must match the "
+                "artifact binding"
+            )
+        if self.runtime_view.intent_digest != self.intent_digest:
+            raise ValueError(
+                "compiledExecutionIntent.runtimeView intentDigest must match "
+                "the artifact binding"
+            )
+        return self
+
+
 class AgentRuntimeStepExecutionLaunch(BaseModel):
     """Compact adapter-visible launch envelope for one Step Execution."""
 
@@ -669,6 +805,15 @@ class AgentExecutionRequest(BaseModel):
     agent_kind: AgentKind = Field(..., alias="agentKind")
     agent_id: str = Field(..., alias="agentId", min_length=1)
     execution_profile_ref: str | None = Field(None, alias="executionProfileRef", min_length=1)
+    execution_intent_requirement: Literal["legacy_history", "required"] = Field(
+        "legacy_history", alias="executionIntentRequirement"
+    )
+    compiled_execution_intent: CompiledExecutionIntentBinding | None = Field(
+        None, alias="compiledExecutionIntent"
+    )
+    remediation_loop: AgentRemediationLoopIntent | None = Field(
+        None, alias="remediationLoop"
+    )
     correlation_id: str = Field(..., alias="correlationId", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     instruction_ref: str | None = Field(None, alias="instructionRef")
@@ -761,6 +906,42 @@ class AgentExecutionRequest(BaseModel):
                 raise ValueError(
                     "managedSession.runtimeId must match the managed-session runtime"
                 )
+        if self.execution_intent_requirement == "required" and not (
+            self.agent_kind == "external" and self.agent_id == "omnigent"
+        ):
+            raise ValueError(
+                "executionIntentRequirement=required is only supported for "
+                "external/omnigent execution"
+            )
+        if self.compiled_execution_intent is not None and not (
+            self.agent_kind == "external" and self.agent_id == "omnigent"
+        ):
+            raise ValueError(
+                "compiledExecutionIntent is only supported for "
+                "external/omnigent execution"
+            )
+        if self.compiled_execution_intent is not None:
+            runtime_view = self.compiled_execution_intent.runtime_view
+            if runtime_view.intent_digest != (
+                self.compiled_execution_intent.intent_digest
+            ):
+                raise ValueError(
+                    "compiledExecutionIntent.runtimeView intentDigest must match "
+                    "the artifact binding"
+                )
+            if (
+                runtime_view.agent_kind != "external"
+                or runtime_view.agent_id != "omnigent"
+            ):
+                raise ValueError(
+                    "compiledExecutionIntent.runtimeView must bind external/omnigent"
+                )
+        if self.remediation_loop is not None and not (
+            self.agent_kind == "external" and self.agent_id == "omnigent"
+        ):
+            raise ValueError(
+                "remediationLoop is only supported for external/omnigent execution"
+            )
         if self.remediation_workspace is not None:
             from moonmind.omnigent.remediation_workspace import (
                 RemediationWorkspaceBinding,
@@ -1958,6 +2139,9 @@ def build_canonical_result(payload: dict[str, Any]) -> AgentRunResult:
 
 __all__ = [
     "AgentExecutionRequest",
+    "AgentRemediationLoopIntent",
+    "CompiledExecutionIntentRuntimeView",
+    "CompiledExecutionIntentBinding",
     "AgentKind",
     "ExternalExecutionStyle",
     "AgentRunHandle",

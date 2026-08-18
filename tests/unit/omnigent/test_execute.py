@@ -53,6 +53,19 @@ def _request() -> AgentExecutionRequest:
     )
 
 
+@pytest.mark.asyncio
+async def test_required_compiled_intent_is_rejected_before_provider_gate() -> None:
+    request = _request().model_copy(
+        update={"execution_intent_requirement": "required"}
+    )
+
+    with pytest.raises(
+        OmnigentContractError,
+        match="artifact-backed compiled execution intent is required",
+    ):
+        await run_omnigent_execution(request)
+
+
 @pytest.mark.parametrize(
     ("snapshot", "expected"),
     [

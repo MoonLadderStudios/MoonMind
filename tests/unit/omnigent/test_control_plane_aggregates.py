@@ -162,6 +162,46 @@ async def test_one_chat_binding_maps_to_one_session(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_compiled_intent_binding_is_idempotent_and_immutable(store) -> None:
+    binding = {
+        "moonmind_workflow_id": "wf-1",
+        "moonmind_run_id": "run-1",
+        "step_execution_id": "step-execution-1",
+        "moonmind_agent_run_id": "agent-run-1",
+        "provider": "codex_cli",
+        "intent_ref": "art-intent-1",
+        "intent_digest": "sha256:" + "a" * 64,
+        "provider_profile_id": "codex",
+        "compatibility_profile": "omnigent:codex-native:v1",
+        "compatibility_ref": "art-compatibility-1",
+        "image_manifest_ref": "art-build-1",
+    }
+    async with store.transaction() as repos:
+        await repos.sessions.create(
+            session_id="s-intent",
+            moonmind_workflow_id="wf-1",
+            provider="codex_cli",
+        )
+        first = await repos.sessions.bind_immutable_authority(
+            "s-intent", **binding
+        )
+    async with store.transaction() as repos:
+        retry = await repos.sessions.bind_immutable_authority(
+            "s-intent", **binding
+        )
+
+    assert first.intent_ref == retry.intent_ref == "art-intent-1"
+    assert first.intent_digest == retry.intent_digest == binding["intent_digest"]
+
+    with pytest.raises(ConflictingSessionAuthorityError):
+        async with store.transaction() as repos:
+            await repos.sessions.bind_immutable_authority(
+                "s-intent",
+                **{**binding, "intent_digest": "sha256:" + "b" * 64},
+            )
+
+
+@pytest.mark.asyncio
 async def test_turn_attempt_has_no_chat_binding_authority() -> None:
     # Structural invariant: a turn attempt row cannot carry chat-binding
     # authority because the model has no such column.

@@ -376,6 +376,66 @@ class SessionRepository(_RepositoryBase):
         row = await self._load(session_id)
         return _session_record(row) if row is not None else None
 
+    async def bind_immutable_authority(
+        self,
+        session_id: str,
+        *,
+        moonmind_workflow_id: str,
+        moonmind_run_id: str,
+        step_execution_id: str,
+        moonmind_agent_run_id: str,
+        provider: str,
+        intent_ref: str,
+        intent_digest: str,
+        provider_profile_id: str,
+        compatibility_profile: str,
+        compatibility_ref: str,
+        image_manifest_ref: str,
+    ) -> SessionRecord:
+        """Bind the compiled intent once, rejecting every later disagreement.
+
+        This is setup authority rather than mutable lifecycle state, so it does
+        not advance the session revision. A retry may present the identical
+        binding; a different ref, digest, profile, compatibility contract, or
+        image manifest fails closed before provider-side effects.
+        """
+
+        row = await self._load(session_id, for_update=True)
+        if row is None:
+            raise ConflictingSessionAuthorityError(
+                f"Unknown canonical session {session_id!r}"
+            )
+        expected = {
+            "moonmind_workflow_id": moonmind_workflow_id,
+            "moonmind_run_id": moonmind_run_id,
+            "step_execution_id": step_execution_id,
+            "moonmind_agent_run_id": moonmind_agent_run_id,
+            "provider": provider,
+            "intent_ref": intent_ref,
+            "intent_digest": intent_digest,
+            "provider_profile_id": provider_profile_id,
+            "compatibility_profile": compatibility_profile,
+            "compatibility_ref": compatibility_ref,
+            "image_manifest_ref": image_manifest_ref,
+        }
+        conflicts = [
+            field_name
+            for field_name, value in expected.items()
+            if getattr(row, field_name) is not None
+            and getattr(row, field_name) != value
+        ]
+        if conflicts:
+            raise ConflictingSessionAuthorityError(
+                f"Session {session_id!r} has conflicting immutable authority "
+                f"for {sorted(conflicts)}"
+            )
+        for field_name, value in expected.items():
+            if getattr(row, field_name) is None:
+                setattr(row, field_name, value)
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _session_record(row)
+
     async def load_for_update(self, session_id: str) -> Optional[SessionRecord]:
         """Load a session under a row lock for a read-decide-write sequence.
 

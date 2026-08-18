@@ -209,6 +209,23 @@ async def test_omnigent_execute_activity_delegates(
     )
 
 
+@pytest.mark.asyncio
+@patch("moonmind.omnigent.execute.run_omnigent_execution")
+async def test_direct_omnigent_fallback_rejects_required_compiled_intent(mock_run):
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionIntentRequirement="required",
+        correlationId="corr-required",
+        idempotencyKey="idem-required",
+    )
+
+    with pytest.raises(ValueError, match="executionProfileRef"):
+        await ActivityEnvironment().run(omnigent_execute_activity, request)
+
+    mock_run.assert_not_called()
+
+
 def test_omnigent_execution_path_does_not_use_managed_github_broker() -> None:
     """Omnigent is an external-agent adapter, not a managed runtime launcher."""
 

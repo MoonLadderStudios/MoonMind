@@ -169,6 +169,8 @@ async def test_step_checkpoint_activity_constructs_complete_omnigent_identity() 
                 "captureManifestRef": manifest_ref,
                 "terminalRef": "artifact://terminal/result",
                 "diagnosticsRef": "artifact://diagnostics/result",
+                "compiledExecutionIntentRef": "artifact://compiled/intent",
+                "compiledExecutionIntentDigest": "sha256:" + "6" * 64,
                 "idempotencyKey": "idem-3509",
                 "workspaceLocator": {
                     "kind": "sandbox",
@@ -190,6 +192,8 @@ async def test_step_checkpoint_activity_constructs_complete_omnigent_identity() 
     assert identity["externalStateRef"] == external_ref
     assert identity["externalStateDigest"].startswith("sha256:")
     assert identity["workspaceCheckpointRef"] == "artifact://workspace/archive"
+    assert identity["compiledExecutionIntentRef"] == "artifact://compiled/intent"
+    assert identity["compiledExecutionIntentDigest"] == "sha256:" + "6" * 64
     # Immutable policy-authority evidence stamped from the trusted launch flows
     # through to the persisted checkpoint so it stays cold-restore eligible.
     assert identity["policyId"] == "omnigent-codex"

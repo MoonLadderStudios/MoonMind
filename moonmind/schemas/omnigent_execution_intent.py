@@ -264,8 +264,8 @@ class ExecutionIdentity(_IntentModel):
     #: Original task-input snapshot ref and digest (never re-authored).
     task_input_snapshot_ref: str = Field(..., min_length=1)
     task_input_snapshot_digest: str = Field(..., min_length=1)
-    instruction_ref: str | None = None
-    instruction_digest: str | None = None
+    instruction_ref: str = Field(..., min_length=1)
+    instruction_digest: str = Field(..., min_length=1)
 
 
 class RuntimeProviderSelection(_IntentModel):
@@ -308,15 +308,15 @@ class LaunchDeploymentAuthority(_IntentModel):
     #: Exact image-digest expectations; a running deployment that drifts from
     #: these is rejected rather than silently accepted (image-drift incident).
     server_image_digest: str = Field(..., min_length=1)
-    ui_image_digest: str | None = None
+    ui_image_digest: str = Field(..., min_length=1)
     host_image_digest: str = Field(..., min_length=1)
-    network_policy_ref: str | None = None
-    egress_policy_ref: str | None = None
+    network_policy_ref: str = Field(..., min_length=1)
+    egress_policy_ref: str = Field(..., min_length=1)
     #: Runtime capability requirements (http, sse, websocket, mounted tools,
     #: repository capabilities). Normalized and deduplicated for a stable digest.
     runtime_capabilities: tuple[str, ...] = Field(default_factory=tuple)
-    compatibility_manifest_ref: str | None = None
-    build_manifest_ref: str | None = None
+    compatibility_manifest_ref: str = Field(..., min_length=1)
+    build_manifest_ref: str = Field(..., min_length=1)
 
     @field_validator("runtime_capabilities", mode="before")
     @classmethod
@@ -356,6 +356,16 @@ class RepositoryWorkspaceAuthority(_IntentModel):
 
     @model_validator(mode="after")
     def _validate_operation_consistency(self) -> "RepositoryWorkspaceAuthority":
+        if (self.checkpoint_ref is None) != (self.checkpoint_digest is None):
+            raise ValueError(
+                f"{EXECUTION_INTENT_INCOMPLETE_AUTHORITY}: checkpoint ref and "
+                "digest must be supplied together"
+            )
+        if (self.restore_ref is None) != (self.restore_digest is None):
+            raise ValueError(
+                f"{EXECUTION_INTENT_INCOMPLETE_AUTHORITY}: restore ref and digest "
+                "must be supplied together"
+            )
         publishing = self.operation_class in {
             RepositoryOperationClass.PUBLICATION,
             RepositoryOperationClass.PULL_REQUEST,
@@ -379,7 +389,7 @@ class SessionContinuationPolicy(_IntentModel):
     schema_version: Literal["v1"] = "v1"
     session_mode: SessionMode = SessionMode.FRESH
     initial_turn_attempt_id: str = Field(..., min_length=1)
-    first_message_digest: str | None = None
+    first_message_digest: str = Field(..., min_length=1)
     first_message_marker_policy: str = Field(..., min_length=1)
     allowed_continuation_kinds: tuple[str, ...] = Field(default_factory=tuple)
     provider_session_epoch: int = Field(0, ge=0)
@@ -531,6 +541,11 @@ class CompiledOmnigentExecutionIntent(_IntentModel):
 
     @model_validator(mode="after")
     def _finalize(self) -> "CompiledOmnigentExecutionIntent":
+        if self.session.first_message_digest != self.identity.instruction_digest:
+            raise ValueError(
+                f"{EXECUTION_INTENT_CONTRADICTORY_AUTHORITY}: first-message and "
+                "instruction digests must match"
+            )
         dumped = self.model_dump(by_alias=True, mode="json", exclude_none=True)
 
         # 1. Payload bounds — admitted authority is compact refs and digests.
@@ -618,9 +633,19 @@ class CompiledOmnigentExecutionIntent(_IntentModel):
             "agentKind": self.runtime.agent_kind,
             "agentId": self.runtime.agent_id,
             "executionProfileRef": self.runtime.execution_profile_ref,
+            "executionProfileVersion": self.runtime.execution_profile_version,
+            "agentProfileRef": self.runtime.agent_profile_ref,
+            "agentProfileDigest": self.runtime.agent_profile_digest,
             "providerProfileId": self.runtime.provider_profile_id,
+            "credentialGeneration": self.runtime.credential_generation,
             "model": self.runtime.model,
             "effort": self.runtime.effort,
+            "launchPolicyRef": self.launch.launch_policy_ref,
+            "launchPolicyDigest": self.launch.launch_policy_digest,
+            "effectiveLaunchSnapshotRef": self.launch.effective_launch_snapshot_ref,
+            "effectiveLaunchSnapshotDigest": (
+                self.launch.effective_launch_snapshot_digest
+            ),
             "hostImageDigest": self.launch.host_image_digest,
             "serverImageDigest": self.launch.server_image_digest,
             "operationClass": self.repository.operation_class.value,
@@ -631,6 +656,33 @@ class CompiledOmnigentExecutionIntent(_IntentModel):
             "sessionMode": self.session.session_mode.value,
             "claimsFullAuthority": self.provenance.claims_full_authority,
         }
+
+    def reconciler_view(self) -> Any:
+        """Derive the pure lifecycle reconciler's compact input from this authority."""
+
+        from moonmind.omnigent.reconciler.contracts import CompiledSessionIntent
+
+        prompt_digest = (
+            self.session.first_message_digest or self.identity.instruction_digest
+        )
+        if not prompt_digest:
+            raise ValueError(
+                f"{EXECUTION_INTENT_INCOMPLETE_AUTHORITY}: reconciler intent "
+                "requires a first-message digest"
+            )
+        return CompiledSessionIntent(
+            sessionId=self.identity.canonical_session_seed,
+            provider=self.runtime.provider_runtime,
+            requiresProfileLease=True,
+            requiresHost=True,
+            requiresCleanup=(
+                self.session.cleanup_policy.strip().lower()
+                not in {"none", "disabled"}
+            ),
+            maxTurnAttempts=self.timing.max_attempts,
+            reconcileIntervalSeconds=self.timing.reconcile_cadence_seconds,
+            turnPromptDigest=prompt_digest,
+        )
 
     def evidence(self) -> dict[str, Any]:
         """Bounded, credential-free, path-safe compilation evidence.

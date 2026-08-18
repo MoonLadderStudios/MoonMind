@@ -29,6 +29,7 @@ _ARTIFACT_FIELDS = {
     "externalStateRef",
     "terminalRef",
     "diagnosticsRef",
+    "compiledExecutionIntentRef",
     "resourceManifestRef",
     "captureManifestRef",
     "headRef",
@@ -117,6 +118,12 @@ class OmnigentCheckpointIdentity(BaseModel):
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     terminal_ref: str | None = Field(None, alias="terminalRef")
     diagnostics_ref: str | None = Field(None, alias="diagnosticsRef")
+    compiled_execution_intent_ref: str | None = Field(
+        None, alias="compiledExecutionIntentRef", min_length=1
+    )
+    compiled_execution_intent_digest: str | None = Field(
+        None, alias="compiledExecutionIntentDigest", pattern=_DIGEST
+    )
     effective_launch_ref: str | None = Field(None, alias="effectiveLaunchRef", min_length=1)
     execution_profile_ref: str = Field(..., alias="executionProfileRef", min_length=1)
     launch_policy_ref: str = Field(..., alias="launchPolicyRef", min_length=1)
@@ -215,6 +222,12 @@ class OmnigentCheckpointIdentity(BaseModel):
                 raise ValueError(f"{field} must contain durable artifact references")
         if (self.diff_ref is None) != (self.diff_digest is None):
             raise ValueError("diffRef and diffDigest must be supplied together")
+        if (self.compiled_execution_intent_ref is None) != (
+            self.compiled_execution_intent_digest is None
+        ):
+            raise ValueError(
+                "compiled execution-intent ref and digest must be supplied together"
+            )
         if (self.first_message_id is None) != (self.first_message_digest is None):
             raise ValueError(
                 "firstMessageId and firstMessageDigest must be supplied together"

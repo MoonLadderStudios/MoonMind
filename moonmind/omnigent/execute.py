@@ -1443,6 +1443,15 @@ async def run_omnigent_execution(
 ) -> AgentRunResult:
     """Execute one Omnigent session and return only terminal AgentRunResult."""
 
+    if (
+        request.execution_intent_requirement == "required"
+        and request.compiled_execution_intent is None
+    ):
+        raise OmnigentContractError(
+            "artifact-backed compiled execution intent is required before "
+            "Omnigent provider execution"
+        )
+
     gate = build_omnigent_gate()
     if not gate.enabled:
         raise RuntimeError(
@@ -1536,6 +1545,21 @@ async def run_omnigent_execution(
                     target_metadata={
                         "hostType": selection.session.host_type,
                         "workspace": selection.session.workspace,
+                        "executionIntentRequirement": (
+                            request.execution_intent_requirement
+                        ),
+                        **(
+                            {
+                                "compiledExecutionIntent": (
+                                    request.compiled_execution_intent.model_dump(
+                                        by_alias=True,
+                                        mode="json",
+                                    )
+                                )
+                            }
+                            if request.compiled_execution_intent is not None
+                            else {}
+                        ),
                     },
                 )
                 bridge_session_id = str(

@@ -1835,6 +1835,26 @@ def test_serialize_execution_ignores_non_mapping_memo_for_progress() -> None:
     assert payload["progress"] is None
 
 
+def test_serialize_execution_projects_compiled_intent_binding() -> None:
+    record = _build_execution_record()
+    record.memo = {
+        **record.memo,
+        "compiled_execution_intent_schema": (
+            "moonmind.omnigent.compiled-execution-intent/v1"
+        ),
+        "compiled_execution_intent_ref": "artifact://art_compiled_intent_1",
+        "compiled_execution_intent_digest": f"sha256:{'a' * 64}",
+    }
+
+    payload = _serialize_execution(record).model_dump(by_alias=True)
+
+    assert payload["compiledExecutionIntent"] == {
+        "intentSchema": "moonmind.omnigent.compiled-execution-intent/v1",
+        "artifactRef": "artifact://art_compiled_intent_1",
+        "intentDigest": f"sha256:{'a' * 64}",
+    }
+
+
 def test_serialize_execution_nulls_progress_for_legacy_rows() -> None:
     payload = _serialize_execution(_build_execution_record()).model_dump(by_alias=True)
 

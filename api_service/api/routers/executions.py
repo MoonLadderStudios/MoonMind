@@ -135,6 +135,7 @@ from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_te
 from moonmind.schemas.temporal_models import (
     CancelExecutionRequest,
     ConfigureIntegrationMonitoringRequest,
+    CompiledExecutionIntentEvidenceModel,
     CreateExecutionRequest,
     ExecutionActionCapabilityModel,
     ExecutionDependencySummaryModel,
@@ -4349,6 +4350,9 @@ def _serialize_execution(
         input_parameters=params,
         input_artifact_ref=getattr(record, "input_ref", None),
         task_input_snapshot=_workflow_input_snapshot_descriptor_from_record(record),
+        compiled_execution_intent=(
+            _compiled_execution_intent_evidence_from_record(record)
+        ),
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
@@ -9668,6 +9672,37 @@ def _workflow_input_snapshot_descriptor_from_record(
         disabledReasons=disabled_reasons,
         fallbackEvidenceRefs=fallback_refs,
     )
+
+
+def _compiled_execution_intent_evidence_from_record(
+    record,
+) -> CompiledExecutionIntentEvidenceModel | None:
+    """Project only the safe immutable binding stored on the create record."""
+
+    memo = dict(getattr(record, "memo", None) or {})
+    schema_id = str(
+        memo.get("compiled_execution_intent_schema")
+        or memo.get("compiledExecutionIntentSchema")
+        or ""
+    ).strip()
+    artifact_ref = str(
+        memo.get("compiled_execution_intent_ref")
+        or memo.get("compiledExecutionIntentRef")
+        or ""
+    ).strip()
+    intent_digest = str(
+        memo.get("compiled_execution_intent_digest")
+        or memo.get("compiledExecutionIntentDigest")
+        or ""
+    ).strip()
+    if not any((schema_id, artifact_ref, intent_digest)):
+        return None
+    return CompiledExecutionIntentEvidenceModel(
+        intentSchema=schema_id,
+        artifactRef=artifact_ref,
+        intentDigest=intent_digest,
+    )
+
 
 def _build_original_workflow_input_snapshot_payload(
     *,

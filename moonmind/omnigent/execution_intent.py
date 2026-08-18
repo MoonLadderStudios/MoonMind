@@ -119,8 +119,8 @@ class ResolvedExecutionAuthority(BaseModel):
     task_input_snapshot_digest: str = Field(
         ..., alias="taskInputSnapshotDigest", min_length=1
     )
-    instruction_ref: str | None = Field(None, alias="instructionRef")
-    instruction_digest: str | None = Field(None, alias="instructionDigest")
+    instruction_ref: str = Field(..., alias="instructionRef", min_length=1)
+    instruction_digest: str = Field(..., alias="instructionDigest", min_length=1)
 
     # Runtime / provider selection.
     execution_profile_ref: str = Field(..., alias="executionProfileRef", min_length=1)
@@ -142,6 +142,9 @@ class ResolvedExecutionAuthority(BaseModel):
     #: Models/efforts the resolved profile is eligible for. Empty means the API
     #: did not constrain the choice.
     allowed_models: tuple[str, ...] = Field(default_factory=tuple, alias="allowedModels")
+    allowed_efforts: tuple[str, ...] = Field(
+        default_factory=tuple, alias="allowedEfforts"
+    )
     default_model: str = Field(..., alias="defaultModel", min_length=1)
     default_effort: str | None = Field(None, alias="defaultEffort")
 
@@ -156,17 +159,17 @@ class ResolvedExecutionAuthority(BaseModel):
     )
     host_mode: str = Field(..., alias="hostMode", min_length=1)
     server_image_digest: str = Field(..., alias="serverImageDigest", min_length=1)
-    ui_image_digest: str | None = Field(None, alias="uiImageDigest")
+    ui_image_digest: str = Field(..., alias="uiImageDigest", min_length=1)
     host_image_digest: str = Field(..., alias="hostImageDigest", min_length=1)
-    network_policy_ref: str | None = Field(None, alias="networkPolicyRef")
-    egress_policy_ref: str | None = Field(None, alias="egressPolicyRef")
+    network_policy_ref: str = Field(..., alias="networkPolicyRef", min_length=1)
+    egress_policy_ref: str = Field(..., alias="egressPolicyRef", min_length=1)
     runtime_capabilities: tuple[str, ...] = Field(
         default_factory=tuple, alias="runtimeCapabilities"
     )
-    compatibility_manifest_ref: str | None = Field(
-        None, alias="compatibilityManifestRef"
+    compatibility_manifest_ref: str = Field(
+        ..., alias="compatibilityManifestRef", min_length=1
     )
-    build_manifest_ref: str | None = Field(None, alias="buildManifestRef")
+    build_manifest_ref: str = Field(..., alias="buildManifestRef", min_length=1)
 
     # Repository / workspace authority (readiness already resolved).
     repository_provider: str = Field(..., alias="repositoryProvider", min_length=1)
@@ -352,6 +355,18 @@ def authored_remediation_loop(request: AgentExecutionRequest) -> Mapping[str, An
     into the typed contract, where a later dashboard transform cannot strip it.
     """
 
+    if request.remediation_loop is not None:
+        return request.remediation_loop.model_dump(
+            by_alias=True,
+            mode="json",
+            exclude_none=True,
+        )
+    if request.execution_intent_requirement == "required":
+        # New workflow generations receive remediation authority only from the
+        # deterministic workflow-owned typed projection.  Annotation and
+        # generic-parameter reads below are migration-only behavior.
+        return {}
+
     for candidate in (
         _parameters(request).get("remediationLoop"),
         _annotations(request).get("remediationLoop"),
@@ -380,9 +395,49 @@ def authored_lineage_kind(request: AgentExecutionRequest) -> ExecutionLineageKin
         "edit": ExecutionLineageKind.EDIT,
         "remediation": ExecutionLineageKind.REMEDIATION,
         "checkpoint": ExecutionLineageKind.CHECKPOINT,
+        "checkpoint_branch": ExecutionLineageKind.CHECKPOINT,
+        "recover_from_failed_step": ExecutionLineageKind.CHECKPOINT,
         "continuation": ExecutionLineageKind.CONTINUATION,
+        "runtime_recovered": ExecutionLineageKind.CONTINUATION,
+        "policy_revalidation": ExecutionLineageKind.CONTINUATION,
+        "retry": ExecutionLineageKind.CONTINUATION,
+        "quality_gate_failed": ExecutionLineageKind.REMEDIATION,
     }
     return mapping.get(value, ExecutionLineageKind.CREATE)
+
+
+def authored_source_execution_ref(request: AgentExecutionRequest) -> str | None:
+    explicit = str(_parameters(request).get("sourceExecutionRef") or "").strip()
+    if explicit:
+        return explicit
+    remediation = request.remediation_workspace
+    if isinstance(remediation, Mapping):
+        value = str(
+            remediation.get("headAuthorityRef")
+            or remediation.get("baseCheckpointRef")
+            or ""
+        ).strip()
+        if value:
+            return value
+    recovery = request.checkpoint_recovery
+    if isinstance(recovery, Mapping):
+        for key in (
+            "sourceCheckpointRef",
+            "checkpointRef",
+            "externalStateRef",
+        ):
+            value = str(recovery.get(key) or "").strip()
+            if value:
+                return value
+    if request.step_execution is not None and isinstance(
+        request.step_execution.branch, Mapping
+    ):
+        value = str(
+            request.step_execution.branch.get("sourceCheckpointRef") or ""
+        ).strip()
+        if value:
+            return value
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -458,9 +513,15 @@ def _build_remediation_policy(
         maxBranches=int(loop.get("maxBranches") or 1) if enabled else 1,
         gateResultRef=str(loop.get("gateResultRef") or "").strip() or None,
         remainingWorkRef=str(loop.get("remainingWorkRef") or "").strip() or None,
-        checkpointBranchBehavior=resolved.checkpoint_branch_behavior,
+        checkpointBranchBehavior=(
+            str(loop.get("checkpointBranchBehavior") or "").strip()
+            or resolved.checkpoint_branch_behavior
+        ),
         reattachPolicy=reattach_policy,
-        immutableDimensions=list(resolved.immutable_dimensions),
+        immutableDimensions=(
+            list(loop.get("immutableDimensions") or ())
+            or list(resolved.immutable_dimensions)
+        ),
     )
 
 
@@ -494,6 +555,11 @@ def _resolve_model_effort(
             f"model {model!r} is not eligible for the resolved profile",
         )
     effort = authored_effort(request) or resolved.default_effort
+    if resolved.allowed_efforts and effort not in resolved.allowed_efforts:
+        raise ExecutionIntentCompilationError(
+            EXECUTION_INTENT_CONTRADICTORY_AUTHORITY,
+            f"effort {effort!r} is not eligible for the resolved profile",
+        )
     return model, effort
 
 
@@ -519,6 +585,39 @@ def compile_execution_intent(
         raise ExecutionIntentCompilationError(
             EXECUTION_INTENT_CONTRADICTORY_AUTHORITY,
             "compiled execution intent is only for the external omnigent runtime",
+        )
+
+    if (
+        request.execution_profile_ref is not None
+        and request.execution_profile_ref != resolved.provider_profile_id
+    ):
+        raise ExecutionIntentCompilationError(
+            EXECUTION_INTENT_CONTRADICTORY_AUTHORITY,
+            "authored Provider Profile selection disagrees with resolved authority",
+        )
+    runtime_harnesses = {
+        "codex_cli": "codex-native",
+        "claude_code": "claude-native",
+    }
+    expected_harness = runtime_harnesses.get(resolved.provider_runtime)
+    if expected_harness and resolved.provider_harness != expected_harness:
+        raise ExecutionIntentCompilationError(
+            EXECUTION_INTENT_CONTRADICTORY_AUTHORITY,
+            "resolved provider runtime and harness are incompatible",
+        )
+    omnigent = _parameters(request).get("omnigent")
+    omnigent = omnigent if isinstance(omnigent, Mapping) else {}
+    agent_selection = omnigent.get("agent")
+    agent_selection = (
+        agent_selection if isinstance(agent_selection, Mapping) else {}
+    )
+    authored_harness = str(
+        agent_selection.get("harnessOverride") or ""
+    ).strip()
+    if authored_harness and authored_harness != resolved.provider_harness:
+        raise ExecutionIntentCompilationError(
+            EXECUTION_INTENT_CONTRADICTORY_AUTHORITY,
+            "authored harness disagrees with resolved provider authority",
         )
 
     # An author supplies user-selectable intent only; runtime-owned resolved
@@ -551,13 +650,10 @@ def compile_execution_intent(
             agentRunId=resolved.agent_run_id,
             canonicalSessionSeed=resolved.canonical_session_seed,
             lineageKind=authored_lineage_kind(request),
-            sourceExecutionRef=str(
-                _parameters(request).get("sourceExecutionRef") or ""
-            ).strip()
-            or None,
+            sourceExecutionRef=authored_source_execution_ref(request),
             taskInputSnapshotRef=resolved.task_input_snapshot_ref,
             taskInputSnapshotDigest=resolved.task_input_snapshot_digest,
-            instructionRef=resolved.instruction_ref or request.instruction_ref,
+            instructionRef=resolved.instruction_ref,
             instructionDigest=resolved.instruction_digest,
         )
         runtime = RuntimeProviderSelection(
@@ -610,6 +706,7 @@ def compile_execution_intent(
         session = SessionContinuationPolicy(
             sessionMode=authored_session_mode(request),
             initialTurnAttemptId=resolved.initial_turn_attempt_id,
+            firstMessageDigest=resolved.instruction_digest,
             firstMessageMarkerPolicy=resolved.first_message_marker_policy,
             allowedContinuationKinds=list(resolved.allowed_continuation_kinds),
             chatBindingPolicy=resolved.chat_binding_policy,
@@ -742,6 +839,7 @@ __all__ = [
     "authored_effort",
     "authored_operation_class",
     "authored_remediation_loop",
+    "authored_source_execution_ref",
     "authored_session_mode",
     "authored_target_branch",
 ]

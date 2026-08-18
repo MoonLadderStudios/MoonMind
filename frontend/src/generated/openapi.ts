@@ -6468,6 +6468,21 @@ export interface components {
             message: string;
         };
         /**
+         * CompiledExecutionIntentEvidenceModel
+         * @description Safe API projection of the immutable Omnigent authority binding.
+         */
+        CompiledExecutionIntentEvidenceModel: {
+            /**
+             * Intentschema
+             * @constant
+             */
+            intentSchema: "moonmind.omnigent.compiled-execution-intent/v1";
+            /** Artifactref */
+            artifactRef: string;
+            /** Intentdigest */
+            intentDigest: string;
+        };
+        /**
          * CompleteArtifactPartModel
          * @description Multipart completion part descriptor (reserved for compatibility).
          */
@@ -8253,6 +8268,8 @@ export interface components {
             /** Inputartifactref */
             inputArtifactRef?: string | null;
             taskInputSnapshot?: components["schemas"]["WorkflowInputSnapshotDescriptorModel"];
+            /** @description Redacted ref-and-digest evidence for the immutable Omnigent execution authority. */
+            compiledExecutionIntent?: components["schemas"]["CompiledExecutionIntentEvidenceModel"] | null;
             /** Targetruntime */
             targetRuntime?: string | null;
             /** Targetskill */

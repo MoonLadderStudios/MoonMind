@@ -1,8 +1,11 @@
 from .agent_runtime_models import (
     AgentExecutionRequest,
+    AgentRemediationLoopIntent,
     AgentRunHandle,
     AgentRunResult,
     AgentRunStatus,
+    CompiledExecutionIntentBinding,
+    CompiledExecutionIntentRuntimeView,
     ManagedAgentRuntimeProfile,
     ManagedAgentProviderProfile,
     ManagedRuntimeWorkloadMode,
@@ -11,6 +14,12 @@ from .agent_runtime_models import (
     moonmind_ops_runtime_contract,
     resolve_managed_runtime_workload_mode,
     is_terminal_agent_run_state,
+)
+from .omnigent_execution_intent import (
+    EXECUTION_INTENT_SCHEMA,
+    CompiledOmnigentExecutionIntent,
+    ExecutionIntentSchemaPolicy,
+    classify_execution_intent_schema,
 )
 from .agent_skill_models import (
     AgentSkillFormat,
@@ -389,6 +398,13 @@ __all__ = [
     "ExecutionModel",
     "ExecutionListResponse",
     "AgentExecutionRequest",
+    "AgentRemediationLoopIntent",
+    "CompiledExecutionIntentBinding",
+    "CompiledExecutionIntentRuntimeView",
+    "CompiledOmnigentExecutionIntent",
+    "EXECUTION_INTENT_SCHEMA",
+    "ExecutionIntentSchemaPolicy",
+    "classify_execution_intent_schema",
     "AgentRunHandle",
     "AgentRunStatus",
     "AgentRunResult",

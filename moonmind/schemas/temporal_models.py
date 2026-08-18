@@ -3256,6 +3256,23 @@ class WorkflowInputSnapshotDescriptorModel(BaseModel):
             raise ValueError("authoritative reconstruction requires artifactRef")
         return self
 
+
+class CompiledExecutionIntentEvidenceModel(BaseModel):
+    """Safe API projection of the immutable Omnigent authority binding."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    intent_schema: Literal[
+        "moonmind.omnigent.compiled-execution-intent/v1"
+    ] = Field(..., alias="intentSchema")
+    artifact_ref: str = Field(..., alias="artifactRef", min_length=1)
+    intent_digest: str = Field(
+        ...,
+        alias="intentDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+
+
 class StepLedgerCheckModel(BaseModel):
     """Structured step-level review or check result."""
 
@@ -3889,6 +3906,14 @@ class ExecutionModel(BaseModel):
     task_input_snapshot: WorkflowInputSnapshotDescriptorModel = Field(
         default_factory=WorkflowInputSnapshotDescriptorModel,
         alias="taskInputSnapshot",
+    )
+    compiled_execution_intent: CompiledExecutionIntentEvidenceModel | None = Field(
+        None,
+        alias="compiledExecutionIntent",
+        description=(
+            "Redacted ref-and-digest evidence for the immutable Omnigent "
+            "execution authority."
+        ),
     )
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
     target_skill: Optional[str] = Field(None, alias="targetSkill")

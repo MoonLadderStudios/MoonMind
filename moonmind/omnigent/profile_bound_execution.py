@@ -13,7 +13,11 @@ from typing import Any, TypeVar
 from sqlalchemy import select
 from temporalio import activity
 
-from api_service.db.models import ManagedAgentProviderProfile
+from api_service.db.models import (
+    ManagedAgentProviderProfile,
+    TemporalArtifactRetentionClass,
+    TemporalExecutionCanonicalRecord,
+)
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
 )
@@ -44,6 +48,11 @@ from moonmind.omnigent.remediation_workspace import (
 from moonmind.omnigent.execution_profiles import (
     PROFILES,
     selection_from_request,
+)
+from moonmind.omnigent.execution_intent import (
+    ExecutionIntentCompilationError,
+    ResolvedExecutionAuthority,
+    compile_execution_intent,
 )
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_hosts import (
@@ -79,6 +88,7 @@ from moonmind.provider_profiles.oauth_policy import is_omnigent_oauth_profile
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunResult,
+    CompiledExecutionIntentBinding,
     OmnigentHostLease,
     RepositoryOutcomePolicy,
 )
@@ -99,6 +109,11 @@ HOST_LEASE_HEARTBEAT_INTERVAL_SECONDS = 30.0
 HOST_PROFILE_BUSY_WAIT_SECONDS = 360.0
 HOST_PROFILE_BUSY_POLL_SECONDS = 5.0
 REPOSITORY_PUBLICATION_CONTINUATION_LIMIT = 8
+_EXECUTION_INTENT_PRINCIPAL = "service:omnigent-execution-intent"
+_EXECUTION_INTENT_LINK_TYPE = "omnigent.execution_intent"
+_EXECUTION_INTENT_CONTENT_TYPE = (
+    "application/vnd.moonmind.omnigent-execution-intent+json;version=1"
+)
 
 _REPOSITORY_PUBLICATION_CONTINUATION_PROMPT = """\
 Continue the current task from this same session. The previous turn ended before
@@ -116,6 +131,24 @@ def _activity_attempt() -> int:
         return max(1, int(activity.info().attempt))
     except RuntimeError:
         return 1
+
+
+def _sha256_ref(value: object) -> str:
+    candidate = str(value or "").strip()
+    if candidate.startswith("sha256:") and len(candidate) == 71:
+        return candidate
+    if len(candidate) == 64 and all(ch in "0123456789abcdef" for ch in candidate):
+        return f"sha256:{candidate}"
+    return "sha256:" + hashlib.sha256(candidate.encode("utf-8")).hexdigest()
+
+
+def _artifact_id_from_ref(value: object) -> str:
+    candidate = str(value or "").strip()
+    if candidate.startswith("artifact://"):
+        return candidate.rstrip("/").rsplit("/", 1)[-1]
+    if candidate.startswith("artifact:"):
+        return candidate.split(":", 1)[1]
+    return candidate
 
 
 def _failure_evidence(exc: Exception) -> tuple[str, str, str]:
@@ -777,6 +810,540 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
                 await asyncio.sleep(retry_after)
 
+    async def _artifact_digest(self, artifact_ref: str) -> str:
+        artifact_id = _artifact_id_from_ref(artifact_ref)
+        if not artifact_id or not hasattr(self._artifact_service, "get_metadata"):
+            raise ExecutionIntentCompilationError(
+                "EXECUTION_INTENT_INCOMPLETE_AUTHORITY",
+                "artifact metadata is unavailable for immutable input authority",
+            )
+        result = await self._artifact_service.get_metadata(
+            artifact_id=artifact_id,
+            principal=_EXECUTION_INTENT_PRINCIPAL,
+        )
+        artifact = result[0] if isinstance(result, tuple) else result
+        status = getattr(getattr(artifact, "status", None), "value", None) or str(
+            getattr(artifact, "status", "") or ""
+        )
+        if status.strip().lower() != "complete":
+            raise ExecutionIntentCompilationError(
+                "EXECUTION_INTENT_INCOMPLETE_AUTHORITY",
+                f"artifact {artifact_id!r} is not durably complete",
+            )
+        digest = str(getattr(artifact, "sha256", "") or "").strip()
+        if not digest:
+            raise ExecutionIntentCompilationError(
+                "EXECUTION_INTENT_INCOMPLETE_AUTHORITY",
+                f"artifact {artifact_id!r} has no completed content digest",
+            )
+        return _sha256_ref(digest)
+
+    async def _task_input_snapshot_authority(
+        self, workflow_id: str
+    ) -> tuple[str, str]:
+        async with self._session_factory() as session:
+            record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+            memo = dict(getattr(record, "memo", None) or {}) if record else {}
+        snapshot_ref = str(
+            memo.get("task_input_snapshot_ref")
+            or memo.get("taskInputSnapshotRef")
+            or ""
+        ).strip()
+        if not snapshot_ref:
+            raise ExecutionIntentCompilationError(
+                "EXECUTION_INTENT_INCOMPLETE_AUTHORITY",
+                "the original task-input snapshot is not yet durable",
+            )
+        return snapshot_ref, await self._artifact_digest(snapshot_ref)
+
+    async def _resolved_execution_authority(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        profile: ManagedAgentProviderProfile,
+        policy_snapshot: Mapping[str, Any],
+        effective_launch: Mapping[str, Any],
+        workspace_intent: Any,
+    ) -> ResolvedExecutionAuthority:
+        workflow_id, step_execution_id = _request_identity(request)
+        if request.step_execution is None or not step_execution_id:
+            raise ExecutionIntentCompilationError(
+                "EXECUTION_INTENT_INCOMPLETE_AUTHORITY",
+                "compiled execution intent requires a typed Step Execution identity",
+            )
+        task_ref, task_digest = await self._task_input_snapshot_authority(workflow_id)
+
+        instruction_value = str(request.instruction_ref or "").strip()
+        if not instruction_value:
+            raise ExecutionIntentCompilationError(
+                "EXECUTION_INTENT_INCOMPLETE_AUTHORITY",
+                "compiled execution intent requires an immutable instruction ref",
+            )
+        if instruction_value.startswith(("artifact://", "artifact:", "art_")):
+            instruction_ref = instruction_value
+            instruction_digest = await self._artifact_digest(instruction_value)
+        else:
+            # Inline authored instructions remain in the original task-input
+            # snapshot.  The compiled authority carries only a content-addressed
+            # marker and digest, never the potentially large instruction body.
+            instruction_digest = _sha256_ref(instruction_value)
+            instruction_ref = f"inline:{instruction_digest}"
+
+        selected_profile_ref = str(
+            effective_launch.get("executionProfileRef") or ""
+        ).strip()
+        selected_profile = PROFILES.get(selected_profile_ref)
+        if selected_profile is None:
+            raise ExecutionIntentCompilationError(
+                "EXECUTION_INTENT_INCOMPLETE_AUTHORITY",
+                "the selected immutable Agent Profile is unavailable",
+            )
+
+        model_tiers = list(getattr(profile, "model_tiers", None) or ())
+        allowed_models = tuple(
+            dict.fromkeys(
+                str(tier.get("model") or "").strip()
+                for tier in model_tiers
+                if isinstance(tier, Mapping) and str(tier.get("model") or "").strip()
+            )
+        )
+        allowed_efforts = tuple(
+            dict.fromkeys(
+                str(tier.get("effort") or "").strip()
+                for tier in model_tiers
+                if isinstance(tier, Mapping)
+                and str(tier.get("effort") or "").strip()
+            )
+        )
+        request_parameters = (
+            request.parameters if isinstance(request.parameters, Mapping) else {}
+        )
+        default_model = str(
+            getattr(profile, "default_model", None)
+            or selected_profile.model
+            or request_parameters.get("model")
+            or "provider-profile-default"
+        ).strip()
+        default_effort = str(
+            getattr(profile, "default_effort", None)
+            or selected_profile.reasoning
+            or ""
+        ).strip() or None
+
+        repository = str(workspace_intent.repository or "").strip() or None
+        base_branch = str(
+            workspace_intent.starting_branch
+            or ("detached" if workspace_intent.checkout_commit else "")
+            or ("not-applicable" if repository is None else "")
+        ).strip()
+        if not base_branch:
+            raise ExecutionIntentCompilationError(
+                "EXECUTION_INTENT_INCOMPLETE_AUTHORITY",
+                "repository default/base branch readiness is unresolved",
+            )
+
+        launch_ref = str(effective_launch.get("snapshotRef") or "").strip()
+        launch_digest = _sha256_ref(launch_ref.rsplit(":sha256:", 1)[-1])
+        timeout_policy = (
+            request.timeout_policy
+            if isinstance(request.timeout_policy, Mapping)
+            else {}
+        )
+        retry_policy = (
+            request.retry_policy if isinstance(request.retry_policy, Mapping) else {}
+        )
+        deadline = int(
+            dict(effective_launch.get("limits") or {}).get("timeoutSeconds") or 5400
+        )
+        no_progress = int(
+            timeout_policy.get("noProgressTimeoutSeconds")
+            or timeout_policy.get("no_progress_timeout_seconds")
+            or min(deadline, 900)
+        )
+        max_attempts = int(
+            retry_policy.get("maximumAttempts")
+            or retry_policy.get("maxAttempts")
+            or 1
+        )
+        runtime_capabilities = tuple(
+            dict.fromkeys(
+                (
+                    "http",
+                    "sse",
+                    "websocket",
+                    *tuple(workspace_intent.required_capabilities),
+                )
+            )
+        )
+        remediation = request.remediation_loop
+        session_boundary = dict(
+            dict(effective_launch.get("boundaries") or {}).get("session") or {}
+        )
+        continuation_enabled = session_boundary.get("continuation") is True
+        checkpoint_ref = (
+            workspace_intent.restore_input_refs[0]
+            if workspace_intent.restore_input_refs
+            else None
+        )
+        restore_ref = (
+            workspace_intent.external_state_refs[0]
+            if workspace_intent.external_state_refs
+            else None
+        )
+        checkpoint_digest = (
+            await self._artifact_digest(checkpoint_ref) if checkpoint_ref else None
+        )
+        restore_digest = (
+            await self._artifact_digest(restore_ref) if restore_ref else None
+        )
+
+        return ResolvedExecutionAuthority(
+            workflowId=workflow_id,
+            runId=request.step_execution.run_id,
+            logicalStepId=request.step_execution.logical_step_id,
+            stepExecutionId=step_execution_id,
+            agentRunId=request.idempotency_key,
+            canonicalSessionSeed=request.idempotency_key,
+            taskInputSnapshotRef=task_ref,
+            taskInputSnapshotDigest=task_digest,
+            instructionRef=instruction_ref,
+            instructionDigest=instruction_digest,
+            executionProfileRef=selected_profile_ref,
+            executionProfileVersion=str(selected_profile.version),
+            agentProfileRef=selected_profile_ref,
+            agentProfileDigest=str(
+                effective_launch.get("executionProfileDigest") or ""
+            ),
+            providerProfileRef=f"provider-profile:{profile.profile_id}",
+            providerProfileId=profile.profile_id,
+            credentialGeneration=str(profile.credential_generation),
+            providerRuntime=str(
+                getattr(profile.runtime_id, "value", profile.runtime_id)
+            ),
+            providerHarness=str(effective_launch.get("harness") or ""),
+            compatibilityProfile=(
+                "omnigent:"
+                + str(effective_launch.get("harness") or "unknown")
+                + ":v1"
+            ),
+            allowedModels=allowed_models,
+            allowedEfforts=allowed_efforts,
+            defaultModel=default_model,
+            defaultEffort=default_effort,
+            launchPolicyRef=str(effective_launch.get("launchPolicyRef") or ""),
+            launchPolicyDigest=str(policy_snapshot.get("policyDigest") or ""),
+            effectiveLaunchSnapshotRef=launch_ref,
+            effectiveLaunchSnapshotDigest=launch_digest,
+            hostMode=str(effective_launch.get("hostMode") or ""),
+            serverImageDigest=str(effective_launch.get("serverImageRef") or ""),
+            uiImageDigest=str(
+                effective_launch.get("uiImageRef")
+                or effective_launch.get("serverImageRef")
+                or ""
+            ),
+            hostImageDigest=str(effective_launch.get("hostImageRef") or ""),
+            networkPolicyRef=str(effective_launch.get("networkRef") or "") or None,
+            egressPolicyRef=(
+                str(effective_launch.get("egressProfileRef") or "") or None
+            ),
+            runtimeCapabilities=runtime_capabilities,
+            compatibilityManifestRef=launch_ref,
+            buildManifestRef=launch_ref,
+            repositoryProvider=str(
+                workspace_intent.repository_kind or "none"
+            ),
+            repository=repository,
+            connectionRef=workspace_intent.connection_ref,
+            baseBranch=base_branch,
+            checkoutCommit=workspace_intent.checkout_commit,
+            workspaceLocator=workspace_intent.workspace_locator_payload(),
+            workspaceAuthorityClass=workspace_intent.workspace_locator.kind,
+            checkpointRef=checkpoint_ref,
+            checkpointDigest=checkpoint_digest,
+            restoreRef=restore_ref,
+            restoreDigest=restore_digest,
+            allowedOperationClasses=(
+                "read_only",
+                "controlled_mutation",
+                "publication",
+                "pull_request",
+            ) if workspace_intent.repository_mutation else ("read_only",),
+            initialTurnAttemptId=f"{request.idempotency_key}:turn:1",
+            firstMessageMarkerPolicy="digest_and_idempotency_marker_required",
+            allowedContinuationKinds=(
+                (
+                    "message",
+                    "repository_continuation",
+                    "checkpoint",
+                    "remediation",
+                )
+                if continuation_enabled
+                else ()
+            ),
+            chatBindingPolicy="workflow_scoped_exact_binding",
+            terminalEvidenceContract=(
+                request.terminal_contract.contract_id
+                if request.terminal_contract is not None
+                else "omnigent-terminal-envelope/v1"
+            ),
+            cleanupPolicy=str(
+                dict(effective_launch.get("cleanup") or {}).get("mode")
+                or "drain"
+            ),
+            historicalReadPolicy="artifact_read_only_after_cleanup",
+            remediationLoopPermitted=remediation is not None,
+            verifierOwner=(remediation.verifier_owner if remediation else None),
+            remediatorOwner=(remediation.remediator_owner if remediation else None),
+            checkpointBranchBehavior=(
+                remediation.checkpoint_branch_behavior
+                if remediation
+                else "branch_on_immutable_change"
+            ),
+            immutableDimensions=(
+                remediation.immutable_dimensions
+                if remediation
+                else (
+                    "instructionDigest",
+                    "model",
+                    "effort",
+                    "providerProfileId",
+                    "launchPolicyRef",
+                    "repositoryBranch",
+                    "publishMode",
+                )
+            ),
+            executionDeadlineSeconds=deadline,
+            noProgressTimeoutSeconds=no_progress,
+            observationCadenceSeconds=10,
+            reconcileCadenceSeconds=10,
+            retryClasses=("transient_provider", "transient_observation"),
+            maxAttempts=max_attempts,
+            cancellationPolicy="try_cancel_then_reconcile",
+            requiredEvidence=("terminal_envelope", "cleanup_evidence"),
+            cleanupLeaseReleaseOrder=(
+                "terminal_evidence",
+                "session_cleanup",
+                "host_cleanup",
+                "provider_lease_release",
+            ),
+        )
+
+    async def _persist_execution_intent(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        intent: Any,
+    ) -> CompiledExecutionIntentBinding:
+        event_identity = f"execution_intent_compiled:{intent.intent_digest}"
+        existing = await self._run_store.get_lifecycle_event_metadata(
+            request.idempotency_key,
+            event_identity=event_identity,
+        )
+        if isinstance(existing, Mapping) and existing.get("executionIntentRef"):
+            if existing.get("executionIntentDigest") != intent.intent_digest:
+                raise ExecutionIntentCompilationError(
+                    "EXECUTION_INTENT_DIGEST_MISMATCH",
+                    "persisted execution-intent event has conflicting authority",
+                )
+            binding = CompiledExecutionIntentBinding(
+                intentSchema=intent.schema_id,
+                artifactRef=str(existing["executionIntentRef"]),
+                intentDigest=intent.intent_digest,
+                runtimeView=intent.compact_runtime_view(),
+            )
+            await self._bind_execution_intent_to_create_record(
+                workflow_id=intent.identity.workflow_id,
+                binding=binding,
+            )
+            return binding
+        if not (
+            hasattr(self._artifact_service, "create")
+            and hasattr(self._artifact_service, "write_complete")
+        ):
+            raise ExecutionIntentCompilationError(
+                "EXECUTION_INTENT_INCOMPLETE_AUTHORITY",
+                "the durable artifact service is unavailable at admission",
+            )
+        body = json.dumps(
+            intent.model_dump(by_alias=True, mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        body_digest = hashlib.sha256(body).hexdigest()
+        run_id = request.step_execution.run_id if request.step_execution else ""
+        artifact, _upload = await self._artifact_service.create(
+            principal=_EXECUTION_INTENT_PRINCIPAL,
+            content_type=_EXECUTION_INTENT_CONTENT_TYPE,
+            size_bytes=len(body),
+            sha256=body_digest,
+            retention_class=TemporalArtifactRetentionClass.LONG,
+            link={
+                "namespace": "default",
+                "workflow_id": intent.identity.workflow_id,
+                "run_id": run_id,
+                "link_type": _EXECUTION_INTENT_LINK_TYPE,
+                "label": "Compiled Omnigent execution intent",
+            },
+            metadata_json={
+                "artifact_kind": _EXECUTION_INTENT_LINK_TYPE,
+                "schema": intent.schema_id,
+                "intent_digest": intent.intent_digest,
+                "traceability": "MoonLadderStudios/MoonMind#3706",
+            },
+            content_addressed_scope="omnigent_execution_intent_v1",
+        )
+        completed = await self._artifact_service.write_complete(
+            artifact_id=artifact.artifact_id,
+            principal=_EXECUTION_INTENT_PRINCIPAL,
+            payload=body,
+            content_type=_EXECUTION_INTENT_CONTENT_TYPE,
+        )
+        artifact_ref = f"artifact://{completed.artifact_id}"
+        evidence = {
+            **intent.evidence(),
+            "executionIntentRef": artifact_ref,
+            "executionIntentDigest": intent.intent_digest,
+            "artifactSha256": _sha256_ref(body_digest),
+        }
+        await self._run_store.record_lifecycle_event(
+            request.idempotency_key,
+            event_type="execution_intent_compiled",
+            status="completed",
+            event_identity=event_identity,
+            metadata=evidence,
+        )
+        winner = await self._run_store.get_lifecycle_event_metadata(
+            request.idempotency_key,
+            event_identity=event_identity,
+        )
+        if isinstance(winner, Mapping) and winner.get("executionIntentRef"):
+            if winner.get("executionIntentDigest") != intent.intent_digest:
+                raise ExecutionIntentCompilationError(
+                    "EXECUTION_INTENT_DIGEST_MISMATCH",
+                    "the authoritative artifact binding changed during admission",
+                )
+            artifact_ref = str(winner["executionIntentRef"])
+        binding = CompiledExecutionIntentBinding(
+            intentSchema=intent.schema_id,
+            artifactRef=artifact_ref,
+            intentDigest=intent.intent_digest,
+            runtimeView=intent.compact_runtime_view(),
+        )
+        await self._bind_execution_intent_to_create_record(
+            workflow_id=intent.identity.workflow_id,
+            binding=binding,
+        )
+        return binding
+
+    async def _bind_execution_intent_to_create_record(
+        self,
+        *,
+        workflow_id: str,
+        binding: CompiledExecutionIntentBinding,
+    ) -> None:
+        """Bind the exact immutable authority to the canonical create record."""
+
+        async with self._session_factory() as session:
+            record = await session.get(TemporalExecutionCanonicalRecord, workflow_id)
+            if record is None:
+                raise ExecutionIntentCompilationError(
+                    "EXECUTION_INTENT_INCOMPLETE_AUTHORITY",
+                    "the canonical execution create record is unavailable",
+                )
+            memo = dict(record.memo or {})
+            existing_ref = str(
+                memo.get("compiled_execution_intent_ref") or ""
+            ).strip()
+            existing_digest = str(
+                memo.get("compiled_execution_intent_digest") or ""
+            ).strip()
+            if existing_ref and (
+                existing_ref != binding.artifact_ref
+                or existing_digest != binding.intent_digest
+            ):
+                raise ExecutionIntentCompilationError(
+                    "EXECUTION_INTENT_DIGEST_MISMATCH",
+                    "the canonical create record already binds different authority",
+                )
+            memo.update(
+                {
+                    "compiled_execution_intent_schema": binding.intent_schema,
+                    "compiled_execution_intent_ref": binding.artifact_ref,
+                    "compiled_execution_intent_digest": binding.intent_digest,
+                }
+            )
+            record.memo = memo
+            artifact_refs = list(record.artifact_refs or [])
+            if binding.artifact_ref not in artifact_refs:
+                artifact_refs.append(binding.artifact_ref)
+            record.artifact_refs = artifact_refs
+            await session.commit()
+
+    async def _bind_execution_intent_to_session(
+        self,
+        *,
+        intent: Any,
+        binding: CompiledExecutionIntentBinding,
+    ) -> None:
+        """Bind the same ref and digest to the canonical OmnigentSession."""
+
+        from moonmind.omnigent.control_plane import (
+            ConflictingSessionAuthorityError,
+            SessionRepository,
+        )
+
+        authority = {
+            "moonmind_workflow_id": intent.identity.workflow_id,
+            "moonmind_run_id": intent.identity.run_id,
+            "step_execution_id": intent.identity.step_execution_id,
+            "moonmind_agent_run_id": intent.identity.agent_run_id,
+            "provider": intent.runtime.provider_runtime,
+            "intent_ref": binding.artifact_ref,
+            "intent_digest": binding.intent_digest,
+            "provider_profile_id": intent.runtime.provider_profile_id,
+            "compatibility_profile": intent.runtime.compatibility_profile,
+            "compatibility_ref": intent.launch.compatibility_manifest_ref,
+            "image_manifest_ref": intent.launch.build_manifest_ref,
+        }
+        try:
+            async with self._session_factory() as session:
+                sessions = SessionRepository(session)
+                current = await sessions.get(intent.identity.canonical_session_seed)
+                if current is None:
+                    try:
+                        await sessions.create(
+                            session_id=intent.identity.canonical_session_seed,
+                            **authority,
+                            metadata={
+                                "intentSchema": binding.intent_schema,
+                                "traceability": "MoonLadderStudios/MoonMind#3706",
+                            },
+                        )
+                    except ConflictingSessionAuthorityError:
+                        # A concurrent deterministic admission may have inserted
+                        # the same session. Re-read and apply the exact-binding
+                        # comparison instead of treating the race as success.
+                        current = await sessions.get(
+                            intent.identity.canonical_session_seed
+                        )
+                        if current is None:
+                            raise
+                        await sessions.bind_immutable_authority(
+                            intent.identity.canonical_session_seed,
+                            **authority,
+                        )
+                else:
+                    await sessions.bind_immutable_authority(
+                        intent.identity.canonical_session_seed,
+                        **authority,
+                    )
+                await session.commit()
+        except ConflictingSessionAuthorityError as exc:
+            raise ExecutionIntentCompilationError(
+                "EXECUTION_INTENT_CONTRADICTORY_AUTHORITY",
+                str(exc),
+            ) from exc
+
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         budget_rejection = _profile_bound_max_budget_rejection(request)
         if budget_rejection is not None:
@@ -793,6 +1360,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "workflowId": workflow_id,
                 "stepExecutionId": step_execution_id,
                 "attemptIdentity": request.idempotency_key,
+                "executionIntentRequirement": (
+                    request.execution_intent_requirement
+                ),
             },
         )
         bridge_ready = True
@@ -1065,6 +1635,107 @@ class OmnigentProfileBoundExecutionCoordinator:
                         "remediation workspace launch snapshot does not match effective launch",
                         code="REMEDIATION_WORKSPACE_LAUNCH_MISMATCH",
                     )
+            await emit(
+                "effective_launch_compiled",
+                "completed",
+                metadata={"effectiveLaunch": effective_launch},
+            )
+            # Compile the workspace subset for every path, including remediation,
+            # before its owner materializes the typed locator.
+            current_stage = "workspace_intent_compilation"
+            await emit(current_stage, "started")
+            try:
+                workspace_intent = compile_workspace_intent(
+                    request,
+                    workflow_id=workflow_id,
+                    step_execution_id=(step_execution_id or request.idempotency_key),
+                    run_id=(
+                        request.step_execution.run_id
+                        if request.step_execution is not None
+                        else None
+                    ),
+                    logical_step_id=(
+                        request.step_execution.logical_step_id
+                        if request.step_execution is not None
+                        else None
+                    ),
+                )
+            except WorkspaceIntentCompilationError as exc:
+                raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
+            await self._run_store.record_lifecycle_event(
+                request.idempotency_key,
+                event_type="workspace_intent_compiled",
+                event_identity=(
+                    f"workspace_intent_compiled:{workspace_intent.intent_digest}"
+                ),
+                metadata=workspace_intent.evidence(),
+            )
+            await emit(
+                current_stage,
+                "completed",
+                metadata={
+                    "workspaceIntentDigest": workspace_intent.intent_digest,
+                    "workspaceIntentSchemaVersion": workspace_intent.schema_version,
+                    "locatorKind": workspace_intent.workspace_locator.kind,
+                    "repositoryMutation": workspace_intent.repository_mutation,
+                    "publishMode": workspace_intent.publish_mode,
+                },
+            )
+
+            # New workflow generations fail closed unless one complete immutable
+            # intent is artifact-persisted before profile capacity, workspace,
+            # host, or provider side effects. Histories recorded before this
+            # additive request field remain on the explicit legacy-history path.
+            if request.execution_intent_requirement == "required":
+                current_stage = "execution_intent_compilation"
+                await emit(current_stage, "started")
+                try:
+                    resolved_authority = await self._resolved_execution_authority(
+                        request=request,
+                        profile=profile,
+                        policy_snapshot=policy_snapshot,
+                        effective_launch=effective_launch,
+                        workspace_intent=workspace_intent,
+                    )
+                    compiled_intent = compile_execution_intent(
+                        request,
+                        resolved=resolved_authority,
+                    )
+                    compiled_binding = await self._persist_execution_intent(
+                        request=request,
+                        intent=compiled_intent,
+                    )
+                    await self._bind_execution_intent_to_session(
+                        intent=compiled_intent,
+                        binding=compiled_binding,
+                    )
+                except ExecutionIntentCompilationError as exc:
+                    raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
+                request = request.model_copy(
+                    update={"compiled_execution_intent": compiled_binding}
+                )
+                await self._run_store.get_or_create(
+                    request=request,
+                    endpoint_ref="pending",
+                    agent_id=None,
+                    agent_name=None,
+                    target_metadata={
+                        "compiledExecutionIntent": compiled_binding.model_dump(
+                            by_alias=True,
+                            mode="json",
+                        )
+                    },
+                )
+                await emit(
+                    current_stage,
+                    "completed",
+                    metadata={
+                        "executionIntentRef": compiled_binding.artifact_ref,
+                        "executionIntentDigest": compiled_binding.intent_digest,
+                        "executionIntentSchema": compiled_binding.intent_schema,
+                    },
+                )
+            if remediation is not None:
                 current_stage = "remediation_workspace_admission"
                 await emit(current_stage, "started")
                 remediation_resolution = await self._workspace_owner.admit_and_resolve(
@@ -1083,72 +1754,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                             "restoreEvidenceRef"
                         ),
                         "workspaceState": remediation_resolution.get("workspaceState"),
-                    },
-                )
-            await emit(
-                "effective_launch_compiled",
-                "completed",
-                metadata={"effectiveLaunch": effective_launch},
-            )
-            # Compile every normal authoring surface's authored request into one
-            # durable, versioned workspace-intent record before any host binding,
-            # lease, or workspace mutation. Unsafe or inconsistent authored input
-            # (runtime-specific bind paths, Docker authority, arbitrary host ids,
-            # credential-shaped values) fails closed here. Remediation runs carry
-            # a pre-materialized, separately-authorized workspace and are compiled
-            # by their owner, so they are not recompiled here.
-            workspace_intent = None
-            if remediation_resolution is None:
-                current_stage = "workspace_intent_compilation"
-                await emit(current_stage, "started")
-                try:
-                    workspace_intent = compile_workspace_intent(
-                        request,
-                        workflow_id=workflow_id,
-                        step_execution_id=(
-                            step_execution_id or request.idempotency_key
-                        ),
-                        run_id=(
-                            request.step_execution.run_id
-                            if request.step_execution is not None
-                            else None
-                        ),
-                        logical_step_id=(
-                            request.step_execution.logical_step_id
-                            if request.step_execution is not None
-                            else None
-                        ),
-                    )
-                except WorkspaceIntentCompilationError as exc:
-                    raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
-                # Durable, bounded, credential-free, path-safe compilation
-                # evidence for Workflow Detail. A retry deterministically
-                # reproduces the same intent digest.
-                await self._run_store.record_lifecycle_event(
-                    request.idempotency_key,
-                    event_type="workspace_intent_compiled",
-                    # Scope the durable event identity to the compiled intent
-                    # digest. A deterministic retry reproduces the same digest and
-                    # deduplicates; a conflicting resubmission under the same
-                    # idempotency key (changed repository, branch, locator, or
-                    # authority) produces a distinct digest and is recorded as a
-                    # new event instead of silently retaining the stale evidence.
-                    event_identity=(
-                        f"workspace_intent_compiled:{workspace_intent.intent_digest}"
-                    ),
-                    metadata=workspace_intent.evidence(),
-                )
-                await emit(
-                    current_stage,
-                    "completed",
-                    metadata={
-                        "workspaceIntentDigest": workspace_intent.intent_digest,
-                        "workspaceIntentSchemaVersion": (
-                            workspace_intent.schema_version
-                        ),
-                        "locatorKind": workspace_intent.workspace_locator.kind,
-                        "repositoryMutation": workspace_intent.repository_mutation,
-                        "publishMode": workspace_intent.publish_mode,
                     },
                 )
             owner_id = deterministic_lease_owner_id(
@@ -1775,6 +2380,13 @@ class OmnigentProfileBoundExecutionCoordinator:
             # evidence is deliberately added later by the workspace capture
             # activity; neither boundary is allowed to infer the other plane.
             result_metadata = dict(result.metadata or {})
+            if request.compiled_execution_intent is not None:
+                result_metadata["compiledExecutionIntentRef"] = (
+                    request.compiled_execution_intent.artifact_ref
+                )
+                result_metadata["compiledExecutionIntentDigest"] = (
+                    request.compiled_execution_intent.intent_digest
+                )
             result_metadata["omnigentCheckpointCapture"] = {
                 "providerProfileId": profile_id,
                 "credentialRef": (
@@ -1793,6 +2405,18 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "effectiveLaunchRef": effective_launch["snapshotRef"],
                 "executionProfileRef": effective_launch["executionProfileRef"],
                 "launchPolicyRef": effective_launch["launchPolicyRef"],
+                **(
+                    {
+                        "compiledExecutionIntentRef": (
+                            request.compiled_execution_intent.artifact_ref
+                        ),
+                        "compiledExecutionIntentDigest": (
+                            request.compiled_execution_intent.intent_digest
+                        ),
+                    }
+                    if request.compiled_execution_intent is not None
+                    else {}
+                ),
                 # The full attestation includes the compiled launch-policy
                 # boundary and is already durable behind this reference. Keep
                 # the workflow result plane reference-only so terminal evidence
@@ -2244,6 +2868,13 @@ class OmnigentProfileBoundExecutionCoordinator:
                 if effective_launch is not None:
                     authorization_evidence["effectiveLaunchRef"] = str(
                         effective_launch.get("snapshotRef") or ""
+                    )
+                if request.compiled_execution_intent is not None:
+                    authorization_evidence["compiledExecutionIntentRef"] = (
+                        request.compiled_execution_intent.artifact_ref
+                    )
+                    authorization_evidence["compiledExecutionIntentDigest"] = (
+                        request.compiled_execution_intent.intent_digest
                     )
                 if authority_bridge_session_id:
                     authorization_evidence["bridgeSessionId"] = (

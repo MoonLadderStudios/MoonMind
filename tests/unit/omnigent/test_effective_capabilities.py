@@ -139,6 +139,118 @@ def test_bridge_row_adapter_uses_only_execution_bound_authority():
     assert set(stale.disabled_reasons.values()) == {"session_epoch_stale"}
 
 
+def test_bridge_capabilities_are_bound_to_compiled_execution_intent():
+    grants = _all()
+    digest = "sha256:" + "a" * 64
+    row = SimpleNamespace(
+        status="active",
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
+        metadata_={
+            "compiledExecutionIntent": {
+                "intentSchema": "moonmind.omnigent.compiled-execution-intent/v1",
+                "artifactRef": "artifact://compiled-intent",
+                "intentDigest": digest,
+                "runtimeView": {
+                    "schema": "moonmind.omnigent.compiled-execution-intent/v1",
+                    "intentDigest": digest,
+                    "claimsFullAuthority": True,
+                    "agentProfileDigest": "sha256:agent",
+                    "providerProfileId": "provider-1",
+                    "credentialGeneration": "4",
+                    "effectiveLaunchSnapshotRef": "artifact://launch",
+                    "launchPolicyDigest": "sha256:policy",
+                },
+            },
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            },
+        },
+    )
+
+    result = resolve_bridge_row_capabilities(row, caller_capabilities=grants)
+    assert all(result.capabilities.values())
+    assert len(result.authority_digest) == 64
+
+    row.metadata_["compiledExecutionIntent"]["runtimeView"][
+        "effectiveLaunchSnapshotRef"
+    ] = "artifact://stale-launch"
+    stale = resolve_bridge_row_capabilities(row, caller_capabilities=grants)
+    assert set(stale.disabled_reasons.values()) == {
+        "compiled_execution_intent_launch_stale"
+    }
+
+    row.metadata_["executionIntentRequirement"] = "required"
+    row.metadata_.pop("compiledExecutionIntent")
+    missing = resolve_bridge_row_capabilities(row, caller_capabilities=grants)
+    assert set(missing.disabled_reasons.values()) == {
+        "compiled_execution_intent_missing"
+    }
+
+
+def test_bridge_capabilities_reject_unknown_or_unproven_compiled_authority():
+    grants = _all()
+    digest = "sha256:" + "a" * 64
+    runtime_view = {
+        "schema": "moonmind.omnigent.compiled-execution-intent/v2",
+        "intentDigest": digest,
+        "claimsFullAuthority": True,
+    }
+    row = SimpleNamespace(
+        status="active",
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={},
+        metadata_={
+            "executionIntentRequirement": "required",
+            "compiledExecutionIntent": {
+                "intentSchema": "moonmind.omnigent.compiled-execution-intent/v2",
+                "artifactRef": "artifact://compiled-intent",
+                "intentDigest": digest,
+                "runtimeView": runtime_view,
+            },
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            },
+        },
+    )
+
+    unsupported = resolve_bridge_row_capabilities(row, caller_capabilities=grants)
+    assert set(unsupported.disabled_reasons.values()) == {
+        "compiled_execution_intent_schema_unsupported"
+    }
+
+    row.metadata_["compiledExecutionIntent"]["intentSchema"] = (
+        "moonmind.omnigent.compiled-execution-intent/v1"
+    )
+    runtime_view["schema"] = "moonmind.omnigent.compiled-execution-intent/v1"
+    runtime_view["claimsFullAuthority"] = False
+    unproven = resolve_bridge_row_capabilities(row, caller_capabilities=grants)
+    assert set(unproven.disabled_reasons.values()) == {
+        "compiled_execution_intent_authority_unproven"
+    }
+
+
 def test_bridge_row_adapter_fails_closed_without_capability_authority():
     row = SimpleNamespace(
         status="active",

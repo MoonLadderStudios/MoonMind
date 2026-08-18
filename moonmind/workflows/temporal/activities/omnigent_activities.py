@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -58,6 +59,69 @@ class _OnDemandTemporalArtifactService:
         return await self._invoke(
             "write_complete", artifact_id=artifact_id, **kwargs
         )
+
+
+async def _bind_checkpoint_execution_intent(
+    *,
+    request: AgentExecutionRequest,
+    checkpoint: Any,
+    artifact_service: Any,
+) -> AgentExecutionRequest:
+    """Rehydrate the exact admitted authority for a live checkpoint reattach."""
+
+    if request.execution_intent_requirement != "required":
+        return request
+    if request.compiled_execution_intent is not None:
+        return request
+    artifact_ref = str(
+        getattr(checkpoint, "compiled_execution_intent_ref", None) or ""
+    ).strip()
+    expected_digest = str(
+        getattr(checkpoint, "compiled_execution_intent_digest", None) or ""
+    ).strip()
+    if not artifact_ref or not expected_digest:
+        raise ValueError(
+            "live checkpoint reattach requires compiled execution-intent "
+            "authority; use a cold restore or branch for a legacy checkpoint"
+        )
+    artifact_id = artifact_ref.rstrip("/").rsplit("/", 1)[-1]
+    if artifact_id.startswith("artifact:"):
+        artifact_id = artifact_id.split(":", 1)[1]
+    _metadata, payload = await artifact_service.read(
+        artifact_id=artifact_id,
+        principal="service:omnigent-execution-intent",
+    )
+    from moonmind.schemas.agent_runtime_models import CompiledExecutionIntentBinding
+    from moonmind.schemas.omnigent_execution_intent import (
+        CompiledOmnigentExecutionIntent,
+    )
+
+    try:
+        document = json.loads(payload.decode("utf-8"))
+        intent = CompiledOmnigentExecutionIntent.model_validate(document)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("compiled execution-intent artifact is invalid") from exc
+    if intent.intent_digest != expected_digest:
+        raise ValueError("compiled execution-intent checkpoint digest mismatch")
+    if not intent.provenance.claims_full_authority:
+        raise ValueError("live reattach requires fully durable execution authority")
+    if intent.identity.step_execution_id != checkpoint.step_execution_id:
+        raise ValueError("compiled execution-intent checkpoint identity mismatch")
+    if intent.runtime.provider_profile_id != checkpoint.provider_profile_id:
+        raise ValueError("compiled execution-intent provider authority mismatch")
+    if (
+        checkpoint.effective_launch_ref
+        and intent.launch.effective_launch_snapshot_ref
+        != checkpoint.effective_launch_ref
+    ):
+        raise ValueError("compiled execution-intent launch authority mismatch")
+    binding = CompiledExecutionIntentBinding(
+        intentSchema=intent.schema_id,
+        artifactRef=artifact_ref,
+        intentDigest=expected_digest,
+        runtimeView=intent.compact_runtime_view(),
+    )
+    return request.model_copy(update={"compiled_execution_intent": binding})
 
 
 def _checkpoint_recovery_decision(
@@ -360,6 +424,11 @@ async def _omnigent_execute_activity(
     artifact_gateway = LocalOmnigentArtifactGateway()
     run_store = OmnigentBridgeSessionStore(async_session_maker)
     if not request.execution_profile_ref:
+        if request.execution_intent_requirement == "required":
+            raise ValueError(
+                "compiled Omnigent execution intent requires an admitted "
+                "executionProfileRef; direct fallback is not authorized"
+            )
         return await run_omnigent_execution(
             request,
             artifact_gateway=artifact_gateway,
@@ -471,6 +540,11 @@ async def _omnigent_execute_activity(
                     "checkpoint cold restore requires an owned workspace restoration "
                     "boundary before Omnigent launch"
                 )
+            request = await _bind_checkpoint_execution_intent(
+                request=request,
+                checkpoint=checkpoint,
+                artifact_service=artifact_service,
+            )
             return await coordinator.recover_from_checkpoint(
                 request=request,
                 checkpoint=checkpoint,

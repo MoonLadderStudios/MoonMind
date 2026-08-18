@@ -12,6 +12,8 @@ from hashlib import sha256
 import json
 from typing import Any, Mapping
 
+from moonmind.schemas.omnigent_execution_intent import EXECUTION_INTENT_SCHEMA
+
 CAPABILITY_SCHEMA_VERSION = "moonmind.omnigent.effective-capabilities.v1"
 
 CAPABILITY_NAMES: tuple[str, ...] = (
@@ -253,6 +255,11 @@ def resolve_bridge_row_capabilities(
 
     metadata = dict(getattr(row, "metadata_", None) or {})
     evidence = dict(metadata.get("capabilityAuthority") or {})
+    intent_requirement = str(
+        metadata.get("executionIntentRequirement") or "legacy_history"
+    ).strip()
+    compiled_binding = dict(metadata.get("compiledExecutionIntent") or {})
+    compiled_view = dict(compiled_binding.get("runtimeView") or {})
     launch = dict(getattr(row, "effective_launch_snapshot_json", None) or {})
     policy = dict(launch.get("policyAuthority") or {})
     state = dict(evidence.get("state") or {})
@@ -269,8 +276,64 @@ def resolve_bridge_row_capabilities(
         "authorityFresh": evidence.get("fresh") is True,
         "expectedProviderProfileGeneration": evidence.get("providerProfileGeneration"),
         "expectedSessionEpoch": expected_session_epoch,
+        "compiledExecutionIntentRef": compiled_binding.get("artifactRef"),
+        "compiledExecutionIntentDigest": compiled_binding.get("intentDigest"),
     }
     stale_reason = None
+    if intent_requirement == "required" and not compiled_binding:
+        stale_reason = "compiled_execution_intent_missing"
+    elif compiled_binding:
+        required_binding = (
+            "artifactRef",
+            "intentDigest",
+            "intentSchema",
+            "runtimeView",
+        )
+        if any(not compiled_binding.get(key) for key in required_binding):
+            stale_reason = "compiled_execution_intent_incomplete"
+        elif (
+            compiled_binding.get("intentSchema") != EXECUTION_INTENT_SCHEMA
+            or compiled_view.get("schema") != EXECUTION_INTENT_SCHEMA
+        ):
+            stale_reason = "compiled_execution_intent_schema_unsupported"
+        elif compiled_view.get("intentDigest") != compiled_binding.get(
+            "intentDigest"
+        ):
+            stale_reason = "compiled_execution_intent_digest_stale"
+        elif compiled_view.get("claimsFullAuthority") is not True:
+            stale_reason = "compiled_execution_intent_authority_unproven"
+        else:
+            compiled_preconditions = (
+                (
+                    compiled_view.get("agentProfileDigest"),
+                    launch.get("executionProfileDigest"),
+                    "compiled_execution_intent_profile_stale",
+                ),
+                (
+                    compiled_view.get("providerProfileId"),
+                    getattr(row, "provider_profile_id", None),
+                    "compiled_execution_intent_provider_stale",
+                ),
+                (
+                    compiled_view.get("credentialGeneration"),
+                    getattr(row, "credential_generation", None),
+                    "compiled_execution_intent_generation_stale",
+                ),
+                (
+                    compiled_view.get("effectiveLaunchSnapshotRef"),
+                    launch.get("snapshotRef"),
+                    "compiled_execution_intent_launch_stale",
+                ),
+                (
+                    compiled_view.get("launchPolicyDigest"),
+                    policy.get("policyDigest"),
+                    "compiled_execution_intent_policy_stale",
+                ),
+            )
+            for expected, actual, reason in compiled_preconditions:
+                if expected is None or str(expected) != str(actual):
+                    stale_reason = reason
+                    break
     immutable_preconditions = (
         (
             expected_agent_profile_digest,
@@ -294,6 +357,8 @@ def resolve_bridge_row_capabilities(
         ),
     )
     for expected, actual, reason in immutable_preconditions:
+        if stale_reason:
+            break
         if expected is not None and str(expected) != str(actual):
             stale_reason = reason
             break
