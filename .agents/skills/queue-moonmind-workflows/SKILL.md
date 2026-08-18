@@ -67,6 +67,11 @@ The helper supports both execution API shapes:
 - task-shaped wrapper: `{"type": "task", "payload": {...}}`
 - direct execution create body: `{"workflowType": "MoonMind.UserWorkflow", ...}`
 
+When `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN` is present, only the task-shaped
+child form is accepted and the helper binds it to the caller with
+`runtimeInheritance="caller"`; direct create and schedule shapes remain available
+only to ordinary authenticated API users.
+
 For task-shaped requests, idempotency is stored at `request.payload.idempotencyKey`.
 For direct create requests, idempotency is stored at `request.idempotencyKey`.
 
@@ -96,6 +101,8 @@ For direct create requests, idempotency is stored at `request.idempotencyKey`.
 `scripts/queue_moonmind_workflows.py`:
 
 - requires `MOONMIND_URL`;
+- prefers `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN` when present, sends it as a
+  bearer with the fan-out v1 marker, and never substitutes a broader API token;
 - forwards supported API auth from `MOONMIND_AUTH_HEADER`,
   `MOONMIND_API_TOKEN`, `MOONMIND_AUTH_TOKEN`, `MOONMIND_BEARER_TOKEN`, or
   `MOONMIND_API_KEY` when present, and also forwards

@@ -196,6 +196,48 @@ def test_request_headers_build_bearer_auth_from_runtime_token(
     assert headers["Authorization"] == "Bearer test-token"
 
 
+def test_request_headers_prefer_scoped_execution_fanout_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_module()
+    monkeypatch.setenv("MOONMIND_API_TOKEN", "broad-api-token")
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "fanout-test-capability"
+    )
+
+    headers = module["_request_headers"]()
+
+    assert headers["Authorization"] == "Bearer fanout-test-capability"
+    assert headers["X-MoonMind-Execution-Fanout"] == "v1"
+
+
+def test_manifest_binds_scoped_fanout_request_to_caller_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "fanout-test-capability"
+    )
+    manifest = tmp_path / "manifest.json"
+    request = _task_request()
+    request["payload"].pop("runtimeInheritance")
+    manifest.write_text(
+        json.dumps(
+            {
+                "batchScope": "mm:parent",
+                "workflows": [{"ref": "child-1", "request": request}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    children, skipped = module["_load_manifest"](manifest)
+
+    assert skipped == []
+    assert children[0].request["payload"]["runtimeInheritance"] == "caller"
+
+
 class _FakeResponse:
     def __init__(self, status_code: int, payload: dict[str, Any]) -> None:
         self.status_code = status_code

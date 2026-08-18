@@ -55,6 +55,9 @@ from moonmind.schemas.workspace_locator_models import (
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
+from moonmind.security.execution_fanout_capabilities import (
+    mint_execution_fanout_capability,
+)
 from moonmind.security.egress import (
     EgressAttestation,
     OMNIGENT_EGRESS_PROFILE,
@@ -171,7 +174,7 @@ _RUNNER_GITHUB_ENV_NAMES = (
 # a provider harness.  Codex tool shells are login shells, so this exact
 # non-secret subset is also materialized through the lease-owned profile under
 # ``/etc/profile.d``.  Keep credential-bearing values (notably the scoped
-# container-job bearer) out of the generated file.
+# container-job and execution-fan-out bearers) out of the generated file.
 _RUNTIME_EXECUTION_PROFILE_ENV_NAMES = (
     "MOONMIND_URL",
     "MOONMIND_AGENT_RUN_ID",
@@ -184,6 +187,12 @@ _RUNTIME_EXECUTION_PROFILE_ENV_NAMES = (
     "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND",
     "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID",
     "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH",
+)
+_SECRET_RUNTIME_ENV_NAMES = frozenset(
+    {
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN",
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN",
+    }
 )
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _PLACEHOLDER_DIGEST = "0" * 64
@@ -2270,7 +2279,7 @@ class OmnigentOAuthHostRuntime:
             )
         for key, value in sorted(dict(container_job_environment or {}).items()):
             runner_env_passthrough.append(key)
-            if key == "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN":
+            if key in _SECRET_RUNTIME_ENV_NAMES:
                 child_env[key] = value
                 args.extend(["--env", key])
             else:
@@ -2346,6 +2355,16 @@ class OmnigentOAuthHostRuntime:
             workspace_relative_path=locator.relative_path,
             lifetime_seconds=timeout_seconds,
         )
+        execution_fanout_token = mint_execution_fanout_capability(
+            secret=str(settings.security.JWT_SECRET_KEY or ""),
+            parent_workflow_id=current_workflow_id,
+            agent_run_id=agent_run_id,
+            step_id=current_step_execution_id,
+            session_id=session_scope,
+            runtime_id=runtime_id,
+            source_kind="omnigent",
+            lifetime_seconds=timeout_seconds,
+        )
         return {
             "MOONMIND_URL": moonmind_url,
             "MOONMIND_AGENT_RUN_ID": agent_run_id,
@@ -2356,6 +2375,7 @@ class OmnigentOAuthHostRuntime:
                 moonmind_url.rstrip("/") + "/mcp/container"
             ),
             "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": token,
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": execution_fanout_token,
             "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "omnigent",
             "MOONMIND_CONTAINER_JOBS_SESSION_ID": session_scope,
             "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND": "sandbox",

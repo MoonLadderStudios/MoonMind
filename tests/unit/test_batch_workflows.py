@@ -73,6 +73,50 @@ def test_http_error_body_read_is_bounded(monkeypatch: pytest.MonkeyPatch) -> Non
     assert "invalid response" in errors[0]["error"]
 
 
+def test_http_submission_forwards_scoped_execution_fanout_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_module()
+    captured_headers: dict[str, str] = {}
+
+    class _Response:
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps({"workflowId": "mm:child"}).encode("utf-8")
+
+    def _urlopen(request: Any, **_kwargs: Any) -> _Response:
+        captured_headers.update(dict(request.header_items()))
+        return _Response()
+
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "fanout-test-capability"
+    )
+    monkeypatch.setattr(
+        module["_submit_jobs_via_http"].__globals__["urllib"].request,
+        "urlopen",
+        _urlopen,
+    )
+    submission = module["ChildSubmission"](
+        queue_request={"type": "workflow", "payload": {}},
+        provider="jira",
+        ref="MM-1",
+    )
+
+    created, errors = module["_submit_jobs_via_http"](
+        [submission], moonmind_url="http://api:8000", worker_token=None
+    )
+
+    assert errors == []
+    assert created[0]["workflowId"] == "mm:child"
+    assert captured_headers["Authorization"] == "Bearer fanout-test-capability"
+    assert captured_headers["X-moonmind-execution-fanout"] == "v1"
+
+
 _JIRA_TARGET: dict[str, Any] = {
     "provider": "jira",
     "ref": "THOR-123",
