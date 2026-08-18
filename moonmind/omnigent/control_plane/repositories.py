@@ -36,6 +36,7 @@ from .records import (
     TURN_STATE_PREPARED,
     TURN_STATE_TERMINAL,
     ChatBindingAliasRecord,
+    CommandIdempotencyConflictError,
     CommandRecord,
     ConflictingSessionAuthorityError,
     DecisionRecord,
@@ -48,6 +49,14 @@ from .records import (
 )
 
 _UNSET: Any = object()
+
+# Fields an ordinary lifecycle update may still advance after a session has
+# reached a terminal state. The normal terminal-then-cleanup/archive journey has
+# no separate writer, so cleanup/archive progress must remain recordable while
+# any attempt to mutate nonterminal session state still fails closed.
+_POST_TERMINAL_MUTABLE_FIELDS: frozenset[str] = frozenset(
+    {"cleanup_state", "historical_read_state"}
+)
 
 
 # --- ORM -> record converters ------------------------------------------------
@@ -273,16 +282,36 @@ class SessionRepository(_RepositoryBase):
         )
         return _session_record(row)
 
-    async def _load(self, session_id: str) -> Optional[OmnigentSession]:
-        return await self._session.get(OmnigentSession, session_id)
+    async def _load(
+        self, session_id: str, *, for_update: bool = False
+    ) -> Optional[OmnigentSession]:
+        # Revision-fenced writers load ``for_update`` so the load/check/increment
+        # sequence is atomic: a concurrent writer blocks on the row lock and then
+        # observes the incremented revision, so stale work cannot overwrite the
+        # winner. (SQLite serializes writes and ignores ``FOR UPDATE``; PostgreSQL
+        # provides the real row lock that proves ownership.)
+        return await self._session.get(
+            OmnigentSession, session_id, with_for_update=for_update or None
+        )
 
     async def get(self, session_id: str) -> Optional[SessionRecord]:
         row = await self._load(session_id)
         return _session_record(row) if row is not None else None
 
     async def get_by_scope(
-        self, moonmind_workflow_id: str, provider_session_ref: Optional[str]
+        self, moonmind_workflow_id: str, provider_session_ref: str
     ) -> Optional[SessionRecord]:
+        # The schema deliberately admits multiple unattached sessions with a NULL
+        # provider_session_ref in one workflow, so a NULL lookup is ambiguous:
+        # ``scalar_one_or_none`` would raise ``MultipleResultsFound`` rather than
+        # return a usable result. Require a concrete discriminator and fail closed
+        # with an actionable error instead of a lookup crash.
+        if provider_session_ref is None:
+            raise ConflictingSessionAuthorityError(
+                "get_by_scope requires a non-null provider_session_ref: "
+                f"workflow={moonmind_workflow_id!r} admits multiple unattached "
+                "sessions, so a NULL scope lookup is ambiguous"
+            )
         stmt = select(OmnigentSession).where(
             OmnigentSession.moonmind_workflow_id == moonmind_workflow_id,
             OmnigentSession.provider_session_ref == provider_session_ref,
@@ -378,10 +407,12 @@ class SessionRepository(_RepositoryBase):
 
         Never clears or rewrites session terminality: a terminal session cannot
         be moved back to a nonterminal state by an ordinary update (use
-        :meth:`mark_terminal`).
+        :meth:`mark_terminal`). Once terminal, only the cleanup/archive fields in
+        :data:`_POST_TERMINAL_MUTABLE_FIELDS` may still advance so the normal
+        terminal-then-cleanup journey can record completion.
         """
 
-        row = await self._load(session_id)
+        row = await self._load(session_id, for_update=True)
         if row is None:
             raise ConflictingSessionAuthorityError(
                 f"Unknown canonical session {session_id!r}"
@@ -391,25 +422,37 @@ class SessionRepository(_RepositoryBase):
                 f"Session {session_id!r} revision {row.revision} != expected "
                 f"{expected_revision} (fencing)"
             )
-        if row.terminal_state is not None:
-            raise TerminalSessionOverwriteError(
-                f"Session {session_id!r} is terminal ({row.terminal_state!r}); "
-                "refusing nonterminal lifecycle update"
+        provided = [
+            (name, value)
+            for name, value in (
+                ("desired_state", desired_state),
+                ("observed_state", observed_state),
+                ("reconciled_state", reconciled_state),
+                ("active_turn_attempt_id", active_turn_attempt_id),
+                ("provider_event_cursor", provider_event_cursor),
+                ("snapshot_frontier", snapshot_frontier),
+                ("cleanup_state", cleanup_state),
+                ("historical_read_state", historical_read_state),
+                ("next_reconciliation_deadline", next_reconciliation_deadline),
+                ("last_decision_ref", last_decision_ref),
             )
-        for name, value in (
-            ("desired_state", desired_state),
-            ("observed_state", observed_state),
-            ("reconciled_state", reconciled_state),
-            ("active_turn_attempt_id", active_turn_attempt_id),
-            ("provider_event_cursor", provider_event_cursor),
-            ("snapshot_frontier", snapshot_frontier),
-            ("cleanup_state", cleanup_state),
-            ("historical_read_state", historical_read_state),
-            ("next_reconciliation_deadline", next_reconciliation_deadline),
-            ("last_decision_ref", last_decision_ref),
-        ):
-            if value is not _UNSET:
-                setattr(row, name, value)
+            if value is not _UNSET
+        ]
+        if row.terminal_state is not None:
+            disallowed = [
+                name
+                for name, _ in provided
+                if name not in _POST_TERMINAL_MUTABLE_FIELDS
+            ]
+            if disallowed:
+                raise TerminalSessionOverwriteError(
+                    f"Session {session_id!r} is terminal ({row.terminal_state!r}); "
+                    "refusing nonterminal lifecycle update to "
+                    f"{sorted(disallowed)} (only "
+                    f"{sorted(_POST_TERMINAL_MUTABLE_FIELDS)} may advance)"
+                )
+        for name, value in provided:
+            setattr(row, name, value)
         row.revision = row.revision + 1
         await self._session.flush()
         await self._session.refresh(row)
@@ -423,7 +466,7 @@ class SessionRepository(_RepositoryBase):
         terminal_evidence_ref: Optional[str] = None,
         expected_revision: Optional[int] = None,
     ) -> SessionRecord:
-        row = await self._load(session_id)
+        row = await self._load(session_id, for_update=True)
         if row is None:
             raise ConflictingSessionAuthorityError(
                 f"Unknown canonical session {session_id!r}"
@@ -672,10 +715,24 @@ class CommandRepository(_RepositoryBase):
         fencing_generation: int = 0,
         retry_policy: Optional[dict[str, Any]] = None,
     ) -> CommandRecord:
-        """Record a logical command. Idempotent on ``idempotency_key``."""
+        """Record a logical command. Idempotent on ``idempotency_key``.
+
+        A reused key must describe the same logical command. If the immutable
+        identity ``(session_id, command_type, turn_attempt_id, payload_digest)``
+        differs from the stored command, fail closed rather than returning a
+        receipt/status for unrelated input.
+        """
 
         existing = await self.get_by_idempotency_key(idempotency_key)
         if existing is not None:
+            self._ensure_same_command_identity(
+                existing,
+                idempotency_key=idempotency_key,
+                session_id=session_id,
+                command_type=command_type,
+                turn_attempt_id=turn_attempt_id,
+                payload_digest=payload_digest,
+            )
             return existing
         row = OmnigentCommand(
             command_id=command_id,
@@ -695,10 +752,42 @@ class CommandRepository(_RepositoryBase):
         except IntegrityError:
             existing = await self.get_by_idempotency_key(idempotency_key)
             if existing is not None:
+                self._ensure_same_command_identity(
+                    existing,
+                    idempotency_key=idempotency_key,
+                    session_id=session_id,
+                    command_type=command_type,
+                    turn_attempt_id=turn_attempt_id,
+                    payload_digest=payload_digest,
+                )
                 return existing
             raise
         await self._session.refresh(row)
         return _command_record(row)
+
+    @staticmethod
+    def _ensure_same_command_identity(
+        existing: CommandRecord,
+        *,
+        idempotency_key: str,
+        session_id: str,
+        command_type: str,
+        turn_attempt_id: Optional[str],
+        payload_digest: str,
+    ) -> None:
+        incoming = (session_id, command_type, turn_attempt_id, payload_digest)
+        stored = (
+            existing.session_id,
+            existing.command_type,
+            existing.turn_attempt_id,
+            existing.payload_digest,
+        )
+        if incoming != stored:
+            raise CommandIdempotencyConflictError(
+                f"Idempotency key {idempotency_key!r} already bound to command "
+                f"{existing.command_id!r} with identity {stored!r}; refusing to "
+                f"reuse it for {incoming!r}"
+            )
 
     async def get(self, command_id: str) -> Optional[CommandRecord]:
         row = await self._session.get(OmnigentCommand, command_id)
@@ -820,6 +909,29 @@ class ChatBindingAliasRepository(_RepositoryBase):
                 diagnostic_reason=diagnostic_reason,
             )
             self._session.add(row)
+        elif row.session_id == session_id and row.alias_state == alias_state:
+            # Identical registration is preserved (idempotent); only refresh a
+            # newly supplied diagnostic reason.
+            if diagnostic_reason is not None:
+                row.diagnostic_reason = diagnostic_reason
+        elif alias_state == ALIAS_STATE_QUARANTINED:
+            # An explicit quarantine transition always fails closed onto the
+            # existing handle regardless of prior binding.
+            row.session_id = session_id
+            row.alias_state = alias_state
+            row.diagnostic_reason = diagnostic_reason
+        elif (
+            row.alias_state == ALIAS_STATE_ACTIVE
+            and row.session_id is not None
+            and row.session_id != session_id
+        ):
+            # A browser-safe handle that already actively resolves to one
+            # canonical session must never be silently repointed at another.
+            raise ConflictingSessionAuthorityError(
+                f"Chat binding {chat_binding_id!r} already actively bound to "
+                f"canonical session {row.session_id!r}; refusing to reassign to "
+                f"{session_id!r}"
+            )
         else:
             row.session_id = session_id
             row.alias_state = alias_state
@@ -920,7 +1032,7 @@ class OmnigentControlPlaneStore:
         metadata: Optional[dict[str, Any]] = None,
     ) -> tuple[SessionRecord, TurnAttemptRecord]:
         async with self.transaction() as repos:
-            session = await repos.sessions.create(
+            await repos.sessions.create(
                 session_id=session_id,
                 moonmind_workflow_id=moonmind_workflow_id,
                 provider=provider,

@@ -141,15 +141,13 @@ def control_plane_postgres_url():
 async def pg_store(control_plane_postgres_url):
     engine = create_async_engine(control_plane_postgres_url)
     async with engine.begin() as conn:
-        await conn.run_sync(
-            lambda sync_conn: _create_tables(sync_conn)
-        )
+        await conn.run_sync(_create_tables)
     maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     try:
         yield OmnigentControlPlaneStore(maker)
     finally:
         async with engine.begin() as conn:
-            await conn.run_sync(lambda sync_conn: _drop_tables(sync_conn))
+            await conn.run_sync(_drop_tables)
         await engine.dispose()
 
 
@@ -229,6 +227,42 @@ async def test_postgres_concurrent_scope_creation_admits_one_authority(pg_store)
         stored = await repos.sessions.get_by_scope("wf-1", "psess-1")
     assert stored is not None
     assert stored.session_id == winner.session_id
+
+
+@pytest.mark.asyncio
+async def test_postgres_concurrent_fenced_update_admits_one_writer(pg_store) -> None:
+    # Two reconcilers loading the same revision must not both commit: the
+    # revision fence is enforced by a real row lock, so exactly one write lands
+    # and the loser fails closed rather than overwriting the winner's cursor.
+    async with pg_store.transaction() as repos:
+        created = await repos.sessions.create(
+            session_id="s1",
+            moonmind_workflow_id="wf-1",
+            provider="codex",
+            provider_session_ref="psess-1",
+        )
+    base_revision = created.revision
+
+    async def _advance(cursor: str):
+        async with pg_store.transaction() as repos:
+            return await repos.sessions.update_lifecycle(
+                "s1",
+                provider_event_cursor=cursor,
+                expected_revision=base_revision,
+            )
+
+    results = await asyncio.gather(
+        _advance("cursor-a"), _advance("cursor-b"), return_exceptions=True
+    )
+    successes = [r for r in results if not isinstance(r, Exception)]
+    conflicts = [r for r in results if isinstance(r, ConflictingSessionAuthorityError)]
+    assert len(successes) == 1
+    assert len(conflicts) == 1
+
+    async with pg_store.transaction() as repos:
+        stored = await repos.sessions.get("s1")
+    assert stored.revision == base_revision + 1
+    assert stored.provider_event_cursor == successes[0].provider_event_cursor
 
 
 @pytest.mark.asyncio

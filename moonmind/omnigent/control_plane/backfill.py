@@ -32,7 +32,7 @@ from typing import Any, Callable, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api_service.db.models import OmnigentBridgeSession
+from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
 
 from .records import compute_digest
 from .repositories import ControlPlaneRepositories
@@ -53,6 +53,10 @@ _EVIDENCE_REF_FIELDS = (
 )
 
 _MIGRATION_OBSERVATION_TYPE = "legacy_bridge_row"
+# Per-event evidence preserved from the legacy bridge event index. An artifact
+# referenced only by an event row (never by a session-level ref) would otherwise
+# become unreachable once the legacy tables are retired.
+_MIGRATION_EVENT_OBSERVATION_TYPE = "legacy_bridge_event"
 _MIGRATION_SOURCE = "bridge_backfill"
 
 
@@ -339,6 +343,24 @@ async def run_backfill(
             .all()
         }
 
+        # Index the legacy per-event stream so artifacts referenced only by an
+        # event row (not by a session-level ref) are preserved as canonical
+        # observations before the legacy tables can be retired.
+        events_by_bridge: dict[str, list[OmnigentBridgeSessionEvent]] = {}
+        for event in (
+            (
+                await session.execute(
+                    select(OmnigentBridgeSessionEvent).order_by(
+                        OmnigentBridgeSessionEvent.bridge_session_id,
+                        OmnigentBridgeSessionEvent.sequence,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        ):
+            events_by_bridge.setdefault(event.bridge_session_id, []).append(event)
+
         repos = ControlPlaneRepositories.bind(session)
 
         for planned in plan.sessions:
@@ -397,6 +419,42 @@ async def run_backfill(
                     observation_type=_MIGRATION_OBSERVATION_TYPE,
                 )
                 if len(after) > len(before):
+                    report.observations_written += 1
+
+            # Preserve per-event artifact evidence for this member row so an
+            # artifact referenced only by an event survives legacy retirement.
+            for event in events_by_bridge.get(planned_turn.bridge_session_id, []):
+                if not event.artifact_ref:
+                    continue
+                event_dedup = f"{_MIGRATION_EVENT_OBSERVATION_TYPE}:{event.event_id}"
+                before_events = await repos.observations.list_for_session(
+                    planned_turn.session_id,
+                    observation_type=_MIGRATION_EVENT_OBSERVATION_TYPE,
+                )
+                await repos.observations.append(
+                    observation_id="obe_" + compute_digest(["event", event_dedup])[:40],
+                    session_id=planned_turn.session_id,
+                    observation_type=_MIGRATION_EVENT_OBSERVATION_TYPE,
+                    source=_MIGRATION_SOURCE,
+                    observed_at=event.timestamp,
+                    deduplication_key=event_dedup,
+                    source_sequence=event.sequence,
+                    payload_ref=event.artifact_ref,
+                    bounded_index={
+                        "bridge_session_id": event.bridge_session_id,
+                        "event_id": event.event_id,
+                        "sequence": event.sequence,
+                        "direction": event.direction,
+                        "event_type": event.event_type,
+                        "normalized_status": event.normalized_status,
+                        "artifact_ref": event.artifact_ref,
+                    },
+                )
+                after_events = await repos.observations.list_for_session(
+                    planned_turn.session_id,
+                    observation_type=_MIGRATION_EVENT_OBSERVATION_TYPE,
+                )
+                if len(after_events) > len(before_events):
                     report.observations_written += 1
 
         for alias in plan.aliases:

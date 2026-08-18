@@ -20,12 +20,14 @@ from sqlalchemy.orm import sessionmaker
 from api_service.db.models import (
     Base,
     OmnigentBridgeSession,
+    OmnigentBridgeSessionEvent,
     OmnigentSession,
     OmnigentTurnAttempt,
 )
 from moonmind.omnigent.control_plane import (
     ALIAS_STATE_QUARANTINED,
     TURN_STATE_TERMINAL,
+    CommandIdempotencyConflictError,
     ConflictingSessionAuthorityError,
     OmnigentControlPlaneStore,
     TerminalSessionOverwriteError,
@@ -85,7 +87,31 @@ def _bridge_row(
     )
 
 
-async def _seed_bridge_rows(session_factory, rows: list[OmnigentBridgeSession]) -> None:
+def _bridge_event(
+    event_id: str,
+    *,
+    bridge_session_id: str,
+    sequence: int,
+    artifact_ref: str | None = None,
+    event_type: str = "message",
+    direction: str = "inbound",
+    normalized_status: str | None = None,
+) -> OmnigentBridgeSessionEvent:
+    return OmnigentBridgeSessionEvent(
+        event_id=event_id,
+        bridge_session_id=bridge_session_id,
+        sequence=sequence,
+        deduplication_key=f"dedup-{event_id}",
+        timestamp=datetime(2026, 8, 18, tzinfo=UTC),
+        direction=direction,
+        event_type=event_type,
+        normalized_status=normalized_status,
+        artifact_ref=artifact_ref,
+        metadata_={},
+    )
+
+
+async def _seed_bridge_rows(session_factory, rows: list) -> None:
     async with session_factory() as session:
         for row in rows:
             session.add(row)
@@ -195,6 +221,44 @@ async def test_unique_command_idempotency_identity(store) -> None:
 
 
 @pytest.mark.asyncio
+async def test_command_idempotency_key_reuse_with_different_payload_fails_closed(
+    store,
+) -> None:
+    async with store.transaction() as repos:
+        await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
+        )
+        await repos.commands.record(
+            command_id="c1",
+            session_id="s1",
+            command_type="submit_turn",
+            idempotency_key="cmd-1",
+            payload_digest=compute_digest({"turn": 1}),
+        )
+    # Reusing the key after changing the payload must fail closed rather than
+    # returning a receipt/status for unrelated input.
+    with pytest.raises(CommandIdempotencyConflictError):
+        async with store.transaction() as repos:
+            await repos.commands.record(
+                command_id="c2",
+                session_id="s1",
+                command_type="submit_turn",
+                idempotency_key="cmd-1",
+                payload_digest=compute_digest({"turn": 2}),
+            )
+    # A different command_type on the same key also fails closed.
+    with pytest.raises(CommandIdempotencyConflictError):
+        async with store.transaction() as repos:
+            await repos.commands.record(
+                command_id="c3",
+                session_id="s1",
+                command_type="ensure_host",
+                idempotency_key="cmd-1",
+                payload_digest=compute_digest({"turn": 1}),
+            )
+
+
+@pytest.mark.asyncio
 async def test_command_carries_delivery_and_fencing_state(store) -> None:
     async with store.transaction() as repos:
         await repos.sessions.create(
@@ -240,6 +304,47 @@ async def test_terminal_session_not_overwritten_by_nonterminal_update(store) -> 
     async with store.transaction() as repos:
         idempotent = await repos.sessions.mark_terminal("s1", "completed")
     assert idempotent.terminal_state == "completed"
+
+
+@pytest.mark.asyncio
+async def test_terminal_session_allows_cleanup_and_archive_transitions(store) -> None:
+    async with store.transaction() as repos:
+        await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
+        )
+        await repos.sessions.mark_terminal("s1", "completed")
+    # The terminal-then-cleanup journey (no separate cleanup writer exists) must
+    # still record cleanup/archive progress on the terminal session.
+    async with store.transaction() as repos:
+        cleaned = await repos.sessions.update_lifecycle(
+            "s1", cleanup_state="released", historical_read_state="archived"
+        )
+    assert cleaned.terminal_state == "completed"
+    assert cleaned.cleanup_state == "released"
+    assert cleaned.historical_read_state == "archived"
+    # A cleanup update mixed with a nonterminal-state mutation still fails closed.
+    with pytest.raises(TerminalSessionOverwriteError):
+        async with store.transaction() as repos:
+            await repos.sessions.update_lifecycle(
+                "s1", cleanup_state="purged", observed_state="running"
+            )
+
+
+@pytest.mark.asyncio
+async def test_get_by_scope_rejects_ambiguous_null_lookup(store) -> None:
+    async with store.transaction() as repos:
+        await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
+        )
+        await repos.sessions.create(
+            session_id="s2", moonmind_workflow_id="wf-1", provider="codex"
+        )
+    # Two unattached (NULL provider_session_ref) sessions coexist by design, so a
+    # NULL scope lookup is ambiguous and must fail closed with an actionable
+    # error rather than raising MultipleResultsFound.
+    with pytest.raises(ConflictingSessionAuthorityError):
+        async with store.transaction() as repos:
+            await repos.sessions.get_by_scope("wf-1", None)
 
 
 @pytest.mark.asyncio
@@ -348,6 +453,39 @@ async def test_continuation_turn_reuses_session_without_new_binding(store) -> No
     assert by_binding.session_id == "s1"
 
 
+@pytest.mark.asyncio
+async def test_active_chat_alias_cannot_be_reassigned(store) -> None:
+    async with store.transaction() as repos:
+        await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
+        )
+        await repos.sessions.create(
+            session_id="s2", moonmind_workflow_id="wf-2", provider="codex"
+        )
+        await repos.chat_binding_aliases.register(
+            chat_binding_id="cb-1", session_id="s1"
+        )
+    # Identical re-registration is preserved (idempotent).
+    async with store.transaction() as repos:
+        again = await repos.chat_binding_aliases.register(
+            chat_binding_id="cb-1", session_id="s1"
+        )
+    assert again.session_id == "s1"
+    # Reassigning an active handle to a different session fails closed.
+    with pytest.raises(ConflictingSessionAuthorityError):
+        async with store.transaction() as repos:
+            await repos.chat_binding_aliases.register(
+                chat_binding_id="cb-1", session_id="s2"
+            )
+    # An explicit quarantine transition is still permitted.
+    async with store.transaction() as repos:
+        quarantined = await repos.chat_binding_aliases.quarantine(
+            "cb-1", diagnostic_reason="handle retired"
+        )
+    assert quarantined.alias_state == ALIAS_STATE_QUARANTINED
+    assert quarantined.resolves is False
+
+
 # --- Migration / backfill tests ---------------------------------------------
 
 
@@ -425,6 +563,48 @@ async def test_backfill_seven_rows_one_provider_session(session_factory) -> None
     assert all(a.resolves for a in resolved)
     assert {a.session_id for a in resolved} == {session_id}
     assert session.chat_binding_id == "cb-1"
+
+
+@pytest.mark.asyncio
+async def test_backfill_preserves_per_event_artifact_evidence(session_factory) -> None:
+    # An artifact referenced only by an event row (no session-level ref) must be
+    # preserved as a canonical observation so it stays reachable after the legacy
+    # tables are retired.
+    await _seed_bridge_rows(
+        session_factory,
+        [
+            _bridge_row("b1", provider_session_id="psess-1", chat_binding_id="cb-1"),
+            _bridge_event(
+                "e1",
+                bridge_session_id="b1",
+                sequence=1,
+                artifact_ref="art://event-artifact-1",
+            ),
+            # An event without an artifact_ref contributes no observation.
+            _bridge_event("e2", bridge_session_id="b1", sequence=2),
+        ],
+    )
+    report = await run_backfill(session_factory, dry_run=False)
+    session_id = report.plan.sessions[0].session_id
+
+    store = OmnigentControlPlaneStore(session_factory)
+    async with store.transaction() as repos:
+        event_obs = await repos.observations.list_for_session(
+            session_id, observation_type="legacy_bridge_event"
+        )
+    assert len(event_obs) == 1
+    assert event_obs[0].payload_ref == "art://event-artifact-1"
+    assert event_obs[0].bounded_index["artifact_ref"] == "art://event-artifact-1"
+    assert event_obs[0].bounded_index["event_id"] == "e1"
+
+    # Repeat apply is idempotent: the event observation is not duplicated.
+    report2 = await run_backfill(session_factory, dry_run=False)
+    async with store.transaction() as repos:
+        event_obs_again = await repos.observations.list_for_session(
+            session_id, observation_type="legacy_bridge_event"
+        )
+    assert len(event_obs_again) == 1
+    assert report2.observations_written == 0
 
 
 @pytest.mark.asyncio

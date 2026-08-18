@@ -88,6 +88,16 @@ class TurnIdempotencyConflictError(OmnigentControlPlaneError):
     different logical turn."""
 
 
+class CommandIdempotencyConflictError(OmnigentControlPlaneError):
+    """Raised when a command reuses an existing idempotency key for a different
+    logical command.
+
+    Command identity is the immutable tuple ``(session_id, command_type,
+    turn_attempt_id, payload_digest)``. Reusing a key after changing any of those
+    fields fails closed rather than silently returning a receipt/status for
+    unrelated input."""
+
+
 class AmbiguousAuthorityError(OmnigentControlPlaneError):
     """Raised by the backfill when a duplicate group carries conflicting
     immutable authority and cannot be resolved deterministically."""
