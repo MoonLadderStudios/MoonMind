@@ -1,12 +1,22 @@
 [
   {
-    "id": 3803594905,
+    "id": 3808359979,
     "disposition": "addressed",
-    "rationale": "Updated PINNED_OMNIGENT_COMMIT to the PR submodule commit and refreshed the native compatibility fixture hashes anchored to that pinned source for contract verification."
+    "rationale": "Removed both legacy managed-session network aliases and updated every remaining test and caller to use MOONMIND_CONTROL_PLANE_NETWORK."
   },
   {
-    "id": 4960451954,
+    "id": 3808359988,
+    "disposition": "addressed",
+    "rationale": "The lifecycle conformance now launches its health probe through DockerCodexManagedSessionController before testing API reachability from the resulting managed-session container."
+  },
+  {
+    "id": 3808359994,
+    "disposition": "addressed",
+    "rationale": "The lifecycle conformance exports project-specific names for the control-plane, Docker-proxy, sandbox-egress, restricted-egress, and Omnigent-egress networks."
+  },
+  {
+    "id": 4966282554,
     "disposition": "not-applicable",
-    "rationale": "Informational bot review summary comment with no standalone code or test action required."
+    "rationale": "This review body is an informational summary whose actionable findings are represented and addressed by the three linked review comments."
   }
 ]

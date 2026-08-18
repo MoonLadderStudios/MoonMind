@@ -31,6 +31,7 @@ from moonmind.omnigent.oauth_hosts import (
     deterministic_host_container_name,
     validate_preflight_result,
 )
+from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
 from moonmind.publish.service import PublishService
 from moonmind.repositories.lore_adapter import (
     LORE_UNSUPPORTED_RUNTIME_LANE,
@@ -55,6 +56,7 @@ from moonmind.schemas.workspace_locator_models import (
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
+from moonmind.security.docker_networks import resolve_control_plane_network
 from moonmind.security.execution_fanout_capabilities import (
     EXECUTION_FANOUT_REQUIRED_CAPABILITY,
     mint_execution_fanout_capability,
@@ -305,8 +307,10 @@ class OmnigentOAuthHostRuntime:
             else:
                 tag = os.getenv("OMNIGENT_HOST_IMAGE_TAG", "latest")
                 self._image = f"{base_image}:{tag}"
-        self._network = network or os.getenv(
-            "OMNIGENT_HOST_NETWORK", "local-network"
+        self._network = (
+            network
+            or os.getenv("OMNIGENT_HOST_NETWORK")
+            or resolve_control_plane_network()
         )
         self._server_url = server_url or os.getenv(
             "OMNIGENT_SERVER_INTERNAL_URL", "http://omnigent:8000"
@@ -2144,6 +2148,29 @@ class OmnigentOAuthHostRuntime:
             return []
         return [line.strip() for line in result[1].splitlines() if line.strip()]
 
+    async def managed_container_host_lease_ref(
+        self, container_name: str
+    ) -> str | None:
+        """Return the durable lease identity carried by a managed container."""
+
+        result = await self._run(
+            "docker", "inspect", "--format",
+            (
+                '{{index .Config.Labels "moonmind.kind"}}|'
+                '{{index .Config.Labels "moonmind.host_lease_id"}}'
+            ),
+            container_name, check=False,
+        )
+        if result[0] != 0:
+            return None
+        kind, separator, lease_ref = result[1].strip().partition("|")
+        if not separator or kind != "omnigent-oauth-host":
+            raise OmnigentOAuthHostError(
+                "refusing to inspect a container outside Omnigent ownership",
+                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
+            )
+        return lease_ref.strip() or None
+
     async def remove_container(self, container_name: str) -> None:
         # Janitor discovery is label-scoped; never accept an arbitrary name.
         result = await self._run(
@@ -2333,7 +2360,9 @@ class OmnigentOAuthHostRuntime:
             "--mount",
             f"type=bind,src={workspace_source},dst=/workspaces/run",
             "--mount",
-            f"type=bind,src={skill_projection},dst=/opt/moonmind-skills,readonly",
+            "type=bind,"
+            f"src={skill_projection},"
+            f"dst={OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR},readonly",
             "--env",
             f"PATH={self._prepend_tools_path(host_path)}",
             "--env",
@@ -2343,7 +2372,8 @@ class OmnigentOAuthHostRuntime:
             "--env",
             f"OMNIGENT_SERVER_URL={self._server_url}",
             "--env",
-            "MOONMIND_ACTIVE_SKILLS_DIR=/opt/moonmind-skills",
+            "MOONMIND_ACTIVE_SKILLS_DIR="
+            f"{OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR}",
             "--env",
             f"MOONMIND_STEP_EXECUTION_ID={current_step_execution_id}",
             "--env",
@@ -2363,6 +2393,7 @@ class OmnigentOAuthHostRuntime:
             args.extend(["--env", proxy_env])
         runner_env_passthrough = [
             *_RUNNER_PROXY_ENV_NAMES,
+            "MOONMIND_ACTIVE_SKILLS_DIR",
             "MOONMIND_STEP_EXECUTION_ID",
         ]
         token = os.getenv("OMNIGENT_HOST_TOKEN", "")

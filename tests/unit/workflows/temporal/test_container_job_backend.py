@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from moonmind.security.egress import (
+    CONTROL_PLANE_NETWORK_REF,
     DEFAULT_EGRESS_PROFILE,
     EGRESS_CONFIG_DIGEST,
     EGRESS_NETWORK_REF,
@@ -61,7 +62,7 @@ def _expected_applied_rule_digest() -> str:
                 EGRESS_NETWORK_REF,
                 "moonmind_sandbox-egress-network",
                 OMNIGENT_EGRESS_NETWORK_REF,
-                "local-network",
+                CONTROL_PLANE_NETWORK_REF,
             }
         ),
         "enforcer": ENFORCER_IMPLEMENTATION,
@@ -244,7 +245,7 @@ async def test_bridge_launch_requires_attestation_and_uses_restricted_network(
                     EGRESS_NETWORK_REF: {},
                     "moonmind_sandbox-egress-network": {},
                     OMNIGENT_EGRESS_NETWORK_REF: {},
-                    "local-network": {},
+                    CONTROL_PLANE_NETWORK_REF: {},
                 },
                 "image": "sha256:gateway-image",
                 "health": "healthy",
@@ -306,7 +307,7 @@ async def test_bridge_start_publishes_exact_running_attachment_authority(
                     EGRESS_NETWORK_REF: {},
                     "moonmind_sandbox-egress-network": {},
                     OMNIGENT_EGRESS_NETWORK_REF: {},
-                    "local-network": {},
+                    CONTROL_PLANE_NETWORK_REF: {},
                 },
                 "image": "sha256:gateway-image",
                 "health": "healthy",
@@ -1368,7 +1369,7 @@ async def test_reconcile_recovers_launch_attestation_for_bridge(tmp_path):
                     EGRESS_NETWORK_REF: {},
                     "moonmind_sandbox-egress-network": {},
                     OMNIGENT_EGRESS_NETWORK_REF: {},
-                    "local-network": {},
+                    CONTROL_PLANE_NETWORK_REF: {},
                 },
                 "image": "sha256:gateway-image",
                 "health": "healthy",

@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -38,6 +38,8 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.execute import (
     OmnigentSessionStillRunningError,
     _await_marked_turn_terminal,
+    _build_omnigent_first_message,
+    _first_message_text,
     _marked_turn_item_state,
     _persisted_pre_dispatch_item_ids,
     _safe_heartbeat,
@@ -2944,6 +2946,93 @@ async def test_cleaned_up_host_retry_rebinds_fresh_endpoint_authority(
     ]
 
 
+async def test_fresh_omnigent_launch_is_not_reaped_before_materialization() -> None:
+    """Replay mm:4ce41531 at the coordinator-to-janitor authority handoff."""
+
+    replay_id = "omnigent-fresh-launch-janitor-race"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    now = datetime.now(timezone.utc)
+    lease = SimpleNamespace(
+        lease_id="host-lease-fresh-launch",
+        provider_profile_id="profile-replay",
+        provider_lease_id="provider-lease-fresh-launch",
+        binding_ref="binding-replay",
+        container_name="host-container-fresh-launch",
+        omnigent_session_id=None,
+        last_heartbeat_at=now
+        - timedelta(seconds=manifest["heartbeatAgeSeconds"]),
+        expires_at=now + timedelta(hours=1),
+        status=manifest["leaseStatusAtJanitorScan"],
+    )
+    cleanup_claims: list[str] = []
+    stopped: list[str] = []
+    released: list[str] = []
+    cleanup_records: list[dict] = []
+
+    class Repository:
+        async def list_active_host_leases(self):
+            return [lease]
+
+        async def list_terminal_host_leases_with_active_provider_capacity(self):
+            return []
+
+        async def get_binding_for_profile(self, _profile_id):
+            return None
+
+        async def claim_host_lease_cleanup(self, lease_id, **_kwargs):
+            cleanup_claims.append(lease_id)
+            return lease
+
+        async def validate_binding(self, _binding_ref):
+            raise AssertionError("fresh launch must not enter cleanup")
+
+        async def mark_host_lease_stopped(self, lease_id):
+            stopped.append(lease_id)
+            return lease
+
+    class Runtime:
+        async def container_exists(self, name):
+            assert name == lease.container_name
+            return False
+
+        async def list_managed_containers(self):
+            return []
+
+        async def stop_host(self, **_kwargs):
+            stopped.append(lease.lease_id)
+            return {}
+
+    class LeaseClient:
+        async def release_lease(self, provider_lease):
+            released.append(provider_lease.lease_id)
+
+    class RunStore:
+        async def cleanup_required_host_lease_refs(self):
+            return set()
+
+        async def embedded_reconciliation_host_lease_refs(self, **_kwargs):
+            return {}
+
+        async def record_terminal_cleanup(self, **kwargs):
+            cleanup_records.append(kwargs)
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=Repository(),
+        runtime=Runtime(),
+        client=SimpleNamespace(),
+        run_store=RunStore(),
+        lease_client=LeaseClient(),
+        heartbeat_timeout_seconds=manifest["heartbeatTimeoutSeconds"],
+    ).run()
+
+    assert result["count"] == expected["janitorActionCount"]
+    assert len(cleanup_claims) == expected["cleanupClaimCount"]
+    assert len(stopped) == expected["hostStopCount"]
+    assert len(released) == expected["providerLeaseReleaseCount"]
+    assert bool(cleanup_records) is expected["durableCleanupFailureRecorded"]
+
+
 async def test_abandoned_omnigent_host_cleanup_releases_provider_capacity() -> None:
     """Replay mm:651a14f6 after cancellation killed its coordinator Activity."""
 
@@ -4911,6 +5000,55 @@ async def test_omnigent_pr_resolver_runtime_authority_replay(
     assert evaluated.metadata["terminalContractEvidencePath"] == expected[
         "terminalContractEvidencePath"
     ]
+
+
+async def test_omnigent_profile_bound_skill_activation_replay() -> None:
+    """Replay mm:b56b53bd at the verified snapshot-to-first-message boundary."""
+
+    replay_id = "omnigent-profile-bound-skill-activation"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex_openai_oauth",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:skill-activation-replay",
+        instructionRef="ignored inline instruction",
+        resolvedSkillsetRef=manifest["resolvedSkillsetRef"],
+        parameters={
+            "metadata": {
+                "moonmind": {"selectedSkill": manifest["selectedSkill"]}
+            }
+        },
+    )
+    request = _bind_exact_host(
+        request,
+        host_id="host-replay",
+        workspace_path="/workspaces/run",
+        profile_authorization={
+            "providerProfileId": "codex_openai_oauth",
+            "hostLeaseRef": "lease-replay",
+        },
+        harness="codex-native",
+        agent_name=CODEX_STOCK_AGENT_NAME,
+    )
+
+    class Gateway:
+        async def read_text(self, _ref: str) -> str:
+            raise AssertionError("inline replay prompt must not read an artifact")
+
+    message = await _build_omnigent_first_message(
+        request=request,
+        prompt={"text": manifest["firstMessage"]},
+        artifact_gateway=Gateway(),
+    )
+    text = _first_message_text(message)
+
+    assert text.startswith(expected["firstMessageHeader"])
+    assert expected["skillDocument"] in text
+    assert expected["runnerEnvironmentVariable"] in text
+    assert text.endswith(manifest["firstMessage"])
 
 
 async def test_omnigent_pr_resolver_publish_evidence_handoff_replay(

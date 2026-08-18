@@ -69,7 +69,7 @@ def checkpoint_branch_policy_snapshot() -> dict[str, Any]:
             "concurrency": 1,
         },
         "network": {
-            "attachmentRef": "local-network",
+            "attachmentRef": "control-plane-network",
             "egressProfileRef": "egress-default",
         },
         "workspace": {
@@ -344,6 +344,34 @@ async def execute_checkpoint_branch_request(
         async def restart_host_lease(self, _lease_id):
             lease = ledger._host_leases[key].model_copy(
                 update={"status": "allocating", "omnigent_host_id": None}
+            )
+            ledger._host_leases[key] = lease
+            return lease
+
+        async def get_host_lease(self, _lease_id):
+            return ledger._host_leases.get(key)
+
+        async def claim_host_lease_cleanup(
+            self,
+            _lease_id,
+            *,
+            expected_status,
+            expected_last_heartbeat_at,
+            ttl_seconds,
+        ):
+            lease = ledger._host_leases[key]
+            if (
+                lease.status != expected_status
+                or lease.last_heartbeat_at != expected_last_heartbeat_at
+            ):
+                return None
+            now = datetime.now(UTC)
+            lease = lease.model_copy(
+                update={
+                    "status": "draining",
+                    "last_heartbeat_at": now,
+                    "expires_at": now + timedelta(seconds=ttl_seconds),
+                }
             )
             ledger._host_leases[key] = lease
             return lease

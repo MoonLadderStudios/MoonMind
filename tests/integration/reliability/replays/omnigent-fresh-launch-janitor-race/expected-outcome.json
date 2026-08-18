@@ -1,0 +1,7 @@
+{
+  "janitorActionCount": 0,
+  "cleanupClaimCount": 0,
+  "hostStopCount": 0,
+  "providerLeaseReleaseCount": 0,
+  "durableCleanupFailureRecorded": false
+}

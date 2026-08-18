@@ -64,6 +64,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRuntimeStepExecutionLaunch,
 )
 from moonmind.security.egress import (
+    CONTROL_PLANE_NETWORK_REF,
     DEFAULT_EGRESS_PROFILE,
     EGRESS_CONFIG_DIGEST,
     EGRESS_PROFILE_SET_DIGEST,
@@ -238,7 +239,26 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
                 binding_ref="binding-1", container_name="host-1",
                 omnigent_session_id=None, last_heartbeat_at=now,
                 expires_at=now + timedelta(hours=1),
+                status="ready",
             )]
+
+        async def claim_host_lease_cleanup(
+            self, lease_id, *, expected_status, expected_last_heartbeat_at,
+            ttl_seconds,
+        ):
+            assert lease_id == "host-lease-1"
+            assert expected_status == "ready"
+            assert ttl_seconds == 90
+            return SimpleNamespace(
+                lease_id=lease_id,
+                provider_profile_id="profile-1",
+                binding_ref="binding-1",
+                container_name="host-1",
+                omnigent_session_id=None,
+                last_heartbeat_at=expected_last_heartbeat_at,
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                status="draining",
+            )
 
         async def validate_binding(self, _binding_ref):
             return SimpleNamespace()
@@ -502,7 +522,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         DEFAULT_EGRESS_PROFILE.network_ref: {},
         "moonmind_sandbox-egress-network": {},
         OMNIGENT_EGRESS_PROFILE.network_ref: {},
-        "local-network": {},
+        CONTROL_PLANE_NETWORK_REF: {},
     }
     applied_rule_payload = {
         "profileDigest": OMNIGENT_EGRESS_PROFILE.digest,

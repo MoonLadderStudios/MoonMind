@@ -10,6 +10,7 @@ from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
 class _Repository:
     def __init__(self, lease):
         self.lease = lease
+        self.cleanup_claims: list[str] = []
         self.stopped: list[str] = []
         self.order: list[str] = []
 
@@ -38,6 +39,25 @@ class _Repository:
         self.lease.status = "stopped"
         return self.lease
 
+    async def claim_host_lease_cleanup(
+        self, lease_id, *, expected_status, expected_last_heartbeat_at,
+        ttl_seconds=90,
+    ):
+        assert lease_id == self.lease.lease_id
+        if (
+            self.lease.status != expected_status
+            or self.lease.last_heartbeat_at != expected_last_heartbeat_at
+        ):
+            return None
+        self.order.append("cleanup_claimed")
+        self.cleanup_claims.append(lease_id)
+        self.lease.status = "draining"
+        self.lease.last_heartbeat_at = datetime.now(UTC)
+        self.lease.expires_at = self.lease.last_heartbeat_at + timedelta(
+            seconds=ttl_seconds
+        )
+        return self.lease
+
     async def transition_host_lease(
         self, lease_id, *, expected_status, new_status
     ):
@@ -60,6 +80,7 @@ class _Runtime:
         self.stop_kwargs: list[dict] = []
         self.static_stops = 0
         self.managed_containers: list[str] = []
+        self.container_lease_refs: dict[str, str | None] = {}
 
     async def container_exists(self, _name):
         return True
@@ -77,6 +98,9 @@ class _Runtime:
 
     async def list_managed_containers(self):
         return list(self.managed_containers)
+
+    async def managed_container_host_lease_ref(self, name):
+        return self.container_lease_refs.get(name)
 
     async def stop_static_host(self, **_kwargs):
         self.static_stops += 1
@@ -222,6 +246,7 @@ async def test_action_reuses_durable_launch_authority_and_binds_terminal_evidenc
         "artifact://terminal-egress"
     )
     assert repository.order == [
+        "cleanup_claimed",
         "host_stopped",
         "lease_released",
         "provider_released",
@@ -326,7 +351,7 @@ async def test_stale_lease_eviction_rejects_fresh_lease() -> None:
 @pytest.mark.asyncio
 async def test_janitor_reconciles_stale_heartbeat_after_restart() -> None:
     repository = _Repository(_lease(heartbeat_age=121))
-    runtime = _Runtime()
+    runtime = _Runtime(repository.order)
 
     result = await OmnigentOAuthHostJanitor(
         repository=repository,
@@ -338,6 +363,77 @@ async def test_janitor_reconciles_stale_heartbeat_after_restart() -> None:
     assert result["actions"][-1]["action"] == "stale_heartbeat_cleanup"
     assert repository.stopped == ["lease-1"]
     assert runtime.stopped == 1
+    assert repository.order[:2] == ["cleanup_claimed", "host_stopped"]
+
+
+@pytest.mark.asyncio
+async def test_janitor_ignores_missing_container_during_fresh_launch() -> None:
+    lease = _lease()
+    lease.status = "starting"
+    lease.omnigent_session_id = None
+    repository = _Repository(lease)
+    runtime = _Runtime(repository.order)
+
+    async def missing_container(_name):
+        return False
+
+    runtime.container_exists = missing_container
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        heartbeat_timeout_seconds=90,
+    ).run()
+
+    assert result == {"status": "completed", "actions": [], "count": 0}
+    assert repository.cleanup_claims == []
+    assert repository.stopped == []
+    assert runtime.stopped == 0
+
+
+@pytest.mark.asyncio
+async def test_janitor_claims_missing_container_after_launch_boundary() -> None:
+    repository = _Repository(_lease())
+    runtime = _Runtime(repository.order)
+
+    async def missing_container(_name):
+        return False
+
+    runtime.container_exists = missing_container
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+    ).run()
+
+    assert result["actions"][-1]["action"] == "missing_container_repair"
+    assert repository.cleanup_claims == ["lease-1"]
+    assert repository.order[:2] == ["cleanup_claimed", "host_stopped"]
+
+
+@pytest.mark.asyncio
+async def test_janitor_reloads_after_cleanup_claim_conflict() -> None:
+    repository = _Repository(_lease(heartbeat_age=121))
+    runtime = _Runtime(repository.order)
+
+    async def lost_claim(*_args, **_kwargs):
+        repository.lease.last_heartbeat_at = datetime.now(UTC)
+        return None
+
+    repository.claim_host_lease_cleanup = lost_claim
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        heartbeat_timeout_seconds=90,
+    ).run()
+
+    assert result == {"status": "completed", "actions": [], "count": 0}
+    assert repository.stopped == []
+    assert runtime.stopped == 0
 
 
 @pytest.mark.asyncio
@@ -367,6 +463,7 @@ async def test_janitor_consumes_durable_runner_exit_cleanup_handoff() -> None:
     assert lease_client.released[0].owner_id == "provider-lease-1"
     assert lease_client.released[0].runtime_id == "codex_cli"
     assert repository.order == [
+        "cleanup_claimed",
         "host_stopped",
         "lease_released",
         "provider_released",
@@ -455,7 +552,11 @@ async def test_janitor_reconciles_each_durable_embedded_abandonment_class(
     ).run()
 
     assert result["actions"][-1]["action"] == action
-    assert repository.order == ["host_stopped", "lease_released"]
+    assert repository.order == [
+        "cleanup_claimed",
+        "host_stopped",
+        "lease_released",
+    ]
 
 
 @pytest.mark.asyncio
@@ -489,6 +590,7 @@ async def test_pre_upgrade_restricted_lease_uses_bounded_cleanup_cutover() -> No
 
     assert runtime.stop_kwargs[0].get("effective_launch") is None
     assert repository.order == [
+        "cleanup_claimed",
         "host_stopped",
         "lease_released",
         "provider_released",
@@ -582,3 +684,58 @@ async def test_janitor_removes_label_owned_orphan_instead_of_repeating_report() 
             "providerLeaseReleased": False,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_janitor_reloads_container_lease_before_orphan_removal() -> None:
+    initial_lease = _lease()
+    new_lease = _lease()
+    new_lease.lease_id = "lease-created-after-scan"
+    new_lease.container_name = "new-host"
+    repository = _Repository(initial_lease)
+
+    async def get_host_lease(lease_id):
+        if lease_id == new_lease.lease_id:
+            return new_lease
+        return initial_lease if lease_id == initial_lease.lease_id else None
+
+    repository.get_host_lease = get_host_lease
+    runtime = _Runtime()
+    runtime.managed_containers = ["new-host"]
+    runtime.container_lease_refs["new-host"] = new_lease.lease_id
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository, runtime=runtime, client=_Client(),
+    ).run()
+
+    assert result == {"status": "completed", "actions": [], "count": 0}
+    assert runtime.removed == []
+
+
+@pytest.mark.asyncio
+async def test_stale_remediation_claim_conflict_prevents_cleanup() -> None:
+    repository = _Repository(_lease(heartbeat_age=121))
+    runtime = _Runtime()
+
+    async def lost_claim(*_args, **_kwargs):
+        repository.lease.last_heartbeat_at = datetime.now(UTC)
+        return None
+
+    repository.claim_host_lease_cleanup = lost_claim
+
+    with pytest.raises(OmnigentOAuthHostError, match="changed concurrently"):
+        await OmnigentOAuthHostJanitor(
+            repository=repository,
+            runtime=runtime,
+            client=_Client(),
+            heartbeat_timeout_seconds=90,
+        ).run_action(
+            action_kind="host_lease.reconcile_stale",
+            profile_id="profile-1",
+            host_lease_ref="lease-1",
+            expected_host_state="ready",
+            request_id="stale-race",
+        )
+
+    assert runtime.stopped == 0
+    assert repository.stopped == []
