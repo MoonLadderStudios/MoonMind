@@ -3286,16 +3286,14 @@ def test_build_agent_runtime_deps_wires_production_lore_readiness_adapter(
     assert launcher._lore_repository_readiness_adapter is not None
 
 
-def test_build_agent_runtime_deps_reuses_global_session_network(
+def test_build_agent_runtime_deps_uses_canonical_control_plane_network(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ):
     artifacts_root = tmp_path / "artifacts"
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
-    monkeypatch.delenv("MOONMIND_CONTROL_PLANE_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "shared-moonmind-network")
+    monkeypatch.setenv("MOONMIND_CONTROL_PLANE_NETWORK", "shared-moonmind-network")
     monkeypatch.setenv("MOONMIND_URL", "http://moonmind-api:8000")
 
     (

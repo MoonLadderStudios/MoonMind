@@ -61,27 +61,8 @@ def test_managed_session_network_uses_canonical_control_plane_setting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MOONMIND_CONTROL_PLANE_NETWORK", "custom-control-plane")
-    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", "legacy-managed")
-    monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "legacy-global")
 
     assert _managed_session_docker_network() == "custom-control-plane"
-
-
-@pytest.mark.parametrize(
-    ("legacy_name", "legacy_value"),
-    [
-        ("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", "legacy-managed"),
-        ("MOONMIND_DOCKER_NETWORK", "legacy-global"),
-    ],
-)
-def test_managed_session_network_retains_legacy_aliases(
-    monkeypatch: pytest.MonkeyPatch,
-    legacy_name: str,
-    legacy_value: str,
-) -> None:
-    monkeypatch.setenv(legacy_name, legacy_value)
-
-    assert _managed_session_docker_network() == legacy_value
 
 
 class _LocalArtifactStorage:
@@ -283,8 +264,6 @@ async def test_controller_launches_container_and_returns_typed_handle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
     monkeypatch.delenv("MOONMIND_PYTHON_TEST_IMAGE", raising=False)
     monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
     workspace_root = tmp_path / "agent_jobs"
@@ -453,8 +432,6 @@ async def test_launch_session_injects_generic_managed_agent_env(
     authoritatively over caller-supplied passthrough values (every managed
     agent session honors the same contract as ``ManagedRuntimeLauncher``)."""
 
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
         agentRunId="task-1",
@@ -690,8 +667,6 @@ async def test_controller_record_keeps_auth_and_runtime_homes_out_of_artifact_re
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
     workspace_root = tmp_path / "agent_jobs"
     session_store = ManagedSessionStore(tmp_path / "session-store")
     session_supervisor = AsyncMock()
@@ -765,8 +740,6 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
     monkeypatch.delenv("MOONMIND_URL", raising=False)
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
@@ -831,8 +804,6 @@ async def test_unrestricted_policy_uses_container_jobs_without_raw_docker(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
     monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "docker-proxy-test")
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(

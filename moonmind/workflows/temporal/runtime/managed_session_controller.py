@@ -309,20 +309,6 @@ def _managed_session_docker_network(
     if CONTROL_PLANE_NETWORK_ENV in os.environ:
         return resolve_control_plane_network()
 
-    # Temporary compatibility aliases for deployments that have not yet moved
-    # their direct-session override to the canonical control-plane setting.
-    for env_key in (
-        "MOONMIND_MANAGED_SESSION_DOCKER_NETWORK",
-        "MOONMIND_DOCKER_NETWORK",
-    ):
-        raw_value = os.environ.get(env_key)
-        if raw_value is None:
-            continue
-        value = raw_value.strip()
-        if value.lower() in {"", "none", "disabled", "off"}:
-            return None
-        return value
-
     moonmind_url = ""
     if request_environment is not None:
         moonmind_url = str(request_environment.get("MOONMIND_URL") or "").strip()

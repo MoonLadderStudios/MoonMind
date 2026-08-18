@@ -6,8 +6,11 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.yaml"
 PROJECT_NAME="${MOONMIND_CONTROL_PLANE_TEST_PROJECT:-moonmind-test-control-plane}"
 NETWORK_NAME="${MOONMIND_CONTROL_PLANE_TEST_NETWORK:-moonmind-test_control-plane-network}"
-PROBE_NAME="${PROJECT_NAME}-managed-session-probe"
-INTERRUPTED_NAME="${PROJECT_NAME}-interrupted-session"
+SESSION_PROJECT_NAME="${PROJECT_NAME//_/-}"
+PROBE_SESSION_ID="${SESSION_PROJECT_NAME}-managed-session-probe"
+PROBE_NAME="mm-codex-session-${PROBE_SESSION_ID}"
+INTERRUPTED_SESSION_ID="${SESSION_PROJECT_NAME}-interrupted-session"
+INTERRUPTED_NAME="mm-codex-session-${INTERRUPTED_SESSION_ID}"
 COMPOSE_CMD=()
 
 if [[ "${MOONMIND_RUN_CONTROL_PLANE_NETWORK_CONFORMANCE:-}" != "1" ]]; then
@@ -35,7 +38,7 @@ compose() {
 
 cleanup() {
   docker rm -f "$PROBE_NAME" "$INTERRUPTED_NAME" >/dev/null 2>&1 || true
-  compose down --remove-orphans >/dev/null 2>&1 || true
+  compose down --volumes --remove-orphans >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -51,6 +54,10 @@ fi
 
 export MOONMIND_CONTROL_PLANE_NETWORK="$NETWORK_NAME"
 export MOONMIND_DOCKER_PROXY_NETWORK="${PROJECT_NAME}_docker-proxy-network"
+export MOONMIND_SANDBOX_EGRESS_NETWORK="${PROJECT_NAME}_sandbox-egress-network"
+export MOONMIND_RESTRICTED_EGRESS_NETWORK="${PROJECT_NAME}_restricted-egress-network"
+export MOONMIND_OMNIGENT_EGRESS_NETWORK="${PROJECT_NAME}_omnigent-egress-network"
+export MOONMIND_URL="http://api:8000"
 export MOONMIND_AGENT_WORKSPACES_VOLUME_NAME="${PROJECT_NAME}_agent-workspaces"
 export MOONMIND_SECRETS_VOLUME_NAME="${PROJECT_NAME}_secrets"
 export MOONMIND_RETRIEVAL_STATE_VOLUME_NAME="${PROJECT_NAME}_retrieval-state"
@@ -78,16 +85,31 @@ wait_for_runtime() {
 }
 
 probe_api() {
-  local container_name="$1"
-  docker run --rm --name "$container_name" --network "$NETWORK_NAME" \
-    alpine:3.20 wget -q -O /dev/null http://api:8000/healthz
+  local session_id="$1"
+  local keep_running="${2:-false}"
+  local runtime_image_ref
+  runtime_image_ref="$(compose images -q temporal-worker-agent-runtime)"
+  if [[ -z "$runtime_image_ref" ]]; then
+    echo "Error: could not resolve the managed-session runtime image." >&2
+    return 1
+  fi
+  local probe_args=(
+    python /workspace/host_project/tools/probe_managed_session_control_plane.py
+    --session-id "$session_id"
+    --image-ref "$runtime_image_ref"
+    --expected-network "$NETWORK_NAME"
+  )
+  if [[ "$keep_running" == "true" ]]; then
+    probe_args+=(--keep-running)
+  fi
+  compose exec -T temporal-worker-agent-runtime "${probe_args[@]}"
 }
 
 # Fresh startup: Compose must create the stable network without bootstrap.
 compose up -d
 wait_for_runtime
 docker network inspect "$NETWORK_NAME" >/dev/null
-probe_api "$PROBE_NAME"
+probe_api "$PROBE_SESSION_ID"
 
 # Normal owned-container cleanup must allow Compose to remove the network.
 compose down --remove-orphans
@@ -100,8 +122,7 @@ fi
 # startup must reuse that authoritative network until reconciliation removes it.
 compose up -d
 wait_for_runtime
-docker run -d --name "$INTERRUPTED_NAME" --network "$NETWORK_NAME" \
-  alpine:3.20 sleep 600 >/dev/null
+probe_api "$INTERRUPTED_SESSION_ID" true
 compose down --remove-orphans >/dev/null 2>&1 || true
 if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
   echo "Error: Compose removed a network that still had an attached owned container." >&2
@@ -110,7 +131,8 @@ fi
 
 compose up -d
 wait_for_runtime
-docker exec "$INTERRUPTED_NAME" wget -q -O /dev/null http://api:8000/healthz
+docker exec "$INTERRUPTED_NAME" python3 -c \
+  'import urllib.request; response=urllib.request.urlopen("http://api:8000/healthz", timeout=10); assert 200 <= response.status < 300'
 docker rm -f "$INTERRUPTED_NAME" >/dev/null
 compose down --remove-orphans
 if docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then

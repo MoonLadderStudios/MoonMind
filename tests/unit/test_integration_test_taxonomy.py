@@ -265,12 +265,28 @@ def test_control_plane_lifecycle_conformance_uses_compose_network_authority() ->
     helper = (
         REPO_ROOT / "tools" / "test_control_plane_network_lifecycle.sh"
     ).read_text(encoding="utf-8")
+    managed_session_probe = (
+        REPO_ROOT / "tools" / "probe_managed_session_control_plane.py"
+    ).read_text(encoding="utf-8")
 
     assert "MOONMIND_RUN_CONTROL_PLANE_NETWORK_CONFORMANCE" in helper
     assert "compose up -d" in helper
     assert "compose down --remove-orphans" in helper
+    assert "probe_managed_session_control_plane.py" in helper
     assert "http://api:8000/healthz" in helper
     assert "docker network create" not in helper
+    assert "docker run" not in helper
+    assert "DockerCodexManagedSessionController" in managed_session_probe
+    assert "controller.launch_session(request)" in managed_session_probe
+    for environment_name in (
+        "MOONMIND_CONTROL_PLANE_NETWORK",
+        "MOONMIND_DOCKER_PROXY_NETWORK",
+        "MOONMIND_SANDBOX_EGRESS_NETWORK",
+        "MOONMIND_RESTRICTED_EGRESS_NETWORK",
+        "MOONMIND_OMNIGENT_EGRESS_NETWORK",
+        "MOONMIND_URL",
+    ):
+        assert f"export {environment_name}=" in helper
 
 
 def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> None:
