@@ -43,6 +43,7 @@ from .harness import (
 )
 from .invariants import check_all, violations
 from .minimizer import minimize_plan
+from .projection import ProjectedCommand, ProjectedRun, project_run
 from .provider import ProgrammableFakeProvider, SideEffectLedger, payload_digest
 from .reference_model import (
     IllegalTransitionError,
@@ -81,6 +82,10 @@ __all__ = [
     "ProgrammableFakeProvider",
     "SideEffectLedger",
     "payload_digest",
+    # boundary-neutral projection (repository / Temporal / API / image layers)
+    "ProjectedCommand",
+    "ProjectedRun",
+    "project_run",
     # reference model
     "IllegalTransitionError",
     "ReferenceCommand",

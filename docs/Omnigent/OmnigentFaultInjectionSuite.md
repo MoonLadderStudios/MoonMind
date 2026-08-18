@@ -26,6 +26,8 @@ without change.
 | `generator.py` | The seed-based deterministic fault-plan generator and the determinism check. |
 | `minimizer.py` | The greedy delta-debugging minimizer that reduces a failing plan while preserving its invariant failure. |
 | `conversions.py` | Total, round-trippable conversion between the executable `FaultPlan` and the declarative `FaultScenario`. |
+| `projection.py` | Boundary-neutral projection (`project_run`) of an execution trace into an ordered, secret-safe logical command stream the repository/Temporal/API/image bindings replay. |
+| `image_smoke.py` | The portable exact-image fault matrix (`run_image_fault_matrix`) run inside the deployable API/worker images. |
 | `diagnostics.py` | Secret-safe diagnostic bundles (seed, minimized scenario, decision journal, provider request log, safe refs). |
 | `corpus.py` | The initial generalized escaped-incident scenarios and the incident-ingestion workflow. |
 | `scenarios/*/fault-scenario.yaml` | The packaged declarative corpus. |
@@ -145,10 +147,39 @@ replay corpus.
   reproduction-complete, secret-safe diagnostic bundle to
   `MOONMIND_FAULTLAB_DIAGNOSTICS_DIR` for upload.
 - **Repository/concurrency, Temporal, API/browser, and exact-image layers**
-  consume the same scenarios and provider ledger. The framework is intentionally
-  layer-neutral so those bindings are thin adapters; they are tracked as follow-up
-  bindings on top of this substrate and are not required for the pure-domain and
-  reliability-journey gates above.
+  consume the same scenarios and provider ledger through the boundary-neutral
+  projection in `moonmind/omnigent/faultlab/projection.py` (`project_run`), which
+  turns an execution trace into an ordered, secret-safe logical command stream.
+  The framework is intentionally layer-neutral, so each binding is a thin adapter
+  that replays that projection at its real boundary and re-proves the invariants
+  there:
+  - **PostgreSQL repository/concurrency** — `tests/integration/omnigent/`
+    `test_control_plane_faultlab.py` replays the projected command stream against
+    the real `moonmind.omnigent.control_plane` repositories, re-proving durable
+    revisions, command-claim uniqueness, idempotency-key conflict, fencing
+    generation, distinct terminality, and historical-read safety. The hermetic
+    SQLite journey is required-CI (`integration_ci` + `reliability_journey`); the
+    decisive concurrency races run on the ephemeral PostgreSQL cluster in
+    `conftest.py`.
+  - **Temporal** — `tests/integration/workflows/temporal/`
+    `test_omnigent_faultlab_temporal.py` drives the real `MoonMind.AgentSession`
+    workflow under the time-skipping server with an injected lost/delayed turn
+    response, proving at-most-once turn submission (via the independent ledger)
+    across activity retries, a worker restart, Continue-As-New, and deterministic
+    replay. It is marked `temporal_boundary` and excluded from required CI per the
+    time-skipping policy.
+  - **API/transport** — `tests/integration/omnigent/test_faultlab_api_bridge.py`
+    drives the real bridge SSE stream route with a fault-scenario transport
+    frontier, proving a monotonic de-duplicated frontier, reconnect without
+    re-delivery (`Last-Event-ID`), and terminal replay. Hermetic in-process ASGI
+    (required CI). The browser counterpart
+    `frontend/src/browser/omnigentFaultReplay.browser.test.ts` exercises the real
+    Workflow Detail parse/dedup contract under `npm run ui:test:browser`.
+  - **Exact-image** — `moonmind/omnigent/faultlab/image_smoke.py` runs a bounded
+    deterministic fault matrix; `tools/run_omnigent_fault_image_smoke.py` and the
+    `omnigent-fault-image-smoke` workflow run it *inside* the deployable API and
+    worker images so image authority drift (#3694) fails the smoke. The matrix
+    core is proven hermetically in `tests/unit/omnigent/faultlab/test_image_smoke.py`.
 
 Every failure prints and can upload a reproduction-complete, secret-safe
 diagnostic bundle (seed, minimized scenario, decision journal, provider request
