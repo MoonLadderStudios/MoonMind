@@ -80,6 +80,7 @@ _AUTH_FAILURE_MARKERS = (
     "invalid token",
     "expired token",
     "access token could not be refreshed",
+    "oauth session expired",
     "authentication failed",
     "not logged in",
     "please run /login",
