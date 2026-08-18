@@ -79,6 +79,28 @@ def test_reconcile_quarantines_bypassed_unknown_version():
     assert decision.next_deadline is None
 
 
+@pytest.mark.parametrize("bad_value", [0, -1])
+def test_intent_rejects_non_positive_max_turn_attempts(bad_value):
+    with pytest.raises(ValidationError):
+        CompiledSessionIntent(
+            session_id="s",
+            provider="omnigent",
+            turn_prompt_digest="sha256:x",
+            max_turn_attempts=bad_value,
+        )
+
+
+@pytest.mark.parametrize("bad_value", [0, -5])
+def test_intent_rejects_non_positive_reconcile_interval(bad_value):
+    with pytest.raises(ValidationError):
+        CompiledSessionIntent(
+            session_id="s",
+            provider="omnigent",
+            turn_prompt_digest="sha256:x",
+            reconcile_interval_seconds=bad_value,
+        )
+
+
 def test_snake_case_and_camel_case_construction_equivalent():
     snake = ProviderSessionObservation(observed_at=FIXED_NOW, raw_status="running")
     camel = ProviderSessionObservation.model_validate(
@@ -109,8 +131,11 @@ def test_contract_version_constant():
         ("failed", ProviderStatusClass.TERMINAL_FAILURE),
         ("canceled", ProviderStatusClass.TERMINAL_CANCELLED),
         ("cancelled", ProviderStatusClass.TERMINAL_CANCELLED),
-        ("timed_out", ProviderStatusClass.TERMINAL_CANCELLED),
-        ("timeout", ProviderStatusClass.TERMINAL_CANCELLED),
+        # Timeouts are a system failure, kept distinct from user cancellation.
+        ("timed_out", ProviderStatusClass.TERMINAL_FAILURE),
+        ("timeout", ProviderStatusClass.TERMINAL_FAILURE),
+        ("awaiting_approval", ProviderStatusClass.INTERVENTION),
+        ("intervention_requested", ProviderStatusClass.INTERVENTION),
         ("Completed", ProviderStatusClass.TERMINAL_SUCCESS),
         ("  running ", ProviderStatusClass.ACTIVE),
         ("weird_new_status", ProviderStatusClass.UNKNOWN),

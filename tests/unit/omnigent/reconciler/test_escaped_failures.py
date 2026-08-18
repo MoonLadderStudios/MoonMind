@@ -13,7 +13,6 @@ from moonmind.omnigent.reconciler import (
     EventFrontierObservation,
     EvidenceObservation,
     LeaseObservation,
-    LeaseState,
     ObservationSet,
     ProviderSessionObservation,
     ProviderTurnObservation,
@@ -141,9 +140,12 @@ def test_provider_terminal_while_cleanup_and_release_incomplete(
     )
     assert harvest.kind == DecisionKind.HARVEST_EVIDENCE
 
-    # Harvested, cleanup not started -> begin cleanup, still no lease release.
+    # Harvested (with a durable evidence ref), cleanup not started -> begin
+    # cleanup, still no lease release.
     durable = make_ready_durable(
-        terminal_outcome=TerminalOutcome.SUCCESS, evidence_harvested=True
+        terminal_outcome=TerminalOutcome.SUCCESS,
+        evidence_harvested=True,
+        terminal_evidence_ref="evref-1",
     )
     cleanup = run(intent, durable, ObservationSet())
     assert cleanup.kind == DecisionKind.BEGIN_CLEANUP
@@ -152,6 +154,7 @@ def test_provider_terminal_while_cleanup_and_release_incomplete(
     durable = make_ready_durable(
         terminal_outcome=TerminalOutcome.SUCCESS,
         evidence_harvested=True,
+        terminal_evidence_ref="evref-1",
         cleanup_started=True,
         cleanup_complete=False,
     )
@@ -163,6 +166,7 @@ def test_provider_terminal_while_cleanup_and_release_incomplete(
     durable = make_ready_durable(
         terminal_outcome=TerminalOutcome.SUCCESS,
         evidence_harvested=True,
+        terminal_evidence_ref="evref-1",
         cleanup_started=True,
         cleanup_complete=True,
     )
@@ -178,8 +182,28 @@ def test_provider_terminal_while_cleanup_and_release_incomplete(
     assert consumer_active.kind == DecisionKind.AWAIT_OBSERVATION
     assert consumer_active.reason_code == ReasonCode.LEASE_CONSUMERS_ACTIVE
 
-    # Cleanup complete, no consumer -> now release is allowed.
-    release = run(intent, durable, ObservationSet())
+    # Cleanup complete, no consumer *observation* at all -> still no release,
+    # because absent observations are "not observed", not an observed negative.
+    no_confirmation = run(intent, durable, ObservationSet())
+    assert no_confirmation.kind == DecisionKind.AWAIT_OBSERVATION
+    assert (
+        no_confirmation.reason_code
+        == ReasonCode.AWAITING_LEASE_CONSUMER_CONFIRMATION
+    )
+
+    # Cleanup complete, both leases confirmed consumer-free -> release allowed.
+    release = run(
+        intent,
+        durable,
+        ObservationSet(
+            profile_lease=LeaseObservation(
+                observed_at=now, held=True, consumer_active=False
+            ),
+            host_lease=LeaseObservation(
+                observed_at=now, held=True, consumer_active=False
+            ),
+        ),
+    )
     assert release.kind == DecisionKind.RELEASE_LEASES
 
     # Releasing/closing never erases the recorded terminal outcome (invariant 9).

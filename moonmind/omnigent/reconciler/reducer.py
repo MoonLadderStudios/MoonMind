@@ -27,7 +27,6 @@ from .contracts import (
     DurableSessionState,
     EvidenceRequirement,
     KNOWN_COMPATIBILITY_VERSIONS,
-    LINEAR_PHASE_ORDER,
     LeaseState,
     ObservationSet,
     ProviderStatusClass,
@@ -55,9 +54,18 @@ _ACTIVE_STATUSES = frozenset(
     {"created", "launching", "provisioning", "running", "waiting", "queued", "in_progress"}
 )
 _IDLE_STATUSES = frozenset({"idle"})
+#: Supported, actionable non-terminal product states emitted by the production
+#: normalization boundary (approval/elicitation and intervention). The bridge
+#: store accepts these as normal nonterminal statuses, so the reconciler must
+#: model them explicitly instead of failing closed to ``UNKNOWN`` (invariant 6).
+_INTERVENTION_STATUSES = frozenset({"awaiting_approval", "intervention_requested"})
 _TERMINAL_SUCCESS_STATUSES = frozenset({"completed"})
-_TERMINAL_FAILURE_STATUSES = frozenset({"failed"})
-_TERMINAL_CANCELLED_STATUSES = frozenset({"canceled", "cancelled", "timed_out", "timeout"})
+#: Timeouts are a *system failure*, not a user cancellation. The existing
+#: Omnigent bridge deliberately keeps ``timed_out`` distinct from cancellation
+#: and maps it to failure; classifying it as cancelled would corrupt failure
+#: classification and retry policy.
+_TERMINAL_FAILURE_STATUSES = frozenset({"failed", "timed_out", "timeout"})
+_TERMINAL_CANCELLED_STATUSES = frozenset({"canceled", "cancelled"})
 
 
 def classify_provider_status(raw_status: str) -> ProviderStatusClass:
@@ -72,6 +80,8 @@ def classify_provider_status(raw_status: str) -> ProviderStatusClass:
         return ProviderStatusClass.ACTIVE
     if normalized in _IDLE_STATUSES:
         return ProviderStatusClass.IDLE
+    if normalized in _INTERVENTION_STATUSES:
+        return ProviderStatusClass.INTERVENTION
     if normalized in _TERMINAL_SUCCESS_STATUSES:
         return ProviderStatusClass.TERMINAL_SUCCESS
     if normalized in _TERMINAL_FAILURE_STATUSES:
@@ -124,7 +134,15 @@ def current_phase(durable: DurableSessionState) -> SessionLifecyclePhase:
     )
     if leases_settled and durable.cleanup_complete:
         return SessionLifecyclePhase.CLOSED
-    if durable.profile_lease == LeaseState.RELEASED or durable.host_lease == LeaseState.RELEASED:
+    # Only report LEASES_RELEASED once *every* lease is settled. A partial
+    # release (one lease released while the other is still HELD) must not be
+    # reported as settled, or callers would treat a still-held host or profile
+    # lease as released and break the monotonic phase view.
+    any_released = (
+        durable.profile_lease == LeaseState.RELEASED
+        or durable.host_lease == LeaseState.RELEASED
+    )
+    if leases_settled and any_released:
         return SessionLifecyclePhase.LEASES_RELEASED
     if durable.cleanup_started:
         return SessionLifecyclePhase.CLEANUP_STARTED
@@ -164,6 +182,7 @@ def _decision(
     now: datetime,
     product_visible: bool = False,
     evidence: tuple[EvidenceRequirement, ...] = (),
+    terminal_outcome: TerminalOutcome | None = None,
 ) -> ReconciliationDecision:
     """Build a decision, wiring durable authority and the bounded deadline.
 
@@ -171,7 +190,9 @@ def _decision(
     durable state, never from an observation or from intent (invariant 11), so
     the executor cannot ignore concurrency authority. Settled decisions carry no
     deadline; every other (nonterminal) decision carries a bounded deadline
-    (invariant 10).
+    (invariant 10). ``terminal_outcome`` is carried on terminal
+    recording/synthesis commands so the executor records the observed durable
+    outcome without reimplementing reducer semantics.
     """
 
     command: CommandSpec | None = None
@@ -181,6 +202,7 @@ def _decision(
             command_id=_command_id(durable, kind),
             attempt_id=durable.attempt_id if kind == DecisionKind.SUBMIT_TURN else None,
             provider_session_id=durable.provider_session_id,
+            terminal_outcome=terminal_outcome,
         )
 
     next_deadline: datetime | None
@@ -235,6 +257,7 @@ def reconcile(
         *,
         product_visible: bool = False,
         evidence: tuple[EvidenceRequirement, ...] = (),
+        terminal_outcome: TerminalOutcome | None = None,
     ) -> ReconciliationDecision:
         return _decision(
             kind=kind,
@@ -245,6 +268,7 @@ def reconcile(
             now=now,
             product_visible=product_visible,
             evidence=evidence,
+            terminal_outcome=terminal_outcome,
         )
 
     # -- G0. Version / compatibility fail-closed --------------------------
@@ -258,6 +282,18 @@ def reconcile(
                 DecisionKind.QUARANTINE_AMBIGUOUS_STATE,
                 ReasonCode.UNKNOWN_INPUT_VERSION,
             )
+
+    # -- G0b. Intent / durable identity correlation ----------------------
+    # The reducer combines policy and retry limits from the intent with
+    # revision, fencing, lease, and command identity from the durable state. An
+    # adapter that pairs intent for session B with durable state for session A
+    # would otherwise authorize side effects on A under B's execution contract;
+    # fail closed before evaluating provisioning or submission (invariant 11).
+    if intent.session_id != durable.session_id:
+        return decide(
+            DecisionKind.QUARANTINE_AMBIGUOUS_STATE,
+            ReasonCode.SESSION_IDENTITY_MISMATCH,
+        )
 
     # -- G1. Sticky durable meta-terminal states -------------------------
     if durable.failed:
@@ -291,6 +327,7 @@ def reconcile(
             DecisionKind.RECORD_PROVIDER_TERMINAL,
             ReasonCode.DESIRED_CANCELLATION,
             product_visible=True,
+            terminal_outcome=TerminalOutcome.CANCELLED,
         )
 
     # -- G5. Provider Profile lease --------------------------------------
@@ -312,9 +349,25 @@ def reconcile(
     # -- G8. Turn submission (at-most-once, invariant 7) -----------------
     if durable.submission == SubmissionState.NOT_SUBMITTED:
         if durable.turn_attempts >= intent.max_turn_attempts:
+            # Exhausting the attempt budget only happens after leases and the
+            # provider session were acquired. Record a FAILURE terminal so the
+            # owned post-terminal chain harvests evidence, cleans up, and
+            # releases those resources instead of stopping at a settled dead end
+            # that leaks the acquired leases and session.
             return decide(
-                DecisionKind.FAIL_NONRETRYABLE,
+                DecisionKind.RECORD_PROVIDER_TERMINAL,
                 ReasonCode.MAX_TURN_ATTEMPTS_EXHAUSTED,
+                product_visible=True,
+                terminal_outcome=TerminalOutcome.FAILURE,
+            )
+        if durable.attempt_id is None:
+            # Every attempt lacking a durable identity would receive the same
+            # ``unknown_attempt`` idempotency id, so the executor could dedup a
+            # legitimate later attempt as the first. Fail closed until a durable
+            # attempt id exists rather than manufacturing a shared identity.
+            return decide(
+                DecisionKind.QUARANTINE_AMBIGUOUS_STATE,
+                ReasonCode.MISSING_ATTEMPT_IDENTITY,
             )
         return decide(
             DecisionKind.SUBMIT_TURN,
@@ -322,8 +375,18 @@ def reconcile(
             product_visible=True,
         )
     if durable.submission == SubmissionState.IN_FLIGHT:
-        # Delivery is ambiguous; never reissue the submit (invariant 7). Wait for
-        # an observation that lets the executor durably confirm acceptance.
+        # Delivery is ambiguous; never reissue the submit (invariant 7). If the
+        # submit response was lost but an authoritative, correlated observation
+        # now reports the matching turn, advance by consuming that evidence in
+        # the terminal-detection path instead of waiting forever.
+        ps = observations.provider_session
+        if (
+            ps is not None
+            and ps.present
+            and _observation_matches_session(durable, ps)
+            and classify_provider_status(ps.raw_status) != ProviderStatusClass.UNKNOWN
+        ):
+            return _detect_terminal(intent, durable, observations, decide)
         return decide(
             DecisionKind.AWAIT_OBSERVATION, ReasonCode.SUBMISSION_DELIVERY_AMBIGUOUS
         )
@@ -332,12 +395,45 @@ def reconcile(
     return _detect_terminal(intent, durable, observations, decide)
 
 
+def _observation_matches_session(durable, ps) -> bool:
+    """Whether a provider-session observation correlates to the durable session.
+
+    A snapshot that names a *different* provider session is not evidence about
+    this session (invariant 11). When either side omits the id the observation is
+    treated as correlated — absence is *not observed*, not a mismatch.
+    """
+
+    return not (
+        ps.provider_session_id is not None
+        and durable.provider_session_id is not None
+        and ps.provider_session_id != durable.provider_session_id
+    )
+
+
+def _turn_matches_attempt(durable, pt) -> bool:
+    """Whether a turn/transcript observation belongs to the current attempt.
+
+    A delayed transcript from a *previous* turn carries a stale ``attempt_id``;
+    it must not record the current attempt as terminal. Absent ids are treated
+    as correlated (not observed), never as a mismatch.
+    """
+
+    return not (
+        pt.attempt_id is not None
+        and durable.attempt_id is not None
+        and pt.attempt_id != durable.attempt_id
+    )
+
+
 def _detect_terminal(intent, durable, observations, decide):
     """Decide the next step while awaiting a terminal for an accepted turn.
 
     A provider event/snapshot is treated as an *observation*, not an unquestioned
     state mutation (invariant 1): the reducer only recommends recording a
-    terminal, it never assumes durable state changed.
+    terminal, it never assumes durable state changed. Terminal recording is
+    additionally gated on the snapshot/transcript correlating to the durable
+    provider session and attempt identity, so a delayed terminal from a previous
+    turn or another session cannot terminalize the current attempt.
     """
 
     ps = observations.provider_session
@@ -354,6 +450,15 @@ def _detect_terminal(intent, durable, observations, decide):
             DecisionKind.QUARANTINE_AMBIGUOUS_STATE,
             ReasonCode.PROVIDER_SESSION_MISSING,
         )
+    if not _observation_matches_session(durable, ps):
+        # The snapshot names another provider session — it is not evidence about
+        # this session. Wait for a correlated observation rather than recording a
+        # terminal from an unrelated session.
+        return decide(
+            DecisionKind.AWAIT_OBSERVATION,
+            ReasonCode.AWAITING_CORRELATED_TERMINAL_EVIDENCE,
+            evidence=(EvidenceRequirement.PROVIDER_TERMINAL_SNAPSHOT,),
+        )
 
     status_class = classify_provider_status(ps.raw_status)
 
@@ -366,6 +471,16 @@ def _detect_terminal(intent, durable, observations, decide):
     if status_class == ProviderStatusClass.ACTIVE:
         return decide(DecisionKind.AWAIT_OBSERVATION, ReasonCode.PROVIDER_RUNNING)
 
+    if status_class == ProviderStatusClass.INTERVENTION:
+        # A supported, actionable product state (approval/elicitation or
+        # intervention). Preserve it as product-visible instead of a generic
+        # non-product-visible poll.
+        return decide(
+            DecisionKind.AWAIT_OBSERVATION,
+            ReasonCode.PROVIDER_INTERVENTION_REQUIRED,
+            product_visible=True,
+        )
+
     if status_class == ProviderStatusClass.IDLE:
         # Idle alone is not terminal when a tool call is still open (invariant 3).
         if ps.open_tool_call:
@@ -373,14 +488,16 @@ def _detect_terminal(intent, durable, observations, decide):
                 DecisionKind.AWAIT_OBSERVATION, ReasonCode.IDLE_WITH_OPEN_TOOL_CALL
             )
         pt = observations.provider_turn
-        if pt is not None and pt.turn_complete:
+        if pt is not None and pt.turn_complete and _turn_matches_attempt(durable, pt):
             # Idle after completed work — recover the terminal from corroborating
-            # transcript evidence (#3683).
+            # transcript evidence (#3683), preserving the observed outcome so the
+            # executor records the correct durable terminal.
             return decide(
                 DecisionKind.SYNTHESIZE_TERMINAL_FROM_SNAPSHOT,
                 ReasonCode.TERMINAL_IDLE_SYNTHESIS,
                 product_visible=True,
                 evidence=(EvidenceRequirement.PROVIDER_TURN_TRANSCRIPT,),
+                terminal_outcome=pt.outcome,
             )
         return decide(
             DecisionKind.AWAIT_OBSERVATION,
@@ -388,7 +505,8 @@ def _detect_terminal(intent, durable, observations, decide):
             evidence=(EvidenceRequirement.PROVIDER_TURN_TRANSCRIPT,),
         )
 
-    # Provider status is an explicit terminal class.
+    # Provider status is an explicit terminal class; carry its outcome.
+    observed_outcome = _CLASS_TO_OUTCOME[status_class]
     frontier = observations.event_frontier
     if frontier is not None and frontier.terminal_event_seen:
         return decide(
@@ -396,6 +514,7 @@ def _detect_terminal(intent, durable, observations, decide):
             ReasonCode.TERMINAL_EVENT_OBSERVED,
             product_visible=True,
             evidence=(EvidenceRequirement.PROVIDER_TERMINAL_SNAPSHOT,),
+            terminal_outcome=observed_outcome,
         )
     # Terminal snapshot but the terminal event edge was missed — recover it from
     # snapshot evidence (#3698).
@@ -404,6 +523,7 @@ def _detect_terminal(intent, durable, observations, decide):
         ReasonCode.TERMINAL_SNAPSHOT_SYNTHESIS,
         product_visible=True,
         evidence=(EvidenceRequirement.PROVIDER_TERMINAL_SNAPSHOT,),
+        terminal_outcome=observed_outcome,
     )
 
 
@@ -417,6 +537,26 @@ def _consumers_active(observations: ObservationSet) -> bool:
     if observations.host is not None and observations.host.runner_ready:
         return True
     return False
+
+
+def _consumers_confirmed_absent(durable, observations: ObservationSet) -> bool:
+    """Whether fresh observations explicitly confirm no active lease consumer.
+
+    ``None`` means *not observed*, not an observed negative, so an observation
+    outage must not authorize releasing a still-consumed profile credential or
+    host lease (invariant 8). Each currently-HELD lease requires a present
+    observation reporting its consumer inactive before release is allowed.
+    """
+
+    if durable.profile_lease == LeaseState.HELD:
+        obs = observations.profile_lease
+        if obs is None or obs.consumer_active:
+            return False
+    if durable.host_lease == LeaseState.HELD:
+        obs = observations.host_lease
+        if obs is None or obs.consumer_active:
+            return False
+    return True
 
 
 def _post_terminal(intent, durable, observations, decide):
@@ -459,8 +599,12 @@ def _post_terminal(intent, durable, observations, decide):
 
 
 def _post_terminal_chain(intent, durable, observations, decide, *, stale_reason):
-    # Harvest terminal evidence first.
-    if not durable.evidence_harvested:
+    # Harvest terminal evidence first. A partial/inconsistent durable update can
+    # set ``evidence_harvested`` while the durable ``terminal_evidence_ref`` is
+    # still missing; require the durable reference, not only the flag, before
+    # advancing past this gate so cleanup/release cannot delete the authoritative
+    # workspace before retrievable terminal evidence exists.
+    if not durable.evidence_harvested or durable.terminal_evidence_ref is None:
         ev = observations.evidence
         if ev is None:
             return decide(
@@ -503,10 +647,30 @@ def _post_terminal_chain(intent, durable, observations, decide, *, stale_reason)
                 DecisionKind.AWAIT_OBSERVATION,
                 ReasonCode.CLEANUP_INCOMPLETE_BEFORE_RELEASE,
             )
+        if not _consumers_confirmed_absent(durable, observations):
+            # No consumer is currently *observed* active, but ``None`` means not
+            # observed — a temporary observation outage must not release a lease
+            # while its consumer may still be running. Require an explicit
+            # observed-negative before authorizing release (invariant 8).
+            return decide(
+                DecisionKind.AWAIT_OBSERVATION,
+                ReasonCode.AWAITING_LEASE_CONSUMER_CONFIRMATION,
+                evidence=(EvidenceRequirement.LEASE_RELEASE_CONFIRMATION,),
+            )
         return decide(
             DecisionKind.RELEASE_LEASES,
             stale_reason or ReasonCode.LEASE_RELEASE_REQUIRED,
             evidence=(EvidenceRequirement.LEASE_RELEASE_CONFIRMATION,),
+        )
+
+    # Cleanup completion gates closure independently of leases: a session whose
+    # leases are already gone (partial executor update, or a session that never
+    # required leases) must still not report SESSION_CLOSED while durable cleanup
+    # is unfinished (invariant 9).
+    if intent.requires_cleanup and not durable.cleanup_complete:
+        return decide(
+            DecisionKind.AWAIT_OBSERVATION,
+            ReasonCode.CLEANUP_INCOMPLETE_BEFORE_CLOSE,
         )
 
     # Fully settled.
@@ -519,31 +683,30 @@ def _post_terminal_chain(intent, durable, observations, decide, *, stale_reason)
 
 #: Maps the legacy execution path's action vocabulary onto the reconciler's
 #: decision vocabulary. Used only to compare the two along the existing path; the
-#: reconciler never becomes a second orchestration source of truth.
+#: reconciler never becomes a second orchestration source of truth. One canonical
+#: legacy action per decision kind — MoonMind's pre-release policy forbids keeping
+#: multiple aliases for the same internal decision as a maintained contract.
 LEGACY_ACTION_TO_DECISION_KIND: dict[str, DecisionKind] = {
     "noop": DecisionKind.NO_OP,
     "await": DecisionKind.AWAIT_OBSERVATION,
-    "poll": DecisionKind.AWAIT_OBSERVATION,
     "ensure_profile_lease": DecisionKind.ENSURE_PROFILE_LEASE,
-    "acquire_profile_lease": DecisionKind.ENSURE_PROFILE_LEASE,
     "ensure_host": DecisionKind.ENSURE_HOST,
-    "launch_host": DecisionKind.ENSURE_HOST,
     "ensure_session": DecisionKind.ENSURE_PROVIDER_SESSION,
-    "create_session": DecisionKind.ENSURE_PROVIDER_SESSION,
     "submit_turn": DecisionKind.SUBMIT_TURN,
-    "post_first_message": DecisionKind.SUBMIT_TURN,
     "record_terminal": DecisionKind.RECORD_PROVIDER_TERMINAL,
     "synthesize_terminal": DecisionKind.SYNTHESIZE_TERMINAL_FROM_SNAPSHOT,
-    "reconcile_terminal_snapshot": DecisionKind.SYNTHESIZE_TERMINAL_FROM_SNAPSHOT,
-    "harvest": DecisionKind.HARVEST_EVIDENCE,
     "harvest_evidence": DecisionKind.HARVEST_EVIDENCE,
-    "cleanup": DecisionKind.BEGIN_CLEANUP,
     "begin_cleanup": DecisionKind.BEGIN_CLEANUP,
     "release_leases": DecisionKind.RELEASE_LEASES,
     "retry": DecisionKind.RETRY_TRANSIENT_OBSERVATION,
     "quarantine": DecisionKind.QUARANTINE_AMBIGUOUS_STATE,
     "fail": DecisionKind.FAIL_NONRETRYABLE,
 }
+
+#: Fixed marker retained for an unrecognized legacy action. Never echo the raw
+#: caller-supplied string into the persisted comparison record: it is unbounded
+#: and could carry a session id, token, or error text.
+_UNKNOWN_LEGACY_ACTION = "unknown"
 
 
 def shadow_compare(
@@ -552,25 +715,28 @@ def shadow_compare(
     """Compare a legacy action string against a reconciler decision.
 
     Returns a bounded, non-sensitive comparison record suitable for logging or
-    persistence in shadow mode. It does not act on the divergence.
+    persistence in shadow mode. It does not act on the divergence. Only a
+    canonical recognized token (or a fixed ``unknown`` marker) is retained, so
+    the record can never leak an oversized or sensitive raw action string.
     """
 
-    mapped = LEGACY_ACTION_TO_DECISION_KIND.get(legacy_action.strip().lower())
+    normalized = legacy_action.strip().lower()
+    mapped = LEGACY_ACTION_TO_DECISION_KIND.get(normalized)
     if mapped is None:
         return ShadowComparison(
-            legacy_action=legacy_action,
+            legacy_action=_UNKNOWN_LEGACY_ACTION,
             decision_kind=decision.kind,
             agreement=False,
             divergence_reason="unknown_legacy_action",
         )
     if mapped == decision.kind:
         return ShadowComparison(
-            legacy_action=legacy_action,
+            legacy_action=normalized,
             decision_kind=decision.kind,
             agreement=True,
         )
     return ShadowComparison(
-        legacy_action=legacy_action,
+        legacy_action=normalized,
         decision_kind=decision.kind,
         agreement=False,
         divergence_reason=f"legacy_maps_to:{mapped.value}",

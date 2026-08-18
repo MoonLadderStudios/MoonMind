@@ -23,7 +23,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
 #: The single supported contract version for every reconciler domain object.
@@ -98,6 +98,11 @@ class ProviderStatusClass(str, Enum):
 
     ACTIVE = "active"
     IDLE = "idle"
+    #: A supported, actionable non-terminal product state (approval/elicitation or
+    #: intervention required). Distinct from ``UNKNOWN`` so the reducer preserves
+    #: the actionable, product-visible intervention state instead of failing
+    #: closed to a generic poll.
+    INTERVENTION = "intervention"
     TERMINAL_SUCCESS = "terminal_success"
     TERMINAL_FAILURE = "terminal_failure"
     TERMINAL_CANCELLED = "terminal_cancelled"
@@ -191,6 +196,10 @@ class ReasonCode(str, Enum):
     UNKNOWN_COMPATIBILITY_VERSION = "unknown_compatibility_version"
     RUNTIME_NOT_READY = "runtime_not_ready"
 
+    # Identity correlation (fail closed on mismatched/ambiguous identity)
+    SESSION_IDENTITY_MISMATCH = "session_identity_mismatch"
+    MISSING_ATTEMPT_IDENTITY = "missing_attempt_identity"
+
     # Sticky durable meta states
     SESSION_FAILED = "session_failed"
     SESSION_QUARANTINED = "session_quarantined"
@@ -209,8 +218,10 @@ class ReasonCode(str, Enum):
     PROVIDER_SESSION_MISSING = "provider_session_missing"
     UNKNOWN_PROVIDER_STATUS = "unknown_provider_status"
     PROVIDER_RUNNING = "provider_running"
+    PROVIDER_INTERVENTION_REQUIRED = "provider_intervention_required"
     IDLE_WITH_OPEN_TOOL_CALL = "idle_with_open_tool_call"
     IDLE_PENDING_TURN_EVIDENCE = "idle_pending_turn_evidence"
+    AWAITING_CORRELATED_TERMINAL_EVIDENCE = "awaiting_correlated_terminal_evidence"
     TERMINAL_EVENT_OBSERVED = "terminal_event_observed"
     TERMINAL_SNAPSHOT_SYNTHESIS = "terminal_snapshot_synthesis"
     TERMINAL_IDLE_SYNTHESIS = "terminal_idle_synthesis"
@@ -226,7 +237,9 @@ class ReasonCode(str, Enum):
     CLEANUP_REQUIRED = "cleanup_required"
     LEASE_RELEASE_REQUIRED = "lease_release_required"
     LEASE_CONSUMERS_ACTIVE = "lease_consumers_active"
+    AWAITING_LEASE_CONSUMER_CONFIRMATION = "awaiting_lease_consumer_confirmation"
     CLEANUP_INCOMPLETE_BEFORE_RELEASE = "cleanup_incomplete_before_release"
+    CLEANUP_INCOMPLETE_BEFORE_CLOSE = "cleanup_incomplete_before_close"
     SESSION_CLOSED = "session_closed"
 
 
@@ -260,8 +273,11 @@ class CompiledSessionIntent(_ReconcilerModel):
     requires_profile_lease: bool = True
     requires_host: bool = True
     requires_cleanup: bool = True
-    max_turn_attempts: int = 1
-    reconcile_interval_seconds: int = 30
+    #: Must be positive: a fresh session must be allowed at least one attempt.
+    max_turn_attempts: int = Field(default=1, gt=0)
+    #: Must be positive so the bounded next deadline is strictly in the future
+    #: (invariant 10) and reconciliation cannot enter a tight zero-interval loop.
+    reconcile_interval_seconds: int = Field(default=30, gt=0)
     turn_prompt_digest: str
 
 
@@ -464,6 +480,11 @@ class CommandSpec(_ReconcilerModel):
     performs the same logical command twice (invariant 7). The provider session
     identity here is copied from durable authority only, never from an
     observation (invariant 11).
+
+    ``terminal_outcome`` carries the observed terminal outcome for the terminal
+    recording/synthesis commands so the executor records the correct durable
+    outcome (success/failure/cancellation, or ``None`` for an unresolved
+    outcome) without reimplementing reducer semantics from the raw observations.
     """
 
     schema_version: Literal["v1"] = RECONCILER_CONTRACT_VERSION
@@ -471,6 +492,7 @@ class CommandSpec(_ReconcilerModel):
     command_id: str
     attempt_id: str | None = None
     provider_session_id: str | None = None
+    terminal_outcome: TerminalOutcome | None = None
 
 
 class DecisionDiagnostics(_ReconcilerModel):

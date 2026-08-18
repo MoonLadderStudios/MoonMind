@@ -8,9 +8,7 @@ from __future__ import annotations
 from moonmind.omnigent.reconciler import (
     DecisionKind,
     EventFrontierObservation,
-    EvidenceObservation,
     HostObservation,
-    LeaseObservation,
     LeaseState,
     ObservationSet,
     ProviderSessionObservation,
@@ -147,6 +145,7 @@ def test_invariant_8_no_release_while_consumer_observed(
     durable = make_ready_durable(
         terminal_outcome=TerminalOutcome.SUCCESS,
         evidence_harvested=True,
+        terminal_evidence_ref="evref-1",
         cleanup_started=True,
         cleanup_complete=True,
     )
@@ -168,6 +167,7 @@ def test_invariant_9_cleanup_distinct_from_completion(
     durable = make_ready_durable(
         terminal_outcome=TerminalOutcome.SUCCESS,
         evidence_harvested=True,
+        terminal_evidence_ref="evref-1",
         cleanup_started=True,
         cleanup_complete=False,
     )

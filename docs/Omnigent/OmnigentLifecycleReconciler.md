@@ -160,17 +160,16 @@ alongside the existing path so a bounded legacy-vs-reconciler comparison can be
 logged or persisted, **without** the reducer becoming a second orchestration
 source of truth: it only compares, it never acts.
 
-## 8. Integration status and non-goals
+## 8. Non-goals
 
-Per the parent plan, this change introduces the domain package, the pure
-reducer, and its tests **without** changing production behavior. Adapting
-`execute.py`, the bridge store, host, and lease state into these typed inputs,
-running the reducer in shadow mode along the live path, and moving terminal
-recovery, retry attachment, and cleanup decisions behind it are subsequent,
-incremental steps. Orchestration and side effects stay in the existing code
-until the dedicated session workflow issue consumes this reducer.
+The reconciler owns the pure decision boundary only. The following remain owned
+elsewhere and are outside this contract's authority:
 
-Non-goals (owned elsewhere): implementing the new Temporal session workflow;
-performing provider/database/Docker/artifact side effects; migrating the durable
-schema; and replacing native Omnigent UI behavior.
-```
+- orchestration and durable scheduling (the Temporal session workflow);
+- performing provider, database, Docker, or artifact side effects;
+- owning or migrating the durable session schema;
+- replacing native Omnigent UI behavior.
+
+Transient provider events feed the reducer to trigger faster reconciliation but
+are never required for correctness; the same decision is always reachable from
+durable state plus authoritative observations.

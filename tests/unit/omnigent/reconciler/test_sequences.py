@@ -17,6 +17,7 @@ from moonmind.omnigent.reconciler import (
     EventFrontierObservation,
     EvidenceObservation,
     LINEAR_PHASE_ORDER,
+    LeaseObservation,
     LeaseState,
     ObservationSet,
     ProviderSessionObservation,
@@ -47,6 +48,20 @@ def _world_observations(durable: DurableSessionState, now: datetime) -> Observat
         kwargs["evidence"] = EvidenceObservation(
             observed_at=now, terminal_evidence_available=True
         )
+    if durable.terminal_outcome is not None:
+        # Post-terminal, the world confirms no lease consumer is active so the
+        # reducer may release once cleanup completes (invariant 8 requires an
+        # observed negative, not merely an absent observation).
+        kwargs["profile_lease"] = LeaseObservation(
+            observed_at=now,
+            held=durable.profile_lease == LeaseState.HELD,
+            consumer_active=False,
+        )
+        kwargs["host_lease"] = LeaseObservation(
+            observed_at=now,
+            held=durable.host_lease == LeaseState.HELD,
+            consumer_active=False,
+        )
     return ObservationSet(**kwargs)
 
 
@@ -62,6 +77,9 @@ def _advance(durable: DurableSessionState, decision, *, confirm_submit: bool) ->
     elif kind == DecisionKind.ENSURE_PROVIDER_SESSION:
         update["provider_session_attached"] = True
         update["provider_session_id"] = "provider-session-1"
+        # A durable attempt identity is assigned alongside the session so the
+        # first turn can be submitted with a stable idempotency identity.
+        update["attempt_id"] = "attempt-1"
     elif kind == DecisionKind.SUBMIT_TURN:
         update["turn_attempts"] = durable.turn_attempts + 1
         update["submission"] = (
@@ -71,6 +89,7 @@ def _advance(durable: DurableSessionState, decision, *, confirm_submit: bool) ->
         update["terminal_outcome"] = TerminalOutcome.SUCCESS
     elif kind == DecisionKind.HARVEST_EVIDENCE:
         update["evidence_harvested"] = True
+        update["terminal_evidence_ref"] = "evref-1"
     elif kind == DecisionKind.BEGIN_CLEANUP:
         update["cleanup_started"] = True
         update["cleanup_complete"] = True

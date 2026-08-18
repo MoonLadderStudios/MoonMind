@@ -17,7 +17,6 @@ from moonmind.omnigent.reconciler import (
     DesiredLifecycle,
     EventFrontierObservation,
     EvidenceObservation,
-    HostObservation,
     LeaseObservation,
     LeaseState,
     ObservationSet,
@@ -39,8 +38,13 @@ def _scenarios(now, make_durable, make_ready_durable):
     ev = lambda **kw: EvidenceObservation(observed_at=now, **kw)  # noqa: E731
     lease = lambda **kw: LeaseObservation(observed_at=now, **kw)  # noqa: E731
 
+    # A recorded terminal always carries a durable evidence reference; the
+    # harvest gate is driven by ``evidence_harvested`` (defaulting False here),
+    # so pre-harvest scenarios still exercise the harvest path.
     terminal = lambda **kw: make_ready_durable(  # noqa: E731
-        terminal_outcome=TerminalOutcome.SUCCESS, **kw
+        terminal_outcome=TerminalOutcome.SUCCESS,
+        terminal_evidence_ref="evref-1",
+        **kw,
     )
 
     return [
@@ -186,7 +190,10 @@ def _scenarios(now, make_durable, make_ready_durable):
             ReasonCode.SESSION_QUARANTINED,
         ),
         (
-            "max_attempts_exhausted_fails",
+            # Exhausting the attempt budget records a FAILURE terminal so the
+            # post-terminal chain can release the leases/session that were
+            # already acquired, rather than stopping at a settled dead end.
+            "max_attempts_exhausted_records_failure_terminal",
             make_durable(
                 profile_lease=LeaseState.HELD,
                 host_lease=LeaseState.HELD,
@@ -197,7 +204,7 @@ def _scenarios(now, make_durable, make_ready_durable):
                 turn_attempts=1,
             ),
             ObservationSet(),
-            DecisionKind.FAIL_NONRETRYABLE,
+            DecisionKind.RECORD_PROVIDER_TERMINAL,
             ReasonCode.MAX_TURN_ATTEMPTS_EXHAUSTED,
         ),
         # --- compatibility gate ---
@@ -271,15 +278,33 @@ def _scenarios(now, make_durable, make_ready_durable):
             ReasonCode.LEASE_CONSUMERS_ACTIVE,
         ),
         (
+            # Release requires an explicit observed-negative for every held lease
+            # (invariant 8); a fresh consumer-inactive observation authorizes it.
             "terminal_ready_releases_leases",
             terminal(
                 evidence_harvested=True,
                 cleanup_started=True,
                 cleanup_complete=True,
             ),
-            ObservationSet(),
+            ObservationSet(
+                profile_lease=lease(held=True, consumer_active=False),
+                host_lease=lease(held=True, consumer_active=False),
+            ),
             DecisionKind.RELEASE_LEASES,
             ReasonCode.LEASE_RELEASE_REQUIRED,
+        ),
+        (
+            # Without a confirming observation, ``None`` is *not observed* — the
+            # reducer must wait for consumer confirmation, not release the lease.
+            "terminal_ready_but_no_consumer_confirmation_waits",
+            terminal(
+                evidence_harvested=True,
+                cleanup_started=True,
+                cleanup_complete=True,
+            ),
+            ObservationSet(),
+            DecisionKind.AWAIT_OBSERVATION,
+            ReasonCode.AWAITING_LEASE_CONSUMER_CONFIRMATION,
         ),
         (
             "terminal_fully_settled_no_op",
@@ -384,12 +409,18 @@ def test_optional_provisioning_requirements(
 
 
 def test_cleanup_not_required_skips_to_release(
-    make_intent, make_ready_durable, run
+    now, make_intent, make_ready_durable, run
 ):
     intent = make_intent(requires_cleanup=False)
     durable = make_ready_durable(
-        terminal_outcome=TerminalOutcome.SUCCESS, evidence_harvested=True
+        terminal_outcome=TerminalOutcome.SUCCESS,
+        evidence_harvested=True,
+        terminal_evidence_ref="evref-1",
     )
-    decision = run(intent, durable)
+    observations = ObservationSet(
+        profile_lease=LeaseObservation(observed_at=now, held=True, consumer_active=False),
+        host_lease=LeaseObservation(observed_at=now, held=True, consumer_active=False),
+    )
+    decision = run(intent, durable, observations)
     # With cleanup not required, the chain goes straight to lease release.
     assert decision.kind == DecisionKind.RELEASE_LEASES
