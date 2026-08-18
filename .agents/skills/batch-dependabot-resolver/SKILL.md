@@ -171,7 +171,9 @@ python3 .agents/skills/batch-dependabot-resolver/bin/batch_dependabot_resolver.p
    `batch-dependabot-resolver:{repo}:pr:{number}:head:{headSha}`. Submit via
    `POST /api/executions`, require the canonical `workflowId`, and verify it via
    `GET /api/executions/{workflowId}` before counting the child as queued
-   (`MOONMIND_URL` must point at the MoonMind API).
+   (`MOONMIND_URL` must point at the MoonMind API). When MoonMind supplies
+   `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN`, forward it as the
+   execution-scoped bearer and mark both calls as fan-out v1.
 
 5. Write a summary artifact `batch_dependabot_resolver_result.json` (under the managed
    session artifact spool when available, otherwise the configured `--artifacts-dir`) listing
