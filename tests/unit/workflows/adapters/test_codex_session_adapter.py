@@ -40,7 +40,9 @@ from moonmind.workflows.codex_session_timeouts import (
 from moonmind.workflows.adapters.codex_session_adapter import (
     CodexSessionAdapter,
     CodexSessionRunFailedError,
+    _execution_fanout_authorization,
     _jira_skill_blocker_summary,
+    _managed_session_required_capabilities,
     _pr_resolver_terminal_contract,
 )
 from moonmind.workflows.temporal.workflows.agent_run import (
@@ -53,6 +55,49 @@ from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     _CODEX_PROVIDER_USAGE_LIMIT_REACHED_REASON,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
+
+
+async def test_managed_session_required_capabilities_preserve_omitted_replay_shape() -> None:
+    assert _managed_session_required_capabilities({}) is None
+    assert _managed_session_required_capabilities(
+        {"requiredCapabilities": []}
+    ) == []
+    assert _managed_session_required_capabilities(
+        {"requiredCapabilities": ["execution.fanout"]}
+    ) == ["execution.fanout"]
+
+    with pytest.raises(ValueError, match="must be a list"):
+        _managed_session_required_capabilities(
+            {"requiredCapabilities": "execution.fanout"}
+        )
+
+
+async def test_execution_fanout_authorization_comes_from_step_policy() -> None:
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="codex_cli",
+        correlationId="corr-1",
+        idempotencyKey="idem-1",
+        stepExecution={
+            "workflowId": "wf-1",
+            "runId": "run-1",
+            "logicalStepId": "step-1",
+            "executionOrdinal": 1,
+            "stepExecutionId": "wf-1:run-1:step-1:execution:1",
+            "runtimeContextPolicy": "fresh_agent_run",
+            "skillSourcePolicy": {
+                "executionFanout": {
+                    "authorized": True,
+                    "sourceKind": "built_in",
+                }
+            },
+        },
+    )
+
+    assert _execution_fanout_authorization(request) == {
+        "authorized": True,
+        "sourceKind": "built_in",
+    }
 
 pytestmark = [pytest.mark.asyncio]
 

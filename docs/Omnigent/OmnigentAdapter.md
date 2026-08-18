@@ -283,7 +283,10 @@ Host registration credentials and OpenAI OAuth credentials remain separate. Neit
 
 The Omnigent network route to MoonMind is transport, not authority. The runtime
 adapter derives grants from the normalized Required Capabilities and policy
-snapshot. For `execution.fanout`, it mints a short-lived parent-scoped bearer,
+snapshot. For `execution.fanout`, the workflow must also attest that the
+immutable resolved Skill has built-in or deployment-managed provenance and the
+derived requirement; an authored capability string is never sufficient
+authority. The adapter then mints a short-lived parent-scoped bearer,
 writes it to the lease-owned read-only capability directory, and exposes only
 `MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE` to the runner and login shell.
 Runs without that requirement receive neither the file nor its selector. Raw

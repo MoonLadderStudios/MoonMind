@@ -1177,6 +1177,10 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
         None,
         alias="requiredCapabilities",
     )
+    execution_fanout_authorization: dict[str, Any] | None = Field(
+        None,
+        alias="executionFanoutAuthorization",
+    )
     container_job_owner: OwnerIdentity | None = Field(
         None, alias="containerJobOwner"
     )

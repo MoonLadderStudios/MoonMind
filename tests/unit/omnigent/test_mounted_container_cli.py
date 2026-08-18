@@ -45,6 +45,40 @@ def test_omitted_request_id_remains_unique(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
 
+def test_bearer_token_reads_omnigent_capability_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cli = _load_cli()
+    capability_file = tmp_path / "container-jobs"
+    capability_file.write_text("scoped-file-token\n", encoding="utf-8")
+    monkeypatch.delenv("MOONMIND_CONTAINER_JOBS_BEARER_TOKEN", raising=False)
+    monkeypatch.setenv(
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE", str(capability_file)
+    )
+    monkeypatch.setenv(
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN", "stale-inline-token"
+    )
+
+    assert cli._container_jobs_bearer_token() == "scoped-file-token"
+
+
+def test_bearer_token_file_selector_fails_closed_when_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cli = _load_cli()
+    monkeypatch.setenv(
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE", str(tmp_path / "missing")
+    )
+    monkeypatch.setenv(
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN", "must-not-be-used"
+    )
+
+    with pytest.raises(cli.CliError, match="BEARER_TOKEN_FILE is unavailable"):
+        cli._container_jobs_bearer_token()
+
+
 def test_log_reader_follows_cursors_and_keeps_terminal_tail(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

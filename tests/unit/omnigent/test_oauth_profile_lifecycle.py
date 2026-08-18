@@ -1108,6 +1108,25 @@ def test_runtime_script_snapshot_materializes_owned_step_identity(tmp_path) -> N
         encoding="utf-8"
     ) == "also-must-not-be-persisted\n"
     assert profile.stat().st_mode & 0o777 == 0o444
+    retried = runtime._prepare_runtime_scripts(
+        "workspace-key",
+        current_step_execution_id=execution_id,
+        runtime_environment={
+            "MOONMIND_URL": "http://api:8000",
+            "MOONMIND_AGENT_RUN_ID": execution_id,
+            "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
+            "MOONMIND_RUNTIME_ID": "codex_cli",
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "retry-container-capability",
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "retry-fanout-capability",
+        },
+    )
+    assert retried == target
+    assert (target / "capabilities" / "container-jobs").read_text(
+        encoding="utf-8"
+    ) == "retry-container-capability\n"
+    assert (target / "capabilities" / "execution-fanout").read_text(
+        encoding="utf-8"
+    ) == "retry-fanout-capability\n"
     with pytest.raises(OmnigentOAuthHostError) as mismatch:
         runtime._prepare_runtime_scripts(
             "workspace-key",
@@ -1817,6 +1836,10 @@ def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
         current_step_execution_id="agent-run-1",
         timeout_seconds=3600,
         required_capabilities=("docker", "execution.fanout"),
+        execution_fanout_authorization={
+            "authorized": True,
+            "sourceKind": "built_in",
+        },
     )
 
     assert environment["MOONMIND_CONTAINER_JOBS_MCP_URL"] == (
@@ -1873,6 +1896,43 @@ def test_omnigent_runtime_authority_is_not_minted_without_required_capabilities(
     assert environment["MOONMIND_URL"] == "http://api:8000"
     assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in environment
     assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
+
+
+def test_omnigent_fanout_mint_rejects_denied_skill_authorization(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        runtime._container_job_environment(
+            binding=_binding().model_copy(
+                update={
+                    "static_host_id": None,
+                    "host_launch_profile_ref": "codex-oauth-v1",
+                }
+            ),
+            host_lease=_host_lease(),
+            workspace_locator={
+                "kind": "sandbox",
+                "workspaceId": "sandbox-1",
+                "relativePath": "repo",
+            },
+            current_workflow_id="workflow-1",
+            current_step_execution_id="agent-run-1",
+            timeout_seconds=3600,
+            required_capabilities=("execution.fanout",),
+            execution_fanout_authorization={
+                "authorized": False,
+                "sourceKind": "repo",
+            },
+        )
+
+    assert exc_info.value.code == "authorization_denied"
 
 
 @pytest.mark.asyncio

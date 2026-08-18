@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -79,6 +80,15 @@ metadata:
         markdown,
         skill_name="batch-skill",
     ) == ("execution.fanout",)
+
+
+async def test_tactics_test_declares_canonical_docker_capability() -> None:
+    skill_path = Path(__file__).parents[3] / ".agents" / "skills" / "tactics-test" / "SKILL.md"
+
+    assert extract_required_capabilities_from_skill_markdown(
+        skill_path.read_text(encoding="utf-8"),
+        skill_name="tactics-test",
+    ) == ("docker",)
 
 
 async def test_terminal_contract_rejects_rooted_posix_path() -> None:

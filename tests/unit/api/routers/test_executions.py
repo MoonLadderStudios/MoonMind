@@ -120,6 +120,26 @@ from moonmind.workflows.executions.control_stop_continuation import (
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
 
 
+def test_deployment_skill_requirements_merge_into_canonical_capabilities() -> None:
+    assert executions_module._merge_deployment_skill_required_capabilities(
+        ["Git", "execution.fanout"],
+        {
+            "batch-skill": {
+                "required_capabilities": ["execution.fanout", "GH"]
+            },
+            "step-skill": {"required_capabilities": ["docker"]},
+        },
+    ) == ["git", "execution.fanout", "gh", "docker"]
+
+
+def test_deployment_skill_requirements_reject_malformed_trusted_metadata() -> None:
+    with pytest.raises(HTTPException, match="must be a JSON array of strings"):
+        executions_module._merge_deployment_skill_required_capabilities(
+            [],
+            {"batch-skill": {"required_capabilities": "execution.fanout"}},
+        )
+
+
 class _ScalarRows:
     def __init__(self, rows: list[object]) -> None:
         self._rows = rows

@@ -8,6 +8,7 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 _AUDIENCE = "moonmind-execution-fanout"
@@ -17,6 +18,30 @@ EXECUTION_FANOUT_REQUIRED_CAPABILITY = "execution.fanout"
 
 class ExecutionFanoutCapabilityError(ValueError):
     """Raised when an execution fan-out capability is invalid or expired."""
+
+
+def require_execution_fanout_authorization(
+    required_capabilities: Sequence[str] | None,
+    authorization: Mapping[str, Any] | None,
+) -> bool:
+    """Authorize minting from workflow-owned evidence, with a replay-only gap."""
+
+    required = {
+        str(value or "").strip().lower()
+        for value in (required_capabilities or ())
+    }
+    if EXECUTION_FANOUT_REQUIRED_CAPABILITY not in required:
+        return False
+    # Already-scheduled activity payloads predate the typed authorization field
+    # and retain their former launch semantics. Current workflows always write
+    # an explicit authorized/denied decision.
+    if authorization is None:
+        return True
+    if authorization.get("authorized") is True:
+        return True
+    raise ExecutionFanoutCapabilityError(
+        "execution fan-out is not authorized by the resolved Skill policy"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,5 +189,6 @@ __all__ = [
     "ExecutionFanoutCapability",
     "ExecutionFanoutCapabilityError",
     "mint_execution_fanout_capability",
+    "require_execution_fanout_authorization",
     "verify_execution_fanout_capability",
 ]

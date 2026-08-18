@@ -316,6 +316,57 @@ def test_run_python_tests_passes_scoped_bearer_token_to_transport(
     }
 
 
+def test_run_python_tests_reads_scoped_bearer_token_file(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str | None] = {}
+    fake_client = _FakeClient(["succeeded"])
+    capability_file = tmp_path / "container-jobs"
+    capability_file.write_text("scoped-file-token\n", encoding="utf-8")
+
+    def client_factory(*, endpoint: str, bearer_token: str | None):
+        captured["endpoint"] = endpoint
+        captured["bearer_token"] = bearer_token
+        return fake_client
+
+    monkeypatch.setattr(
+        "moonmind.container_job_cli.ContainerJobMcpClient", client_factory
+    )
+
+    result = run_python_tests(
+        [],
+        env={
+            **_ENV,
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "stale-inline-token",
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE": str(capability_file),
+        },
+        poll_seconds=0.001,
+    )
+
+    assert result.state == "succeeded"
+    assert captured == {
+        "endpoint": "http://api:8000/mcp",
+        "bearer_token": "scoped-file-token",
+    }
+
+
+def test_bearer_token_file_selector_fails_closed_when_empty(tmp_path) -> None:
+    capability_file = tmp_path / "container-jobs"
+    capability_file.write_text("\n", encoding="utf-8")
+
+    with pytest.raises(ContainerJobCliError, match="BEARER_TOKEN_FILE is empty"):
+        run_python_tests(
+            [],
+            env={
+                **_ENV,
+                "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "must-not-be-used",
+                "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE": str(capability_file),
+            },
+            poll_seconds=0.001,
+        )
+
+
 def test_run_python_tests_polls_to_authoritative_terminal_evidence() -> None:
     client = _FakeClient(["queued", "running", "succeeded"])
 

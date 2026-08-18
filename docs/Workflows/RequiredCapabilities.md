@@ -297,6 +297,16 @@ Skill metadata with `sideEffect.kind: enqueue_children` automatically contribute
 this requirement during trusted backend normalization. Built-in batch Skills
 therefore work without an operator permission toggle, while repo and local Skill
 metadata still passes through the normal untrusted-source policy checks.
+The Run workflow records a compact allow/deny attestation from the immutable
+resolved Skill entry: only built-in or deployment-managed provenance with the
+derived requirement authorizes bearer minting. An authored top-level token is
+still only a requirement and cannot grant fan-out by itself. Missing attestation
+is reserved for replay of launches scheduled before this contract existed.
+The Run workflow records a compact allow/deny attestation from the immutable
+resolved Skill entry: only built-in or deployment-managed provenance with the
+derived requirement authorizes bearer minting. An authored top-level token is
+still only a requirement and cannot grant fan-out by itself. Missing attestation
+is reserved for replay of launches scheduled before this contract existed.
 
 Minimum readiness:
 

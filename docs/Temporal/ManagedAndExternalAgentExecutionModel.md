@@ -415,6 +415,18 @@ file and pass only its non-secret selector into runner and login-shell
 environments. Hosts without the requirement receive neither the bearer nor the
 selector.
 
+The Run workflow derives the mint authorization from immutable resolved-Skill
+provenance and carries it in `stepExecution.skillSourcePolicy.executionFanout`.
+Built-in and deployment-managed Skills are eligible; repo/local Skills and
+top-level-only declarations are denied before runtime launch. The absent field
+is a replay marker for already-scheduled launch payloads, not a current default.
+
+The Run workflow derives the mint authorization from immutable resolved-Skill
+provenance and carries it in `stepExecution.skillSourcePolicy.executionFanout`.
+Built-in and deployment-managed Skills are eligible; repo/local Skills and
+top-level-only declarations are denied before runtime launch. The absent field
+is a replay marker for already-scheduled launch payloads, not a current default.
+
 ### 11.2 Profile-bound Omnigent hosts
 
 The Codex host filesystem separates:

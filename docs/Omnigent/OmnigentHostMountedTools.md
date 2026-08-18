@@ -375,6 +375,12 @@ selector exists but the file is missing or empty. This preserves unchanged
 upstream host images and avoids a token broker, sidecar, broad API token, or
 operator-managed permission switch.
 
+The container-job bearer uses the same lease-owned file pattern. Both the
+projected dependency-free `moonmind` CLI and the shared Python CLI prefer
+`MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE`, fail closed when its selected file
+is missing or empty, and use the legacy inline value only when no selector is
+present. Same-lease retries atomically refresh file contents before launch.
+
 ---
 
 ## 9. Use for future tools

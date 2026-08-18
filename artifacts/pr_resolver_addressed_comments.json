@@ -1,22 +1,42 @@
 [
   {
-    "id": 3808359979,
+    "id": 3808837005,
     "disposition": "addressed",
-    "rationale": "Removed both legacy managed-session network aliases and updated every remaining test and caller to use MOONMIND_CONTROL_PLANE_NETWORK."
+    "rationale": "Both container CLIs now prefer the lease-owned bearer file, fail closed for missing or empty selected files, and retain inline fallback only when no selector exists."
   },
   {
-    "id": 3808359988,
+    "id": 3808837012,
     "disposition": "addressed",
-    "rationale": "The lifecycle conformance now launches its health probe through DockerCodexManagedSessionController before testing API reachability from the resulting managed-session container."
+    "rationale": "The tactics-test Skill now declares the canonical docker capability in its portable frontmatter and the real Skill parser test verifies it."
   },
   {
-    "id": 3808359994,
+    "id": 3808837016,
     "disposition": "addressed",
-    "rationale": "The lifecycle conformance exports project-specific names for the control-plane, Docker-proxy, sandbox-egress, restricted-egress, and Omnigent-egress networks."
+    "rationale": "Managed-session fanout minting is independent of container-job availability and the no-docker boundary test verifies fanout without container-job authority."
   },
   {
-    "id": 4966282554,
+    "id": 3808837020,
+    "disposition": "addressed",
+    "rationale": "Trusted deployment Skill artifact requirements are normalized, lowercased, deduplicated, and flattened into canonical top-level requiredCapabilities."
+  },
+  {
+    "id": 3808837024,
+    "disposition": "addressed",
+    "rationale": "The managed adapter preserves omitted requiredCapabilities as None for in-flight replay, preserves explicit empty lists, and rejects malformed present values."
+  },
+  {
+    "id": 3808837028,
+    "disposition": "addressed",
+    "rationale": "Same-lease retries atomically replace capability-file contents with freshly minted values while preserving the exact owned filename set and read-only final mode."
+  },
+  {
+    "id": 3808837030,
+    "disposition": "addressed",
+    "rationale": "Fanout minting now requires workflow-owned authorization derived from immutable built-in or deployment Skill provenance; repo/local and top-level-only declarations are denied."
+  },
+  {
+    "id": 4966913681,
     "disposition": "not-applicable",
-    "rationale": "This review body is an informational summary whose actionable findings are represented and addressed by the three linked review comments."
+    "rationale": "This review body is an informational summary whose seven actionable findings are separately classified and addressed above."
   }
 ]

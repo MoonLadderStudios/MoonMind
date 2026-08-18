@@ -59,7 +59,9 @@ from moonmind.security.container_job_capabilities import (
 from moonmind.security.docker_networks import resolve_control_plane_network
 from moonmind.security.execution_fanout_capabilities import (
     EXECUTION_FANOUT_REQUIRED_CAPABILITY,
+    ExecutionFanoutCapabilityError,
     mint_execution_fanout_capability,
+    require_execution_fanout_authorization,
 )
 from moonmind.security.egress import (
     EgressAttestation,
@@ -415,6 +417,7 @@ class OmnigentOAuthHostRuntime:
         cleanup_authority_store: Any | None = None,
         target_repository: str = "",
         required_capabilities: tuple[str, ...] = (),
+        execution_fanout_authorization: Mapping[str, Any] | None = None,
         github_token: str | None = None,
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
@@ -447,6 +450,15 @@ class OmnigentOAuthHostRuntime:
         normalized_capabilities = {
             str(item or "").strip().lower() for item in required_capabilities
         }
+        try:
+            require_execution_fanout_authorization(
+                required_capabilities,
+                execution_fanout_authorization,
+            )
+        except ExecutionFanoutCapabilityError as exc:
+            raise OmnigentOAuthHostError(
+                str(exc), code="authorization_denied"
+            ) from exc
         if (
             EXECUTION_FANOUT_REQUIRED_CAPABILITY in normalized_capabilities
             and not binding.host_launch_profile_ref
@@ -509,6 +521,7 @@ class OmnigentOAuthHostRuntime:
                 current_step_execution_id=current_step_execution_id,
                 timeout_seconds=int(launch["limits"]["timeoutSeconds"]),
                 required_capabilities=required_capabilities,
+                execution_fanout_authorization=execution_fanout_authorization,
             )
             daemon_runtime_scripts = self._prepare_daemon_runtime_scripts(
                 host_lease.lease_id,
@@ -1745,6 +1758,13 @@ class OmnigentOAuthHostRuntime:
                     code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
                 )
             capability_dir = target / "capabilities"
+            if capability_dir.is_dir() and any(
+                path.is_symlink() for path in capability_dir.iterdir()
+            ):
+                raise OmnigentOAuthHostError(
+                    "Omnigent runtime capability files do not match their owner",
+                    code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
+                )
             existing_capability_files = (
                 {path.name for path in capability_dir.iterdir() if path.is_file()}
                 if capability_dir.is_dir()
@@ -1755,6 +1775,32 @@ class OmnigentOAuthHostRuntime:
                     "Omnigent runtime capability files do not match their owner",
                     code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
                 )
+            if capability_files:
+                try:
+                    capability_dir.chmod(0o700)
+                    for filename, secret_value in capability_files.items():
+                        descriptor, temporary_name = tempfile.mkstemp(
+                            prefix=f".{filename}-",
+                            dir=capability_dir,
+                        )
+                        os.close(descriptor)
+                        temporary = Path(temporary_name)
+                        try:
+                            temporary.write_text(
+                                secret_value + "\n", encoding="utf-8"
+                            )
+                            temporary.chmod(0o444)
+                            os.replace(temporary, capability_dir / filename)
+                        finally:
+                            if temporary.exists():
+                                temporary.unlink()
+                except OSError as exc:
+                    raise OmnigentOAuthHostError(
+                        "Omnigent runtime capability files could not be refreshed",
+                        code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
+                    ) from exc
+                finally:
+                    capability_dir.chmod(0o555)
             return target
 
         target_parent.mkdir(parents=True, exist_ok=True)
@@ -2453,6 +2499,7 @@ class OmnigentOAuthHostRuntime:
         current_step_execution_id: str,
         timeout_seconds: int,
         required_capabilities: Sequence[str] = (),
+        execution_fanout_authorization: Mapping[str, Any] | None = None,
     ) -> dict[str, str]:
         """Materialize only the runtime capabilities declared for this host lease."""
 
@@ -2484,6 +2531,15 @@ class OmnigentOAuthHostRuntime:
         normalized_capabilities = {
             str(item or "").strip().lower() for item in required_capabilities
         }
+        try:
+            require_execution_fanout_authorization(
+                required_capabilities,
+                execution_fanout_authorization,
+            )
+        except ExecutionFanoutCapabilityError as exc:
+            raise OmnigentOAuthHostError(
+                str(exc), code="authorization_denied"
+            ) from exc
         environment = {
             "MOONMIND_URL": moonmind_url,
             "MOONMIND_AGENT_RUN_ID": agent_run_id,
