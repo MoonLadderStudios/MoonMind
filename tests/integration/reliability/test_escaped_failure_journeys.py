@@ -38,6 +38,8 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.execute import (
     OmnigentSessionStillRunningError,
     _await_marked_turn_terminal,
+    _build_omnigent_first_message,
+    _first_message_text,
     _marked_turn_item_state,
     _persisted_pre_dispatch_item_ids,
     _safe_heartbeat,
@@ -4992,6 +4994,55 @@ async def test_omnigent_pr_resolver_runtime_authority_replay(
     assert evaluated.metadata["terminalContractEvidencePath"] == expected[
         "terminalContractEvidencePath"
     ]
+
+
+async def test_omnigent_profile_bound_skill_activation_replay() -> None:
+    """Replay mm:b56b53bd at the verified snapshot-to-first-message boundary."""
+
+    replay_id = "omnigent-profile-bound-skill-activation"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex_openai_oauth",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:skill-activation-replay",
+        instructionRef="ignored inline instruction",
+        resolvedSkillsetRef=manifest["resolvedSkillsetRef"],
+        parameters={
+            "metadata": {
+                "moonmind": {"selectedSkill": manifest["selectedSkill"]}
+            }
+        },
+    )
+    request = _bind_exact_host(
+        request,
+        host_id="host-replay",
+        workspace_path="/workspaces/run",
+        profile_authorization={
+            "providerProfileId": "codex_openai_oauth",
+            "hostLeaseRef": "lease-replay",
+        },
+        harness="codex-native",
+        agent_name=CODEX_STOCK_AGENT_NAME,
+    )
+
+    class Gateway:
+        async def read_text(self, _ref: str) -> str:
+            raise AssertionError("inline replay prompt must not read an artifact")
+
+    message = await _build_omnigent_first_message(
+        request=request,
+        prompt={"text": manifest["firstMessage"]},
+        artifact_gateway=Gateway(),
+    )
+    text = _first_message_text(message)
+
+    assert text.startswith(expected["firstMessageHeader"])
+    assert expected["skillDocument"] in text
+    assert expected["runnerEnvironmentVariable"] in text
+    assert text.endswith(manifest["firstMessage"])
 
 
 async def test_omnigent_pr_resolver_publish_evidence_handoff_replay(

@@ -631,6 +631,9 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     assert _network_names(host_service) == {"local-network"}
 
     host_env = _env_map(host_service["environment"])
+    assert host_env["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] == (
+        "MOONMIND_ACTIVE_SKILLS_DIR"
+    )
     assert host_env["OPENAI_API_KEY"] == "${OPENAI_API_KEY:-}"
     assert "CODEX_HOME" not in host_env
     assert host_env["ANTHROPIC_API_KEY"] == "${ANTHROPIC_API_KEY:-}"
@@ -677,7 +680,8 @@ def test_omnigent_claude_host_profile_uses_only_canonical_oauth_credentials():
             "NO_PROXY": "localhost,127.0.0.1",
             "no_proxy": "localhost,127.0.0.1",
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH": (
-            "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy"
+            "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
+            "MOONMIND_ACTIVE_SKILLS_DIR"
         ),
         "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
         "OMNIGENT_SERVER_URL": "http://omnigent:8000",
@@ -779,7 +783,8 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
             "NO_PROXY": "localhost,127.0.0.1",
             "no_proxy": "localhost,127.0.0.1",
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH": (
-            "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy"
+            "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
+            "MOONMIND_ACTIVE_SKILLS_DIR"
         ),
         "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
         "HOME": "/home/app",

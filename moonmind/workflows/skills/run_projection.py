@@ -367,6 +367,8 @@ def build_skill_activation_summary(
         f"- Selected skill: {selected_skill}\n"
         f"- Full active MoonMind skill content is available at: {visible_path}\n"
         f"- Read `{skill_doc}` first and follow that active snapshot.\n"
+        "- For Skill helper commands, set `MOONMIND_ACTIVE_SKILLS_DIR` to the "
+        "visible path above if it is not already exported.\n"
         "- Do not discover skills from repo-local or local-only source folders during execution.\n"
     )
     on_demand_instruction = skills_on_demand_runtime_instruction(
@@ -376,9 +378,9 @@ def build_skill_activation_summary(
         block = block + f"{on_demand_instruction}\n"
     if not alias_available:
         block = block + (
-            "- The repository also contains `.agents/skills`; that directory "
-            "is repo-authored source and must not be modified or treated as "
-            "the active selected skill snapshot.\n"
+            "- If the repository contains `.agents/skills`, that directory is "
+            "repo-authored source and must not be modified or treated as the "
+            "active selected skill snapshot.\n"
         )
     return block + "\n"
 

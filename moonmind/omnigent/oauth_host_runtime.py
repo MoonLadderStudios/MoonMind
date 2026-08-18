@@ -31,6 +31,7 @@ from moonmind.omnigent.oauth_hosts import (
     deterministic_host_container_name,
     validate_preflight_result,
 )
+from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
 from moonmind.publish.service import PublishService
 from moonmind.repositories.lore_adapter import (
     LORE_UNSUPPORTED_RUNTIME_LANE,
@@ -2223,7 +2224,9 @@ class OmnigentOAuthHostRuntime:
             "--mount",
             f"type=bind,src={workspace_source},dst=/workspaces/run",
             "--mount",
-            f"type=bind,src={skill_projection},dst=/opt/moonmind-skills,readonly",
+            "type=bind,"
+            f"src={skill_projection},"
+            f"dst={OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR},readonly",
             "--env",
             f"PATH={self._prepend_tools_path(host_path)}",
             "--env",
@@ -2233,7 +2236,8 @@ class OmnigentOAuthHostRuntime:
             "--env",
             f"OMNIGENT_SERVER_URL={self._server_url}",
             "--env",
-            "MOONMIND_ACTIVE_SKILLS_DIR=/opt/moonmind-skills",
+            "MOONMIND_ACTIVE_SKILLS_DIR="
+            f"{OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR}",
             "--env",
             f"MOONMIND_STEP_EXECUTION_ID={current_step_execution_id}",
             "--env",
@@ -2253,6 +2257,7 @@ class OmnigentOAuthHostRuntime:
             args.extend(["--env", proxy_env])
         runner_env_passthrough = [
             *_RUNNER_PROXY_ENV_NAMES,
+            "MOONMIND_ACTIVE_SKILLS_DIR",
             "MOONMIND_STEP_EXECUTION_ID",
         ]
         token = os.getenv("OMNIGENT_HOST_TOKEN", "")

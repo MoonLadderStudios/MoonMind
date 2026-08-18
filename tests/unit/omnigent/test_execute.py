@@ -126,6 +126,41 @@ async def test_first_message_includes_terminal_continuation_authority(
     assert text.count(authority_instruction) == 1
 
 
+@pytest.mark.asyncio
+async def test_profile_bound_first_message_activates_resolved_skill_snapshot() -> None:
+    request = _request()
+    request.resolved_skillset_ref = "art-resolved-fix-comments"
+    request.instruction_ref = "Inline task instructions"
+    request.parameters = {
+        "metadata": {"moonmind": {"selectedSkill": "fix-comments"}},
+        "omnigent": {
+            "_moonmindProfileAuthorization": {
+                "providerProfileId": "codex",
+                "hostLeaseRef": "lease-1",
+            }
+        },
+    }
+
+    class Gateway:
+        async def read_text(self, _ref: str) -> str:
+            raise AssertionError("the explicit prompt should not read an artifact")
+
+    message = await _build_omnigent_first_message(
+        request=request,
+        prompt={"text": "Execute the selected skill"},
+        artifact_gateway=Gateway(),
+    )
+    text = _first_message_text(message)
+
+    assert text.startswith("Active MoonMind skill snapshot:")
+    assert "Selected skill: fix-comments" in text
+    assert (
+        "Read `/opt/moonmind-skills/fix-comments/SKILL.md` first" in text
+    )
+    assert "set `MOONMIND_ACTIVE_SKILLS_DIR`" in text
+    assert text.endswith("Execute the selected skill")
+
+
 def test_current_turn_progress_ignores_prior_terminal_work() -> None:
     marker = """MoonMind-Omnigent-Run:
   correlationId: workflow-1
