@@ -35,6 +35,7 @@ from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
     ManagedSessionReapResult,
     _default_command_runner,
+    _managed_session_docker_network,
     _parse_docker_timestamp,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
@@ -53,6 +54,34 @@ def _clear_managed_session_docker_policy_env(
     monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_MODE", raising=False)
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", raising=False)
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS", raising=False)
+    monkeypatch.delenv("MOONMIND_CONTROL_PLANE_NETWORK", raising=False)
+
+
+def test_managed_session_network_uses_canonical_control_plane_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_CONTROL_PLANE_NETWORK", "custom-control-plane")
+    monkeypatch.setenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", "legacy-managed")
+    monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "legacy-global")
+
+    assert _managed_session_docker_network() == "custom-control-plane"
+
+
+@pytest.mark.parametrize(
+    ("legacy_name", "legacy_value"),
+    [
+        ("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", "legacy-managed"),
+        ("MOONMIND_DOCKER_NETWORK", "legacy-global"),
+    ],
+)
+def test_managed_session_network_retains_legacy_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    legacy_name: str,
+    legacy_value: str,
+) -> None:
+    monkeypatch.setenv(legacy_name, legacy_value)
+
+    assert _managed_session_docker_network() == legacy_value
 
 
 class _LocalArtifactStorage:
@@ -338,7 +367,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert "--mount" in run_command
     assert "-v" not in run_command
     assert "--network" in run_command
-    assert "local-network" in run_command
+    assert "moonmind_control-plane-network" in run_command
     assert request.image_ref in run_command
     assert (
         "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS=1800" in run_command
@@ -795,7 +824,7 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
         command for command in commands if command[:2] == ("docker", "run")
     )
     assert "--network" in run_command
-    assert "local-network" in run_command
+    assert "moonmind_control-plane-network" in run_command
 
 @pytest.mark.asyncio
 async def test_unrestricted_policy_uses_container_jobs_without_raw_docker(

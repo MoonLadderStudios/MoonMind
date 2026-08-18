@@ -65,7 +65,7 @@ These need real secret values / a verified digest and cannot be committed:
 
 3. If sidecars run on the locked-down `sandbox-egress-network`, also ensure the DinD
    daemon uses the egress proxy (the squid allowlist now permits `ghcr.io`, but the
-   daemon must be told to use it). On the default `local-network` (NAT egress) this is
+   daemon must be told to use it). On the default control-plane network (NAT egress) this is
    not required.
 
 ## Deferred (separate change, needs design + tests)

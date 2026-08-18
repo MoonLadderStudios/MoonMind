@@ -3293,6 +3293,7 @@ def test_build_agent_runtime_deps_reuses_global_session_network(
     artifacts_root = tmp_path / "artifacts"
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
     monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_ARTIFACTS", str(artifacts_root))
+    monkeypatch.delenv("MOONMIND_CONTROL_PLANE_NETWORK", raising=False)
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
     monkeypatch.setenv("MOONMIND_DOCKER_NETWORK", "shared-moonmind-network")
     monkeypatch.setenv("MOONMIND_URL", "http://moonmind-api:8000")

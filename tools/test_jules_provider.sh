@@ -4,7 +4,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 COMPOSE_FILE="$REPO_ROOT/docker-compose.test.yaml"
-NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
 TEST_COMPOSE_PROJECT_NAME="${MOONMIND_TEST_COMPOSE_PROJECT_NAME:-moonmind-test}"
 COMPOSE_CMD=()
 
@@ -43,11 +42,6 @@ if [[ ! -f "$REPO_ROOT/.env" ]]; then
     echo "Error: missing $REPO_ROOT/.env and $REPO_ROOT/.env-template." >&2
     exit 1
   fi
-fi
-
-if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
-  docker network create "$NETWORK_NAME" >/dev/null
-  echo "Created Docker network: $NETWORK_NAME"
 fi
 
 "${COMPOSE_CMD[@]}" --project-name "$TEST_COMPOSE_PROJECT_NAME" -f "$COMPOSE_FILE" --project-directory "$REPO_ROOT" build pytest

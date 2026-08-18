@@ -41,20 +41,24 @@ from moonmind.schemas.managed_session_models import (
     TerminateCodexManagedSessionRequest,
     canonical_managed_session_runtime_id,
 )
-from moonmind.workflows.codex_session_timeouts import (
-    DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
-)
-from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
-    resolve_github_token_for_launch,
-)
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
+)
+from moonmind.security.docker_networks import (
+    CONTROL_PLANE_NETWORK_ENV,
+    resolve_control_plane_network,
 )
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
-from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
+from moonmind.workflows.codex_session_timeouts import (
+    DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS,
+)
+from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
+from moonmind.workflows.temporal.runtime.managed_api_key_resolve import (
+    resolve_github_token_for_launch,
+)
 
 from .github_auth_broker import (
     GitHubAuthBrokerManager,
@@ -302,6 +306,11 @@ def _managed_session_docker_network(
 ) -> str | None:
     """Return the Docker network managed session containers should join."""
 
+    if CONTROL_PLANE_NETWORK_ENV in os.environ:
+        return resolve_control_plane_network()
+
+    # Temporary compatibility aliases for deployments that have not yet moved
+    # their direct-session override to the canonical control-plane setting.
     for env_key in (
         "MOONMIND_MANAGED_SESSION_DOCKER_NETWORK",
         "MOONMIND_DOCKER_NETWORK",
@@ -322,7 +331,7 @@ def _managed_session_docker_network(
     if moonmind_url:
         hostname = (urlparse(moonmind_url).hostname or "").strip().lower()
         if hostname in {"api", "moonmind-api", "moonmind-api-1"}:
-            return "local-network"
+            return resolve_control_plane_network()
     return None
 
 class CommandRunner(Protocol):

@@ -69,7 +69,7 @@ def checkpoint_branch_policy_snapshot() -> dict[str, Any]:
             "concurrency": 1,
         },
         "network": {
-            "attachmentRef": "local-network",
+            "attachmentRef": "control-plane-network",
             "egressProfileRef": "egress-default",
         },
         "workspace": {

@@ -197,9 +197,7 @@ def test_bash_compose_runners_register_cleanup_before_setup() -> None:
         "tools/test_jules_provider.sh",
     ):
         runner = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
-        assert runner.index("trap cleanup EXIT") < runner.index("docker network inspect"), (
-            relative_path
-        )
+        assert "trap cleanup EXIT" in runner, relative_path
 
 
 def test_bash_compose_test_runners_reject_the_deployment_project() -> None:
@@ -234,7 +232,7 @@ def test_provider_verification_is_not_configured_as_a_github_action() -> None:
     assert "./tools/test_jules_provider.sh" not in required_workflow
 
 
-def test_docker_compose_test_runners_provision_the_shared_network() -> None:
+def test_docker_compose_test_runners_delegate_network_lifecycle_to_compose() -> None:
     shell_runner = (REPO_ROOT / "tools" / "test_integration.sh").read_text(
         encoding="utf-8"
     )
@@ -245,15 +243,34 @@ def test_docker_compose_test_runners_provision_the_shared_network() -> None:
         encoding="utf-8"
     )
 
-    assert "MOONMIND_DOCKER_NETWORK" in shell_runner
-    assert 'docker network inspect "$NETWORK_NAME"' in shell_runner
-    assert 'docker network create "$NETWORK_NAME"' in shell_runner
-    assert "MOONMIND_DOCKER_NETWORK" in provider_runner
-    assert 'docker network inspect "$NETWORK_NAME"' in provider_runner
-    assert 'docker network create "$NETWORK_NAME"' in provider_runner
-    assert "$env:MOONMIND_DOCKER_NETWORK" in powershell_runner
-    assert "docker network inspect $networkName" in powershell_runner
-    assert "docker network create $networkName" in powershell_runner
+    for runner in (shell_runner, provider_runner, powershell_runner):
+        assert "network inspect" not in runner
+        assert "network create" not in runner
+
+
+def test_auth_and_provider_helpers_do_not_bootstrap_compose_networks() -> None:
+    for relative_path in (
+        "tools/auth-codex-volume.sh",
+        "tools/auth-claude-volume.sh",
+        "tools/test_codex_provider.sh",
+        "tools/test_jules_provider.sh",
+        "tools/test-provider.ps1",
+    ):
+        helper = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert "network inspect" not in helper, relative_path
+        assert "network create" not in helper, relative_path
+
+
+def test_control_plane_lifecycle_conformance_uses_compose_network_authority() -> None:
+    helper = (
+        REPO_ROOT / "tools" / "test_control_plane_network_lifecycle.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "MOONMIND_RUN_CONTROL_PLANE_NETWORK_CONFORMANCE" in helper
+    assert "compose up -d" in helper
+    assert "compose down --remove-orphans" in helper
+    assert "http://api:8000/healthz" in helper
+    assert "docker network create" not in helper
 
 
 def test_phase6_integration_ci_suite_stays_focused_on_highest_risk_seams() -> None:
