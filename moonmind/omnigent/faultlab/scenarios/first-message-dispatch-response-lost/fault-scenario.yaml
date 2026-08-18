@@ -1,0 +1,20 @@
+desiredCancel: false
+groundTruthTerminal: success
+invariant: at_most_once_submission
+maxTurnAttempts: 3
+recoveryRound: 3
+requiresCleanup: true
+requiresHost: true
+requiresProfileLease: true
+scenarioId: first-message-dispatch-response-lost
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 1001
+sourceRef: MM-omnigent-first-message
+steps:
+- disconnect: false
+  duplicate: false
+  emit: []
+  'on': submit_turn
+  reorder: false
+  response: drop
+  sideEffect: accepted
