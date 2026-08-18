@@ -2035,6 +2035,29 @@ class OmnigentOAuthHostRuntime:
             return []
         return [line.strip() for line in result[1].splitlines() if line.strip()]
 
+    async def managed_container_host_lease_ref(
+        self, container_name: str
+    ) -> str | None:
+        """Return the durable lease identity carried by a managed container."""
+
+        result = await self._run(
+            "docker", "inspect", "--format",
+            (
+                '{{index .Config.Labels "moonmind.kind"}}|'
+                '{{index .Config.Labels "moonmind.host_lease_id"}}'
+            ),
+            container_name, check=False,
+        )
+        if result[0] != 0:
+            return None
+        kind, separator, lease_ref = result[1].strip().partition("|")
+        if not separator or kind != "omnigent-oauth-host":
+            raise OmnigentOAuthHostError(
+                "refusing to inspect a container outside Omnigent ownership",
+                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
+            )
+        return lease_ref.strip() or None
+
     async def remove_container(self, container_name: str) -> None:
         # Janitor discovery is label-scoped; never accept an arbitrary name.
         result = await self._run(

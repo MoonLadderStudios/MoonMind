@@ -763,6 +763,42 @@ async def _drive_coordinator_materialization_to_cleanup(
         async def create_or_get_host_lease(self, **_kwargs):
             return self.lease
 
+        async def get_host_lease(self, _lease_id):
+            return self.lease
+
+        async def heartbeat_host_lease(self, _lease_id, *, ttl_seconds):
+            now = datetime.now(UTC)
+            self.lease = self.lease.model_copy(
+                update={
+                    "last_heartbeat_at": now,
+                    "expires_at": now + timedelta(seconds=ttl_seconds),
+                }
+            )
+            return self.lease
+
+        async def claim_host_lease_cleanup(
+            self,
+            _lease_id,
+            *,
+            expected_status,
+            expected_last_heartbeat_at,
+            ttl_seconds,
+        ):
+            if (
+                self.lease.status != expected_status
+                or self.lease.last_heartbeat_at != expected_last_heartbeat_at
+            ):
+                return None
+            now = datetime.now(UTC)
+            self.lease = self.lease.model_copy(
+                update={
+                    "status": "draining",
+                    "last_heartbeat_at": now,
+                    "expires_at": now + timedelta(seconds=ttl_seconds),
+                }
+            )
+            return self.lease
+
         async def restart_host_lease(self, _lease_id):
             self.lease = self.lease.model_copy(update={"status": "allocating"})
             return self.lease
