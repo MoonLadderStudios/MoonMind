@@ -360,6 +360,42 @@ async def test_supervise_classifies_claude_not_logged_in_as_auth_failure(
         "Provider authentication required; reauthenticate the selected provider profile"
     )
 
+
+@pytest.mark.asyncio
+async def test_supervise_classifies_claude_expired_oauth_session_as_auth_failure(
+    tmp_path: Path,
+) -> None:
+    """Replay the escaped Claude OAuth failure as an actionable auth error."""
+    supervisor, store, _ = _make_supervisor(tmp_path)
+    run_id = "run-claude-expired-oauth"
+    _save_record(store, run_id, runtime_id="claude_code")
+
+    process = await asyncio.create_subprocess_exec(
+        "python3",
+        "-c",
+        (
+            "print('Failed to authenticate: OAuth session expired and could not be "
+            "refreshed'); raise SystemExit(1)"
+        ),
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+
+    result = await supervisor.supervise(
+        run_id=run_id,
+        process=process,
+        timeout_seconds=10,
+    )
+
+    assert result.status == "failed"
+    assert result.failure_class == "user_error"
+    assert result.provider_error_code == "401"
+    assert result.error_message == (
+        "Provider authentication required; reauthenticate the selected provider profile"
+    )
+
+
 @pytest.mark.asyncio
 async def test_supervise_allows_successful_claude_output_with_auth_text(
     tmp_path: Path,
