@@ -150,6 +150,12 @@ def _flag_state(value: Optional[bool]) -> ReadinessState:
 def _fresh_state(age: Optional[timedelta], max_age: timedelta) -> ReadinessState:
     if age is None:
         return ReadinessState.UNKNOWN
+    # A negative age means the evidence is timestamped in the future (clock skew
+    # or malformed evidence). Treat it as unknown rather than fresh so a
+    # future-dated capability probe or conformance artifact can never bypass the
+    # fail-closed admission gate.
+    if age < timedelta(0):
+        return ReadinessState.UNKNOWN
     return ReadinessState.READY if age <= max_age else ReadinessState.NOT_READY
 
 

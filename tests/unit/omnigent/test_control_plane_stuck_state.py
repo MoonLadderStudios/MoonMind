@@ -60,12 +60,39 @@ def test_active_no_recent_evidence_detected_at_deadline():
 
 
 def test_never_observed_counts_as_no_recent_evidence():
-    # Absent observations (lack of evidence) trips the freshness finding, but is
-    # not treated as an observed provider-terminal/active negative.
-    signals = SessionSignals(last_event_at=None, last_snapshot_at=None)
+    # Absent observations aged past the deadline from the durable turn start trip
+    # the freshness finding, but are not treated as an observed
+    # provider-terminal/active negative.
+    signals = SessionSignals(
+        last_event_at=None,
+        last_snapshot_at=None,
+        active_turn_started_at=NOW - POLICY.event_staleness,
+    )
     findings = detect_stuck_state(session=_session(), signals=signals, now=NOW, policy=POLICY)
     assert StuckStateReason.MOONMIND_ACTIVE_NO_RECENT_EVIDENCE in _reasons(findings)
     assert StuckStateReason.PROVIDER_TERMINAL_MOONMIND_NONTERMINAL not in _reasons(findings)
+
+
+def test_fresh_turn_with_no_observations_does_not_trip_freshness():
+    # A turn that has just started with no observations yet must not immediately
+    # trip the freshness finding; absence is aged from the durable start.
+    signals = SessionSignals(
+        last_event_at=None,
+        last_snapshot_at=None,
+        active_turn_started_at=NOW - timedelta(seconds=5),
+    )
+    findings = detect_stuck_state(session=_session(), signals=signals, now=NOW, policy=POLICY)
+    assert StuckStateReason.MOONMIND_ACTIVE_NO_RECENT_EVIDENCE not in _reasons(findings)
+
+
+def test_fresh_evidence_on_one_channel_suppresses_freshness_finding():
+    # One channel is stale, but the other just reported progress => suppressed.
+    signals = SessionSignals(
+        last_event_at=NOW - POLICY.event_staleness,  # stale
+        last_snapshot_at=NOW - timedelta(seconds=5),  # fresh
+    )
+    findings = detect_stuck_state(session=_session(), signals=signals, now=NOW, policy=POLICY)
+    assert StuckStateReason.MOONMIND_ACTIVE_NO_RECENT_EVIDENCE not in _reasons(findings)
 
 
 def test_absent_provider_observation_is_not_a_negative():

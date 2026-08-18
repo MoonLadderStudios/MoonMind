@@ -30,7 +30,6 @@ from enum import Enum
 from typing import Optional
 
 from .records import (
-    CleanupAuthorityRecord,
     CommandRecord,
     SessionRecord,
     COMMAND_STATE_CLAIMED,
@@ -95,6 +94,10 @@ class SessionSignals:
 
     last_event_at: Optional[datetime] = None
     last_snapshot_at: Optional[datetime] = None
+    #: Durable start of the active turn attempt. Absence of any observation is
+    #: aged from this timestamp so a freshly activated turn with no observations
+    #: yet does not immediately trip the freshness finding.
+    active_turn_started_at: Optional[datetime] = None
     #: An active turn produced only liveness/heartbeat observations since this
     #: time (``None`` when the turn is producing substantive observations).
     liveness_only_since: Optional[datetime] = None
@@ -176,10 +179,26 @@ def detect_stuck_state(
 
     # 1. MoonMind active with no recent event or snapshot.
     if nonterminal and session.active_turn_attempt_id is not None:
-        no_recent_event = _stale(signals.last_event_at, now, policy.event_staleness)
-        no_recent_snapshot = _stale(signals.last_snapshot_at, now, policy.snapshot_staleness)
-        never_observed = signals.last_event_at is None and signals.last_snapshot_at is None
-        if no_recent_event or no_recent_snapshot or never_observed:
+        # Fresh evidence from *either* channel means the turn is progressing;
+        # never fire the freshness finding while one channel is reporting, even
+        # if the other channel is stale.
+        fresh_event = signals.last_event_at is not None and not _stale(
+            signals.last_event_at, now, policy.event_staleness
+        )
+        fresh_snapshot = signals.last_snapshot_at is not None and not _stale(
+            signals.last_snapshot_at, now, policy.snapshot_staleness
+        )
+        # Age the absence from the most recent durable timestamp available: the
+        # latest observation on either channel, else the turn's durable start.
+        # A brand-new turn with no observations must not trip immediately, and
+        # without any durable timestamp the finding stays conservative (no fire).
+        reference = (
+            signals.last_event_at
+            or signals.last_snapshot_at
+            or signals.active_turn_started_at
+        )
+        aged_out = _stale(reference, now, min(policy.event_staleness, policy.snapshot_staleness))
+        if not (fresh_event or fresh_snapshot) and aged_out:
             findings.append(
                 StuckStateFinding(
                     reason=StuckStateReason.MOONMIND_ACTIVE_NO_RECENT_EVIDENCE,

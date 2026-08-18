@@ -119,7 +119,18 @@ MAX_ATTRIBUTE_VALUE_LEN = 96
 _FORBIDDEN_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"ghp_|github_pat_|AKIA|AIza|ATATT"),  # credential prefixes
     re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),  # private key block
-    re.compile(r"[?&](?:x-amz-|sig=|signature=|token=|password=)", re.IGNORECASE),  # presigned/secret query
+    re.compile(r"[?&](?:x-amz-|sig=|signature=)", re.IGNORECASE),  # presigned URL query params
+    # Credential assignments and auth headers, matched independently of URL-query
+    # punctuation: ``token=secret``, ``password: secret``, ``api_key=...``, an
+    # ``Authorization:`` header, etc. are all dropped whether or not they follow
+    # a ``?``/``&``. A bounded classification code never contains one of these.
+    re.compile(
+        r"(?:token|password|passwd|pwd|secret|api[_-]?key|apikey|access[_-]?key|"
+        r"client[_-]?secret|private[_-]?key|authorization|session[_-]?id)"
+        r"\s*[=:]",
+        re.IGNORECASE,
+    ),
+    re.compile(r"(?:^|[\s\"'=:])[Bb]earer\s+\S"),  # bearer token value
     re.compile(r"https?://"),  # any URL (links belong in server-authored refs, not span attrs)
     re.compile(r"(?:^|[\s\"'])/(?:home|root|work|var|tmp|etc|mnt|usr)/"),  # host filesystem path
     re.compile(r"\n"),  # multi-line values are transcripts/diffs, not bounded codes
@@ -218,23 +229,32 @@ def omnigent_span(name: str, /, **attributes: Any) -> Iterator[None]:
         yield
         return
 
+    exc_info: tuple[Any, Any, Any] = (None, None, None)
     try:
         try:
             for key, value in safe.items():
                 span.set_attribute(f"omnigent.{key}", value)
         except Exception:  # pragma: no cover - defensive
+            # Setting a bounded attribute must never fail the wrapped work.
             pass
         yield
-    except Exception as exc:  # record then re-raise: the work's error is real
+    except BaseException as exc:  # record then re-raise: the work's error is real
+        # Capture the real exception (including cancellations that bypass the
+        # ``Exception`` hierarchy) so the span is closed with the actual error
+        # tuple below and OpenTelemetry records its error status instead of a
+        # normal, successful completion.
+        exc_info = (type(exc), exc, exc.__traceback__)
         try:  # pragma: no cover - telemetry must not fail hard
             span.record_exception(exc)
         except Exception:
+            # Recording the exception on the span is best-effort telemetry.
             pass
         raise
     finally:
         try:  # pragma: no cover - telemetry must not fail hard
-            span_cm.__exit__(None, None, None)
+            span_cm.__exit__(*exc_info)
         except Exception:
+            # Closing the span/exporter is best-effort and must not fail hard.
             pass
 
 

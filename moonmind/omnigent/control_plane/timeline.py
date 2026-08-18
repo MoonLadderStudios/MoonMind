@@ -81,17 +81,21 @@ def _safe_ref(value: Optional[str]) -> Optional[str]:
 
 
 def _safe_link(kind: str, ref: Optional[str]) -> Optional[str]:
-    """Build a server-authored relative URL from an opaque, validated id."""
+    """Build a server-authored relative URL from an opaque, validated id.
+
+    Only links to routes that are actually registered are emitted; an operator
+    link must never resolve to a 404. Artifact and intent refs map to the
+    registered artifact metadata route ``/api/artifacts/{artifact_id}`` (see
+    :mod:`api_service.api.routers.temporal_artifacts`). ``trace`` refs have no
+    registered destination in this phase, so the link is omitted rather than
+    pointed at a nonexistent ``/api/omnigent/traces`` route.
+    """
 
     safe = _safe_ref(ref)
     if safe is None or not _SAFE_ID.match(safe):
         return None
-    if kind == "trace":
-        return f"/api/omnigent/traces/{safe}"
-    if kind == "artifact":
-        return f"/api/v1/artifacts/{safe}"
-    if kind == "intent":
-        return f"/api/v1/artifacts/{safe}"
+    if kind in {"artifact", "intent"}:
+        return f"/api/artifacts/{safe}"
     return None
 
 
@@ -330,6 +334,7 @@ def build_timeline(
     commands: Sequence[CommandRecord] = (),
     decisions: Sequence[DecisionRecord] = (),
     cleanup: Optional[CleanupAuthorityRecord] = None,
+    turn_attempt_count: Optional[int] = None,
 ) -> SessionTimeline:
     """Project one bounded operator session timeline from durable records.
 
@@ -338,6 +343,11 @@ def build_timeline(
     passed through :func:`_safe_ref`, and trace/artifact links are built only
     from opaque validated ids, so no credential, presigned URL, host path, or
     unbounded payload can appear.
+
+    ``turn_attempt_count`` lets a caller supply an authoritative database count
+    when it only fetched the active turn attempt (bounded query) rather than the
+    full turn-attempt history; when omitted the count falls back to the length of
+    the passed ``turn_attempts`` sequence.
     """
 
     # Active turn attempt.
@@ -411,7 +421,9 @@ def build_timeline(
         revision=session.revision,
         fencing_generation=session.fencing_generation,
         active_turn_attempt_state=active_turn.state if active_turn is not None else None,
-        turn_attempt_count=len(turn_attempts),
+        turn_attempt_count=(
+            turn_attempt_count if turn_attempt_count is not None else len(turn_attempts)
+        ),
         provider_event_cursor=_safe_ref(session.provider_event_cursor),
         snapshot_frontier=_safe_ref(session.snapshot_frontier),
         last_snapshot_at=getattr(snapshot_obs, "observed_at", None),

@@ -48,6 +48,22 @@ def test_launching_session_explained_from_records():
     assert doc["state"]["revision"] == 3
 
 
+def test_turn_attempt_count_uses_explicit_count_when_supplied():
+    # A caller that fetched only the active turn attempt (bounded query) supplies
+    # the authoritative database count instead of len(turn_attempts).
+    session = _session(active_turn_attempt_id="turn-1", provider_session_ref="psr-1")
+    active = TurnAttemptRecord(
+        turn_attempt_id="turn-1", session_id="sess-1", idempotency_key="k1", state="running"
+    )
+    timeline = build_timeline(
+        session=session, turn_attempts=[active], turn_attempt_count=42
+    )
+    assert timeline.turn_attempt_count == 42
+    assert timeline.active_turn_attempt_state == "running"
+    # Falls back to the sequence length when no explicit count is given.
+    assert build_timeline(session=session, turn_attempts=[active]).turn_attempt_count == 1
+
+
 def test_awaiting_observation_status():
     session = _session(active_turn_attempt_id="turn-1", provider_session_ref="psr-1")
     timeline = build_timeline(
@@ -132,8 +148,12 @@ def test_timeline_survives_live_resource_deletion():
     assert doc["terminal"]["state"] == "success"
     assert doc["terminal"]["evidenceRef"] == "evidence-xyz"
     assert doc["lastDecision"]["decisionCode"] == "record_provider_terminal"
-    assert doc["lastDecision"]["traceLink"] == "/api/omnigent/traces/trace123"
-    assert doc["links"]["trace"] == "/api/omnigent/traces/trace123"
+    # Trace has no registered route in this phase, so the link is omitted rather
+    # than pointed at a nonexistent /api/omnigent/traces route (would 404).
+    assert doc["lastDecision"]["traceLink"] is None
+    assert doc["links"]["trace"] is None
+    # Artifact-backed diagnostics link uses the registered /api/artifacts route.
+    assert doc["lastDecision"]["diagnosticsLink"] == "/api/artifacts/artifact456"
 
 
 def test_timeline_drops_secret_like_refs_and_host_paths():

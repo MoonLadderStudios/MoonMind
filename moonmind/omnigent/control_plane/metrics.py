@@ -132,6 +132,18 @@ BOUNDED_LABEL_VALUES: dict[str, frozenset[str]] = {
     "readiness": frozenset({"ready", "not_ready", "unknown"}),
 }
 
+#: Fallback label values emitted by :func:`_normalize_labels`: an
+#: out-of-vocabulary value collapses to ``"other"`` and an omitted label to
+#: ``"unknown"``. Both are declared members of *every* bounded vocabulary so an
+#: exporter or dashboard reading the registry can enumerate every value this
+#: recorder can actually produce (no undeclared value ever reaches the backend).
+LABEL_FALLBACK_OTHER = "other"
+LABEL_FALLBACK_UNKNOWN = "unknown"
+BOUNDED_LABEL_VALUES = {
+    key: values | {LABEL_FALLBACK_OTHER, LABEL_FALLBACK_UNKNOWN}
+    for key, values in BOUNDED_LABEL_VALUES.items()
+}
+
 
 COUNTER = "counter"
 OBSERVATION = "observation"
@@ -336,6 +348,8 @@ def reset() -> None:
 __all__ = [
     "FORBIDDEN_LABEL_KEYS",
     "BOUNDED_LABEL_VALUES",
+    "LABEL_FALLBACK_OTHER",
+    "LABEL_FALLBACK_UNKNOWN",
     "METRICS",
     "MetricDefinition",
     "COUNTER",
