@@ -56,6 +56,7 @@ from moonmind.schemas.workspace_locator_models import (
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
+from moonmind.security.docker_networks import resolve_control_plane_network
 from moonmind.security.execution_fanout_capabilities import (
     mint_execution_fanout_capability,
 )
@@ -292,8 +293,10 @@ class OmnigentOAuthHostRuntime:
             else:
                 tag = os.getenv("OMNIGENT_HOST_IMAGE_TAG", "latest")
                 self._image = f"{base_image}:{tag}"
-        self._network = network or os.getenv(
-            "OMNIGENT_HOST_NETWORK", "local-network"
+        self._network = (
+            network
+            or os.getenv("OMNIGENT_HOST_NETWORK")
+            or resolve_control_plane_network()
         )
         self._server_url = server_url or os.getenv(
             "OMNIGENT_SERVER_INTERNAL_URL", "http://omnigent:8000"

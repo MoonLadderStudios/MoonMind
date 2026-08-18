@@ -64,6 +64,7 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRuntimeStepExecutionLaunch,
 )
 from moonmind.security.egress import (
+    CONTROL_PLANE_NETWORK_REF,
     DEFAULT_EGRESS_PROFILE,
     EGRESS_CONFIG_DIGEST,
     EGRESS_PROFILE_SET_DIGEST,
@@ -521,7 +522,7 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         DEFAULT_EGRESS_PROFILE.network_ref: {},
         "moonmind_sandbox-egress-network": {},
         OMNIGENT_EGRESS_PROFILE.network_ref: {},
-        "local-network": {},
+        CONTROL_PLANE_NETWORK_REF: {},
     }
     applied_rule_payload = {
         "profileDigest": OMNIGENT_EGRESS_PROFILE.digest,

@@ -23,6 +23,7 @@ from moonmind.schemas.container_job_models import (
     ContainerJobActivityRequest,
 )
 from moonmind.security.egress import (
+    CONTROL_PLANE_NETWORK_REF,
     DEFAULT_EGRESS_PROFILE,
     EGRESS_CONFIG_DIGEST,
     EGRESS_NETWORK_REF,
@@ -80,7 +81,7 @@ def _healthy_gateway_inspect() -> bytes:
                 EGRESS_NETWORK_REF: {},
                 "moonmind_sandbox-egress-network": {},
                 OMNIGENT_EGRESS_NETWORK_REF: {},
-                "local-network": {},
+                CONTROL_PLANE_NETWORK_REF: {},
             },
             "image": "sha256:gateway-image",
             "health": "healthy",

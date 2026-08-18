@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from moonmind.security.egress import (
+    CONTROL_PLANE_NETWORK_REF,
     DEFAULT_EGRESS_PROFILE,
     EGRESS_NETWORK_REF,
     PROXY_URL,
@@ -1979,7 +1980,7 @@ def _healthy_egress_run_process(args: list[str]) -> _Process:
         EGRESS_NETWORK_REF: {},
         "moonmind_sandbox-egress-network": {},
         OMNIGENT_EGRESS_NETWORK_REF: {},
-        "local-network": {},
+        CONTROL_PLANE_NETWORK_REF: {},
     }
     applied = {
         "profileDigest": DEFAULT_EGRESS_PROFILE.digest,

@@ -27,8 +27,8 @@ secondary network or launch a helper outside the trusted backend. Static
 Compose and on-demand hosts use the same Omnigent profile, internal network,
 isolated listener, and gateway. Deployment-owned runner profiles select an
 explicit network policy: `restricted_egress` uses the provider profile,
-`docker_proxy` reaches only the trusted Docker proxy. Plain Docker `bridge`,
-`local-network`, and local application URL
+`docker_proxy` reaches only the trusted Docker proxy. Plain Docker `bridge`, the
+Compose-managed `control-plane-network`, and local application URL
 allowlists are non-enforcing development mechanisms and must never be reported
 in `enforcedNetworkRefs`.
 
@@ -36,6 +36,13 @@ The current implementation supports the deployment-selected daemon reached
 through MoonMind's restricted Docker proxy. Arbitrary remote daemon endpoints
 are not profile authority: the backend must find and attest the exact
 deployment-owned network and gateway on its selected daemon or startup fails.
+
+The ordinary application control plane uses the Compose key
+`control-plane-network`. Compose creates and owns it with the stable Docker-level
+name resolved from `MOONMIND_CONTROL_PLANE_NETWORK` (default
+`moonmind_control-plane-network`). Trusted workers pass that same resolved name
+to standalone managed sessions and gateway attestation. It remains a routable
+development/application network, not an enforced egress boundary.
 
 ## Profile and request controls
 
@@ -93,3 +100,10 @@ cleanup outcome. The production-shaped local
 conformance suite is `tests/integration/security/test_restricted_egress_live.py`;
 operators run it against the supported Compose topology with
 `MOONMIND_RUN_EGRESS_CONFORMANCE=1` before approving an external-target profile.
+The opt-in `tools/test_control_plane_network_lifecycle.sh` check starts an
+isolated `moonmind-test-*` project with no pre-existing control-plane network,
+proves standalone managed-session access to `http://api:8000`, observes worker
+egress attestations, verifies normal `compose down`, and exercises restart and
+cleanup while an interrupted owned container temporarily keeps the network
+attached. Run it only with the normal deployment stopped and
+`MOONMIND_RUN_CONTROL_PLANE_NETWORK_CONFORMANCE=1`.
