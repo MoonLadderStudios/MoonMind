@@ -302,11 +302,9 @@ resolved Skill entry: only built-in or deployment-managed provenance with the
 derived requirement authorizes bearer minting. An authored top-level token is
 still only a requirement and cannot grant fan-out by itself. Missing attestation
 is reserved for replay of launches scheduled before this contract existed.
-The Run workflow records a compact allow/deny attestation from the immutable
-resolved Skill entry: only built-in or deployment-managed provenance with the
-derived requirement authorizes bearer minting. An authored top-level token is
-still only a requirement and cannot grant fan-out by itself. Missing attestation
-is reserved for replay of launches scheduled before this contract existed.
+Standard Codex and Claude workers advertise fan-out readiness so trusted batch
+Skills work by default. That readiness label is not authority: the attestation
+and launch-boundary policy check remain mandatory before bearer minting.
 
 Minimum readiness:
 
