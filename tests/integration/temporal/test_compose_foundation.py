@@ -534,15 +534,25 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
     )
     assert (
         "acl moonmind_execution_describe urlpath_regex "
-        "^/api/executions/[^/?]+$"
+        "-i ^/api/executions/([a-z0-9._~:-]|%3a)+$"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_fanout req_header "
+        "X-MoonMind-Execution-Fanout ^v1$"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_bearer req_header Authorization -i "
+        "^Bearer[[:space:]]+[^[:space:]]+$"
     ) in squid_config
     assert (
         "http_access allow omnigent_listener moonmind_api moonmind_api_port "
-        "moonmind_execution_create POST"
+        "moonmind_execution_create moonmind_execution_fanout "
+        "moonmind_execution_bearer POST"
     ) in squid_config
     assert (
         "http_access allow omnigent_listener moonmind_api moonmind_api_port "
-        "moonmind_execution_describe GET"
+        "moonmind_execution_describe moonmind_execution_fanout "
+        "moonmind_execution_bearer GET"
     ) in squid_config
     assert "::/0" in squid_config
     assert "acl connection_limit maxconn 128" in squid_config

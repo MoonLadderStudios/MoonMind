@@ -22,7 +22,7 @@ CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 ENFORCER_IMPLEMENTATION = "docker-internal-proxy/v1"
 # Digest of the reviewed, mounted Squid policy. Attestation compares this
 # deployment-owned value with both the container label and the live file.
-EGRESS_CONFIG_DIGEST = "sha256:b61542ac4c7167bf03ee362216116bfe25f22be898e6f2d6269d925228828490"
+EGRESS_CONFIG_DIGEST = "sha256:a64c798e3fed5252e86811d344ad8f509332e81b06ee75ddc6ad2f2198fc3713"
 # Deployment-owned network names. Compose resolves these same overrides when it
 # creates the networks (``restricted-egress-network`` /
 # ``sandbox-egress-network``), so an operator that sets the documented override

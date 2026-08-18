@@ -28,6 +28,9 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.security.container_job_capabilities import (
     verify_container_job_session_capability,
 )
+from moonmind.security.execution_fanout_capabilities import (
+    verify_execution_fanout_capability,
+)
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
     ManagedSessionReapResult,
@@ -364,6 +367,18 @@ async def test_controller_launches_container_and_returns_typed_handle(
     )
     assert capability.agent_run_id == "task-1"
     assert capability.session_id == "sess-1"
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in run_command
+    assert not any(
+        item.startswith("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=")
+        for item in run_command
+    )
+    fanout = verify_execution_fanout_capability(
+        docker_run_env["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
+        secret="test_jwt_secret_key",
+    )
+    assert fanout.parent_workflow_id == "wf-task-1"
+    assert fanout.agent_run_id == "task-1"
+    assert fanout.session_id == "sess-1"
     assert not any(item.startswith("DOCKER_HOST=") for item in run_command)
     assert not any(item.startswith("SYSTEM_DOCKER_HOST=") for item in run_command)
     assert "python3" in run_command

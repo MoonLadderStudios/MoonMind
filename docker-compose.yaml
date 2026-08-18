@@ -1304,7 +1304,7 @@ services:
     labels:
       moonmind.egress.profile-set-digest: sha256:210bb382a9738300138bca5e4f6885c2e472c725816504040a559a22a7909e82
       moonmind.egress.enforcer: docker-internal-proxy/v1
-      moonmind.egress.config-digest: sha256:b61542ac4c7167bf03ee362216116bfe25f22be898e6f2d6269d925228828490
+      moonmind.egress.config-digest: sha256:a64c798e3fed5252e86811d344ad8f509332e81b06ee75ddc6ad2f2198fc3713
     volumes:
       - ./docker/sandbox-egress-proxy/squid.conf:/etc/squid/squid.conf:ro
     expose:
@@ -1318,7 +1318,7 @@ services:
         aliases:
           - omnigent-egress-proxy
     healthcheck:
-      test: ["CMD-SHELL", "squid -k parse && test \"$$(sha256sum /etc/squid/squid.conf | cut -d' ' -f1)\" = b61542ac4c7167bf03ee362216116bfe25f22be898e6f2d6269d925228828490"]
+      test: ["CMD-SHELL", "squid -k parse && test \"$$(sha256sum /etc/squid/squid.conf | cut -d' ' -f1)\" = a64c798e3fed5252e86811d344ad8f509332e81b06ee75ddc6ad2f2198fc3713"]
       interval: 10s
       timeout: 5s
       retries: 3

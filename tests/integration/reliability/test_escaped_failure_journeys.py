@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import runpy
 import sqlite3
 import subprocess
@@ -3370,8 +3371,9 @@ async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment
         assert f"export {name}=" in profile
     assert f"'{manifest['moonmindUrl']}'" in profile
     assert f"'{manifest['incidentWorkflowId']}'" in profile
-    assert expected["excludedSecretName"] not in profile
-    assert runtime_environment[expected["excludedSecretName"]] not in profile
+    for secret_name in expected["excludedSecretNames"]:
+        assert secret_name not in profile
+        assert runtime_environment[secret_name] not in profile
 
 
 async def test_omnigent_batch_fanout_crosses_only_scoped_execution_proxy_routes(
@@ -3393,16 +3395,42 @@ async def test_omnigent_batch_fanout_crosses_only_scoped_execution_proxy_routes(
     assert manifest["attempts"] == 4
     assert "api" not in proxy_environment["NO_PROXY"].split(",")
 
+    required_header_acls = " ".join(expected["requiredHeaderAcls"])
+    assert (
+        "acl moonmind_execution_fanout req_header "
+        "X-MoonMind-Execution-Fanout ^v1$"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_bearer req_header Authorization -i "
+        "^Bearer[[:space:]]+[^[:space:]]+$"
+    ) in squid_config
+
     for route in expected["allowedRoutes"]:
         acl = f"acl {route['acl']} urlpath_regex {route['pathRegex']}"
         allow = (
             "http_access allow omnigent_listener moonmind_api "
-            f"moonmind_api_port {route['acl']} {route['method']}"
+            f"moonmind_api_port {route['acl']} {required_header_acls} "
+            f"{route['method']}"
         )
         assert acl in squid_config
         assert allow in squid_config
         assert squid_config.index(allow) < squid_config.index(
             "http_access deny omnigent_control"
+        )
+
+    describe_regex = expected["allowedRoutes"][1]["pathRegex"]
+    assert describe_regex.startswith("-i ")
+    describe_pattern = describe_regex.removeprefix("-i ")
+    assert re.fullmatch(
+        describe_pattern,
+        "/api/executions/mm%3Aegress-probe",
+        flags=re.IGNORECASE,
+    )
+    for suffix in expected["rejectedEncodedChildSuffixes"]:
+        assert not re.fullmatch(
+            describe_pattern,
+            "/api/executions/mm%3Aegress-probe" + suffix,
+            flags=re.IGNORECASE,
         )
 
     for denied in expected["deniedAclCombinations"]:
