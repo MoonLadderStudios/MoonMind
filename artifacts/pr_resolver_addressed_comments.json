@@ -1,22 +1,82 @@
 [
   {
-    "id": 3808359979,
-    "disposition": "addressed",
-    "rationale": "Removed both legacy managed-session network aliases and updated every remaining test and caller to use MOONMIND_CONTROL_PLANE_NETWORK."
-  },
-  {
-    "id": 3808359988,
-    "disposition": "addressed",
-    "rationale": "The lifecycle conformance now launches its health probe through DockerCodexManagedSessionController before testing API reachability from the resulting managed-session container."
-  },
-  {
-    "id": 3808359994,
-    "disposition": "addressed",
-    "rationale": "The lifecycle conformance exports project-specific names for the control-plane, Docker-proxy, sandbox-egress, restricted-egress, and Omnigent-egress networks."
-  },
-  {
-    "id": 4966282554,
+    "id": 3806823435,
     "disposition": "not-applicable",
-    "rationale": "This review body is an informational summary whose actionable findings are represented and addressed by the three linked review comments."
+    "rationale": "False positive from static analysis: DecisionKind is an Enum subclass, which is iterable; `for kind in DecisionKind` is valid."
+  },
+  {
+    "id": 3806823446,
+    "disposition": "addressed",
+    "rationale": "Removed the unused CleanupAuthorityRecord import from stuck_state.py."
+  },
+  {
+    "id": 3806823458,
+    "disposition": "addressed",
+    "rationale": "Added an explanatory comment to the attribute-set except clause in omnigent_span (setting a bounded attribute must never fail the wrapped work)."
+  },
+  {
+    "id": 3806823471,
+    "disposition": "addressed",
+    "rationale": "The span-close except clause now carries an explanatory comment and closes the span with the real exception tuple (see 3806845213)."
+  },
+  {
+    "id": 3806845154,
+    "disposition": "not-applicable",
+    "rationale": "Deferred to a later phase: this is Omnigent control plane 7/11 and the reconciler-based session-admission boundary that evaluate_admission_readiness gates does not exist in production yet (the reducer has zero production consumers; the only live session-start path is the legacy bridge architecture, which does not gather reconciler capability signals). readiness.py intentionally lands as a pure, tested projection; wiring it into an admission boundary that does not exist would be premature and out of scope. Reject-future-dated-evidence hardening from the sibling thread (3806845183) was applied."
+  },
+  {
+    "id": 3806845160,
+    "disposition": "not-applicable",
+    "rationale": "Deferred to a later phase: the reconciler lifecycle/activity boundaries these spans and metrics instrument are test-only in this phase (the reducer has no production consumers), and no host exporter consumes control_plane.metrics.snapshot() yet. The module intentionally lands as a pure building block; instrumenting boundaries that do not exist would be premature. Correctness hardening of the primitives themselves (fallback label declaration 3806845223, credential sanitizer 3806845188, span exception handling 3806845213) was applied."
+  },
+  {
+    "id": 3806845166,
+    "disposition": "addressed",
+    "rationale": "The stuck-state endpoint now derives every durable signal it can authoritatively express: latest event/snapshot freshness, the active turn's durable start (so absence is aged), the active/ambiguous command, cleanup progress (loads the cleanup authority), admission, and compatibility resolution. Signals requiring an independent provider observation or cross-aggregate lease reconciliation stay None (not observed) rather than being fabricated at a read boundary, preserving the detector's tri-state invariant."
+  },
+  {
+    "id": 3806845173,
+    "disposition": "addressed",
+    "rationale": "_safe_link now emits only registered routes: artifact/intent refs use the registered /api/artifacts/{id} route, and the trace link (no registered destination this phase) is omitted rather than pointed at a nonexistent /api/omnigent/traces route."
+  },
+  {
+    "id": 3806845180,
+    "disposition": "addressed",
+    "rationale": "The active-no-recent-evidence finding now ages absence from a durable start timestamp (active_turn_started_at) and is suppressed when either channel has fresh evidence, so a freshly activated or actively progressing turn no longer trips immediately."
+  },
+  {
+    "id": 3806845183,
+    "disposition": "addressed",
+    "rationale": "_fresh_state now rejects negative ages (future-dated evidence from clock skew or malformed evidence) as UNKNOWN, so future-dated evidence can no longer bypass the fail-closed admission gate."
+  },
+  {
+    "id": 4964479580,
+    "disposition": "not-applicable",
+    "rationale": "Informational Codex review envelope (review body from a bot); its child review threads carry the actionable feedback."
+  },
+  {
+    "id": 3806845188,
+    "disposition": "addressed",
+    "rationale": "The span value sanitizer now matches credential assignments and auth headers (token=, password:, secret=, api_key=, authorization:, bearer <value>, etc.) independently of URL-query punctuation."
+  },
+  {
+    "id": 3806845194,
+    "disposition": "addressed",
+    "rationale": "Added bounded latest/active repository queries plus a turn-attempt count; both timeline endpoints now fetch only the freshest/active rows and a count instead of materializing the full append-only history."
+  },
+  {
+    "id": 3806845206,
+    "disposition": "addressed",
+    "rationale": "prior_detection_count is now derived from the durable decision journal (count_for_session_reason on the dominant finding's reason) and passed to plan_response, so the bounded reconciliation-to-quarantine policy can terminate instead of always passing 0."
+  },
+  {
+    "id": 3806845213,
+    "disposition": "addressed",
+    "rationale": "omnigent_span now captures the real exception (including cancellations that bypass Exception) and passes the exc_info tuple to the context manager's __exit__, so failed spans record an error status instead of a normal completion."
+  },
+  {
+    "id": 3806845223,
+    "disposition": "addressed",
+    "rationale": "The 'other' and 'unknown' fallback label values are now declared members of every bounded label vocabulary, so exporters can enumerate every value the recorder can emit."
   }
 ]

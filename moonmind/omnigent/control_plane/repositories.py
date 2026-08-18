@@ -15,9 +15,9 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, AsyncIterator, Callable, Optional
+from typing import Any, AsyncIterator, Callable, Optional, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -873,6 +873,16 @@ class TurnAttemptRepository(_RepositoryBase):
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_turn_record(r) for r in rows]
 
+    async def count_for_session(self, session_id: str) -> int:
+        """Return the number of turn attempts without materializing the rows."""
+
+        stmt = (
+            select(func.count())
+            .select_from(OmnigentTurnAttempt)
+            .where(OmnigentTurnAttempt.session_id == session_id)
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
+
     async def _load_turn_for_update(
         self, turn_attempt_id: str
     ) -> OmnigentTurnAttempt:
@@ -1130,6 +1140,32 @@ class ObservationRepository(_RepositoryBase):
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_observation_record(r) for r in rows]
 
+    async def latest_for_session(
+        self,
+        session_id: str,
+        *,
+        observation_types: Optional[Sequence[str]] = None,
+    ) -> Optional[ObservationRecord]:
+        """Return the most recent observation, optionally filtered by type.
+
+        Bounded (``LIMIT 1``) so an operator diagnostic never materializes the
+        full append-only observation history for a long-running session.
+        """
+
+        stmt = select(OmnigentObservation).where(
+            OmnigentObservation.session_id == session_id
+        )
+        if observation_types is not None:
+            stmt = stmt.where(
+                OmnigentObservation.observation_type.in_(list(observation_types))
+            )
+        stmt = stmt.order_by(
+            OmnigentObservation.observed_at.desc(),
+            OmnigentObservation.observation_id.desc(),
+        ).limit(1)
+        row = (await self._session.execute(stmt)).scalars().first()
+        return _observation_record(row) if row is not None else None
+
 
 # --- CommandRepository -------------------------------------------------------
 
@@ -1241,6 +1277,47 @@ class CommandRepository(_RepositoryBase):
             OmnigentCommand.idempotency_key == idempotency_key
         )
         row = (await self._session.execute(stmt)).scalar_one_or_none()
+        return _command_record(row) if row is not None else None
+
+    async def list_for_session(self, session_id: str) -> list[CommandRecord]:
+        """Return this session's commands in creation order (read-only).
+
+        Used by the operator session-timeline projection (#3708) to surface the
+        active or delivery-unknown command; it never claims or mutates a command.
+        """
+
+        stmt = (
+            select(OmnigentCommand)
+            .where(OmnigentCommand.session_id == session_id)
+            .order_by(OmnigentCommand.created_at, OmnigentCommand.command_id)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_command_record(r) for r in rows]
+
+    async def active_for_session(self, session_id: str) -> Optional[CommandRecord]:
+        """Return the single active command, delivery-ambiguity taking precedence.
+
+        Bounded (``LIMIT 1``): a ``delivery_unknown`` command outranks a merely
+        ``claimed`` one, matching the timeline projection's precedence, without
+        loading the full command journal.
+        """
+
+        precedence = case(
+            (OmnigentCommand.status == COMMAND_STATE_DELIVERY_UNKNOWN, 0),
+            else_=1,
+        )
+        stmt = (
+            select(OmnigentCommand)
+            .where(
+                OmnigentCommand.session_id == session_id,
+                OmnigentCommand.status.in_(
+                    [COMMAND_STATE_DELIVERY_UNKNOWN, COMMAND_STATE_CLAIMED]
+                ),
+            )
+            .order_by(precedence, OmnigentCommand.updated_at.desc(), OmnigentCommand.command_id)
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).scalars().first()
         return _command_record(row) if row is not None else None
 
     async def _load_command_for_update(self, command_id: str) -> OmnigentCommand:
@@ -1464,6 +1541,40 @@ class DecisionRepository(_RepositoryBase):
         )
         rows = (await self._session.execute(stmt)).scalars().all()
         return [_decision_record(r) for r in rows]
+
+    async def latest_for_session(self, session_id: str) -> Optional[DecisionRecord]:
+        """Return the most recent reconciliation decision (bounded ``LIMIT 1``)."""
+
+        stmt = (
+            select(OmnigentReconciliationDecision)
+            .where(OmnigentReconciliationDecision.session_id == session_id)
+            .order_by(
+                OmnigentReconciliationDecision.created_at.desc(),
+                OmnigentReconciliationDecision.decision_id.desc(),
+            )
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).scalars().first()
+        return _decision_record(row) if row is not None else None
+
+    async def count_for_session_reason(self, session_id: str, reason_code: str) -> int:
+        """Count durable decisions recorded for a session under one reason code.
+
+        This is the per-session/per-reason detection count the stuck-state
+        response policy uses to escalate persistent ambiguity to quarantine; the
+        durable decision journal *is* the persistence, so no separate counter is
+        introduced.
+        """
+
+        stmt = (
+            select(func.count())
+            .select_from(OmnigentReconciliationDecision)
+            .where(
+                OmnigentReconciliationDecision.session_id == session_id,
+                OmnigentReconciliationDecision.reason_code == reason_code,
+            )
+        )
+        return int((await self._session.execute(stmt)).scalar_one())
 
 
 # --- ChatBindingAliasRepository ----------------------------------------------
