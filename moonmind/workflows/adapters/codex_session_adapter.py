@@ -1892,6 +1892,12 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             binding=active_binding,
             environment=environment,
         )
+        raw_required_capabilities = request.parameters.get("requiredCapabilities")
+        required_capabilities = (
+            list(raw_required_capabilities)
+            if isinstance(raw_required_capabilities, (list, tuple))
+            else []
+        )
         launch_request = LaunchCodexManagedSessionRequest(
             runtimeFamily=managed_session_runtime_family_for_runtime_id(
                 active_binding.runtime_id
@@ -1908,6 +1914,7 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             codexHomePath=str(self._session_root(binding) / ".moonmind" / "codex-home"),
             imageRef=self._session_image_ref,
             workloadMode=workload_mode,
+            requiredCapabilities=required_capabilities,
             containerJobOwner=container_job_owner,
             turnCompletionTimeoutSeconds=turn_completion_timeout_seconds,
             environment=launch_environment,

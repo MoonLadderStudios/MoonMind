@@ -1,5 +1,9 @@
 # Restricted egress
 
+**Document Class:** Canonical declarative
+**Viewpoint:** Cross-Cutting Concept
+**Last updated:** 2026-08-18
+
 MoonLadderStudios/MoonMind#3516 defines the production restricted-egress
 boundary shared by Container Jobs, managed helper workloads, and static and
 on-demand Omnigent hosts.
@@ -57,10 +61,15 @@ without weakening CNAME, mixed-answer, rebinding, metadata, Docker/host gateway,
 or internal-service protections. IPv6 is disabled on workload networks and the
 gateway denies the entire IPv6 destination space on its external hop. The
 reviewed 300-second peer read timeout bounds idle CONNECT tunnels and is part of
-the attested profile/config digests. The single narrow exception is HTTP access
-through the Omnigent-only listener to the `omnigent:8000` control endpoint; no
-other workload network can reach that listener and no other control-plane
-destination is allowed.
+the attested profile/config digests. The Omnigent-only listener permits narrow
+HTTP control-plane exceptions to `omnigent:8000` and to `api:8000` for the
+container Tool call, execution creation, and child execution description paths.
+Execution routes require both the fan-out version marker and a bearer header;
+the API then verifies the workflow-scoped capability and child relationship.
+No other workload network can reach this listener, and all other MoonMind API
+paths, methods, and control-plane destinations are denied. The transport route
+is always available to compatible hosts but grants no authority without the
+operation-specific credential selected by normalized `requiredCapabilities`.
 
 ## Lifecycle and evidence
 

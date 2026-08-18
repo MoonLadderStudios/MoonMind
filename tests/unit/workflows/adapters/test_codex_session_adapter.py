@@ -504,6 +504,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
             "sessionContinuityCacheStatus": "advisory_only",
         }
     }
+    request.parameters["requiredCapabilities"] = ["execution.fanout"]
 
     handle = await adapter.start(request)
     status = await adapter.status(handle.run_id)
@@ -527,6 +528,7 @@ async def test_start_launches_missing_workflow_scoped_session_and_persists_resul
         == DEFAULT_CODEX_TURN_COMPLETION_TIMEOUT_SECONDS
     )
     assert launch_request["workspaceSpec"] == {"workspacePath": str(workspace_path)}
+    assert launch_request["requiredCapabilities"] == ["execution.fanout"]
     assert launch_request["metadata"]["latestContextPackRef"] == "artifacts/context/rag-context-abc123.json"
     assert launch_request["metadata"]["retrievalDurabilityAuthority"] == "artifact_ref"
     assert send_turn_calls[0].instructions.startswith("artifact:instructions")

@@ -1322,6 +1322,20 @@ def test_step_skill_metadata_required_capabilities_aggregate_into_canonical_requ
     assert set(result["requiredCapabilities"]) >= {"git", "gh", "jira"}
 
 
+def test_enqueue_children_skill_derives_execution_fanout_capability() -> None:
+    result = build_canonical_workflow_view(
+        job_type="task",
+        payload={
+            "task": {
+                "instructions": "Queue one resolver per pull request.",
+                "skill": {"id": "batch-pr-resolver"},
+            },
+        },
+    )
+
+    assert "execution.fanout" in result["requiredCapabilities"]
+
+
 def test_mm569_tool_validation_error_identifies_required_field_path() -> None:
     invalid = tool_step()
     invalid["tool"].pop("id")

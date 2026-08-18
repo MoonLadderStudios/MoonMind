@@ -3357,6 +3357,7 @@ async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment
         current_workflow_id=manifest["incidentWorkflowId"],
         current_step_execution_id=manifest["stepExecutionId"],
         timeout_seconds=3600,
+        required_capabilities=manifest["requiredCapabilities"],
     )
     runtime_scripts = runtime._prepare_runtime_scripts(
         manifest["incidentWorkflowId"],
@@ -3372,8 +3373,13 @@ async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment
     assert f"'{manifest['moonmindUrl']}'" in profile
     assert f"'{manifest['incidentWorkflowId']}'" in profile
     for secret_name in expected["excludedSecretNames"]:
-        assert secret_name not in profile
+        assert f"export {secret_name}=" not in profile
         assert runtime_environment[secret_name] not in profile
+    capability_file = runtime_scripts / "capabilities" / "execution-fanout"
+    assert capability_file.read_text(encoding="utf-8").strip() == (
+        runtime_environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"]
+    )
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in runtime_environment
 
 
 async def test_omnigent_batch_fanout_crosses_only_scoped_execution_proxy_routes(

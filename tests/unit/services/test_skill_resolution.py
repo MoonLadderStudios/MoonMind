@@ -16,6 +16,7 @@ from moonmind.services.skill_resolution import (
     RepoSkillLoader,
     DeploymentSkillLoader,
     _terminal_contract_from_side_effect,
+    extract_required_capabilities_from_skill_markdown,
     extract_side_effect_metadata_from_skill_markdown,
 )
 
@@ -42,6 +43,42 @@ metadata:
         "owner": "agent",
         "outcomeArtifact": "artifacts/result.json",
     }
+
+
+async def test_enqueue_children_derives_execution_fanout_capability() -> None:
+    markdown = """---
+name: batch-skill
+metadata:
+  required-capabilities:
+    - gh
+  sideEffect:
+    kind: enqueue_children
+---
+# Batch Skill
+"""
+
+    assert extract_required_capabilities_from_skill_markdown(
+        markdown,
+        skill_name="batch-skill",
+    ) == ("gh", "execution.fanout")
+
+
+async def test_explicit_execution_fanout_capability_is_not_duplicated() -> None:
+    markdown = """---
+name: batch-skill
+metadata:
+  required-capabilities:
+    - execution.fanout
+  sideEffect:
+    kind: enqueue_children
+---
+# Batch Skill
+"""
+
+    assert extract_required_capabilities_from_skill_markdown(
+        markdown,
+        skill_name="batch-skill",
+    ) == ("execution.fanout",)
 
 
 async def test_terminal_contract_rejects_rooted_posix_path() -> None:

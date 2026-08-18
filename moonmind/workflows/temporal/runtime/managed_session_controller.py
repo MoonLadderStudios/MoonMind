@@ -51,6 +51,7 @@ from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
 from moonmind.security.execution_fanout_capabilities import (
+    EXECUTION_FANOUT_REQUIRED_CAPABILITY,
     mint_execution_fanout_capability,
 )
 from moonmind.workflows.skills.workspace_links import cleanup_moonmind_skill_projections
@@ -2554,6 +2555,20 @@ class DockerCodexManagedSessionController:
             request.workload_mode == "container-jobs"
             and session_environment.get("MOONMIND_URL")
         )
+        normalized_capabilities = (
+            None
+            if request.required_capabilities is None
+            else {
+                str(item or "").strip().lower()
+                for item in request.required_capabilities
+            }
+        )
+        # Omitted capabilities preserve already-scheduled launch Activity
+        # payloads. New adapters always send an explicit list, including empty.
+        execution_fanout_required = (
+            normalized_capabilities is None
+            or EXECUTION_FANOUT_REQUIRED_CAPABILITY in normalized_capabilities
+        )
         if container_jobs_available:
             owner = request.container_job_owner or OwnerIdentity(
                 principalId=request.agent_run_id,
@@ -2582,24 +2597,27 @@ class DockerCodexManagedSessionController:
             container_secret_environment[
                 "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"
             ] = capability_token
-            container_secret_environment[
-                "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"
-            ] = mint_execution_fanout_capability(
-                secret=str(settings.security.JWT_SECRET_KEY or ""),
-                parent_workflow_id=str(
-                    session_environment.get("MOONMIND_TASK_WORKFLOW_ID")
-                    or request.agent_run_id
-                ),
-                agent_run_id=request.agent_run_id,
-                step_id=(
-                    str(session_environment.get("MOONMIND_STEP_ID") or "").strip()
-                    or None
-                ),
-                session_id=request.session_id,
-                runtime_id=runtime_id,
-                source_kind="managed_session",
-                lifetime_seconds=int(_DEFAULT_SESSION_REAP_MAX_AGE_SECONDS),
-            )
+            if execution_fanout_required:
+                container_secret_environment[
+                    "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"
+                ] = mint_execution_fanout_capability(
+                    secret=str(settings.security.JWT_SECRET_KEY or ""),
+                    parent_workflow_id=str(
+                        session_environment.get("MOONMIND_TASK_WORKFLOW_ID")
+                        or request.agent_run_id
+                    ),
+                    agent_run_id=request.agent_run_id,
+                    step_id=(
+                        str(
+                            session_environment.get("MOONMIND_STEP_ID") or ""
+                        ).strip()
+                        or None
+                    ),
+                    session_id=request.session_id,
+                    runtime_id=runtime_id,
+                    source_kind="managed_session",
+                    lifetime_seconds=int(_DEFAULT_SESSION_REAP_MAX_AGE_SECONDS),
+                )
             session_environment["MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND"] = (
                 "managed_runtime"
             )

@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 _AUDIENCE = "moonmind-execution-fanout"
 _VERSION = 1
+EXECUTION_FANOUT_REQUIRED_CAPABILITY = "execution.fanout"
 
 
 class ExecutionFanoutCapabilityError(ValueError):
@@ -159,6 +160,7 @@ def verify_execution_fanout_capability(
 
 
 __all__ = [
+    "EXECUTION_FANOUT_REQUIRED_CAPABILITY",
     "ExecutionFanoutCapability",
     "ExecutionFanoutCapabilityError",
     "mint_execution_fanout_capability",

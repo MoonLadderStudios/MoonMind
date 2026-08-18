@@ -1,10 +1,12 @@
 # Executions API Contract
 
+**Document Class:** Canonical declarative
+**Viewpoint:** Module Contract Specification
 **Project:** MoonMind 
 **Doc type:** API contract 
 **Status:** Draft 
 **Owner:** MoonMind Platform 
-**Last updated:** 2026-07-16 (UTC)
+**Last updated:** 2026-08-18 (UTC)
 **Audience:** backend, dashboard, integrations
 
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
@@ -152,7 +154,9 @@ External JSON fields use **camelCase**.
 
 ### 6.1 Authentication
 
-All `/api/executions` endpoints require an authenticated MoonMind user.
+All `/api/executions` endpoints require an authenticated MoonMind user except
+the exact create and describe operations admitted by the workflow-scoped
+execution fan-out capability in Section 6.5.
 
 ### 6.2 Ownership model
 
@@ -178,6 +182,28 @@ Rules:
 ### 6.4 Information disclosure posture
 
 For direct fetch/update/signal/cancel operations, non-admin callers receive `404 Not Found` for executions they do not own. This intentionally avoids confirming whether another user's execution exists.
+
+### 6.5 Workflow-scoped execution fan-out
+
+A managed runtime with the normalized `execution.fanout` requirement may receive
+a short-lived bearer plus `X-MoonMind-Execution-Fanout: v1`. This is an
+operation-specific capability, not a user session, worker token, container-job
+token, or general API credential.
+
+The capability is bound to one parent Workflow Execution, agent run, optional
+step, runtime session, runtime id, source kind, and expiry. The API resolves the
+parent's authoritative user owner and permits only:
+
+- `POST /api/executions` with exactly one task or workflow child,
+  `runtimeInheritance="caller"`, and a stable `idempotencyKey`; and
+- `GET /api/executions/{workflowId}` when the target is a child of that parent
+  and has the same owner.
+
+Fan-out authentication rejects schedules, direct-create payloads, source
+overrides, unrelated execution reads, and every other execution operation.
+Unauthorized or unrelated describe requests return `404` so the capability
+cannot probe execution existence. Runtime adapters mint and materialize this
+bearer only when policy authorizes the declared requirement.
 
 ---
 
