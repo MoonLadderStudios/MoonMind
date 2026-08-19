@@ -23,9 +23,15 @@ rules:
    is a forbidden back-edge.
 
 3. **Single canonical vocabulary.** Canonical domain vocabulary that has one
-   authoritative home (the ``OmnigentFailureReason`` failure table, the
-   ``ControlPlaneOutcome`` conflict outcomes, and the ``FencingScope`` owners)
-   must not be redefined elsewhere in the package.
+   authoritative home must not be redefined elsewhere in the package. This covers
+   the conflict/failure/fencing enums (``OmnigentFailureReason``,
+   ``ControlPlaneOutcome``, ``FencingScope``) *and* the canonical
+   status/capability vocabulary -- provider-status normalization
+   (``ProviderStatusClass``), session lifecycle (``SessionLifecyclePhase``),
+   terminal outcome (``TerminalOutcome``), lease/submission/desired-lifecycle
+   state (``LeaseState``, ``SubmissionState``, ``DesiredLifecycle``), and the
+   decision/reason tables (``DecisionKind``, ``ReasonCode``) -- so that status and
+   transition vocabulary is never duplicated across the large modules.
 
 4. **Web-framework containment.** No decomposed layer (domain, ports,
    application, or adapters) may import FastAPI/Starlette; web transport belongs
@@ -112,8 +118,31 @@ PERSISTENCE_SUBTREE: str = "persistence"
 # Canonical domain vocabularies that have exactly one authoritative definition in
 # the package. Redefining any of them anywhere else is duplicate vocabulary
 # (provider-native or otherwise) that the decomposition exists to eliminate.
+#
+# Two groups are enforced:
+#   * the conflict/failure/fencing enums that own conflict-resolution outcomes;
+#   * the canonical status/capability/lifecycle/decision vocabulary that owns the
+#     provider-status normalization, session lifecycle, terminal outcome, lease and
+#     submission state, desired lifecycle, decision-kind, and reason-code tables.
+# The second group is the "status and capability vocabulary" the issue calls out:
+# these tables must have exactly one home so provider-status normalization and
+# transition/decision vocabulary are never duplicated across the large modules.
 SINGLE_DEFINITION_TYPES: frozenset[str] = frozenset(
-    {"OmnigentFailureReason", "ControlPlaneOutcome", "FencingScope"}
+    {
+        # Conflict-resolution / failure / fencing outcomes.
+        "OmnigentFailureReason",
+        "ControlPlaneOutcome",
+        "FencingScope",
+        # Canonical status/capability/lifecycle/decision vocabulary.
+        "ProviderStatusClass",
+        "SessionLifecyclePhase",
+        "TerminalOutcome",
+        "LeaseState",
+        "SubmissionState",
+        "DesiredLifecycle",
+        "DecisionKind",
+        "ReasonCode",
+    }
 )
 
 # Provider-native vendor vocabulary must stay behind adapters (and their

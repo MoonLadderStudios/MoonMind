@@ -73,8 +73,12 @@ kept out of the infra-free layers — no vendor/runtime name such as `codex`,
 `claude`, `jules`, `gemini`, `anthropic`, or `openai` in an import target or a
 non-docstring string literal, so the pure layers speak only canonical vocabulary
 and providers are translated at the adapter boundary — and single canonical
-vocabulary for the `OmnigentFailureReason`, `ControlPlaneOutcome`, and
-`FencingScope` tables) and covered by
+vocabulary for the conflict/failure/fencing tables (`OmnigentFailureReason`,
+`ControlPlaneOutcome`, `FencingScope`) and for the status/capability vocabulary
+(`ProviderStatusClass`, `SessionLifecyclePhase`, `TerminalOutcome`, `LeaseState`,
+`SubmissionState`, `DesiredLifecycle`, `DecisionKind`, `ReasonCode`), so
+provider-status normalization and transition/decision tables are never duplicated
+across the large modules) and covered by
 `tests/unit/omnigent/test_architecture_boundaries.py`.
 
 ## 4. Canonical aggregate owners

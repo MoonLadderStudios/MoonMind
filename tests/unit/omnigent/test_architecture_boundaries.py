@@ -141,6 +141,62 @@ def test_duplicate_control_plane_outcome_is_flagged(tmp_path) -> None:
     assert "duplicate-vocabulary" in rules
 
 
+def test_duplicate_status_vocabulary_is_flagged(tmp_path) -> None:
+    # The single-canonical-vocabulary rule also covers the status/capability
+    # vocabulary (issue AC7: "duplicated vocabulary" beyond the three conflict
+    # enums). Provider-status normalization, session lifecycle, terminal outcome,
+    # lease/submission/desired-lifecycle state, and the decision/reason tables each
+    # have exactly one home; redefining one anywhere else is a duplicate.
+    status_vocabulary = {
+        "ProviderStatusClass": "TERMINAL_SUCCESS = 'terminal_success'",
+        "SessionLifecyclePhase": "CLOSED = 'closed'",
+        "TerminalOutcome": "SUCCESS = 'success'",
+        "LeaseState": "HELD = 'held'",
+        "SubmissionState": "ACCEPTED = 'accepted'",
+        "DesiredLifecycle": "RUN = 'run'",
+        "DecisionKind": "NO_OP = 'no_op'",
+        "ReasonCode": "SESSION_FAILED = 'session_failed'",
+    }
+    for enum_name, member in status_vocabulary.items():
+        _clean_tree(tmp_path)
+        _write(
+            root=tmp_path,
+            rel="adapters/redefine_status.py",
+            source=(
+                f"from enum import Enum\n\n\nclass {enum_name}(str, Enum):\n"
+                f"    {member}\n"
+            ),
+        )
+        _write(
+            root=tmp_path,
+            rel="domain/status_vocab.py",
+            source=(
+                f"from enum import Enum\n\n\nclass {enum_name}(str, Enum):\n"
+                f"    {member}\n"
+            ),
+        )
+        rules = {v.rule for v in checker.check_omnigent_architecture(tmp_path)}
+        assert "duplicate-vocabulary" in rules, enum_name
+
+
+def test_status_vocabulary_defined_once_is_allowed(tmp_path) -> None:
+    # A single authoritative definition of a status enum must NOT be flagged --
+    # only redefinition is a duplicate.
+    _clean_tree(tmp_path)
+    _write(
+        root=tmp_path,
+        rel="domain/status_vocab.py",
+        source=(
+            "from enum import Enum\n\n\nclass ProviderStatusClass(str, Enum):\n"
+            "    TERMINAL_SUCCESS = 'terminal_success'\n"
+        ),
+    )
+    violations = checker.check_omnigent_architecture(tmp_path)
+    assert not any(
+        v.rule == "duplicate-vocabulary" for v in violations
+    ), "\n".join(v.render() for v in violations)
+
+
 def test_application_layer_forbidden_import_is_flagged(tmp_path) -> None:
     # The application layer is infra-free: it coordinates use cases over ports
     # and domain types, never concrete SQLAlchemy/FastAPI/Docker.
