@@ -21,6 +21,7 @@ OUTPUT_KEYS = (
     "temporal_boundary",
     "integration_ci",
     "reliability_journey",
+    "exact_artifact",
     "full_backend",
     "frontend_static",
     "frontend_browser_chromium",
@@ -177,6 +178,9 @@ OMNIGENT_CONTRACT_GATE_KEYS = (
     "temporal_boundary",
     "integration_ci",
     "reliability_journey",
+    # An Omnigent-owned change ships in the deployable API/worker/UI images, so
+    # it must also exercise the Tier-1 exact deployable-artifact gate.
+    "exact_artifact",
 )
 
 OMNIGENT_CONTRACT_EXACT = {
@@ -231,6 +235,50 @@ OMNIGENT_FACADE_EXACT = {
 
 OMNIGENT_FACADE_PREFIXES = ("frontend/src/features/workflow-native-chat/",)
 
+# --- Tier-1 exact deployable-artifact gate (MoonLadderStudios/MoonMind#3710) ---
+#
+# The required, noncredentialed exact-artifact conformance gate builds or pulls
+# the exact deployable API/worker/UI images and tests them by immutable digest
+# through their real entrypoints.  A change to the *runtime capability surface*
+# of those images — dependency locks, Dockerfiles, Compose, startup scripts and
+# runtime entrypoints, or the exact-artifact gate tooling itself — must always
+# select this gate, because a source-level test passing does not prove the
+# deployed process retains a required runtime capability (see the missing
+# Uvicorn WebSocket implementation in #3697).
+EXACT_ARTIFACT_EXACT = {
+    # Dependency and lockfile changes must always select this gate.
+    "pyproject.toml",
+    "uv.lock",
+    "poetry.lock",
+    "package.json",
+    "package-lock.json",
+    # Compose, startup scripts, and runtime entrypoints.
+    "docker-compose.yaml",
+    "docker-compose.yml",
+    "docker-compose.test.yaml",
+    ".env-template",
+    "tools/start-worker.sh",
+    # The exact-artifact gate implementation itself.
+    "moonmind/omnigent/exact_artifact_conformance.py",
+    "tools/omnigent_exact_artifact_probe.py",
+    "tools/run_omnigent_exact_artifact_conformance.py",
+}
+
+EXACT_ARTIFACT_PREFIXES = (
+    "api_service/docker/",
+    "docker/",
+)
+
+EXACT_ARTIFACT_GLOBS = (
+    # Any Dockerfile at any depth, plus named *.Dockerfile variants.
+    "Dockerfile",
+    "*.Dockerfile",
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+    "tools/omnigent_exact_artifact_*",
+    "tools/run_omnigent_exact_artifact_*",
+)
+
 BACKEND_PREFIXES = (
     ".agents/skills/",
     "api_service/",
@@ -269,6 +317,7 @@ class SuiteSelection:
     temporal_boundary: bool = False
     integration_ci: bool = False
     reliability_journey: bool = False
+    exact_artifact: bool = False
     full_backend: bool = False
     frontend_static: bool = False
     frontend_browser_chromium: bool = False
@@ -342,6 +391,16 @@ def is_omnigent_contract_owned(path: str) -> bool:
     )
 
 
+def is_exact_artifact_owned(path: str) -> bool:
+    """Return whether a change must select the Tier-1 exact-artifact gate."""
+    return _matches(
+        path,
+        exact=EXACT_ARTIFACT_EXACT,
+        prefixes=EXACT_ARTIFACT_PREFIXES,
+        globs=EXACT_ARTIFACT_GLOBS,
+    )
+
+
 def _is_omnigent_facade_path(path: str) -> bool:
     """Return whether an owned path can affect the compiled native UI/facade."""
     return _matches(
@@ -374,6 +433,7 @@ def _full_backend_selection() -> SuiteSelection:
         temporal_boundary=True,
         integration_ci=True,
         reliability_journey=True,
+        exact_artifact=True,
         full_backend=True,
     )
 
@@ -477,6 +537,10 @@ def select_suites(
             )
             for path in backend_paths
         ),
+        # Computed over every path (not just backend paths): dependency locks
+        # and frontend Dockerfiles are non-backend but still change the
+        # deployable image runtime surface.
+        exact_artifact=any(is_exact_artifact_owned(path) for path in paths),
         frontend_static=static or chromium,
         frontend_browser_chromium=chromium,
         frontend_browser_firefox=firefox,

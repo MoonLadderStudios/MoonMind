@@ -5,6 +5,7 @@ import pytest
 from tools import select_test_suites
 from tools.select_test_suites import (
     OMNIGENT_CONTRACT_GATE_KEYS,
+    is_exact_artifact_owned,
     is_omnigent_contract_owned,
     select_suites,
 )
@@ -30,6 +31,7 @@ def test_docs_only_change_does_not_select_heavy_backend_suites(
         "temporal_boundary": "false",
         "integration_ci": "false",
         "reliability_journey": "false",
+        "exact_artifact": "false",
         "full_backend": "false",
         "frontend_static": "false",
         "frontend_browser_chromium": "false",
@@ -392,3 +394,52 @@ def test_docs_only_change_never_selects_omnigent_gate() -> None:
 
     for key in OMNIGENT_CONTRACT_GATE_KEYS:
         assert outputs[key] == "false", key
+
+
+# --- Tier-1 exact deployable-artifact gate (MoonLadderStudios/MoonMind#3710) ---
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        # Dependency and lockfile changes must always select the gate.
+        "package-lock.json",
+        "package.json",
+        "uv.lock",
+        "poetry.lock",
+        # Dockerfiles, Compose, startup scripts, and runtime entrypoints.
+        "api_service/Dockerfile",
+        "frontend/Dockerfile",
+        "docker-compose.test.yaml",
+        "docker-compose.yaml",
+        "api_service/docker/entrypoint.sh",
+        "docker/worker/start.sh",
+        "tools/start-worker.sh",
+        # The exact-artifact gate implementation itself.
+        "moonmind/omnigent/exact_artifact_conformance.py",
+        "tools/omnigent_exact_artifact_probe.py",
+        "tools/run_omnigent_exact_artifact_conformance.py",
+    ],
+)
+def test_deployable_artifact_change_selects_exact_artifact(changed_path: str) -> None:
+    assert is_exact_artifact_owned(changed_path), changed_path
+    assert _outputs([changed_path])["exact_artifact"] == "true", changed_path
+
+
+def test_omnigent_owned_change_selects_exact_artifact() -> None:
+    outputs = _outputs(["moonmind/omnigent/policies.py"])
+    assert outputs["exact_artifact"] == "true"
+
+
+def test_non_deployable_backend_change_does_not_select_exact_artifact() -> None:
+    for path in (
+        "api_service/services/execution_service.py",
+        "api_service/api/routers/workflow_console.py",
+    ):
+        outputs = _outputs([path])
+        assert outputs["exact_artifact"] == "false", path
+
+
+def test_docs_only_change_does_not_select_exact_artifact() -> None:
+    assert _outputs(["docs/Omnigent/Overview.md"])["exact_artifact"] == "false"
+    assert not is_exact_artifact_owned("docs/Omnigent/Overview.md")

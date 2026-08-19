@@ -2,8 +2,8 @@
 
 **Document Class:** Canonical declarative
 **Status:** Current
-**Updated:** 2026-08-13
-**Authority:** MoonLadderStudios/MoonMind#3508 browser-to-host product acceptance, MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract, and MoonLadderStudios/MoonMind#3642 native Workflow Chat release matrix
+**Updated:** 2026-08-19
+**Authority:** MoonLadderStudios/MoonMind#3508 browser-to-host product acceptance, MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract, MoonLadderStudios/MoonMind#3642 native Workflow Chat release matrix, and MoonLadderStudios/MoonMind#3710 exact-artifact CI and verification tiers
 
 MoonMind uses the versioned profile at
 `tests/fixtures/omnigent/conformance-v4.json` as the single inventory for the
@@ -154,6 +154,43 @@ contract generation. The comma-separated `CANARY_OWNER_IDS`,
 `FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_` prefix are exact allowlists.
 Disabling the feature or changing its generation blocks new admissions without
 changing replay or historical reads for already-started destinations.
+
+## Verification tiers
+
+Omnigent verification is separated into four tiers with distinct reliability and
+credential needs (MoonLadderStudios/MoonMind#3710). A higher-tier outage never
+flips a lower required tier closed, but it does keep rollout readiness closed
+where the protected tier is required.
+
+- **Tier 1 — required noncredentialed exact-artifact conformance.** The
+  `omnigent-exact-artifact` job in `.github/workflows/pytest-unit-tests.yml`
+  runs for every affected PR on standard Docker-enabled merge infrastructure
+  with no protected credentials. It builds the exact deployable image, tests it
+  by immutable digest through its real entrypoints — the in-image capability
+  probe (`tools/omnigent_exact_artifact_probe.py`, which proves Uvicorn resolves
+  an installed WebSocket implementation so a #3697-style drop fails closed),
+  HTTP/SSE/WebSocket route handshakes, clean and prior-schema PostgreSQL
+  migrations, worker task-queue/readiness advertisement, and the compiled
+  native UI consuming the hosted bootstrap with no root `/v1/*` traffic — and
+  drives a bounded fake-provider execution plus restart/terminal replay after
+  the fake host is removed. `tools/run_omnigent_exact_artifact_conformance.py`
+  is the authoritative fail-closed decision
+  (`moonmind.omnigent.exact_artifact_conformance`). Dependency and lockfile
+  changes always select this gate, and the `ci-required` aggregator fails when
+  it is selected but skipped, cancelled, or neutral.
+- **Tier 2 — credentialed protected provider canary.** The credentialed
+  publication gate below, run on the dedicated
+  `omnigent-provider-verification` runner.
+- **Tier 3 — post-deployment synthetic.** A bounded disposable execution
+  against the deployed commit and actual image digests through the normal
+  product API, requiring no operator to copy session identifiers.
+- **Tier 4 — scheduled soak and failure matrix.** Broader browser, product,
+  cumulative-remediation, restart, cleanup, and fault scenarios.
+
+`moonmind.omnigent.live_verification_health` projects `tier1Ready` and
+`protectedTierReady` from non-secret runner/queue/freshness/matrix signals; the
+publication/readiness support gate reuses `rolloutReady` so a Tier-4 outage
+fails rollout closed while leaving Tier 1 protecting PRs.
 
 ## Credentialed CI publication
 
