@@ -21,6 +21,7 @@ import hashlib
 import json
 import secrets
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -477,7 +478,10 @@ class OmnigentBridgeSessionStore:
             else {}
         )
         repository = str(
-            parameters.get("repository") or workspace.get("repository") or ""
+            recovery_requested.get("repository")
+            or parameters.get("repository")
+            or workspace.get("repository")
+            or ""
         ).strip()
         branch = str(
             recovery_requested.get("repositoryBranch")
@@ -488,13 +492,31 @@ class OmnigentBridgeSessionStore:
             or "detached"
         ).strip()
         locator = workspace.get("workspaceLocator")
-        remediation_workspace_ref = str(
-            remediation.get("headAuthorityRef")
-            or remediation.get("baseCheckpointRef")
-            or ""
-        ).strip()
+        # A remediation candidate head and checkpoint advance from C0 to C1 to
+        # C2.  They are evidence for one attempt, not the immutable workspace
+        # capability owned by the session.  Bind the immutable dimension to the
+        # controller's stable loop/branch/capability envelope instead; exact
+        # candidate refs remain in RemediationTurnIntent and its idempotency
+        # digest, while the workspace owner separately validates the requested
+        # head against the durable loop-head artifact before materialization.
+        remediation_workspace_ref = (
+            "remediation-workspace:sha256:"
+            + compute_digest(
+                {
+                    "loopId": remediation.get("loopId"),
+                    "branchRef": remediation.get("branchRef"),
+                    "workspacePolicy": remediation.get("workspacePolicy"),
+                    "workspaceCapabilitySnapshot": remediation.get(
+                        "workspaceCapabilitySnapshot"
+                    ),
+                }
+            )
+            if remediation
+            else ""
+        )
         workspace_ref = (
-            remediation_workspace_ref
+            str(recovery_requested.get("workspaceRef") or "").strip()
+            or remediation_workspace_ref
             or (
                 "workspace-intent:sha256:" + compute_digest(locator)
                 if isinstance(locator, Mapping)
@@ -502,18 +524,25 @@ class OmnigentBridgeSessionStore:
             )
         )
         policy_ref = str(
-            launch.get("launchPolicyRef")
+            recovery_requested.get("launchPolicyRef")
+            or launch.get("launchPolicyRef")
             or remediation.get("launchPolicyRef")
-            or recovery_requested.get("launchPolicyRef")
             or ""
         ).strip() or None
         image_ref = str(
-            launch.get("hostImageRef") or launch.get("serverImageRef") or ""
+            recovery_requested.get("imageManifestRef")
+            or launch.get("hostImageRef")
+            or launch.get("serverImageRef")
+            or ""
         ).strip() or None
         compatibility_ref = str(
-            launch.get("compatibilityEvidenceRef") or ""
+            recovery_requested.get("compatibilityRef")
+            or launch.get("compatibilityEvidenceRef")
+            or ""
         ).strip() or None
-        intent_digest = compute_digest(
+        intent_digest = str(
+            recovery_requested.get("intentDigest") or ""
+        ).strip() or compute_digest(
             {
                 "instructionRef": request.instruction_ref,
                 "runtimeCommand": (
@@ -557,9 +586,18 @@ class OmnigentBridgeSessionStore:
                 or "default"
             ).strip()
             or None,
-            compatibility_profile=BRIDGE_COMPATIBILITY_PROFILE,
+            compatibility_profile=str(
+                recovery_requested.get("compatibilityProfile")
+                or BRIDGE_COMPATIBILITY_PROFILE
+            ).strip()
+            or None,
             provider_profile_id=(
-                str(provider_profile_id or request.execution_profile_ref or "").strip()
+                str(
+                    recovery_requested.get("providerProfileId")
+                    or provider_profile_id
+                    or request.execution_profile_ref
+                    or ""
+                ).strip()
                 or None
             ),
             policy_ref=policy_ref,
@@ -575,13 +613,18 @@ class OmnigentBridgeSessionStore:
             ).strip()
             or None,
             skill_ref=str(
-                parameters.get("selectedSkill")
+                recovery_requested.get("skillRef")
+                or parameters.get("selectedSkill")
                 or request.resolved_skillset_ref
                 or request.skill.get("name")
                 or ""
             ).strip()
             or None,
-            runtime_authority_ref=str(launch.get("snapshotRef") or "").strip()
+            runtime_authority_ref=str(
+                recovery_requested.get("runtimeAuthorityRef")
+                or launch.get("snapshotRef")
+                or ""
+            ).strip()
             or None,
             instruction_digest=str(
                 recovery_requested.get("instructionDigest") or ""
@@ -780,16 +823,11 @@ class OmnigentBridgeSessionStore:
             provider_profile_id=provider_profile_id,
             effective_launch_snapshot=effective_launch_snapshot,
         )
-        remediation = self._canonical_remediation_intent(
-            request,
-            dimensions=dimensions,
-            effective_launch_snapshot=effective_launch_snapshot,
-        )
-        assert remediation is not None
         async with self._control_plane.transaction() as repos:
-            predecessor = await repos.turn_attempts.get(
-                remediation.of_turn_attempt_id
-            )
+            predecessor_id = str(
+                (request.parameters or {}).get("remediationOfTurnAttemptId") or ""
+            ).strip()
+            predecessor = await repos.turn_attempts.get(predecessor_id)
             prior_session = (
                 await repos.sessions.get(predecessor.session_id)
                 if predecessor is not None
@@ -799,6 +837,21 @@ class OmnigentBridgeSessionStore:
             raise OmnigentIdempotencyError(
                 "remediation predecessor canonical authority is not terminal"
             )
+        # Candidate restore/checkpoint locations are attempt evidence.  The
+        # remediation inherits the predecessor's stable workspace capability;
+        # every other requested authority remains concrete and fail-closed.
+        dimensions = replace(
+            dimensions,
+            workspace_ref=ImmutableSessionDimensions.from_session(
+                prior_session
+            ).workspace_ref,
+        )
+        remediation = self._canonical_remediation_intent(
+            request,
+            dimensions=dimensions,
+            effective_launch_snapshot=effective_launch_snapshot,
+        )
+        assert remediation is not None
         validate_remediation_authority(
             intent=remediation,
             base_dimensions=ImmutableSessionDimensions.from_session(prior_session),
@@ -808,6 +861,63 @@ class OmnigentBridgeSessionStore:
                 )
             ),
         )
+
+    async def dispatch_same_session_remediation(
+        self, request: AgentExecutionRequest
+    ):
+        """Route a policy-authorized remediation to its canonical session.
+
+        This is the profile-bound production dispatcher for reuse remediation.
+        It resolves the authoritative predecessor turn and its canonical bridge
+        projection using control-plane persistence, then admits the typed turn
+        before the coordinator is allowed to allocate a bridge row, acquire a
+        Provider Profile lease, prepare a host, or mutate the provider.
+        """
+
+        if request.remediation_workspace is None:
+            raise OmnigentIdempotencyError(
+                "same-session remediation requires a remediation workspace"
+            )
+        parameters = dict(request.parameters or {})
+        if parameters.get("allowSameSessionReuse") is not True:
+            raise OmnigentIdempotencyError(
+                "same-session remediation dispatch requires explicit reuse policy"
+            )
+        await self.validate_remediation_lineage(request)
+        predecessor_id = str(
+            parameters.get("remediationOfTurnAttemptId") or ""
+        ).strip()
+        async with self._control_plane.transaction() as repos:
+            predecessor = await repos.turn_attempts.get(predecessor_id)
+            canonical = (
+                await repos.sessions.get(predecessor.session_id)
+                if predecessor is not None
+                else None
+            )
+        if predecessor is None or canonical is None:
+            raise OmnigentIdempotencyError(
+                "remediation predecessor canonical authority is unavailable"
+            )
+        bridge = await self.get_bridge_session(canonical.session_id)
+        if bridge is None:
+            raise OmnigentIdempotencyError(
+                "same-session remediation has no canonical bridge projection"
+            )
+        from moonmind.omnigent.control_plane import TurnSourceKind
+
+        outcome = await self.submit_canonical_turn(
+            request=request,
+            bridge_session_id=canonical.session_id,
+            source_kind=TurnSourceKind.REMEDIATION,
+            effective_launch_snapshot=bridge.effective_launch_snapshot_json or {},
+            caller_id="remediation_controller",
+        )
+        refreshed = await self.get_bridge_session(canonical.session_id)
+        if refreshed is None:
+            raise OmnigentIdempotencyError(
+                "canonical bridge projection disappeared after remediation admission"
+            )
+        return outcome, refreshed
 
     async def establish_canonical_authority(
         self,
@@ -819,6 +929,7 @@ class OmnigentBridgeSessionStore:
         """Idempotently establish the canonical session and first turn."""
 
         from moonmind.omnigent.control_plane import (
+            ImmutableSessionDimensions,
             TurnSubmissionRequest,
             compute_digest,
         )
@@ -856,6 +967,16 @@ class OmnigentBridgeSessionStore:
                 raise OmnigentIdempotencyError(
                     "remediation predecessor canonical authority is unavailable"
                 )
+            dimensions = replace(
+                dimensions,
+                workspace_ref=ImmutableSessionDimensions.from_session(
+                    prior_session
+                ).workspace_ref,
+            )
+            remediation = replace(
+                remediation,
+                granted_dimensions=dimensions,
+            )
             parent_session_id = prior_session.session_id
             if remediation.allow_same_session_reuse:
                 if bridge.bridge_session_id != prior_session.session_id:
@@ -955,6 +1076,22 @@ class OmnigentBridgeSessionStore:
                 or {}
             ),
         )
+        if request.remediation_workspace is not None:
+            async with self._control_plane.transaction() as repos:
+                canonical = await repos.sessions.get(bridge_session_id)
+            if canonical is None:
+                raise OmnigentIdempotencyError(
+                    "same-session remediation canonical authority is unavailable"
+                )
+            from moonmind.omnigent.control_plane import ImmutableSessionDimensions
+
+            base_dimensions = ImmutableSessionDimensions.from_session(canonical)
+            dimensions = replace(
+                dimensions,
+                workspace_ref=base_dimensions.workspace_ref,
+                instruction_digest=base_dimensions.instruction_digest,
+                intent_digest=canonical.intent_digest,
+            )
         remediation = self._canonical_remediation_intent(
             request,
             dimensions=dimensions,
@@ -1195,6 +1332,17 @@ class OmnigentBridgeSessionStore:
 
         async with self._control_plane.transaction() as repos:
             return await repos.sessions.get_by_host_lease_ref(host_lease_ref)
+
+    async def list_canonical_sessions_for_host_authority(
+        self, *, host_binding_ref: str, provider_profile_id: str
+    ):
+        """Resolve all canonical sessions fenced by a static host stop."""
+
+        async with self._control_plane.transaction() as repos:
+            return await repos.sessions.list_for_host_authority(
+                host_binding_ref=host_binding_ref,
+                provider_profile_id=provider_profile_id,
+            )
 
     async def decide_canonical_recovery(
         self,

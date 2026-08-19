@@ -97,6 +97,47 @@ class OmnigentOAuthHostJanitor:
             owner_class="oauth_host_janitor",
         )
 
+    async def _claim_static_host_cleanup(
+        self, *, binding: Any, profile_id: str
+    ) -> list[tuple[Any, ...]]:
+        """Fence every canonical session before a lease-less static stop."""
+
+        resolver = getattr(
+            self._run_store,
+            "list_canonical_sessions_for_host_authority",
+            None,
+        )
+        if not callable(resolver):
+            raise ValueError(
+                "static host cleanup canonical session resolver is unavailable"
+            )
+        sessions = await resolver(
+            host_binding_ref=binding.binding_ref,
+            provider_profile_id=profile_id,
+        )
+        claimed: list[tuple[Any, ...]] = []
+        try:
+            for session in sessions:
+                session_id = str(getattr(session, "session_id", "") or "").strip()
+                if not session_id:
+                    raise ValueError(
+                        "static host cleanup resolved invalid canonical authority"
+                    )
+                claim_token = (
+                    f"oauth-host-janitor:static:{binding.binding_ref}:{session_id}"
+                )
+                claim = await self._run_store.claim_canonical_cleanup(
+                    session_id,
+                    claim_token=claim_token,
+                    owner_class="oauth_host_janitor",
+                )
+                claimed.append((session_id, claim_token, claim))
+        except Exception:
+            for authority in reversed(claimed):
+                await self._release_canonical_cleanup_claim(authority)
+            raise
+        return claimed
+
     async def _claim_cleanup(self, lease: Any) -> Any | None:
         """Claim the observed lease generation before cleanup side effects."""
 
@@ -404,7 +445,17 @@ class OmnigentOAuthHostJanitor:
         if force and profile_id:
             binding = await self._repository.get_binding_for_profile(profile_id)
             if binding is not None and not binding.host_launch_profile_ref:
-                await self._runtime.stop_static_host(binding=binding)
+                canonical_claims = await self._claim_static_host_cleanup(
+                    binding=binding, profile_id=profile_id
+                )
+                try:
+                    await self._runtime.stop_static_host(binding=binding)
+                except Exception:
+                    for authority in reversed(canonical_claims):
+                        await self._release_canonical_cleanup_claim(authority)
+                    raise
+                for authority in canonical_claims:
+                    await self._complete_canonical_cleanup(authority)
                 actions.append(
                     {
                         "hostBindingRef": binding.binding_ref,

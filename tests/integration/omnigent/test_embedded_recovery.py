@@ -64,6 +64,7 @@ from moonmind.omnigent.profile_bound_execution import (
 from moonmind.omnigent.remediation_workspace import (
     RemediationLiveWorkspace,
     RemediationLoopHead,
+    RemediationWorkspaceBinding,
     SandboxRemediationWorkspaceOwner,
 )
 from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
@@ -299,13 +300,13 @@ async def test_runner_crash_disconnected_cleanup_survives_restart_and_drives_jan
 
 
 @pytest.mark.parametrize("cleanup_succeeds", [True, False])
-async def test_remediation_continuation_janitor_uses_real_authority_chain(
+async def test_cumulative_remediation_janitor_uses_real_authority_chain(
     session_factory,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     cleanup_succeeds: bool,
 ) -> None:
-    """Cross remediation admission, prepare, continuation, janitor, and artifacts.
+    """Cross two remediation turns, prepare, janitor, and artifact boundaries.
 
     Docker and Temporal transports are deterministic hermetic boundaries, while
     every authority owner under test is the production implementation: the
@@ -759,28 +760,84 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
     host_lease_ref = current_host_lease_ref[0]
     persisted_host_lease = await repository.get_host_lease(host_lease_ref)
     assert persisted_host_lease is not None
-    continuation_key = f"{request.idempotency_key}:repository-continuation:1"
-    continuation = request.model_copy(
-        update={"idempotency_key": continuation_key}
+    c1_turn_id = await store.get_canonical_turn_attempt_id(request.idempotency_key)
+    assert c1_turn_id is not None
+    c2_step_id = f"{workflow_id}:run:remediate:execution:2"
+    c2_workspace_id = hashlib.sha256(
+        f"{workflow_id}:{c2_step_id}".encode()
+    ).hexdigest()[:24]
+    c2_key = f"{request.idempotency_key}:remediation:2"
+    c2_workspace = {
+        **dict(request.remediation_workspace or {}),
+        "attemptOrdinal": 2,
+        "logicalStepId": "remediate-2",
+        "stepExecutionId": c2_step_id,
+        "baseCheckpointRef": "artifact://checkpoint-c1",
+        "baseWorkspaceDigest": "sha256:" + "c" * 64,
+        "expectedHeadVersion": 3,
+        "headAuthorityRef": "artifact://loop-head-c1",
+        "destinationWorkspaceLocator": {
+            "kind": "sandbox",
+            "workspaceId": c2_workspace_id,
+            "relativePath": "repo",
+        },
+    }
+    c2 = request.model_copy(
+        deep=True,
+        update={
+            "idempotency_key": c2_key,
+            "remediation_workspace": c2_workspace,
+            "parameters": {
+                **dict(request.parameters),
+                "gateResultRef": "artifact://gate-c1",
+                "remainingWorkRef": "artifact://remaining-c1",
+                "remediationOfTurnAttemptId": c1_turn_id,
+                "allowSameSessionReuse": True,
+            },
+        },
     )
+    workspace_owner.record_loop_head(
+        RemediationLoopHead(
+            loop_id=loop_id,
+            branch_ref=branch_ref,
+            checkpoint_ref="artifact://checkpoint-c1",
+            workspace_digest="sha256:" + "c" * 64,
+            head_version=3,
+            base_commit="b" * 40,
+            manifest_ref="artifact://manifest-c1",
+        )
+    )
+    candidate_lineage = await workspace_owner.validate_head_authority(
+        binding=RemediationWorkspaceBinding.model_validate(c2_workspace)
+    )
+    assert candidate_lineage == {
+        "loopId": loop_id,
+        "branchRef": branch_ref,
+        "checkpointRef": "artifact://checkpoint-c1",
+        "workspaceDigest": "sha256:" + "c" * 64,
+        "headVersion": 3,
+        "headAuthorityRef": "artifact://loop-head-c1",
+    }
     initial_bridge = await store.get_existing(request.idempotency_key)
     assert initial_bridge is not None
-    await store.submit_canonical_turn(
-        request=continuation,
+    c2_outcome = await store.submit_canonical_turn(
+        request=c2,
         bridge_session_id=initial_bridge.bridge_session_id,
-        source_kind=TurnSourceKind.REPOSITORY_CONTINUATION,
+        source_kind=TurnSourceKind.REMEDIATION,
         effective_launch_snapshot=persisted_host_lease.effective_launch_snapshot,
-        caller_id="repository_publication_controller",
+        caller_id="remediation_controller",
     )
-    await store.record_canonical_turn_delivery(continuation_key)
+    assert c2_outcome.turn_attempt.remediation_of_turn_attempt_id == c1_turn_id
+    assert not prior_workspace.exists()
+    await store.record_canonical_turn_delivery(c2_key)
     await store.record_canonical_turn_terminal(
-        continuation_key,
+        c2_key,
         terminal_state="failed",
         terminal_evidence_ref="artifact://canonical-c2-terminal",
     )
     await store.record_lifecycle_event(
-        continuation_key,
-        event_type="repository_continuation_1",
+        c2_key,
+        event_type="remediation_attempt_2",
         status="failed",
     )
     authority = await store.get_egress_cleanup_authority(

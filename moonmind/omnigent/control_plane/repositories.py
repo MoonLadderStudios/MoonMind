@@ -431,6 +431,32 @@ class SessionRepository(_RepositoryBase):
             )
         return _session_record(rows[0]) if rows else None
 
+    async def list_for_host_authority(
+        self, *, host_binding_ref: str, provider_profile_id: str
+    ) -> list[SessionRecord]:
+        """Return every canonical session attached to one static host scope.
+
+        Static hosts can be idle without a live host-lease row.  Their force-stop
+        boundary therefore resolves authority from the immutable binding/profile
+        pair rather than guessing from lease presence or provider-session ids.
+        Sessions whose cleanup is already complete are historical evidence and
+        no longer own a cleanup claim for the host.
+        """
+
+        stmt = (
+            select(OmnigentSession)
+            .where(
+                OmnigentSession.host_binding_ref == host_binding_ref,
+                OmnigentSession.provider_profile_id == provider_profile_id,
+                OmnigentSession.cleanup_state.not_in(
+                    (CLEANUP_STATE_COMPLETE, "released")
+                ),
+            )
+            .order_by(OmnigentSession.created_at, OmnigentSession.session_id)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_session_record(row) for row in rows]
+
     async def list_for_workflow(
         self, moonmind_workflow_id: str, *, moonmind_run_id: Optional[str] = None
     ) -> list[SessionRecord]:

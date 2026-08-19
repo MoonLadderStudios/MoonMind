@@ -503,6 +503,161 @@ async def test_remediation_admission_precedes_lease_and_host_mutation() -> None:
     hosts.create_or_get_host_lease.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_same_session_remediation_dispatches_before_reusing_live_host() -> None:
+    order: list[str] = []
+    step_id = "workflow-1:run-1:remediate:execution:2"
+    workspace_id = hashlib.sha256(f"workflow-1:{step_id}".encode()).hexdigest()[:24]
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="workflow-1",
+        idempotencyKey="attempt-reuse-2",
+        stepExecution={
+            "workflowId": "workflow-1",
+            "runId": "run-1",
+            "logicalStepId": "remediate",
+            "executionOrdinal": 2,
+            "stepExecutionId": step_id,
+            "runtimeContextPolicy": "fresh_agent_run",
+        },
+        remediationWorkspace={
+            "loopId": "loop-1",
+            "branchRef": "checkpoint-branch:loop-1",
+            "attemptOrdinal": 2,
+            "workflowId": "workflow-1",
+            "runId": "run-1",
+            "logicalStepId": "remediate",
+            "stepExecutionId": step_id,
+            "baseCheckpointRef": "artifact://workspace/C1",
+            "baseWorkspaceDigest": "sha256:" + "a" * 64,
+            "expectedHeadVersion": 2,
+            "headAuthorityRef": "artifact://loop-head/2",
+            "destinationWorkspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+            "executionProfileRef": "codex",
+            "hostProfileRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-static@1",
+            "workspaceCapabilitySnapshot": {
+                "locatorKind": "sandbox",
+                "restore": True,
+            },
+        },
+        parameters={
+            "allowSameSessionReuse": True,
+            "remediationOfTurnAttemptId": "turn-c1",
+            "gateResultRef": "artifact://gate-c1",
+            "remainingWorkRef": "artifact://remaining-c1",
+        },
+    )
+    launch = {
+        "snapshotRef": "omnigent-launch:sha256:" + "1" * 64,
+        "harness": "codex-native",
+        "agentName": "Codex",
+        "limits": {"timeoutSeconds": 900},
+    }
+    bridge = SimpleNamespace(
+        bridge_session_id="bridge-1",
+        provider_profile_id="codex",
+        provider_lease_id="provider-lease-1",
+        credential_generation=3,
+        host_binding_ref="omnigent-oauth:codex",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+        omnigent_session_id="provider-session-1",
+        omnigent_endpoint_ref="default",
+        workspace="/work/agent_jobs/reuse/repo",
+        effective_launch_snapshot_json=launch,
+    )
+
+    async def dispatch(_request):
+        order.append("typed_dispatch")
+        return (
+            SimpleNamespace(turn_attempt=SimpleNamespace(turn_attempt_id="turn-c2")),
+            bridge,
+        )
+
+    async def validate_head_authority(*, binding):
+        order.append("candidate_lineage_validated")
+        assert binding.base_checkpoint_ref == "artifact://workspace/C1"
+        return {"checkpointRef": binding.base_checkpoint_ref}
+
+    async def execute(bound_request, **kwargs):
+        order.append("provider_turn")
+        assert kwargs["resume_session_id"] == "provider-session-1"
+        assert kwargs["defer_bridge_terminal"] is True
+        assert bound_request.parameters["omnigent"]["session"]["hostId"] == "host-1"
+        return AgentRunResult(
+            summary="remediated",
+            metadata={
+                "deferredBridgeTerminal": {
+                    "idempotencyKey": request.idempotency_key,
+                    "status": "completed",
+                    "terminalRefs": {
+                        "captureManifestRef": "artifact://capture-c2"
+                    },
+                }
+            },
+        )
+
+    async def record_terminal(idempotency_key, **kwargs):
+        order.append("canonical_terminal")
+        assert idempotency_key == request.idempotency_key
+        assert kwargs == {
+            "terminal_state": "completed",
+            "terminal_evidence_ref": "artifact://capture-c2",
+        }
+
+    async def mark_terminal(idempotency_key, **kwargs):
+        order.append("bridge_terminal_evidence")
+        assert idempotency_key == request.idempotency_key
+        assert kwargs["status"] == "completed"
+
+    host_lease = _host_lease().model_copy(
+        update={"bridge_session_id": "bridge-1"}
+    )
+    hosts = SimpleNamespace(
+        get_host_lease=AsyncMock(return_value=host_lease),
+        heartbeat_host_lease=AsyncMock(),
+    )
+    lease_client = SimpleNamespace(
+        acquire_execution_lease=AsyncMock(), release_lease=AsyncMock()
+    )
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=lease_client,
+        host_repository=hosts,
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(
+            dispatch_same_session_remediation=dispatch,
+            record_canonical_turn_terminal=record_terminal,
+            mark_terminal=mark_terminal,
+        ),
+        execution_runner=execute,
+        artifact_gateway=object(),
+        workspace_owner=SimpleNamespace(
+            validate_head_authority=validate_head_authority
+        ),
+    )
+
+    result = await coordinator.execute(request)
+
+    assert order == [
+        "candidate_lineage_validated",
+        "typed_dispatch",
+        "provider_turn",
+        "canonical_terminal",
+        "bridge_terminal_evidence",
+    ]
+    assert result.metadata["canonicalSessionId"] == "bridge-1"
+    assert result.metadata["canonicalTurnAttemptId"] == "turn-c2"
+    lease_client.acquire_execution_lease.assert_not_awaited()
+
+
 def _binding() -> OmnigentOAuthHostBinding:
     return OmnigentOAuthHostBinding(
         bindingRef="omnigent-oauth:codex",

@@ -10,6 +10,7 @@ Source design traceability: OmnigentBridge.md (MM-1152, source issue MM-1140).
 
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -40,7 +41,12 @@ from moonmind.omnigent.bridge_store import (
     bridge_failure_class,
     coalesce_bridge_status,
 )
-from moonmind.omnigent.control_plane import TurnSourceKind
+from moonmind.omnigent.control_plane import (
+    ControlPlaneOutcome,
+    OmnigentTurnService,
+    TurnSourceKind,
+    TurnSubmissionRequest,
+)
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRuntimeStepExecutionLaunch,
@@ -123,6 +129,167 @@ def _effective_launch() -> dict:
         },
         "enforcedEgress": True,
     }
+
+
+def _remediation_request(
+    *,
+    attempt: int,
+    idempotency_key: str,
+    predecessor_id: str,
+    checkpoint_ref: str,
+    head_ref: str,
+) -> AgentExecutionRequest:
+    workflow_id = "wf-remediation"
+    step_id = f"{workflow_id}:run-1:remediation-{attempt}:execution:1"
+    workspace_id = hashlib.sha256(
+        f"{workflow_id}:{step_id}".encode()
+    ).hexdigest()[:24]
+    return AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile-1",
+        correlationId=workflow_id,
+        idempotencyKey=idempotency_key,
+        remediationWorkspace={
+            "loopId": "loop-1",
+            "branchRef": "checkpoint-branch:loop-1",
+            "attemptOrdinal": attempt,
+            "workflowId": workflow_id,
+            "runId": "run-1",
+            "logicalStepId": f"remediation-{attempt}",
+            "stepExecutionId": step_id,
+            "baseCheckpointRef": checkpoint_ref,
+            "baseWorkspaceDigest": "sha256:" + str(attempt) * 64,
+            "expectedHeadVersion": attempt,
+            "headAuthorityRef": head_ref,
+            "destinationWorkspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": workspace_id,
+                "relativePath": "repo",
+            },
+            "executionProfileRef": "profile-1",
+            "hostProfileRef": "profile-1",
+            "launchPolicyRef": "codex-static@1",
+            "workspaceCapabilitySnapshot": {
+                "locatorKind": "sandbox",
+                "restore": True,
+            },
+        },
+        parameters={
+            "repository": "MoonLadderStudios/MoonMind",
+            "publishMode": "none",
+            "gateResultRef": f"artifact://gate-c{attempt - 1}",
+            "remainingWorkRef": f"artifact://remaining-c{attempt - 1}",
+            "remediationOfTurnAttemptId": predecessor_id,
+            "allowSameSessionReuse": True,
+            "attemptBudget": 3,
+            "branchBudget": 1,
+            "selectedSkill": "remediate-issue",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_reuses_one_session_across_advancing_remediation_heads(
+    store,
+) -> None:
+    """C0->C1->C2 changes attempt evidence, never workspace authority."""
+
+    placeholder = _remediation_request(
+        attempt=1,
+        idempotency_key="remediation-c1",
+        predecessor_id="pending",
+        checkpoint_ref="artifact://workspace/C0",
+        head_ref="artifact://head/C0",
+    )
+    bridge = await store.get_or_create(
+        request=_request("bridge-seed"),
+        endpoint_ref="endpoint",
+        agent_id="agent-1",
+        agent_name="Codex",
+        target_metadata={},
+    )
+    launch = _effective_launch()
+    async with store._session_factory() as session:
+        row = await session.get(OmnigentBridgeSession, bridge.bridge_session_id)
+        row.provider_profile_id = "profile-1"
+        row.effective_launch_snapshot_json = launch
+        await session.commit()
+
+    dimensions = store._canonical_dimensions(
+        placeholder,
+        provider_profile_id="profile-1",
+        effective_launch_snapshot=launch,
+    )
+    service = OmnigentTurnService(store._control_plane)
+    initial = await service.establish_session(
+        TurnSubmissionRequest(
+            session_id=bridge.bridge_session_id,
+            source_kind=TurnSourceKind.INITIAL,
+            caller_id="remediation-controller",
+            idempotency_key="canonical-c0",
+            instruction_digest="sha256:canonical-c0",
+            requested_dimensions=dimensions,
+            metadata={"grants_publication_authority": False},
+        ),
+        moonmind_workflow_id="wf-remediation",
+        provider="omnigent",
+        new_session_id=bridge.bridge_session_id,
+        compatibility_profile=dimensions.compatibility_profile,
+        provider_profile_id="profile-1",
+    )
+    await service.record_turn_delivery(
+        initial.turn_attempt.idempotency_key,
+        outcome=ControlPlaneOutcome.APPLIED,
+    )
+    await service.record_turn_terminal(
+        initial.turn_attempt.idempotency_key,
+        terminal_state="completed",
+        terminal_evidence_ref="artifact://terminal/C0",
+    )
+
+    c1 = placeholder.model_copy(
+        update={
+            "parameters": {
+                **placeholder.parameters,
+                "remediationOfTurnAttemptId": initial.turn_attempt.turn_attempt_id,
+            }
+        }
+    )
+    c1_outcome, c1_bridge = await store.dispatch_same_session_remediation(c1)
+    await store.record_canonical_turn_delivery(c1.idempotency_key)
+    await store.record_canonical_turn_terminal(
+        c1.idempotency_key,
+        terminal_state="completed",
+        terminal_evidence_ref="artifact://terminal/C1",
+    )
+    c2 = _remediation_request(
+        attempt=2,
+        idempotency_key="remediation-c2",
+        predecessor_id=c1_outcome.turn_attempt.turn_attempt_id,
+        checkpoint_ref="artifact://workspace/C1",
+        head_ref="artifact://head/C1",
+    )
+    c2_dimensions = store._canonical_dimensions(
+        c2,
+        provider_profile_id="profile-1",
+        effective_launch_snapshot=launch,
+    )
+    c2_outcome, c2_bridge = await store.dispatch_same_session_remediation(c2)
+
+    assert dimensions.workspace_ref == c2_dimensions.workspace_ref
+    assert c1_bridge.bridge_session_id == bridge.bridge_session_id
+    assert c2_bridge.bridge_session_id == bridge.bridge_session_id
+    assert c2_outcome.turn_attempt.remediation_of_turn_attempt_id == (
+        c1_outcome.turn_attempt.turn_attempt_id
+    )
+    async with store._control_plane.transaction() as repos:
+        sessions = await repos.sessions.list_for_workflow("wf-remediation")
+        attempts = await repos.turn_attempts.list_for_session(
+            bridge.bridge_session_id
+        )
+    assert len(sessions) == 1
+    assert len(attempts) == 3
 
 
 @pytest.mark.asyncio

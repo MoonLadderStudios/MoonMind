@@ -209,6 +209,11 @@ async def _await_restore_with_activity_heartbeats(awaitable: Any) -> Any:
 
 
 class RemediationWorkspaceOwner(Protocol):
+    async def validate_head_authority(
+        self, *, binding: RemediationWorkspaceBinding
+    ) -> Mapping[str, Any]:
+        raise NotImplementedError
+
     async def admit_and_resolve(
         self, *, binding: RemediationWorkspaceBinding, workflow_id: str,
         step_execution_id: str,
@@ -309,6 +314,21 @@ class SandboxRemediationWorkspaceOwner:
         ):
             raise RemediationWorkspaceError("REMEDIATION_LOOP_HEAD_MISMATCH", "requested base is not the durable loop head")
         return head
+
+    async def validate_head_authority(
+        self, *, binding: RemediationWorkspaceBinding
+    ) -> Mapping[str, Any]:
+        """Read and validate the exact mutable candidate lineage without restore."""
+
+        head = await self._authoritative_head(binding)
+        return {
+            "loopId": head.loop_id,
+            "branchRef": head.branch_ref,
+            "checkpointRef": head.checkpoint_ref,
+            "workspaceDigest": head.workspace_digest,
+            "headVersion": head.head_version,
+            "headAuthorityRef": binding.head_authority_ref,
+        }
 
     def _try_live_reuse(self, binding: RemediationWorkspaceBinding, head: RemediationLoopHead) -> tuple[Path, SandboxWorkspaceLocator] | None:
         value = self._load("live", binding)

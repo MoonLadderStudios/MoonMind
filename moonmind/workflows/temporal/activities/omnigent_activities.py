@@ -57,18 +57,41 @@ def _checkpoint_recovery_dimensions(recovery: dict[str, Any]):
     if not isinstance(requested, dict):
         raise ValueError("checkpoint recovery immutableRequested is required")
     mapping = {
+        "provider": "provider",
         "instructionDigest": "instruction_digest",
         "runtimeId": "runtime_id",
         "model": "model",
         "effort": "effort",
+        "compatibilityProfile": "compatibility_profile",
         "providerProfileId": "provider_profile_id",
         "launchPolicyRef": "policy_ref",
+        "imageManifestRef": "image_manifest_ref",
+        "compatibilityRef": "compatibility_ref",
+        "repository": "repository",
         "repositoryBranch": "branch",
+        "workspaceRef": "workspace_ref",
         "publishMode": "publication_mode",
+        "skillRef": "skill_ref",
+        "runtimeAuthorityRef": "runtime_authority_ref",
+        "intentDigest": "intent_digest",
     }
+    # These fields existed in the first persisted recovery payload shape and
+    # remain mandatory for in-flight histories.  New payloads carry every
+    # concrete ImmutableSessionDimensions field; optional legacy omissions are
+    # represented as unknown rather than fabricated authority.
+    legacy_required = (
+        "instructionDigest",
+        "runtimeId",
+        "model",
+        "effort",
+        "providerProfileId",
+        "launchPolicyRef",
+        "repositoryBranch",
+        "publishMode",
+    )
     missing = [
         source
-        for source in mapping
+        for source in legacy_required
         if not str(requested.get(source) or "").strip()
     ]
     if missing:
@@ -79,8 +102,10 @@ def _checkpoint_recovery_dimensions(recovery: dict[str, Any]):
     values = {
         target: str(requested[source]).strip()
         for source, target in mapping.items()
+        if str(requested.get(source) or "").strip()
     }
-    return ImmutableSessionDimensions(provider="omnigent", **values)
+    values.setdefault("provider", "omnigent")
+    return ImmutableSessionDimensions(**values)
 
 
 def _checkpoint_recovery_from_request(request: AgentExecutionRequest):

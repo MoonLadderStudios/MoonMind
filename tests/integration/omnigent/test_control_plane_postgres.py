@@ -30,12 +30,154 @@ from moonmind.omnigent.control_plane import (
     TurnSourceKind,
     TurnSubmissionRequest,
 )
+from moonmind.workflows.temporal.activities.omnigent_activities import (
+    _checkpoint_recovery_dimensions,
+)
 
 # The ephemeral-PostgreSQL provisioning (``control_plane_postgres_url``) and the
 # ``pg_store`` binding live in ``conftest.py`` so they are shared with the
 # fault-injection replay binding in ``test_control_plane_faultlab.py``.
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("changed_field", "changed_value", "expected_dimension"),
+    [
+        ("repository", "MoonLadderStudios/Other", "repository"),
+        ("workspaceRef", "workspace-intent:sha256:changed", "workspace_ref"),
+    ],
+)
+async def test_activity_compiled_recovery_changes_require_branch_at_store_boundary(
+    pg_store, changed_field, changed_value, expected_dimension
+) -> None:
+    """The production Activity compiler feeds the persisted canonical gate."""
+
+    service = OmnigentTurnService(pg_store)
+    source = {
+        "provider": "omnigent",
+        "instructionDigest": "sha256:instructions",
+        "runtimeId": "omnigent",
+        "model": "gpt-5.6",
+        "effort": "high",
+        "compatibilityProfile": "omnigent-bridge-v1",
+        "providerProfileId": "profile-1",
+        "launchPolicyRef": "policy-1",
+        "imageManifestRef": "image-1",
+        "compatibilityRef": "compatibility-1",
+        "repository": "MoonLadderStudios/MoonMind",
+        "repositoryBranch": "main",
+        "workspaceRef": "workspace-intent:sha256:source",
+        "publishMode": "none",
+        "skillRef": "remediate-issue",
+        "runtimeAuthorityRef": "launch-1",
+        "intentDigest": "sha256:intent",
+    }
+    source_dimensions = _checkpoint_recovery_dimensions(
+        {"immutableRequested": source}
+    )
+    await service.establish_session(
+        TurnSubmissionRequest(
+            session_id=f"recovery-{expected_dimension}",
+            source_kind=TurnSourceKind.INITIAL,
+            caller_id="workflow-activity",
+            idempotency_key=f"recovery-initial-{expected_dimension}",
+            instruction_digest="sha256:instructions",
+            requested_dimensions=source_dimensions,
+        ),
+        moonmind_workflow_id=f"wf-recovery-{expected_dimension}",
+        provider="omnigent",
+        new_session_id=f"recovery-{expected_dimension}",
+        compatibility_profile=source_dimensions.compatibility_profile,
+        provider_profile_id=source_dimensions.provider_profile_id,
+        compatibility_ref=source_dimensions.compatibility_ref,
+        image_manifest_ref=source_dimensions.image_manifest_ref,
+    )
+    requested = {**source, changed_field: changed_value}
+    intent_dimensions = _checkpoint_recovery_dimensions(
+        {"immutableRequested": requested}
+    )
+    decision = await service.decide_session_recovery(
+        f"recovery-{expected_dimension}",
+        recovery_idempotency_key=f"recover-{expected_dimension}",
+        intent_dimensions=intent_dimensions,
+        live_authority=RecoveryEvidence(
+            intent_dimensions=intent_dimensions,
+            session_dimensions=source_dimensions,
+            provider_profile_lease_current=True,
+            host_available=True,
+            provider_session_reachable=True,
+            cursor_present=True,
+            first_message_consistent=True,
+            credential_generation_current=True,
+            workspace_artifact_valid=True,
+            session_evidence_valid=True,
+        ),
+    )
+
+    assert decision.mode.value == "branch_required"
+    assert decision.changed_dimensions == (expected_dimension,)
+
+
+@pytest.mark.asyncio
+async def test_static_host_authority_resolution_fences_active_chat_turn(
+    pg_store,
+) -> None:
+    """Forced static cleanup consumes real session/turn repositories."""
+
+    service = OmnigentTurnService(pg_store)
+    dimensions = ImmutableSessionDimensions(
+        provider="omnigent",
+        provider_profile_id="profile-static",
+        repository="MoonLadderStudios/MoonMind",
+    )
+    initial = await service.establish_session(
+        TurnSubmissionRequest(
+            session_id="static-session",
+            source_kind=TurnSourceKind.INITIAL,
+            caller_id="workflow-static",
+            idempotency_key="static-initial",
+            instruction_digest="digest-static-initial",
+            requested_dimensions=dimensions,
+        ),
+        moonmind_workflow_id="wf-static",
+        provider="omnigent",
+        new_session_id="static-session",
+        provider_profile_id="profile-static",
+        host_binding_ref="binding-static",
+    )
+    await service.record_turn_delivery(
+        initial.turn_attempt.idempotency_key,
+        outcome=ControlPlaneOutcome.APPLIED,
+    )
+    await service.record_turn_terminal(
+        initial.turn_attempt.idempotency_key,
+        terminal_state="completed",
+    )
+    await service.submit_reuse_turn(
+        TurnSubmissionRequest(
+            session_id="static-session",
+            source_kind=TurnSourceKind.WORKFLOW_CHAT,
+            caller_id="workflow-static",
+            idempotency_key="static-chat-active",
+            instruction_digest="digest-static-chat",
+            requested_dimensions=dimensions,
+        )
+    )
+
+    async with pg_store.transaction() as repos:
+        sessions = await repos.sessions.list_for_host_authority(
+            host_binding_ref="binding-static",
+            provider_profile_id="profile-static",
+        )
+    assert [session.session_id for session in sessions] == ["static-session"]
+    with pytest.raises(CleanupFenceError):
+        await service.claim_cleanup(
+            "static-session",
+            owner_class="oauth_host_janitor",
+            claim_token="force-static",
+        )
 
 
 @pytest.mark.asyncio

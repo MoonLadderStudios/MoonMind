@@ -4579,29 +4579,97 @@ class TemporalExecutionService:
                         separators=(",", ":"),
                     ).encode("utf-8")
                 ).hexdigest()
+                # Recovery compares the complete canonical session authority,
+                # not a separately reconstructed eight-field approximation.
+                # Older checkpoints can still carry the compact shape; the
+                # Activity later requires the canonical session before making
+                # an authoritative decision.
+                from api_service.db.models import OmnigentSession
+
+                canonical = await self._session.get(
+                    OmnigentSession, validated_omnigent.bridge_session_id
+                )
+                canonical_metadata = (
+                    dict(canonical.metadata_ or {}) if canonical is not None else {}
+                )
+                if canonical is not None and (
+                    canonical.provider_profile_id
+                    != validated_omnigent.provider_profile_id
+                ):
+                    raise TemporalExecutionRecoveryCheckpointError(
+                        "Omnigent checkpoint profile does not match canonical "
+                        "session authority."
+                    )
                 immutable_snapshot = {
-                    "instructionDigest": f"sha256:{instruction_identity}",
-                    "runtimeId": eligibility.target_runtime_id,
+                    "provider": (
+                        canonical.provider if canonical is not None else "omnigent"
+                    ),
+                    "instructionDigest": str(
+                        canonical_metadata.get("instruction_digest")
+                        or f"sha256:{instruction_identity}"
+                    ),
+                    "runtimeId": str(
+                        canonical_metadata.get("runtime_id")
+                        or eligibility.target_runtime_id
+                    ),
                     "model": str(
-                        runtime_payload.get("model")
+                        canonical_metadata.get("model")
+                        or runtime_payload.get("model")
                         or task_payload.get("model")
                         or params.get("model")
                         or "default"
                     ),
                     "effort": str(
-                        runtime_payload.get("effort")
+                        canonical_metadata.get("effort")
+                        or runtime_payload.get("effort")
                         or task_payload.get("effort")
                         or params.get("effort")
                         or "default"
                     ),
+                    "compatibilityProfile": (
+                        canonical.compatibility_profile
+                        if canonical is not None
+                        else None
+                    ),
                     "providerProfileId": validated_omnigent.provider_profile_id,
-                    "launchPolicyRef": validated_omnigent.launch_policy_ref,
-                    "repositoryBranch": validated_omnigent.source_branch,
+                    "launchPolicyRef": str(
+                        canonical_metadata.get("policy_ref")
+                        or validated_omnigent.launch_policy_ref
+                    ),
+                    "imageManifestRef": (
+                        canonical.image_manifest_ref
+                        if canonical is not None
+                        else None
+                    ),
+                    "compatibilityRef": (
+                        canonical.compatibility_ref
+                        if canonical is not None
+                        else None
+                    ),
+                    "repository": canonical_metadata.get("repository"),
+                    "repositoryBranch": str(
+                        canonical_metadata.get("branch")
+                        or validated_omnigent.source_branch
+                    ),
+                    "workspaceRef": canonical_metadata.get("workspace_ref"),
                     "publishMode": str(
-                        task_payload.get("publishMode")
+                        canonical_metadata.get("publication_mode")
+                        or task_payload.get("publishMode")
                         or params.get("publishMode")
                         or "none"
                     ),
+                    "skillRef": canonical_metadata.get("skill_ref"),
+                    "runtimeAuthorityRef": canonical_metadata.get(
+                        "runtime_authority_ref"
+                    ),
+                    "intentDigest": (
+                        canonical.intent_digest if canonical is not None else None
+                    ),
+                }
+                immutable_snapshot = {
+                    key: value
+                    for key, value in immutable_snapshot.items()
+                    if value is not None and str(value).strip()
                 }
                 # Pin the checkpoint's validated selection into the authored
                 # launch. A later profile/default lookup must not silently alter

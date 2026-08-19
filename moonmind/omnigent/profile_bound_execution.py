@@ -780,6 +780,198 @@ class OmnigentProfileBoundExecutionCoordinator:
                 )
                 await asyncio.sleep(retry_after)
 
+    async def _execute_same_session_remediation(
+        self, request: AgentExecutionRequest
+    ) -> AgentRunResult:
+        """Dispatch and execute remediation on existing canonical authority.
+
+        The store admits the typed remediation turn first.  Only after that
+        durable fence exists may this coordinator touch the existing host lease
+        or provider session.  This path never allocates a bridge row, host,
+        Provider Profile lease, chat binding, or replacement canonical session.
+        """
+
+        dispatcher = getattr(
+            self._run_store, "dispatch_same_session_remediation", None
+        )
+        if not callable(dispatcher):
+            raise OmnigentOAuthHostError(
+                "same-session remediation dispatcher is unavailable",
+                code="OMNIGENT_REMEDIATION_DISPATCH_UNAVAILABLE",
+            )
+        binding = self._remediation_workspace(request)
+        assert binding is not None
+        lineage_validator = getattr(
+            self._workspace_owner, "validate_head_authority", None
+        )
+        if not callable(lineage_validator):
+            raise OmnigentOAuthHostError(
+                "same-session remediation candidate lineage validator is unavailable",
+                code="OMNIGENT_REMEDIATION_LINEAGE_VALIDATION_UNAVAILABLE",
+            )
+        await lineage_validator(binding=binding)
+        outcome, bridge = await dispatcher(request)
+
+        async def terminal_rejection(message: str, code: str) -> Exception:
+            recorder = getattr(
+                self._run_store, "record_canonical_turn_terminal", None
+            )
+            if callable(recorder):
+                await recorder(
+                    request.idempotency_key,
+                    terminal_state="failed",
+                )
+            return OmnigentOAuthHostError(message, code=code)
+
+        profile_id = str(request.execution_profile_ref or "").strip()
+        if str(bridge.provider_profile_id or "").strip() != profile_id:
+            raise await terminal_rejection(
+                "same-session remediation profile authority changed",
+                "OMNIGENT_REMEDIATION_PROFILE_MISMATCH",
+            )
+        host_lease_ref = str(bridge.host_lease_ref or "").strip()
+        host_id = str(bridge.omnigent_host_id or "").strip()
+        provider_session_id = str(bridge.omnigent_session_id or "").strip()
+        workspace_path = str(bridge.workspace or "").strip()
+        effective_launch = dict(bridge.effective_launch_snapshot_json or {})
+        required = {
+            "hostLeaseRef": host_lease_ref,
+            "hostId": host_id,
+            "providerSessionId": provider_session_id,
+            "workspace": workspace_path,
+            "providerLeaseRef": bridge.provider_lease_id,
+            "hostBindingRef": bridge.host_binding_ref,
+            "endpointRef": bridge.omnigent_endpoint_ref,
+            "credentialGeneration": bridge.credential_generation,
+            "effectiveLaunchRef": effective_launch.get("snapshotRef"),
+            "harness": effective_launch.get("harness"),
+            "agentName": effective_launch.get("agentName"),
+        }
+        missing = sorted(key for key, value in required.items() if not value)
+        if missing:
+            raise await terminal_rejection(
+                "same-session remediation live authority is incomplete: "
+                + ", ".join(missing),
+                "OMNIGENT_REMEDIATION_LIVE_AUTHORITY_INCOMPLETE",
+            )
+        host_lease = await self._hosts.get_host_lease(host_lease_ref)
+        if (
+            host_lease is None
+            or host_lease.status not in {"ready", "assigned"}
+            or str(host_lease.bridge_session_id or "").strip()
+            != str(bridge.bridge_session_id)
+            or str(host_lease.omnigent_host_id or "").strip() != host_id
+            or int(host_lease.credential_generation)
+            != int(bridge.credential_generation or 0)
+        ):
+            raise await terminal_rejection(
+                "same-session remediation live host authority is unavailable",
+                "OMNIGENT_REMEDIATION_LIVE_AUTHORITY_UNAVAILABLE",
+            )
+        bound = _bind_exact_host(
+            request,
+            host_id=host_id,
+            workspace_path=workspace_path,
+            profile_authorization={
+                "providerProfileId": profile_id,
+                "credentialGeneration": host_lease.credential_generation,
+                "providerLeaseRef": bridge.provider_lease_id,
+                "hostBindingRef": bridge.host_binding_ref,
+                "hostLeaseRef": host_lease_ref,
+                "endpointRef": bridge.omnigent_endpoint_ref,
+                "omnigentHostId": host_id,
+                "bridgeSessionId": bridge.bridge_session_id,
+                "effectiveLaunchRef": effective_launch["snapshotRef"],
+            },
+            harness=str(effective_launch["harness"]),
+            agent_name=str(effective_launch["agentName"]),
+        )
+        try:
+            result = await self._execute_with_host_lease_heartbeat(
+                self._execute(
+                    bound,
+                    artifact_gateway=self._artifact_gateway,
+                    run_store=self._run_store,
+                    resume_session_id=provider_session_id,
+                    defer_bridge_terminal=True,
+                ),
+                host_lease_ref=host_lease_ref,
+                ttl_seconds=int(
+                    effective_launch.get("limits", {}).get("timeoutSeconds") or 900
+                ),
+            )
+        except Exception:
+            recorder = getattr(
+                self._run_store, "record_canonical_turn_terminal", None
+            )
+            if callable(recorder):
+                await recorder(request.idempotency_key, terminal_state="failed")
+            raise
+        metadata = dict(result.metadata or {})
+        deferred_terminal = metadata.pop("deferredBridgeTerminal", None)
+        if not isinstance(deferred_terminal, Mapping):
+            raise await terminal_rejection(
+                "same-session remediation returned no terminal attempt evidence",
+                "OMNIGENT_REMEDIATION_TERMINAL_EVIDENCE_MISSING",
+            )
+        terminal_status = str(deferred_terminal.get("status") or "").strip()
+        terminal_refs = deferred_terminal.get("terminalRefs")
+        deferred_idempotency_key = str(
+            deferred_terminal.get("idempotencyKey") or ""
+        ).strip()
+        if (
+            deferred_idempotency_key != request.idempotency_key
+            or not terminal_status
+            or not isinstance(terminal_refs, Mapping)
+        ):
+            raise await terminal_rejection(
+                "same-session remediation returned invalid terminal attempt evidence",
+                "OMNIGENT_REMEDIATION_TERMINAL_EVIDENCE_INVALID",
+            )
+        terminal_evidence_ref = next(
+            (
+                str(terminal_refs[key])
+                for key in (
+                    "captureManifestRef",
+                    "finalSnapshotRef",
+                    "diagnosticsRef",
+                )
+                if terminal_refs.get(key)
+            ),
+            None,
+        )
+        recorder = getattr(
+            self._run_store, "record_canonical_turn_terminal", None
+        )
+        bridge_recorder = getattr(self._run_store, "mark_terminal", None)
+        if not callable(recorder) or not callable(bridge_recorder):
+            raise await terminal_rejection(
+                "same-session remediation terminal persistence is unavailable",
+                "OMNIGENT_REMEDIATION_TERMINAL_PERSISTENCE_UNAVAILABLE",
+            )
+        # Attempt evidence is authoritative before the bridge projection is
+        # updated.  Neither operation terminalizes the canonical provider
+        # session; a later turn may continue to reuse it under policy.
+        await recorder(
+            request.idempotency_key,
+            terminal_state=terminal_status,
+            terminal_evidence_ref=terminal_evidence_ref,
+        )
+        await bridge_recorder(
+            request.idempotency_key,
+            status=terminal_status,
+            terminal_refs=dict(terminal_refs),
+        )
+        metadata.update(
+            {
+                "canonicalSessionId": bridge.bridge_session_id,
+                "canonicalTurnAttemptId": outcome.turn_attempt.turn_attempt_id,
+                "canonicalTurnSourceKind": "remediation",
+                "sameSessionRemediation": True,
+            }
+        )
+        return result.model_copy(update={"metadata": metadata})
+
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
         budget_rejection = _profile_bound_max_budget_rejection(request)
         if budget_rejection is not None:
@@ -789,12 +981,14 @@ class OmnigentProfileBoundExecutionCoordinator:
         remediation_lineage_validator = getattr(
             self._run_store, "validate_remediation_lineage", None
         )
-        if request.remediation_workspace is not None and callable(
-            remediation_lineage_validator
-        ):
-            await remediation_lineage_validator(
-                request, require_new_session=True
-            )
+        if request.remediation_workspace is not None:
+            reuse = (request.parameters or {}).get("allowSameSessionReuse")
+            if reuse is True:
+                return await self._execute_same_session_remediation(request)
+            if callable(remediation_lineage_validator):
+                await remediation_lineage_validator(
+                    request, require_new_session=True
+                )
         await self._run_store.get_or_create(
             request=request,
             endpoint_ref="pending",

@@ -768,16 +768,114 @@ async def test_forced_profile_drain_stops_idle_static_host_without_lease() -> No
     repository.get_binding_for_profile = get_binding
     runtime = _Runtime()
 
+    class RunStore:
+        async def list_canonical_sessions_for_host_authority(self, **kwargs):
+            assert kwargs == {
+                "host_binding_ref": "binding-static",
+                "provider_profile_id": "profile-1",
+            }
+            return []
+
     result = await OmnigentOAuthHostJanitor(
         repository=repository,
         runtime=runtime,
         client=_Client(),
+        run_store=RunStore(),
     ).run(profile_id="profile-1", force=True)
 
     assert runtime.static_stops == 1
     assert result["actions"] == [
         {"hostBindingRef": "binding-static", "action": "static_host_stopped"}
     ]
+
+
+@pytest.mark.asyncio
+async def test_forced_static_host_stop_is_fenced_by_active_canonical_turn() -> None:
+    repository = _Repository(_lease())
+
+    async def no_leases():
+        return []
+
+    binding = SimpleNamespace(
+        binding_ref="binding-static",
+        host_launch_profile_ref=None,
+    )
+    repository.list_active_host_leases = no_leases
+
+    async def get_binding(_profile_id):
+        return binding
+
+    repository.get_binding_for_profile = get_binding
+    runtime = _Runtime()
+
+    class RunStore:
+        async def list_canonical_sessions_for_host_authority(self, **_kwargs):
+            return [SimpleNamespace(session_id="canonical-active")]
+
+        async def claim_canonical_cleanup(self, *_args, **_kwargs):
+            raise CleanupFenceError("accepted workflow chat turn is active")
+
+    with pytest.raises(CleanupFenceError, match="chat turn"):
+        await OmnigentOAuthHostJanitor(
+            repository=repository,
+            runtime=runtime,
+            client=_Client(),
+            run_store=RunStore(),
+        ).run(profile_id="profile-1", force=True)
+
+    assert runtime.static_stops == 0
+
+
+@pytest.mark.asyncio
+async def test_forced_static_host_stop_completes_every_canonical_claim() -> None:
+    repository = _Repository(_lease())
+
+    async def no_leases():
+        return []
+
+    binding = SimpleNamespace(
+        binding_ref="binding-static",
+        host_launch_profile_ref=None,
+    )
+    repository.list_active_host_leases = no_leases
+
+    async def get_binding(_profile_id):
+        return binding
+
+    repository.get_binding_for_profile = get_binding
+    runtime = _Runtime()
+
+    class RunStore:
+        def __init__(self):
+            self.claimed = []
+            self.completed = []
+
+        async def list_canonical_sessions_for_host_authority(self, **_kwargs):
+            return [
+                SimpleNamespace(session_id="canonical-1"),
+                SimpleNamespace(session_id="canonical-2"),
+            ]
+
+        async def claim_canonical_cleanup(self, session_id, **_kwargs):
+            self.claimed.append(session_id)
+            return SimpleNamespace(
+                record=SimpleNamespace(generation=len(self.claimed))
+            )
+
+        async def complete_canonical_cleanup(self, session_id, **kwargs):
+            self.completed.append((session_id, kwargs["generation"]))
+
+    run_store = RunStore()
+    await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        run_store=run_store,
+    ).run(profile_id="profile-1", force=True)
+
+    assert run_store.claimed == ["canonical-1", "canonical-2"]
+    assert runtime.static_stops == 1
+    assert run_store.completed == [("canonical-1", 1), ("canonical-2", 2)]
 
 
 @pytest.mark.asyncio

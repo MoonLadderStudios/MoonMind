@@ -29,28 +29,46 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
 @pytest.mark.parametrize(
     ("dimension", "attribute", "value"),
     [
+        ("provider", "provider", "omnigent"),
         ("instructionDigest", "instruction_digest", "sha256:instructions"),
         ("runtimeId", "runtime_id", "omnigent"),
         ("model", "model", "gpt-5.6"),
         ("effort", "effort", "high"),
+        ("compatibilityProfile", "compatibility_profile", "omnigent-bridge-v1"),
         ("providerProfileId", "provider_profile_id", "profile-2"),
         ("launchPolicyRef", "policy_ref", "artifact://policy/2"),
+        ("imageManifestRef", "image_manifest_ref", "image://omnigent@sha256:2"),
+        ("compatibilityRef", "compatibility_ref", "artifact://compatibility/2"),
+        ("repository", "repository", "MoonLadderStudios/MoonMind"),
         ("repositoryBranch", "branch", "feature/changed"),
+        ("workspaceRef", "workspace_ref", "workspace-intent:sha256:2"),
         ("publishMode", "publication_mode", "pull_request"),
+        ("skillRef", "skill_ref", "remediate-issue"),
+        ("runtimeAuthorityRef", "runtime_authority_ref", "omnigent-launch:sha256:2"),
+        ("intentDigest", "intent_digest", "sha256:intent-2"),
     ],
 )
 def test_checkpoint_recovery_compiles_every_requested_immutable_dimension(
     dimension, attribute, value
 ) -> None:
     requested = {
+        "provider": "omnigent",
         "instructionDigest": "sha256:instructions",
         "runtimeId": "omnigent",
         "model": "gpt-5.6",
         "effort": "high",
+        "compatibilityProfile": "omnigent-bridge-v1",
         "providerProfileId": "profile-2",
         "launchPolicyRef": "artifact://policy/2",
+        "imageManifestRef": "image://omnigent@sha256:2",
+        "compatibilityRef": "artifact://compatibility/2",
+        "repository": "MoonLadderStudios/MoonMind",
         "repositoryBranch": "feature/changed",
+        "workspaceRef": "workspace-intent:sha256:2",
         "publishMode": "none",
+        "skillRef": "remediate-issue",
+        "runtimeAuthorityRef": "omnigent-launch:sha256:2",
+        "intentDigest": "sha256:intent-2",
     }
     requested[dimension] = value
     dimensions = _checkpoint_recovery_dimensions(
