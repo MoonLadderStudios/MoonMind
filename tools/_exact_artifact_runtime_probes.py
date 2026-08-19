@@ -25,8 +25,45 @@ import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+from moonmind.omnigent.bridge_config import resolve_bridge_config
+
 API_PORT = 8000
 WORKER_READY_PORT = 8080
+
+# Placeholder identifiers only resolve the route *pattern*; each probe asserts
+# the request reaches the route's real handler (a non-404), never that the id
+# exists.
+_PROBE_SESSION_ID = "exact-artifact-probe-session"
+_PROBE_HOST_ID = "exact-artifact-probe-host"
+
+
+def probe_route_templates() -> dict[str, str]:
+    """Return the mounted application route templates the runtime probes hit.
+
+    Derived from the operator-declared bridge configuration so this probe and
+    the hermetic route-contract test share one source of truth with the FastAPI
+    routes actually mounted in ``api_service.main`` (liveness ``/healthz``, the
+    Omnigent SSE stream, and the Omnigent WebSocket tunnel) plus the worker
+    readiness endpoint.  If a route is renamed, the contract test
+    (tests/unit/tools/test_exact_artifact_runtime_probe_routes.py) fails instead
+    of the Tier-1 job silently mis-gating a healthy image on a fall-through 404.
+    """
+
+    public_api = resolve_bridge_config().public_api
+    mount = public_api.mount_path.rstrip("/")
+    return {
+        "liveness": "/healthz",
+        "http": "/openapi.json",
+        "sse": f"{mount}{public_api.routes.stream_events}",
+        "websocket": f"{mount}/v1/hosts/{{host_id}}/tunnel",
+        "worker_ready": "/readyz",
+    }
+
+
+def _resolve_probe_path(template: str) -> str:
+    """Fill placeholder route params so a request reaches the real handler."""
+
+    return template.format(session_id=_PROBE_SESSION_ID, host_id=_PROBE_HOST_ID)
 
 
 def _signal(name: str, ok: bool, detail: str) -> dict[str, Any]:
@@ -72,9 +109,9 @@ def _http_status(url: str, *, timeout: float = 3.0) -> int | None:
         return None
 
 
-def _await_health(base_url: str, *, attempts: int = 30) -> bool:
+def _await_health(base_url: str, path: str, *, attempts: int = 30) -> bool:
     for _ in range(attempts):
-        if _http_status(f"{base_url}/health") == 200:
+        if _http_status(f"{base_url}{path}") == 200:
             return True
         time.sleep(2)
     return False
@@ -83,14 +120,20 @@ def _await_health(base_url: str, *, attempts: int = 30) -> bool:
 def _probe_server(image: str, database_url: str) -> list[dict[str, Any]]:
     signals: list[dict[str, Any]] = []
     base_url = f"http://127.0.0.1:{API_PORT}"
+    templates = probe_route_templates()
+    liveness_path = templates["liveness"]
+    http_path = templates["http"]
+    sse_path = _resolve_probe_path(templates["sse"])
+    ws_path = _resolve_probe_path(templates["websocket"])
     env = {"DATABASE_URL": database_url, "MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION": "1"}
     with _container(image, env=env):
-        started = _await_health(base_url)
+        started = _await_health(base_url, liveness_path)
         signals.append(
-            _signal("api_entrypoint_start", started, "GET /health responded 200"
+            _signal("api_entrypoint_start", started,
+                    f"GET {liveness_path} responded 200"
                     if started else "API entrypoint did not become healthy")
         )
-        http_status = _http_status(f"{base_url}/openapi.json")
+        http_status = _http_status(f"{base_url}{http_path}")
         signals.append(
             _signal(
                 "http_route_handler",
@@ -98,7 +141,7 @@ def _probe_server(image: str, database_url: str) -> list[dict[str, Any]]:
                 f"HTTP route resolved through the real handler (status {http_status})",
             )
         )
-        sse_status = _http_status(f"{base_url}/api/omnigent/live/events")
+        sse_status = _http_status(f"{base_url}{sse_path}")
         signals.append(
             _signal(
                 "sse_route_handler",
@@ -106,7 +149,7 @@ def _probe_server(image: str, database_url: str) -> list[dict[str, Any]]:
                 f"SSE route resolved through the real handler (status {sse_status})",
             )
         )
-        ws_ok, ws_detail = _probe_websocket(f"ws://127.0.0.1:{API_PORT}/ws/omnigent")
+        ws_ok, ws_detail = _probe_websocket(f"ws://127.0.0.1:{API_PORT}{ws_path}")
         signals.append(_signal("websocket_route_handshake", ws_ok, ws_detail))
 
     clean_ok, clean_detail = _probe_migrations(image, database_url, prior_schema=False)
@@ -172,7 +215,8 @@ def _probe_worker(image: str, database_url: str) -> list[dict[str, Any]]:
     signals: list[dict[str, Any]] = []
     env = {"DATABASE_URL": database_url}
     command = ["python", "-m", "moonmind.workflows.temporal.worker_runtime"]
-    ready_url = f"http://127.0.0.1:{WORKER_READY_PORT}/readyz"
+    ready_path = probe_route_templates()["worker_ready"]
+    ready_url = f"http://127.0.0.1:{WORKER_READY_PORT}{ready_path}"
     with _container(image, command=command, env=env):
         payload: dict[str, Any] | None = None
         for _ in range(30):
@@ -247,6 +291,12 @@ def _probe_fake_provider(image: str, database_url: str) -> dict[str, Any]:
             "--server-image", "exact-artifact@sha256:" + "0" * 64,
             "--host-image", "exact-artifact@sha256:" + "0" * 64,
             "--host-architecture", "linux/amd64",
+            # Explicitly engage the bounded fake/stock-compatible provider path
+            # (the MOONMIND_OMNIGENT_FAKE_PROVIDER env above is a defense-in-depth
+            # activation the exact image also carries) so the conformance runner
+            # honors and records the selection instead of leaving it unconsumed.
+            "--auth-mode", "deterministic-fake",
+            "--fake-provider",
         ],
         timeout=600,
     )

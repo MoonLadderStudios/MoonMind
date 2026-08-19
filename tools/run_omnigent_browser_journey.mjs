@@ -15,6 +15,102 @@ const required = (name) => {
   return value;
 };
 
+/*
+ * Tier-1 exact-artifact UI probe (MoonLadderStudios/MoonMind#3710).
+ *
+ * Credential-free, self-contained mode used by the exact-artifact gate to prove
+ * the compiled native UI baked into the deployable image consumes the hosted
+ * bootstrap and sends no direct-upstream traffic in hosted mode: no root
+ * `/v1/*` request (which would bypass the `/api/omnigent` mount) and no
+ * cross-origin upstream request. It must run without the credentialed journey's
+ * environment, so it short-circuits before those `required(...)` reads. On a
+ * violation it prints a `root-v1-request` line and exits non-zero so the gate
+ * fails closed; on success it prints a summary that never contains that marker.
+ */
+async function runHostedNetworkCapture() {
+  const hostedUrl = (
+    process.env.MOONMIND_OMNIGENT_DASHBOARD_URL || "http://127.0.0.1:8000"
+  ).replace(/\/$/, "");
+  const hostedOrigin = new URL(hostedUrl).origin;
+  const captureTimeout = Number(
+    process.env.MOONMIND_OMNIGENT_HOSTED_CAPTURE_TIMEOUT_MS || "60000",
+  );
+  const browser = await chromium.launch({ headless: true });
+  const requests = [];
+  const rootV1Requests = [];
+  const directUpstreamRequests = [];
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("request", (request) => {
+      let parsed;
+      try {
+        parsed = new URL(request.url());
+      } catch {
+        return;
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return;
+      requests.push({ origin: parsed.origin, pathname: parsed.pathname });
+      if (parsed.origin === hostedOrigin && parsed.pathname.startsWith("/v1/")) {
+        rootV1Requests.push(`${parsed.pathname}`);
+      } else if (parsed.origin !== hostedOrigin) {
+        directUpstreamRequests.push(`${parsed.origin}${parsed.pathname}`);
+      }
+    });
+    const response = await page.goto(hostedUrl, {
+      waitUntil: "networkidle",
+      timeout: captureTimeout,
+    });
+    // Allow any deferred client-side bootstrap requests to settle.
+    await page.waitForTimeout(1000);
+    const documentOk =
+      Boolean(response) &&
+      response.status() < 400 &&
+      new URL(response.url()).origin === hostedOrigin;
+    const consumedHostedBootstrap =
+      documentOk &&
+      requests.some(
+        (r) => r.origin === hostedOrigin && !r.pathname.startsWith("/v1/"),
+      );
+    if (rootV1Requests.length > 0) {
+      // The literal marker below is what the Tier-1 probe scans stdout for.
+      console.log(
+        `root-v1-request observed in hosted mode: ${rootV1Requests
+          .slice(0, 10)
+          .join(", ")}`,
+      );
+      return 1;
+    }
+    if (directUpstreamRequests.length > 0) {
+      console.log(
+        `direct-upstream request observed in hosted mode: ${directUpstreamRequests
+          .slice(0, 10)
+          .join(", ")}`,
+      );
+      return 1;
+    }
+    if (!consumedHostedBootstrap) {
+      console.log(
+        "hosted UI did not consume the hosted bootstrap from the deployable origin",
+      );
+      return 1;
+    }
+    console.log(
+      `hosted UI capture ok: ${requests.length} same-origin requests, no direct-upstream calls`,
+    );
+    return 0;
+  } catch (error) {
+    console.log(`hosted UI capture failed: ${String(error).slice(0, 200)}`);
+    return 1;
+  } finally {
+    await browser.close();
+  }
+}
+
+if (process.argv.slice(2).includes("--hosted-network-capture")) {
+  process.exit(await runHostedNetworkCapture());
+}
+
 const baseUrl = required("MOONMIND_OMNIGENT_DASHBOARD_URL").replace(/\/$/, "");
 const row = required("MOONMIND_OMNIGENT_BROWSER_ROW");
 const profileId = required("MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID");

@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -18,6 +20,43 @@ from moonmind.omnigent.conformance import (  # noqa: E402
     ConformanceContractError,
     assert_secret_free,
 )
+
+# Activation contract for the bounded fake/stock-compatible provider path.  The
+# Tier-1 exact-artifact driver (tools/_exact_artifact_runtime_probes.py) engages
+# it explicitly via ``--fake-provider`` and via this env var, which the exact
+# image carries.  Consumption is explicit and recorded in the evidence (an
+# observable runtime mode switch), never a hidden fallback.
+FAKE_PROVIDER_ENV = "MOONMIND_OMNIGENT_FAKE_PROVIDER"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def resolve_fake_provider_selection(
+    *, cli_flag: bool, env: Mapping[str, str], auth_mode: str
+) -> dict[str, object]:
+    """Resolve the bounded fake-provider activation for this conformance run.
+
+    A requested fake provider requires the deterministic-fake auth mode, so a
+    mismatched credentialed auth mode fails fast (never silently runs a
+    different provider path). Returns a compact, secret-free record for the
+    published evidence so the exact-artifact gate can prove the bounded
+    execution engaged through the exact image rather than being assumed.
+    """
+
+    env_requested = str(env.get(FAKE_PROVIDER_ENV, "")).strip().lower() in _TRUTHY
+    requested = bool(cli_flag) or env_requested
+    if not requested:
+        return {"requested": False, "engaged": False, "authMode": auth_mode}
+    if auth_mode != "deterministic-fake":
+        raise ConformanceContractError(
+            "fake-provider execution requires --auth-mode 'deterministic-fake'; "
+            f"got {auth_mode!r}"
+        )
+    return {
+        "requested": True,
+        "engaged": True,
+        "authMode": auth_mode,
+        "source": "cli" if cli_flag else "env",
+    }
 
 PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
 DETERMINISTIC_CASES = {
@@ -122,10 +161,28 @@ def main() -> int:
     parser.add_argument("--host-image", required=True)
     parser.add_argument("--host-architecture", required=True)
     parser.add_argument("--auth-mode", default="deterministic-fake")
+    parser.add_argument(
+        "--fake-provider",
+        action="store_true",
+        help=(
+            "Engage the bounded fake/stock-compatible provider path for the "
+            "exact-artifact Tier-1 gate (also activated by "
+            f"{FAKE_PROVIDER_ENV}=1). Requires --auth-mode deterministic-fake."
+        ),
+    )
     args = parser.parse_args()
     if not args.output_dir.is_absolute():
         args.output_dir = REPO_ROOT / args.output_dir
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    # Resolve the fake-provider activation before running any layer so a
+    # requested-but-incompatible auth mode fails fast rather than mid-run.
+    try:
+        fake_provider = resolve_fake_provider_selection(
+            cli_flag=args.fake_provider, env=os.environ, auth_mode=args.auth_mode
+        )
+    except ConformanceContractError as exc:
+        print(f"::error::{exc}", file=sys.stderr)
+        return 1
     failed = False
     log_paths: list[Path] = []
     command_results: list[dict[str, object]] = []
@@ -230,6 +287,7 @@ def main() -> int:
         "images": {"server": args.server_image, "host": args.host_image},
         "hostArchitecture": args.host_architecture,
         "authMode": args.auth_mode,
+        "fakeProvider": fake_provider,
         "protocolVersion": "omnigent/v1",
         "capabilities": ["deterministic-fake", "bridge", "workflow-detail"],
         "evidenceScans": scans,
