@@ -19,7 +19,8 @@ these protocols and are exercised by the shared port-contract suite in
 Ports speak in the pure canonical record types
 (:mod:`moonmind.omnigent.control_plane.records`); they must not depend on
 FastAPI, HTTP clients, Docker, or provider implementations. Allowed dependency
-directions are documented in ``docs/Omnigent/Architecture.md`` and enforced by
+directions are documented in ``docs/Omnigent/OmnigentModuleArchitecture.md`` and
+enforced by
 ``tools/check_omnigent_architecture.py``.
 """
 

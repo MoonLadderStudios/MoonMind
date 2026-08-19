@@ -43,8 +43,11 @@ from moonmind.omnigent.control_plane import (
     RevisionConflictError,
 )
 from tests.helpers.omnigent_port_contracts import (
+    run_command_repository_contract,
     run_decision_repository_contract,
     run_observation_repository_contract,
+    run_session_repository_contract,
+    run_turn_repository_contract,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
@@ -523,3 +526,26 @@ async def test_postgres_decision_port_contract(pg_store) -> None:
         await run_decision_repository_contract(
             repos.decisions, session_a="sa", session_b="sb"
         )
+
+
+@pytest.mark.asyncio
+async def test_postgres_session_port_contract(pg_store) -> None:
+    # The production PostgreSQL session adapter and the in-memory reference
+    # adapter satisfy the same behavioural revision/fencing/terminal contract
+    # (MoonLadderStudios/MoonMind#3711).
+    async with pg_store.transaction() as repos:
+        await run_session_repository_contract(
+            repos.sessions, session_a="sa", session_b="sb"
+        )
+
+
+@pytest.mark.asyncio
+async def test_postgres_turn_port_contract(pg_store) -> None:
+    async with pg_store.transaction() as repos:
+        await run_turn_repository_contract(repos, session_id="sa")
+
+
+@pytest.mark.asyncio
+async def test_postgres_command_port_contract(pg_store) -> None:
+    async with pg_store.transaction() as repos:
+        await run_command_repository_contract(repos, session_id="sa")

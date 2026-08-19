@@ -65,9 +65,12 @@ adapters ─▶ application ─▶ ports ─▶ domain
   domain observations and outcomes.
 
 These directions are enforced by `tools/check_omnigent_architecture.py`
-(forbidden imports in pure layers, no back-edges/cycles across layers, and a
-single canonical failure vocabulary) and covered by
-`tests/unit/omnigent/test_architecture_boundaries.py`.
+(forbidden infrastructure/framework/settings imports and environment reads in the
+infra-free `domain`/`ports`/`application` layers, no back-edges/cycles across
+layers, web-framework containment to the API/`ui_facade` boundary, direct
+SQLAlchemy confined to `adapters/persistence/`, and single canonical vocabulary
+for the `OmnigentFailureReason`, `ControlPlaneOutcome`, and `FencingScope`
+tables) and covered by `tests/unit/omnigent/test_architecture_boundaries.py`.
 
 ## 4. Canonical aggregate owners
 
@@ -76,15 +79,20 @@ adapter; no aggregate is mutated through another aggregate's interface.
 
 | Aggregate | Port | Production adapter |
 | --- | --- | --- |
-| Canonical provider session | `ports.SessionRepositoryPort` | `control_plane.repositories.SessionRepository` |
-| Turn attempt | `ports.TurnRepositoryPort` | `control_plane.repositories.TurnAttemptRepository` |
+| Canonical provider session | `ports.SessionRepositoryPort` | `control_plane.repositories.SessionRepository` (+ `adapters.persistence.InMemorySessionRepository`) |
+| Turn attempt | `ports.TurnRepositoryPort` | `control_plane.repositories.TurnAttemptRepository` (+ `adapters.persistence.InMemoryTurnAttemptRepository`) |
 | Observation index | `ports.ObservationRepositoryPort` | `control_plane.repositories.ObservationRepository` (+ `adapters.persistence.InMemoryObservationRepository`) |
-| Command / idempotency journal | `ports.CommandRepositoryPort` | `control_plane.repositories.CommandRepository` |
+| Command / idempotency journal | `ports.CommandRepositoryPort` | `control_plane.repositories.CommandRepository` (+ `adapters.persistence.InMemoryCommandRepository`) |
 | Reconciliation decision journal | `ports.DecisionRepositoryPort` | `control_plane.repositories.DecisionRepository` (+ `adapters.persistence.InMemoryDecisionRepository`) |
 
-Every adapter implementing a port passes the same shared contract in
-`tests/helpers/omnigent_port_contracts.py`, so in-memory test doubles and the
-PostgreSQL adapter are proven interchangeable behind one interface.
+Every adapter implementing a port passes the same shared behavioural contract in
+`tests/helpers/omnigent_port_contracts.py`, run against the in-memory reference
+adapters, the SQLAlchemy repositories on SQLite, and the PostgreSQL adapters, so
+in-memory test doubles and the PostgreSQL adapter are proven interchangeable
+behind one interface for all five aggregates. Cooperating in-memory adapters that
+share a session/turn/command backing state are exposed through
+`adapters.persistence.InMemoryControlPlaneStore`, mirroring
+`control_plane.OmnigentControlPlaneStore`.
 
 ## 5. Boundaries
 

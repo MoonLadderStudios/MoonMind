@@ -10,7 +10,7 @@ This module lives in the pure ``moonmind.omnigent.domain`` layer: it depends on
 Python standard library and pure schema types only, and must never import
 FastAPI, SQLAlchemy, Temporal, HTTP clients, Docker, artifact services,
 OpenTelemetry exporters, or application settings. The dependency direction and
-layer roles are documented in ``docs/Omnigent/Architecture.md``.
+layer roles are documented in ``docs/Omnigent/OmnigentModuleArchitecture.md``.
 
 Source issue traceability: MM-1140 -> MM-1153; relocated into the domain layer
 by MoonLadderStudios/MoonMind#3711 ([Omnigent control plane 10/11]).

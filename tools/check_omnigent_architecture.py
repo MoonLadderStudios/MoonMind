@@ -4,25 +4,36 @@
 Source issue: MoonLadderStudios/MoonMind#3711
 ([Omnigent control plane 10/11]).
 
-Enforces the layer boundaries documented in ``docs/Omnigent/Architecture.md`` so
+Enforces the layer boundaries documented in
+``docs/Omnigent/OmnigentModuleArchitecture.md`` so
 that reliability changes stay inside one boundary instead of crossing policy,
 persistence, transport, and framework concerns at once. The guard is a small
 AST-based import scanner (no third-party dependency) with three deterministic
 rules:
 
-1. **Forbidden imports in pure layers.** ``domain/`` (including the pure
-   ``reconciler/`` reducer) and ``ports/`` must not import web frameworks,
-   SQLAlchemy, the Temporal SDK, HTTP/Docker/subprocess launchers, OpenTelemetry
-   exporters, or application settings, and must not read environment variables.
+1. **Forbidden imports in infra-free layers.** ``domain/`` (including the pure
+   ``reconciler/`` reducer), ``ports/``, and ``application/`` must not import web
+   frameworks, SQLAlchemy, the Temporal SDK, HTTP/Docker/subprocess launchers,
+   OpenTelemetry exporters, or application settings, and must not read
+   environment variables.
 
 2. **Dependency direction (no cycles/back-edges).** The Omnigent layers form a
-   DAG: ``adapters -> application -> ports -> domain``. A pure layer that imports
+   DAG: ``adapters -> application -> ports -> domain``. A lower layer that imports
    a layer above it (for example ``domain`` importing ``ports`` or ``adapters``)
    is a forbidden back-edge.
 
 3. **Single canonical vocabulary.** Canonical domain vocabulary that has one
-   authoritative home (currently the ``OmnigentFailureReason`` failure table)
+   authoritative home (the ``OmnigentFailureReason`` failure table, the
+   ``ControlPlaneOutcome`` conflict outcomes, and the ``FencingScope`` owners)
    must not be redefined elsewhere in the package.
+
+4. **Web-framework containment.** No decomposed layer (domain, ports,
+   application, or adapters) may import FastAPI/Starlette; web transport belongs
+   to the API routers and the ``ui_facade`` boundary only.
+
+5. **SQLAlchemy containment.** Direct SQLAlchemy use is confined to persistence
+   adapters (``adapters/persistence/``); any other adapter subtree that imports
+   the ORM is reaching past the persistence port.
 
 The checker intentionally does not fail on file length; it measures
 responsibility through dependency and ownership rules, not line counts. Legacy
@@ -53,10 +64,15 @@ LAYER_DIRS: dict[str, tuple[str, ...]] = {
     "adapters": ("adapters",),
 }
 
-# Pure layers: no infrastructure, framework, or environment access.
-PURE_LAYERS = frozenset({"domain", "ports"})
+# Infra-free layers: no infrastructure, framework, or environment access. The
+# domain and ports are pure; the application layer coordinates use cases against
+# abstract ports and domain types only, so it carries the same forbidden-infra
+# set (it may still import ports/domain, which the dependency-direction rule
+# allows). Concrete SQLAlchemy/FastAPI/Docker/provider access belongs in adapters
+# and the UI facade, never here.
+INFRA_FREE_LAYERS = frozenset({"domain", "ports", "application"})
 
-# Top-level module names (or dotted prefixes) forbidden inside pure layers.
+# Top-level module names (or dotted prefixes) forbidden inside infra-free layers.
 FORBIDDEN_IN_PURE: tuple[str, ...] = (
     "fastapi",
     "starlette",
@@ -71,6 +87,24 @@ FORBIDDEN_IN_PURE: tuple[str, ...] = (
     "opentelemetry.exporter",
     "moonmind.config",
     "api_service",
+)
+
+# Web frameworks belong only to the API routers / ``ui_facade`` boundary. No
+# decomposed layer at or below the facade (domain, ports, application, adapters)
+# may import them, so an adapter cannot quietly grow HTTP-transport behaviour.
+WEB_FRAMEWORK_PREFIXES: tuple[str, ...] = ("fastapi", "starlette")
+
+# Direct SQLAlchemy use is confined to persistence adapters. Any other adapter
+# subtree (provider HTTP/stream, docker/compose host, workspace, artifacts) must
+# translate through the persistence port, not reach for the ORM directly.
+SQLALCHEMY_PREFIXES: tuple[str, ...] = ("sqlalchemy",)
+PERSISTENCE_SUBTREE: str = "persistence"
+
+# Canonical domain vocabularies that have exactly one authoritative definition in
+# the package. Redefining any of them anywhere else is duplicate vocabulary
+# (provider-native or otherwise) that the decomposition exists to eliminate.
+SINGLE_DEFINITION_TYPES: frozenset[str] = frozenset(
+    {"OmnigentFailureReason", "ControlPlaneOutcome", "FencingScope"}
 )
 
 # Allowed dependency direction: a layer may only import layers with a rank at or
@@ -162,7 +196,7 @@ def check_omnigent_architecture(
     """Return every architecture-boundary violation under ``omnigent_root``."""
 
     violations: list[Violation] = []
-    failure_reason_defs: list[tuple[str, int]] = []
+    single_def_locations: dict[str, list[tuple[str, int]]] = {}
 
     for path in _iter_python_files(omnigent_root):
         rel = path.relative_to(omnigent_root)
@@ -176,17 +210,19 @@ def check_omnigent_architecture(
         source = path.read_text(encoding="utf-8")
         tree = ast.parse(source, filename=str(path))
 
-        # Rule 3: single canonical vocabulary (failure reason enum).
+        # Rule 3: single canonical vocabulary (failure/outcome/fencing enums).
         for node in ast.walk(tree):
-            if isinstance(node, ast.ClassDef) and node.name == "OmnigentFailureReason":
-                failure_reason_defs.append((rel_str, node.lineno))
+            if isinstance(node, ast.ClassDef) and node.name in SINGLE_DEFINITION_TYPES:
+                single_def_locations.setdefault(node.name, []).append(
+                    (rel_str, node.lineno)
+                )
 
         if layer is None:
             continue
 
         imports = _imported_modules(tree)
 
-        if layer in PURE_LAYERS:
+        if layer in INFRA_FREE_LAYERS:
             for module, lineno in imports:
                 for forbidden in FORBIDDEN_IN_PURE:
                     if _matches_prefix(module, forbidden):
@@ -214,6 +250,46 @@ def check_omnigent_architecture(
                     )
                 )
 
+        # Rule 4/5: containment inside the adapters layer. Web frameworks belong
+        # to the API/ui_facade boundary, and direct ORM use belongs only to the
+        # persistence subtree; every other adapter must translate through a port.
+        if layer == "adapters":
+            under_persistence = (
+                len(rel.parts) >= 2 and rel.parts[1] == PERSISTENCE_SUBTREE
+            )
+            for module, lineno in imports:
+                if any(
+                    _matches_prefix(module, prefix)
+                    for prefix in WEB_FRAMEWORK_PREFIXES
+                ):
+                    violations.append(
+                        Violation(
+                            rule="adapters-web-framework",
+                            path=rel_str,
+                            line=lineno,
+                            detail=(
+                                f"'adapters' layer must not import {module!r}; web "
+                                "transport belongs to the API/ui_facade boundary"
+                            ),
+                        )
+                    )
+                if not under_persistence and any(
+                    _matches_prefix(module, prefix)
+                    for prefix in SQLALCHEMY_PREFIXES
+                ):
+                    violations.append(
+                        Violation(
+                            rule="adapters-sqlalchemy-containment",
+                            path=rel_str,
+                            line=lineno,
+                            detail=(
+                                f"{module!r} may only be imported under "
+                                "adapters/persistence/; other adapters must use "
+                                "the persistence port"
+                            ),
+                        )
+                    )
+
         # Rule 2: dependency direction (no back-edges / cycles across layers).
         own_rank = LAYER_RANK[layer]
         for module, lineno in imports:
@@ -233,16 +309,18 @@ def check_omnigent_architecture(
                     )
                 )
 
-    if len(failure_reason_defs) > 1:
-        locations = ", ".join(f"{p}:{ln}" for p, ln in failure_reason_defs)
-        for path, line in failure_reason_defs:
+    for type_name, defs in sorted(single_def_locations.items()):
+        if len(defs) <= 1:
+            continue
+        locations = ", ".join(f"{p}:{ln}" for p, ln in defs)
+        for path, line in defs:
             violations.append(
                 Violation(
                     rule="duplicate-vocabulary",
                     path=path,
                     line=line,
                     detail=(
-                        "OmnigentFailureReason must be defined exactly once; "
+                        f"{type_name} must be defined exactly once; "
                         f"found duplicates at {locations}"
                     ),
                 )

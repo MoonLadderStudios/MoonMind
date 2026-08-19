@@ -19,8 +19,12 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base
 from moonmind.omnigent.adapters.persistence import (
+    InMemoryCommandRepository,
+    InMemoryControlPlaneStore,
     InMemoryDecisionRepository,
     InMemoryObservationRepository,
+    InMemorySessionRepository,
+    InMemoryTurnAttemptRepository,
 )
 from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
 from moonmind.omnigent.control_plane.repositories import (
@@ -38,8 +42,11 @@ from moonmind.omnigent.ports import (
     TurnRepositoryPort,
 )
 from tests.helpers.omnigent_port_contracts import (
+    run_command_repository_contract,
     run_decision_repository_contract,
     run_observation_repository_contract,
+    run_session_repository_contract,
+    run_turn_repository_contract,
 )
 
 @pytest_asyncio.fixture()
@@ -81,7 +88,10 @@ def test_production_repositories_satisfy_ports() -> None:
 
 
 def test_in_memory_adapters_satisfy_ports() -> None:
+    assert isinstance(InMemorySessionRepository(), SessionRepositoryPort)
+    assert isinstance(InMemoryTurnAttemptRepository(), TurnRepositoryPort)
     assert isinstance(InMemoryObservationRepository(), ObservationRepositoryPort)
+    assert isinstance(InMemoryCommandRepository(), CommandRepositoryPort)
     assert isinstance(InMemoryDecisionRepository(), DecisionRepositoryPort)
 
 
@@ -115,3 +125,42 @@ async def test_decision_contract_sqlalchemy(store) -> None:
         await run_decision_repository_contract(
             repos.decisions, session_a="sa", session_b="sb"
         )
+
+
+@pytest.mark.asyncio
+async def test_session_contract_in_memory() -> None:
+    await run_session_repository_contract(
+        InMemorySessionRepository(), session_a="sa", session_b="sb"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_contract_sqlalchemy(store) -> None:
+    async with store.transaction() as repos:
+        await run_session_repository_contract(
+            repos.sessions, session_a="sa", session_b="sb"
+        )
+
+
+@pytest.mark.asyncio
+async def test_turn_contract_in_memory() -> None:
+    await run_turn_repository_contract(InMemoryControlPlaneStore(), session_id="sa")
+
+
+@pytest.mark.asyncio
+async def test_turn_contract_sqlalchemy(store) -> None:
+    async with store.transaction() as repos:
+        await run_turn_repository_contract(repos, session_id="sa")
+
+
+@pytest.mark.asyncio
+async def test_command_contract_in_memory() -> None:
+    await run_command_repository_contract(
+        InMemoryControlPlaneStore(), session_id="sa"
+    )
+
+
+@pytest.mark.asyncio
+async def test_command_contract_sqlalchemy(store) -> None:
+    async with store.transaction() as repos:
+        await run_command_repository_contract(repos, session_id="sa")

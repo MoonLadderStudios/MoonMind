@@ -65,6 +65,17 @@ ALIAS_STATE_ACTIVE = "active"
 ALIAS_STATE_QUARANTINED = "quarantined"
 ALIAS_STATE_DIAGNOSTIC = "diagnostic"
 
+# Session fields an ordinary lifecycle update may still advance after a session
+# has reached a terminal state. The normal terminal-then-cleanup/archive journey
+# has no separate writer, so cleanup/archive progress must remain recordable
+# while any attempt to mutate nonterminal session state still fails closed. This
+# is the single source of truth shared by every session repository adapter (the
+# production SQLAlchemy repository and the in-memory reference adapter) so the
+# post-terminal write rule cannot drift between them.
+POST_TERMINAL_MUTABLE_FIELDS: frozenset[str] = frozenset(
+    {"cleanup_state", "historical_read_state"}
+)
+
 
 # --- Concurrency & fencing vocabulary (MoonLadderStudios/MoonMind#3704) -------
 

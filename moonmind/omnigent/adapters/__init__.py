@@ -14,5 +14,5 @@ The canonical production persistence adapters currently live in
 in-memory reference adapters used by the shared port-contract suite so that
 in-memory and production adapters are proven interchangeable behind one
 interface. Allowed dependency directions are documented in
-``docs/Omnigent/Architecture.md``.
+``docs/Omnigent/OmnigentModuleArchitecture.md``.
 """

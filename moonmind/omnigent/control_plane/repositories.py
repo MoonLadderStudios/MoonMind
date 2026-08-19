@@ -60,6 +60,7 @@ from .records import (
     FencingScope,
     NotCommandOwnerError,
     ObservationRecord,
+    POST_TERMINAL_MUTABLE_FIELDS,
     RevisionConflictError,
     SessionRecord,
     TerminalSessionOverwriteError,
@@ -71,12 +72,9 @@ from .records import (
 _UNSET: Any = object()
 
 # Fields an ordinary lifecycle update may still advance after a session has
-# reached a terminal state. The normal terminal-then-cleanup/archive journey has
-# no separate writer, so cleanup/archive progress must remain recordable while
-# any attempt to mutate nonterminal session state still fails closed.
-_POST_TERMINAL_MUTABLE_FIELDS: frozenset[str] = frozenset(
-    {"cleanup_state", "historical_read_state"}
-)
+# reached a terminal state (single source of truth in ``records``; shared with
+# the in-memory reference adapter so the rule cannot drift between adapters).
+_POST_TERMINAL_MUTABLE_FIELDS = POST_TERMINAL_MUTABLE_FIELDS
 
 
 def _raise_for_session_conflict(session_id: str, result: CasResult) -> None:

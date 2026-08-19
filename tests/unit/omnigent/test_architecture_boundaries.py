@@ -56,6 +56,12 @@ def _clean_tree(root: Path) -> None:
     _write(
         root,
         "adapters/__init__.py",
+        "from moonmind.omnigent.ports import SessionRepositoryPort\n",
+    )
+    # SQLAlchemy is allowed, but only inside the persistence adapter subtree.
+    _write(
+        root,
+        "adapters/persistence/__init__.py",
         "from moonmind.omnigent.ports import SessionRepositoryPort\n"
         "import sqlalchemy\n",
     )
@@ -113,3 +119,73 @@ def test_duplicate_vocabulary_is_flagged(tmp_path) -> None:
     )
     rules = {v.rule for v in checker.check_omnigent_architecture(tmp_path)}
     assert "duplicate-vocabulary" in rules
+
+
+def test_duplicate_control_plane_outcome_is_flagged(tmp_path) -> None:
+    # The single-canonical-vocabulary rule covers more than the failure enum:
+    # ControlPlaneOutcome and FencingScope each have one authoritative home too.
+    _clean_tree(tmp_path)
+    _write(
+        root=tmp_path,
+        rel="adapters/outcomes.py",
+        source="from enum import Enum\n\n\nclass ControlPlaneOutcome(str, Enum):\n"
+        "    APPLIED = 'applied'\n",
+    )
+    _write(
+        root=tmp_path,
+        rel="domain/outcomes.py",
+        source="from enum import Enum\n\n\nclass ControlPlaneOutcome(str, Enum):\n"
+        "    APPLIED = 'applied'\n",
+    )
+    rules = {v.rule for v in checker.check_omnigent_architecture(tmp_path)}
+    assert "duplicate-vocabulary" in rules
+
+
+def test_application_layer_forbidden_import_is_flagged(tmp_path) -> None:
+    # The application layer is infra-free: it coordinates use cases over ports
+    # and domain types, never concrete SQLAlchemy/FastAPI/Docker.
+    _clean_tree(tmp_path)
+    _write(
+        root=tmp_path,
+        rel="application/reconcile_session.py",
+        source="import sqlalchemy\n",
+    )
+    rules = {v.rule for v in checker.check_omnigent_architecture(tmp_path)}
+    assert "pure-layer-forbidden-import" in rules
+
+
+def test_adapters_web_framework_import_is_flagged(tmp_path) -> None:
+    # No decomposed layer below the facade may import a web framework.
+    _clean_tree(tmp_path)
+    _write(
+        root=tmp_path,
+        rel="adapters/provider_http/client.py",
+        source="from fastapi import APIRouter\n",
+    )
+    rules = {v.rule for v in checker.check_omnigent_architecture(tmp_path)}
+    assert "adapters-web-framework" in rules
+
+
+def test_adapters_sqlalchemy_outside_persistence_is_flagged(tmp_path) -> None:
+    # SQLAlchemy in a non-persistence adapter subtree reaches past the port.
+    _clean_tree(tmp_path)
+    _write(
+        root=tmp_path,
+        rel="adapters/provider_http/client.py",
+        source="import sqlalchemy\n",
+    )
+    rules = {v.rule for v in checker.check_omnigent_architecture(tmp_path)}
+    assert "adapters-sqlalchemy-containment" in rules
+
+
+def test_adapters_sqlalchemy_inside_persistence_is_allowed(tmp_path) -> None:
+    _clean_tree(tmp_path)
+    _write(
+        root=tmp_path,
+        rel="adapters/persistence/postgres.py",
+        source="import sqlalchemy\n",
+    )
+    violations = checker.check_omnigent_architecture(tmp_path)
+    assert not any(
+        v.rule == "adapters-sqlalchemy-containment" for v in violations
+    ), "\n".join(v.render() for v in violations)

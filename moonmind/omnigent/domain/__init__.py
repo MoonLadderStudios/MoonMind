@@ -15,7 +15,8 @@ already live in the pure :mod:`moonmind.omnigent.reconciler` package
 (MoonLadderStudios/MoonMind#3702); this package is its companion for the rest of
 the pure domain vocabulary that is being consolidated out of the large,
 infrastructure-coupled bridge modules. The allowed dependency directions and
-layer roles are documented in ``docs/Omnigent/Architecture.md`` and enforced by
+layer roles are documented in ``docs/Omnigent/OmnigentModuleArchitecture.md`` and
+enforced by
 ``tools/check_omnigent_architecture.py``.
 """
 
