@@ -31,7 +31,6 @@ from moonmind.omnigent.faultlab.invariants import violations
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.integration_ci,
     pytest.mark.reliability_journey,
 ]
 

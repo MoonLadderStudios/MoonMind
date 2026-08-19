@@ -346,7 +346,6 @@ def _corpus_runs() -> list[tuple[str, ProjectedRun]]:
 
 
 @pytest.mark.integration_ci
-@pytest.mark.reliability_journey
 @pytest.mark.asyncio
 async def test_sqlite_corpus_replays_hold_boundary_invariants(sqlite_store) -> None:
     for index, (scenario_id, run) in enumerate(_corpus_runs()):
@@ -357,7 +356,6 @@ async def test_sqlite_corpus_replays_hold_boundary_invariants(sqlite_store) -> N
 
 
 @pytest.mark.integration_ci
-@pytest.mark.reliability_journey
 @pytest.mark.asyncio
 async def test_sqlite_pre_receipt_crash_resumes_at_most_once(sqlite_store) -> None:
     """A command that crashed after its side effect but before its receipt resumes
@@ -456,7 +454,6 @@ async def test_sqlite_pre_receipt_crash_resumes_at_most_once(sqlite_store) -> No
 
 
 @pytest.mark.integration_ci
-@pytest.mark.reliability_journey
 @pytest.mark.asyncio
 async def test_sqlite_command_key_reuse_with_different_payload_fails_closed(
     sqlite_store,
@@ -481,7 +478,6 @@ async def test_sqlite_command_key_reuse_with_different_payload_fails_closed(
 
 
 @pytest.mark.integration_ci
-@pytest.mark.reliability_journey
 @pytest.mark.asyncio
 async def test_sqlite_superseded_generation_command_is_fenced(sqlite_store) -> None:
     # Fencing safety (invariant 4): a command authored under a superseded session
@@ -516,7 +512,6 @@ async def test_sqlite_superseded_generation_command_is_fenced(sqlite_store) -> N
 
 
 @pytest.mark.integration_ci
-@pytest.mark.reliability_journey
 @pytest.mark.asyncio
 async def test_sqlite_terminal_is_distinct_and_not_overwritten(sqlite_store) -> None:
     # Distinct terminality + monotonic authority: once a session is terminal, a
