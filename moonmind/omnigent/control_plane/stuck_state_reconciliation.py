@@ -224,6 +224,12 @@ def _consecutive_no_progress(
     count = 0
     frontier: Optional[str] = None
     for decision in decisions:
+        # Observation-only readiness findings are not reconciliation attempts.
+        # Counting them would manufacture an actionable no-progress condition
+        # from an explicitly non-mutating response and eventually dispatch a
+        # command for an OBSERVE-only finding.
+        if decision.decision_code == "stuck_state_observed":
+            continue
         if decision.expected_revision != session.revision:
             break
         if frontier is None:
@@ -380,9 +386,29 @@ async def inspect_stuck_state(
         )
     prior_count = 0
     if findings:
-        prior_count = await repos.decisions.count_for_session_reason(
-            session_id, findings[0].reason.value
-        )
+        # A repeated sweep can add the generic no-progress finding alongside
+        # the original divergence. Keep the already-observed reason dominant so
+        # its unbucketed command identity remains stable and its bounded
+        # reconcile -> quarantine progression cannot reset under a new reason.
+        counts = [
+            await repos.decisions.count_for_session_reason(
+                session_id, finding.reason.value
+            )
+            for finding in findings
+        ]
+        dominant_index = max(range(len(findings)), key=lambda index: counts[index])
+        if dominant_index:
+            findings = [
+                findings[dominant_index],
+                *findings[:dominant_index],
+                *findings[dominant_index + 1 :],
+            ]
+            counts = [
+                counts[dominant_index],
+                *counts[:dominant_index],
+                *counts[dominant_index + 1 :],
+            ]
+        prior_count = counts[0]
     response = plan_response(
         session=session,
         findings=findings,
@@ -647,14 +673,22 @@ class StuckStateReconciliationService:
                 return
             async with self._session_factory() as db:
                 repos = ControlPlaneRepositories.bind(db)
+                quarantine_fields: dict[str, object] = {
+                    "historical_read_state": "quarantined",
+                }
+                if session.terminal_state is None:
+                    quarantine_fields.update(
+                        {
+                            "reconciled_state": "quarantined",
+                            "next_reconciliation_deadline": None,
+                            "last_decision_ref": decision_id,
+                        }
+                    )
                 cas = await repos.sessions.compare_and_swap_session(
                     session.session_id,
                     expected_revision=session.revision,
                     expected_fencing_generation=session.fencing_generation,
-                    reconciled_state="quarantined",
-                    historical_read_state="quarantined",
-                    next_reconciliation_deadline=None,
-                    last_decision_ref=decision_id,
+                    **quarantine_fields,
                 )
                 if cas.outcome is not ControlPlaneOutcome.APPLIED:
                     await db.rollback()

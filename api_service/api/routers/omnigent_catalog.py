@@ -18,7 +18,7 @@ from typing import Any, Literal
 import httpx
 
 from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +33,7 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import (
     ManagedAgentProviderProfile,
+    OmnigentBridgeSession,
     OmnigentPolicy,
     OmnigentPolicyVersion,
     OmnigentOAuthHostBindingRecord,
@@ -48,6 +49,10 @@ from moonmind.config.container_backend_settings import (
 )
 from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
+from moonmind.omnigent.bridge_store import (
+    EGRESS_CLEANUP_AUTHORITY_KEY,
+    EGRESS_CLEANUP_AUTHORITY_VERSION,
+)
 from moonmind.omnigent.execution_profiles import POLICIES, PROFILES
 from moonmind.omnigent.host_auth_profile import HostAuthProfileError, host_auth_readiness
 from moonmind.omnigent.conformance import (
@@ -75,7 +80,23 @@ from .omnigent_bridge import (
 router = APIRouter(prefix="/api/omnigent", tags=["Omnigent Catalog"])
 
 _SCHEMA_VERSION = "moonmind.omnigent-codex-readiness.v2"
+_BOOTSTRAP_EVIDENCE_SCHEMA_VERSION = (
+    "moonmind.omnigent.catalog-bootstrap-evidence/v1"
+)
+_BOOTSTRAP_EVIDENCE_HEADER = "X-MoonMind-Acceptance-Evidence"
+_MAX_BOOTSTRAP_EVIDENCE_BYTES = 4096
+_MAX_BOOTSTRAP_EVIDENCE_AGE = timedelta(minutes=5)
+_MAX_BUILD_OBSERVATION_AGE = timedelta(hours=24)
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_SAFE_BUILD_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,254}$")
+_SNAPSHOT_OBSERVATION_TYPES = ("snapshot", "provider_snapshot")
+_EVENT_OBSERVATION_TYPES = (
+    "event",
+    "event_frontier",
+    "event_batch",
+    "provider_event",
+    "provider_event_batch",
+)
 _ACCEPTANCE_ROWS = (
     "static_profile_bound",
     "static_restart_replay",
@@ -166,6 +187,60 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     admission_readiness: dict[str, Any] = Field(alias="admissionReadiness")
 
 
+class AcceptanceBootstrapEvidence(BaseModel):
+    """Bounded live observations supplied only by the protected canary."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_version: Literal[
+        "moonmind.omnigent.catalog-bootstrap-evidence/v1"
+    ] = Field(_BOOTSTRAP_EVIDENCE_SCHEMA_VERSION, alias="schemaVersion")
+    observed_at: datetime = Field(alias="observedAt")
+    provider_snapshot_observed: bool = Field(alias="providerSnapshotObserved")
+    event_transport_observed: bool = Field(alias="eventTransportObserved")
+    server_image_ref_observed: str = Field(
+        min_length=1, max_length=255, alias="serverImageRefObserved"
+    )
+    host_image_ref_observed: str = Field(
+        min_length=1, max_length=255, alias="hostImageRefObserved"
+    )
+    ui_build_ref_observed: str = Field(
+        min_length=1, max_length=255, alias="uiBuildRefObserved"
+    )
+
+    @field_validator(
+        "provider_snapshot_observed", "event_transport_observed", mode="before"
+    )
+    @classmethod
+    def _require_observed_true(cls, value: object) -> object:
+        if value is not True:
+            raise ValueError("bootstrap capability must be directly observed")
+        return value
+
+    @field_validator("server_image_ref_observed", "host_image_ref_observed")
+    @classmethod
+    def _require_immutable_image(cls, value: str) -> str:
+        if not _DIGEST_IMAGE.fullmatch(value) or value.endswith(
+            "@sha256:" + "0" * 64
+        ):
+            raise ValueError("bootstrap image observation must be immutable")
+        return value
+
+    @field_validator("ui_build_ref_observed")
+    @classmethod
+    def _require_safe_ui_build_ref(cls, value: str) -> str:
+        if not _SAFE_BUILD_REF.fullmatch(value):
+            raise ValueError("bootstrap UI build observation is invalid")
+        return value
+
+    @field_validator("observed_at")
+    @classmethod
+    def _require_aware_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("bootstrap observation timestamp must include a timezone")
+        return value.astimezone(UTC)
+
+
 _REASONS: dict[str, tuple[str, str]] = {
     "bridge_disabled": ("Enable the Omnigent bridge in deployment settings.", "/settings#omnigent"),
     "bridge_conformance_gated": ("Complete Omnigent bridge conformance checks.", "/settings#omnigent"),
@@ -237,17 +312,71 @@ class SupportEvidence:
     ui_source_commit: str | None = None
 
 
-def _support_evidence(*, acceptance_canary: bool = False) -> SupportEvidence:
+@dataclass(frozen=True, slots=True)
+class ObservedDeploymentManifest:
+    """Actual image/build identities captured by a production owner."""
+
+    observed_at: datetime
+    server_image_ref: str
+    host_image_ref: str
+    ui_build_ref: str
+
+
+def _evidence_age(observed_at: datetime, *, now: datetime) -> timedelta:
+    if observed_at.tzinfo is None:
+        observed_at = observed_at.replace(tzinfo=UTC)
+    return now - observed_at.astimezone(UTC)
+
+
+def _parse_acceptance_bootstrap_evidence(
+    request: Request,
+    *,
+    acceptance_canary: bool,
+    now: datetime,
+) -> AcceptanceBootstrapEvidence | None:
+    """Resolve fresh bootstrap evidence after authenticating canary authority.
+
+    The bounded header exists only to break the empty-deployment cycle for the
+    protected first-run journey. It is never read for an unauthenticated
+    request, and stale/future/malformed evidence cannot grant readiness.
+    """
+
+    if not acceptance_canary:
+        return None
+    raw = request.headers.get(_BOOTSTRAP_EVIDENCE_HEADER, "")
+    if not raw or len(raw.encode("utf-8")) > _MAX_BOOTSTRAP_EVIDENCE_BYTES:
+        return None
+    try:
+        evidence = AcceptanceBootstrapEvidence.model_validate_json(raw)
+    except ValidationError:
+        return None
+    age = _evidence_age(evidence.observed_at, now=now)
+    if age < timedelta(0) or age > _MAX_BOOTSTRAP_EVIDENCE_AGE:
+        return None
+    return evidence
+
+
+def _support_evidence(
+    *,
+    bootstrap_evidence: AcceptanceBootstrapEvidence | None = None,
+    now: datetime | None = None,
+) -> SupportEvidence:
     """Return release-support failures and bounded protected-evidence age."""
 
-    if acceptance_canary:
-        # The authenticated canary is itself producing protected evidence. It
-        # may exercise admission before the resulting manifest exists.
+    if bootstrap_evidence is not None:
+        # The authenticated canary is itself producing the protected acceptance
+        # manifest. Its fresh, directly observed bounded manifest is the only
+        # supported bootstrap source before that durable manifest exists.
         return SupportEvidence(
-            age=timedelta(0),
-            server_digest="canary",
-            host_digest="canary",
-            ui_source_commit="canary",
+            age=_evidence_age(
+                bootstrap_evidence.observed_at,
+                now=now or datetime.now(UTC),
+            ),
+            server_digest=bootstrap_evidence.server_image_ref_observed.rsplit(
+                "@", 1
+            )[1],
+            host_digest=bootstrap_evidence.host_image_ref_observed.rsplit("@", 1)[1],
+            ui_source_commit=bootstrap_evidence.ui_build_ref_observed,
         )
     manifest_path = os.getenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "").strip()
     source_commit = os.getenv("MOONMIND_SOURCE_COMMIT", "").strip()
@@ -272,7 +401,9 @@ def _support_evidence(*, acceptance_canary: bool = False) -> SupportEvidence:
         generated_at = datetime.fromisoformat(
             str(manifest["generatedAt"]).replace("Z", "+00:00")
         )
-        evidence_age = datetime.now(UTC) - generated_at
+        if generated_at.tzinfo is None:
+            generated_at = generated_at.replace(tzinfo=UTC)
+        evidence_age = (now or datetime.now(UTC)) - generated_at
     except (KeyError, TypeError, ValueError):
         # The validator owns this field in production. A non-authoritative test
         # double may omit it; validated evidence is still known-current.
@@ -287,6 +418,73 @@ def _support_evidence(*, acceptance_canary: bool = False) -> SupportEvidence:
         server_digest=str(images.get("serverDigest") or "") or None,
         host_digest=str(images.get("hostDigest") or "") or None,
         ui_source_commit=str(manifest.get("sourceCommit") or "") or None,
+    )
+
+
+def _observed_deployment_manifest(
+    rows: list[Any],
+) -> ObservedDeploymentManifest | None:
+    """Read the newest valid runtime-owned build attestation from durable rows."""
+
+    for row in rows:
+        metadata = getattr(row, "metadata_", None)
+        authority = (
+            metadata.get(EGRESS_CLEANUP_AUTHORITY_KEY)
+            if isinstance(metadata, dict)
+            else None
+        )
+        if (
+            not isinstance(authority, dict)
+            or authority.get("schemaVersion") != EGRESS_CLEANUP_AUTHORITY_VERSION
+            or authority.get("phase") != "attested"
+        ):
+            continue
+        observed = authority.get("egressEvidence")
+        if not isinstance(observed, dict):
+            continue
+        server_ref = str(observed.get("serverImageRefObserved") or "").strip()
+        host_ref = str(observed.get("workloadImageRef") or "").strip()
+        server_digest = str(observed.get("serverImageDigest") or "").strip()
+        host_digest = str(observed.get("workloadImageDigest") or "").strip()
+        observed_at_text = str(observed.get("validatedAt") or "").strip()
+        try:
+            observed_at = datetime.fromisoformat(
+                observed_at_text.replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        if observed_at.tzinfo is None:
+            observed_at = observed_at.replace(tzinfo=UTC)
+        if (
+            not _DIGEST_IMAGE.fullmatch(server_ref)
+            or not _DIGEST_IMAGE.fullmatch(host_ref)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", server_digest)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", host_digest)
+            or not server_ref.endswith("@" + server_digest)
+            or not host_ref.endswith("@" + host_digest)
+        ):
+            continue
+        # The stock UI is bundled in the attested server image, so the actual
+        # server image identity is also its deployed UI build identity.
+        return ObservedDeploymentManifest(
+            observed_at=observed_at.astimezone(UTC),
+            server_image_ref=server_ref,
+            host_image_ref=host_ref,
+            ui_build_ref=server_ref,
+        )
+    return None
+
+
+def _bootstrap_deployment_manifest(
+    evidence: AcceptanceBootstrapEvidence | None,
+) -> ObservedDeploymentManifest | None:
+    if evidence is None:
+        return None
+    return ObservedDeploymentManifest(
+        observed_at=evidence.observed_at,
+        server_image_ref=evidence.server_image_ref_observed,
+        host_image_ref=evidence.host_image_ref_observed,
+        ui_build_ref=evidence.ui_build_ref_observed,
     )
 
 
@@ -465,6 +663,18 @@ def _images_match_support(
     )
 
 
+def _images_match_observed(
+    server_ref: object,
+    host_ref: object,
+    observed: ObservedDeploymentManifest | None,
+) -> bool:
+    return bool(
+        observed is not None
+        and str(server_ref or "") == observed.server_image_ref
+        and str(host_ref or "") == observed.host_image_ref
+    )
+
+
 def _profile_gate_codes(readiness: dict[str, Any]) -> list[str]:
     codes: list[str] = []
     for check in readiness.get("checks", []):
@@ -514,8 +724,17 @@ async def get_omnigent_codex_catalog_readiness(
         and supplied_canary_token
         and secrets.compare_digest(configured_canary_token, supplied_canary_token)
     )
+    now = datetime.now(UTC)
+    bootstrap_evidence = _parse_acceptance_bootstrap_evidence(
+        request,
+        acceptance_canary=acceptance_canary,
+        now=now,
+    )
     deployment_reasons = _deployment_reasons(config, bridge)
-    support_evidence = _support_evidence(acceptance_canary=acceptance_canary)
+    support_evidence = _support_evidence(
+        bootstrap_evidence=bootstrap_evidence,
+        now=now,
+    )
     support_reasons = list(support_evidence.reasons)
     protected_evidence_age = support_evidence.age
     live_readiness = await _live_deployment_readiness()
@@ -567,7 +786,6 @@ async def get_omnigent_codex_catalog_readiness(
         .all()
     )
     active_slot_counts: dict[str, int] = {}
-    now = datetime.now(UTC)
     for slot in active_slots:
         if slot.expires_at is None or slot.expires_at > now:
             active_slot_counts[slot.profile_id] = (
@@ -670,6 +888,20 @@ async def get_omnigent_codex_catalog_readiness(
         )
         .where(OmnigentPolicyVersion.state == "active")
     )).all())
+    attested_bridge_sessions = list(
+        (
+            await session.execute(
+                select(OmnigentBridgeSession)
+                .order_by(OmnigentBridgeSession.updated_at.desc())
+                .limit(100)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    observed_deployment = _observed_deployment_manifest(attested_bridge_sessions)
+    if observed_deployment is None:
+        observed_deployment = _bootstrap_deployment_manifest(bootstrap_evidence)
     schema_versions = (
         await session.execute(
             select(
@@ -682,14 +914,43 @@ async def get_omnigent_codex_catalog_readiness(
         version is None or int(version) in SUPPORTED_SCHEMA_VERSIONS
         for version in schema_versions
     )
-    latest_observation_at = (
-        await session.execute(select(func.max(OmnigentObservation.observed_at)))
-    ).scalar_one_or_none()
-    if latest_observation_at is not None and latest_observation_at.tzinfo is None:
-        latest_observation_at = latest_observation_at.replace(tzinfo=UTC)
-    observation_age = (
-        max(timedelta(0), now - latest_observation_at)
-        if latest_observation_at is not None
+    snapshot_observed_at, event_observed_at = (
+        await session.execute(
+            select(
+                select(func.max(OmnigentObservation.observed_at))
+                .where(
+                    OmnigentObservation.observation_type.in_(
+                        _SNAPSHOT_OBSERVATION_TYPES
+                    )
+                )
+                .scalar_subquery(),
+                select(func.max(OmnigentObservation.observed_at))
+                .where(
+                    OmnigentObservation.observation_type.in_(
+                        _EVENT_OBSERVATION_TYPES
+                    )
+                )
+                .scalar_subquery(),
+            )
+        )
+    ).one()
+
+    def observation_age(value: datetime | None) -> timedelta | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return _evidence_age(value, now=now)
+
+    snapshot_age = observation_age(snapshot_observed_at)
+    event_age = observation_age(event_observed_at)
+    if bootstrap_evidence is not None:
+        bootstrap_age = _evidence_age(bootstrap_evidence.observed_at, now=now)
+        snapshot_age = snapshot_age if snapshot_age is not None else bootstrap_age
+        event_age = event_age if event_age is not None else bootstrap_age
+    freshest_observation_age = (
+        max(snapshot_age, event_age)
+        if snapshot_age is not None and event_age is not None
         else None
     )
 
@@ -833,7 +1094,6 @@ async def get_omnigent_codex_catalog_readiness(
         ))
 
     available_before_admission = any(item.available for item in profile_views)
-    bridge_ready = bridge.get("conformanceState") == "ready"
     deployed_reconciler_ready = (
         _reconciler_generation_available()
         and "MoonMind.AgentSession" in live_readiness.workflow_types
@@ -845,46 +1105,79 @@ async def get_omnigent_codex_catalog_readiness(
         and "integration.omnigent.oauth_host_janitor"
         in live_readiness.activity_types
     )
-    manifest_images_ready = bool(
-        support_evidence.server_digest and support_evidence.host_digest
+    build_observation_age = (
+        _evidence_age(observed_deployment.observed_at, now=now)
+        if observed_deployment is not None
+        else None
     )
-    exact_image_conformant = acceptance_canary or (
-        any(
-            _images_match_support(
-                *_resolved_policy_images(policy), support_evidence
-            )
-            for policy in POLICIES.values()
-            if _policy_images_ready(policy)
+    build_observation_fresh = bool(
+        build_observation_age is not None
+        and timedelta(0) <= build_observation_age <= _MAX_BUILD_OBSERVATION_AGE
+    )
+    observed_build_matches_support = bool(
+        observed_deployment is not None
+        and _images_match_support(
+            observed_deployment.server_image_ref,
+            observed_deployment.host_image_ref,
+            support_evidence,
         )
-        or any(
-            _images_match_support(
-                version.document_json.get("host", {}).get("serverImageRef"),
-                version.document_json.get("host", {}).get("hostImageRef"),
-                support_evidence,
+    )
+    exact_image_conformant = bool(
+        build_observation_fresh
+        and observed_build_matches_support
+        and (
+            any(
+                _images_match_observed(
+                    *_resolved_policy_images(policy), observed_deployment
+                )
+                for policy in POLICIES.values()
+                if _policy_images_ready(policy)
             )
-            for _identity, version in persisted_policies
-            if version.validation_json.get("valid")
+            or any(
+                _images_match_observed(
+                    version.document_json.get("host", {}).get("serverImageRef"),
+                    version.document_json.get("host", {}).get("hostImageRef"),
+                    observed_deployment,
+                )
+                for _identity, version in persisted_policies
+                if version.validation_json.get("valid")
+            )
         )
+    )
+    snapshot_ready = bool(
+        snapshot_age is not None
+        and timedelta(0) <= snapshot_age <= timedelta(minutes=10)
+    )
+    event_transport_ready = bool(
+        event_age is not None
+        and timedelta(0) <= event_age <= timedelta(minutes=10)
     )
     admission = evaluate_admission_readiness(
         ReadinessInputs(
             reconciler_generation_ready=deployed_reconciler_ready,
             schema_compatible=schema_compatible,
-            provider_snapshot_ready=(
-                bridge_ready and live_readiness.endpoint_ready
-            ),
-            event_transport_ready=bridge_ready and live_readiness.endpoint_ready,
+            provider_snapshot_ready=snapshot_ready,
+            event_transport_ready=event_transport_ready,
             server_build_ready=(
-                manifest_images_ready and live_readiness.endpoint_ready
+                build_observation_fresh and observed_build_matches_support
             ),
-            ui_build_ready=bool(support_evidence.ui_source_commit),
+            ui_build_ready=bool(
+                build_observation_fresh
+                and observed_build_matches_support
+                and observed_deployment is not None
+                and observed_deployment.ui_build_ref
+                and support_evidence.ui_source_commit
+            ),
             host_build_ready=(
-                manifest_images_ready and live_readiness.immutable_worker_build
+                build_observation_fresh and observed_build_matches_support
             ),
             websocket_available=_websocket_runtime_available(),
-            worker_backend_ready=live_readiness.backend_ready,
+            worker_backend_ready=(
+                live_readiness.backend_ready
+                and live_readiness.immutable_worker_build
+            ),
             container_backend_ready=backend_ready,
-            observation_age=observation_age,
+            observation_age=freshest_observation_age,
             janitor_healthy=janitor_healthy,
             exact_image_conformant=exact_image_conformant,
             protected_live_evidence_age=protected_evidence_age,

@@ -174,10 +174,21 @@ ready; unknown or negative signals block new admission. Historical reads and
 cleanup for existing sessions stay available regardless. Workflow Create's
 `GET /api/omnigent/codex-catalog-readiness` projection carries this document as
 `admissionReadiness` and derives the loaded supervisor, reconcile Activity,
-janitor Activity, immutable worker build, WebSocket route, persisted schema and
-observation age, and protected build/image manifest from their production
-registries and durable evidence instead of treating configured intent as
-evidence.
+janitor Activity, WebSocket route, persisted schema, typed provider snapshot and
+event observations, and the runtime owner's attested server/host image manifest
+from their production registries and durable evidence. A generic healthy
+endpoint, bridge conformance, or configured image ref is never promoted into
+snapshot, transport, or deployed-build evidence.
+
+An empty deployment has one bounded bootstrap path: the authenticated protected
+acceptance canary may attach a five-minute, closed-schema manifest of directly
+observed snapshot/transport support and immutable deployed server, bundled-UI,
+and host build identities to the normal catalog request. The repository-owned
+live controller accepts that manifest only from its live setup adapter and the
+catalog parses it only after constant-time canary-token authentication. Missing,
+stale, future-dated, malformed, mutable, or unauthenticated bootstrap evidence
+fails closed. Once runtime-owned observation and build rows exist, those durable
+records are authoritative; configured refs remain comparison targets only.
 
 ## Non-goals
 

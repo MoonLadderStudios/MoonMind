@@ -14,6 +14,8 @@ from api_service.db.models import Base
 from api_service.db.models import (
     OmnigentCleanupAuthority,
     OmnigentCommand,
+    OmnigentObservation,
+    OmnigentSession,
     OmnigentTurnAttempt,
 )
 from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
@@ -25,7 +27,10 @@ from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
     inspect_stuck_state,
 )
 from moonmind.omnigent.control_plane.repositories import ControlPlaneRepositories
-from moonmind.omnigent.control_plane.stuck_state import StuckStateReason
+from moonmind.omnigent.control_plane.stuck_state import (
+    StuckStatePolicy,
+    StuckStateReason,
+)
 
 
 @pytest_asyncio.fixture()
@@ -565,6 +570,316 @@ async def test_service_level_detector_matrix_covers_every_durable_condition(
             )
             assert inspection is not None
             assert reason in {finding.reason for finding in inspection.findings}
+
+
+@pytest.mark.parametrize("reason", list(StuckStateReason))
+@pytest.mark.asyncio
+async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
+    session_factory,
+    reason: StuckStateReason,
+) -> None:
+    """Exercise every detector condition through the repository-backed service.
+
+    Each case begins on the safe side of its condition, advances only durable
+    records across the boundary, proves one idempotent fenced request where the
+    response is actionable, and proves persistent ambiguity is quarantined only
+    after a diagnostic exists. The live-conformance condition is deliberately
+    OBSERVE-only and never mutates the session.
+    """
+
+    baseline_now = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
+    trigger_now = baseline_now + timedelta(minutes=1)
+    session_id = f"response-{reason.value}"
+    workflow_id = f"wf-{reason.value}"
+    turn_id = f"turn-{reason.value}"
+    snapshot_id = f"snapshot-safe-{reason.value}"
+    store = OmnigentControlPlaneStore(session_factory)
+
+    needs_turn = reason in {
+        StuckStateReason.MOONMIND_ACTIVE_NO_RECENT_EVIDENCE,
+        StuckStateReason.ACTIVE_TURN_LIVENESS_ONLY,
+    }
+    async with store.transaction() as repos:
+        await repos.sessions.create(
+            session_id=session_id,
+            moonmind_workflow_id=workflow_id,
+            provider="codex",
+            provider_session_ref=f"provider-{reason.value}",
+            compatibility_ref="compat-v1",
+            provider_profile_id="profile-authority",
+            host_lease_ref="host-authority",
+            metadata={
+                "protected_live_evidence_at": baseline_now.isoformat(),
+                "conformance_runner_available": True,
+            },
+        )
+        if needs_turn:
+            await repos.turn_attempts.create(
+                turn_attempt_id=turn_id,
+                session_id=session_id,
+                idempotency_key=f"turn-key-{reason.value}",
+            )
+            await repos.sessions.update_lifecycle(
+                session_id,
+                expected_revision=1,
+                expected_fencing_generation=0,
+                active_turn_attempt_id=turn_id,
+                observed_state="running",
+            )
+        await repos.observations.append(
+            observation_id=snapshot_id,
+            session_id=session_id,
+            observation_type="provider_snapshot",
+            source="provider_authoritative_snapshot",
+            observed_at=baseline_now,
+            deduplication_key=snapshot_id,
+            source_digest="sha256:" + "d" * 64,
+            bounded_index={
+                "providerSession": {"rawStatus": "running", "present": True},
+                "hostLease": {"held": False, "consumerActive": False},
+                "profileLease": {"held": False, "consumerActive": False},
+                "compatibility": {"runtimeReady": True},
+            },
+        )
+
+    policy = (
+        StuckStatePolicy(
+            event_staleness=timedelta(hours=1),
+            snapshot_staleness=timedelta(hours=1),
+        )
+        if reason is StuckStateReason.ACTIVE_TURN_LIVENESS_ONLY
+        else StuckStatePolicy()
+    )
+    dispatcher = _Dispatcher()
+    publisher = _DiagnosticPublisher()
+    service = StuckStateReconciliationService(
+        session_factory=session_factory,
+        dispatcher=dispatcher,
+        diagnostic_publisher=publisher,
+        policy=policy,
+    )
+
+    # Fresh progress / the pre-deadline state suppresses every response.
+    safe = await service.sweep(now=baseline_now)
+    assert safe.findings_recorded == 0
+    assert safe.reconcile_requests == 0
+    assert safe.observation_only == 0
+    assert dispatcher.calls == []
+
+    async def append_snapshot(
+        suffix: str,
+        bounded_index: dict[str, object],
+    ) -> None:
+        async with store.transaction() as repos:
+            await repos.observations.append(
+                observation_id=f"snapshot-{suffix}-{reason.value}",
+                session_id=session_id,
+                observation_type="provider_snapshot",
+                source="provider_authoritative_snapshot",
+                observed_at=trigger_now,
+                deduplication_key=f"snapshot-{suffix}-{reason.value}",
+                source_digest="sha256:" + "e" * 64,
+                bounded_index=bounded_index,
+            )
+
+    if reason is StuckStateReason.MOONMIND_ACTIVE_NO_RECENT_EVIDENCE:
+        async with session_factory() as db:
+            snapshot_row = await db.get(OmnigentObservation, snapshot_id)
+            turn_row = await db.get(OmnigentTurnAttempt, turn_id)
+            assert snapshot_row is not None and turn_row is not None
+            snapshot_row.observed_at = trigger_now - timedelta(minutes=11)
+            turn_row.created_at = trigger_now - timedelta(minutes=11)
+            await db.commit()
+    elif reason is StuckStateReason.PROVIDER_TERMINAL_MOONMIND_NONTERMINAL:
+        await append_snapshot(
+            "provider-terminal", {"providerSession": {"rawStatus": "completed"}}
+        )
+    elif reason is StuckStateReason.MOONMIND_TERMINAL_PROVIDER_ACTIVE:
+        async with store.transaction() as repos:
+            session = await repos.sessions.get(session_id)
+            assert session is not None
+            await repos.sessions.mark_terminal(
+                session_id,
+                "success",
+                expected_revision=session.revision,
+                expected_fencing_generation=session.fencing_generation,
+            )
+        await append_snapshot(
+            "provider-active", {"providerSession": {"rawStatus": "running"}}
+        )
+    elif reason is StuckStateReason.ACTIVE_TURN_LIVENESS_ONLY:
+        async with session_factory() as db:
+            snapshot_row = await db.get(OmnigentObservation, snapshot_id)
+            turn_row = await db.get(OmnigentTurnAttempt, turn_id)
+            assert snapshot_row is not None and turn_row is not None
+            snapshot_row.observed_at = trigger_now - timedelta(minutes=16)
+            turn_row.created_at = trigger_now - timedelta(minutes=16)
+            await db.commit()
+        async with store.transaction() as repos:
+            await repos.observations.append(
+                observation_id=f"liveness-{reason.value}",
+                session_id=session_id,
+                observation_type="liveness",
+                source="provider_liveness",
+                observed_at=trigger_now,
+                deduplication_key=f"liveness-{reason.value}",
+            )
+    elif reason is StuckStateReason.REPEATED_RECONCILIATION_NO_PROGRESS:
+        async with store.transaction() as repos:
+            session = await repos.sessions.get(session_id)
+            assert session is not None
+            for ordinal in range(3):
+                await repos.decisions.append(
+                    decision_id=f"no-progress-{ordinal}-{reason.value}",
+                    session_id=session_id,
+                    decision_code="await_observation",
+                    expected_revision=session.revision,
+                    observation_frontier_digest="unchanged-frontier",
+                )
+    elif reason is StuckStateReason.HOST_LEASE_WITHOUT_SESSION_AUTHORITY:
+        await append_snapshot(
+            "host-orphan",
+            {
+                "providerSession": {"rawStatus": "running"},
+                "hostLease": {"held": True, "consumerActive": False},
+                "compatibility": {"runtimeReady": True},
+            },
+        )
+    elif reason is StuckStateReason.PROFILE_LEASE_WITHOUT_CONSUMER:
+        await append_snapshot(
+            "profile-orphan",
+            {
+                "providerSession": {"rawStatus": "running"},
+                "profileLease": {"held": True, "consumerActive": False},
+                "compatibility": {"runtimeReady": True},
+            },
+        )
+    elif reason is StuckStateReason.CLEANUP_INCOMPLETE_PAST_DEADLINE:
+        async with store.transaction() as repos:
+            await repos.cleanup.claim_cleanup(
+                session_id,
+                owner_class="janitor",
+                claim_token=f"cleanup-{reason.value}",
+            )
+        async with session_factory() as db:
+            cleanup = await db.get(OmnigentCleanupAuthority, session_id)
+            assert cleanup is not None
+            cleanup.updated_at = baseline_now - timedelta(minutes=29)
+            await db.commit()
+        # Prove the true pre-deadline claim is still suppressed before crossing.
+        predeadline = await service.sweep(now=baseline_now)
+        assert predeadline.findings_recorded == 0
+    elif reason is StuckStateReason.COMPATIBILITY_UNKNOWN_AFTER_ADMISSION:
+        async with session_factory() as db:
+            session_row = await db.get(OmnigentSession, session_id)
+            snapshot_row = await db.get(OmnigentObservation, snapshot_id)
+            assert session_row is not None and snapshot_row is not None
+            session_row.compatibility_ref = None
+            snapshot_row.bounded_index_ = {
+                "providerSession": {"rawStatus": "running"}
+            }
+            await db.commit()
+    elif reason is StuckStateReason.COMMAND_STUCK_CLAIMED_OR_DELIVERY_UNKNOWN:
+        async with store.transaction() as repos:
+            await repos.commands.record(
+                command_id=f"original-command-{reason.value}",
+                session_id=session_id,
+                command_type="submit_turn",
+                idempotency_key=f"original-command-{reason.value}",
+                payload_digest="sha256:" + "f" * 64,
+            )
+            await repos.commands.claim_command(
+                f"original-command-{reason.value}",
+                owner_class="session_supervisor",
+                claim_token=f"original-claim-{reason.value}",
+            )
+        async with session_factory() as db:
+            command = await db.get(
+                OmnigentCommand, f"original-command-{reason.value}"
+            )
+            assert command is not None
+            command.updated_at = baseline_now - timedelta(minutes=9)
+            await db.commit()
+        predeadline = await service.sweep(now=baseline_now)
+        assert predeadline.findings_recorded == 0
+    else:
+        assert reason is StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE
+        async with session_factory() as db:
+            session_row = await db.get(OmnigentSession, session_id)
+            assert session_row is not None
+            session_row.metadata_ = {
+                "protected_live_evidence_at": (
+                    trigger_now - timedelta(days=2)
+                ).isoformat(),
+                "conformance_runner_available": False,
+            }
+            await db.commit()
+
+    async with store.transaction() as repos:
+        before = await repos.sessions.get(session_id)
+        turns_before = await repos.turn_attempts.list_for_session(session_id)
+        commands_before = await repos.commands.list_for_session(session_id)
+    assert before is not None
+    submit_count_before = sum(
+        command.command_type == "submit_turn" for command in commands_before
+    )
+
+    first = await service.sweep(now=trigger_now)
+    duplicate = await service.sweep(now=trigger_now + timedelta(minutes=1))
+    later = [
+        await service.sweep(now=trigger_now + timedelta(minutes=offset))
+        for offset in (10, 20, 30)
+    ]
+
+    assert first.findings_recorded == 1
+    assert duplicate.findings_recorded == 0
+    if reason is StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE:
+        assert first.observation_only == 1
+        assert dispatcher.calls == []
+        assert publisher.payloads == []
+        assert all(result.quarantined == 0 for result in later)
+    else:
+        assert first.reconcile_requests == 1
+        assert len(dispatcher.calls) == 1
+        call = dispatcher.calls[0]
+        assert call == {
+            "session_id": session_id,
+            "workflow_id": workflow_id,
+            "request_id": call["request_id"],
+            "reason_code": reason.value,
+            "expected_revision": str(before.revision),
+            "expected_fencing_generation": str(before.fencing_generation),
+        }
+        assert sum(result.quarantined for result in later) == 1
+        assert len(publisher.payloads) == 1
+        assert publisher.payloads[0]["payload"]["reasons"][0] == reason.value
+
+    async with store.transaction() as repos:
+        after = await repos.sessions.get(session_id)
+        turns_after = await repos.turn_attempts.list_for_session(session_id)
+        commands_after = await repos.commands.list_for_session(session_id)
+        decisions = await repos.decisions.list_for_session(session_id)
+        stuck_observations = await repos.observations.list_for_session(
+            session_id, observation_type="stuck_state"
+        )
+    assert after is not None
+    assert after.host_lease_ref == before.host_lease_ref == "host-authority"
+    assert after.provider_profile_id == before.provider_profile_id == "profile-authority"
+    assert turns_after == turns_before
+    assert sum(
+        command.command_type == "submit_turn" for command in commands_after
+    ) == submit_count_before
+    if reason is StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE:
+        assert after.historical_read_state != "quarantined"
+        assert all(decision.decision_code == "stuck_state_observed" for decision in decisions)
+        assert len(stuck_observations) == 4
+    else:
+        assert after.historical_read_state == "quarantined"
+        assert sum(
+            command.command_type == "request_reconcile"
+            for command in commands_after
+        ) == 1
+        assert len(stuck_observations) == 4
 
 
 @pytest.mark.asyncio
