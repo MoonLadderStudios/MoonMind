@@ -21,20 +21,26 @@ class TemporalOmnigentReconcileDispatcher:
         self,
         *,
         session_id: str,
+        workflow_id: str,
         request_id: str,
         reason_code: str,
         expected_revision: str,
         expected_fencing_generation: str,
     ) -> None:
-        # Fencing is durably enforced by the command journal before dispatch and
-        # by the supervisor when it reloads canonical authority.  The signal is
-        # deliberately reference-only and remains compatible with the compact
-        # OmnigentSessionSignal contract from dependency #3705.
-        del expected_revision, expected_fencing_generation
-        await self._client.signal_workflow(
-            f"omnigent-session:{session_id}",
-            "operator_reconcile_requested",
-            {"requestId": request_id, "reasonCode": reason_code},
+        # Managed Codex sessions have one canonical child workflow per parent
+        # workflow/runtime. The acknowledged Update is registered by the real
+        # MoonMind.AgentSession workflow and carries the complete fence through
+        # to its production persistence Activity.
+        await self._client.update_workflow(
+            f"{workflow_id}:session:codex_cli",
+            "ReconcileOmnigentSession",
+            {
+                "sessionId": session_id,
+                "requestId": request_id,
+                "reasonCode": reason_code,
+                "expectedRevision": int(expected_revision),
+                "expectedFencingGeneration": int(expected_fencing_generation),
+            },
         )
 
 

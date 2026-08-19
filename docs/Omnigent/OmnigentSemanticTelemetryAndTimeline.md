@@ -93,6 +93,10 @@ and `FORBIDDEN_LABEL_KEYS` rejects any Workflow, run, user, session, binding,
 provider-session, host, runner, profile, credential, repository, or workspace
 identity at registration and at record time. **Metric labels are low cardinality
 and never carry identity.**
+The same bounded recorder writes both the local diagnostic aggregate and real
+OpenTelemetry Counter/Histogram instruments. API and Temporal worker startup
+install the shared OTLP meter provider; instrument or exporter failure is
+contained after local evidence is recorded.
 
 ## Durable operator session timeline
 
@@ -105,6 +109,11 @@ and reconciled state and explains why a session is launching, running,
 delivery-unknown, awaiting observation, retrying, terminal, cleanup-incomplete,
 or quarantined. Refs/digests pass through a secret-free guard and links are
 server-authored relative URLs built from opaque validated ids.
+Authorized trace and log links use
+`/api/omnigent/sessions/{session_id}/trace` and `/logs` redirects. The server
+resolves durable identifiers into validated telemetry templates only after the
+`operations.read` check; backend URLs and workflow/run identities are never
+embedded directly in the timeline document.
 
 The authorized machine-readable endpoint is
 `GET /api/omnigent/sessions/{session_id}/timeline` (operator permission
@@ -140,7 +149,11 @@ The existing durable `MoonMind.ManagedSessionReconcile` schedule is the single
 operational sweep owner. Its activity loads a bounded batch of canonical
 sessions, records each finding as an observation and reconciliation decision,
 journals one revision- and generation-fenced `request_reconcile` command, and
-signals the canonical session supervisor. An ambiguous signal delivery is
+executes the registered `ReconcileOmnigentSession` Update on the canonical
+`MoonMind.AgentSession` child workflow. The receiving workflow invokes the
+production reconciliation Activity, which reloads the canonical session and
+command journal, confirms that the session belongs to the parent Workflow
+scope, and validates the revision and fencing generation. An ambiguous Update delivery is
 parked as `delivery_unknown` and is never blindly resent. When the bounded
 persistent-ambiguity threshold is reached, the activity first publishes a
 restricted, redacted, long-retention diagnostic artifact and then quarantines
@@ -160,8 +173,10 @@ Admission **fails closed**: a capability is ready only when explicitly observed
 ready; unknown or negative signals block new admission. Historical reads and
 cleanup for existing sessions stay available regardless. Workflow Create's
 `GET /api/omnigent/codex-catalog-readiness` projection carries this document as
-`admissionReadiness` and derives loaded supervisor and WebSocket capability from
-the deployed worker/route registries instead of treating configured intent as
+`admissionReadiness` and derives the loaded supervisor, reconcile Activity,
+janitor Activity, immutable worker build, WebSocket route, persisted schema and
+observation age, and protected build/image manifest from their production
+registries and durable evidence instead of treating configured intent as
 evidence.
 
 ## Non-goals

@@ -18,8 +18,10 @@ internal token, raw host path, or unbounded payload is ever surfaced.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.auth_providers import get_current_user
@@ -31,6 +33,8 @@ from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
     inspect_stuck_state,
 )
 from moonmind.omnigent.control_plane.timeline import build_timeline
+from moonmind.omnigent.control_plane.timeline import safe_timeline_ref
+from moonmind.observability import TelemetrySettings, build_backend_url
 
 router = APIRouter(prefix="/api/omnigent/sessions", tags=["Omnigent Session Timeline"])
 
@@ -92,6 +96,21 @@ async def get_session_timeline(
         else await repos.decisions.latest_for_session(session_id)
     )
     cleanup = await repos.cleanup.get(session_id)
+    telemetry = TelemetrySettings.from_env()
+    encoded_session_id = quote(session_id, safe="")
+    trace_link = (
+        f"/api/omnigent/sessions/{encoded_session_id}/trace"
+        if latest_decision is not None
+        and safe_timeline_ref(latest_decision.trace_ref) is not None
+        and telemetry.trace_url_template
+        else None
+    )
+    log_link = (
+        f"/api/omnigent/sessions/{encoded_session_id}/logs"
+        if telemetry.logs_url_template
+        and session.moonmind_workflow_id
+        else None
+    )
 
     timeline = build_timeline(
         session=session,
@@ -101,8 +120,64 @@ async def get_session_timeline(
         decisions=[latest_decision] if latest_decision is not None else (),
         cleanup=cleanup,
         turn_attempt_count=turn_attempt_count,
+        trace_link=trace_link,
+        log_link=log_link,
     )
     return timeline.to_dict()
+
+
+async def _diagnostic_redirect(
+    *, session_id: str, kind: str, user: User, db: AsyncSession
+) -> RedirectResponse:
+    _require_diagnostic_read(user)
+    repos = ControlPlaneRepositories.bind(db)
+    session = await repos.sessions.get(session_id)
+    if session is None:
+        raise HTTPException(404, "Session not found")
+    telemetry = TelemetrySettings.from_env()
+    if kind == "trace":
+        decision = (
+            await repos.decisions.get(session.last_decision_ref)
+            if session.last_decision_ref is not None
+            else await repos.decisions.latest_for_session(session_id)
+        )
+        trace_id = (
+            safe_timeline_ref(decision.trace_ref)
+            if decision is not None
+            else None
+        )
+        target = build_backend_url(telemetry.trace_url_template, trace_id=trace_id)
+    else:
+        target = build_backend_url(
+            telemetry.logs_url_template,
+            workflow_id=session.moonmind_workflow_id,
+            run_id=session.moonmind_run_id,
+        )
+    if target is None:
+        raise HTTPException(404, f"Authorized {kind} backend link unavailable")
+    return RedirectResponse(target, status_code=307)
+
+
+@router.get("/{session_id}/trace")
+async def get_session_trace_link(
+    session_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+) -> RedirectResponse:
+    return await _diagnostic_redirect(
+        session_id=session_id, kind="trace", user=user, db=db
+    )
+
+
+@router.get("/{session_id}/logs")
+async def get_session_log_link(
+    session_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_async_session),
+) -> RedirectResponse:
+    return await _diagnostic_redirect(
+        session_id=session_id, kind="logs", user=user, db=db
+    )
 
 
 @router.get("/{session_id}/stuck-state")

@@ -19,7 +19,7 @@ import httpx
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.api.routers.provider_profiles import (
@@ -37,7 +37,9 @@ from api_service.db.models import (
     OmnigentPolicyVersion,
     OmnigentOAuthHostBindingRecord,
     OmnigentOAuthHostLeaseRecord,
+    OmnigentObservation,
     ProviderProfileSlotLease,
+    OmnigentSession,
     User,
 )
 from moonmind.config.container_backend_settings import (
@@ -60,6 +62,7 @@ from moonmind.omnigent.control_plane.readiness import (
     ReadinessInputs,
     evaluate_admission_readiness,
 )
+from moonmind.omnigent.control_plane.records import SUPPORTED_SCHEMA_VERSIONS
 from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import (
@@ -225,13 +228,27 @@ def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]
     return reasons
 
 
-def _support_reasons(
-    *, acceptance_canary: bool = False
-) -> tuple[list[GateReason], timedelta | None]:
+@dataclass(frozen=True, slots=True)
+class SupportEvidence:
+    reasons: tuple[GateReason, ...] = ()
+    age: timedelta | None = None
+    server_digest: str | None = None
+    host_digest: str | None = None
+    ui_source_commit: str | None = None
+
+
+def _support_evidence(*, acceptance_canary: bool = False) -> SupportEvidence:
     """Return release-support failures and bounded protected-evidence age."""
 
     if acceptance_canary:
-        return [], timedelta(0)
+        # The authenticated canary is itself producing protected evidence. It
+        # may exercise admission before the resulting manifest exists.
+        return SupportEvidence(
+            age=timedelta(0),
+            server_digest="canary",
+            host_digest="canary",
+            ui_source_commit="canary",
+        )
     manifest_path = os.getenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "").strip()
     source_commit = os.getenv("MOONMIND_SOURCE_COMMIT", "").strip()
     try:
@@ -248,7 +265,9 @@ def _support_reasons(
             evidence_root=manifest_file.parent,
         )
     except (OSError, json.JSONDecodeError, ConformanceContractError):
-        return [_reason("acceptance_evidence_unavailable")], None
+        return SupportEvidence(
+            reasons=(_reason("acceptance_evidence_unavailable"),)
+        )
     try:
         generated_at = datetime.fromisoformat(
             str(manifest["generatedAt"]).replace("Z", "+00:00")
@@ -258,7 +277,17 @@ def _support_reasons(
         # The validator owns this field in production. A non-authoritative test
         # double may omit it; validated evidence is still known-current.
         evidence_age = timedelta(0)
-    return [], evidence_age
+    images = (
+        manifest.get("images")
+        if isinstance(manifest.get("images"), dict)
+        else {}
+    )
+    return SupportEvidence(
+        age=evidence_age,
+        server_digest=str(images.get("serverDigest") or "") or None,
+        host_digest=str(images.get("hostDigest") or "") or None,
+        ui_source_commit=str(manifest.get("sourceCommit") or "") or None,
+    )
 
 
 def _reconciler_generation_available() -> bool:
@@ -269,7 +298,7 @@ def _reconciler_generation_available() -> bool:
     )
 
     return any(
-        registration.class_name == "MoonMindOmnigentSessionWorkflow"
+        registration.class_name == "MoonMindAgentSessionWorkflow"
         for registration in STATIC_WORKFLOW_REGISTRATIONS
     )
 
@@ -292,6 +321,9 @@ class LiveDeploymentReadiness:
     backend_ready: bool = False
     enforced_network_refs: frozenset[str] = frozenset()
     enforced_egress_profile_refs: frozenset[str] = frozenset()
+    workflow_types: frozenset[str] = frozenset()
+    activity_types: frozenset[str] = frozenset()
+    immutable_worker_build: bool = False
 
 
 async def _live_deployment_readiness() -> LiveDeploymentReadiness:
@@ -309,16 +341,24 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
             # represented by endpoint_ready=False in the catalog response.
             pass
 
-    worker_url = os.getenv(
+    agent_worker_url = os.getenv(
         "TEMPORAL_AGENT_RUNTIME_READINESS_URL",
         "http://temporal-worker-agent-runtime:8080/readyz",
+    )
+    workflow_worker_url = os.getenv(
+        "TEMPORAL_WORKFLOW_READINESS_URL",
+        "http://temporal-worker-workflow:8080/readyz",
     )
     enforced_network_refs: set[str] = set()
     enforced_egress_profile_refs: set[str] = set()
     backend_ready = False
+    workflow_types: set[str] = set()
+    activity_types: set[str] = set()
+    agent_build_id = ""
+    agent_build_ready = False
     try:
         async with httpx.AsyncClient(timeout=2.0) as client:
-            response = await client.get(worker_url)
+            response = await client.get(agent_worker_url)
             response.raise_for_status()
             payload = response.json()
         task_queues = {str(value) for value in payload.get("taskQueues", [])}
@@ -327,6 +367,13 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
             payload.get("ready") is True
             and settings.temporal.activity_agent_runtime_task_queue in task_queues
             and backend.get("ready") is True
+        )
+        activity_types = {str(value) for value in payload.get("activityTypes", [])}
+        agent_build_id = str(payload.get("buildId") or "").strip()
+        agent_build_ready = bool(
+            payload.get("immutableReleaseIdentity") is True
+            and agent_build_id
+            and str(payload.get("registryFingerprint") or "").strip()
         )
         enforced_network_refs = {
             str(value) for value in backend.get("enforcedNetworkRefs", [])
@@ -338,6 +385,36 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
         # Readiness is fail-closed; malformed or unavailable worker metadata
         # must not advertise launch authority.
         pass
+    workflow_build_id = ""
+    workflow_build_ready = False
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            response = await client.get(workflow_worker_url)
+            response.raise_for_status()
+            payload = response.json()
+        task_queues = {str(value) for value in payload.get("taskQueues", [])}
+        workflow_ready = (
+            payload.get("ready") is True
+            and settings.temporal.workflow_task_queue in task_queues
+        )
+        if workflow_ready:
+            workflow_types = {
+                str(value) for value in payload.get("workflowTypes", [])
+            }
+        workflow_build_id = str(payload.get("buildId") or "").strip()
+        workflow_build_ready = bool(
+            workflow_ready
+            and payload.get("immutableReleaseIdentity") is True
+            and workflow_build_id
+            and str(payload.get("registryFingerprint") or "").strip()
+        )
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+        pass
+    immutable_worker_build = bool(
+        agent_build_ready
+        and workflow_build_ready
+        and agent_build_id == workflow_build_id
+    )
     return LiveDeploymentReadiness(
         endpoint_ready=endpoint_ready,
         backend_ready=backend_ready,
@@ -345,10 +422,13 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
         enforced_egress_profile_refs=frozenset(
             enforced_egress_profile_refs if backend_ready else ()
         ),
+        workflow_types=frozenset(workflow_types if backend_ready else ()),
+        activity_types=frozenset(activity_types if backend_ready else ()),
+        immutable_worker_build=immutable_worker_build if backend_ready else False,
     )
 
 
-def _policy_images_ready(policy: Any) -> bool:
+def _resolved_policy_images(policy: Any) -> tuple[str, str]:
     values = []
     for value, variable in (
         (policy.server_image_ref, "OMNIGENT_IMAGE_REF"),
@@ -359,11 +439,29 @@ def _policy_images_ready(policy: Any) -> bool:
             if value.startswith("bootstrap://")
             else value
         )
+    return values[0], values[1]
+
+
+def _policy_images_ready(policy: Any) -> bool:
+    values = _resolved_policy_images(policy)
     placeholder_digest = "0" * 64
     return all(
         _DIGEST_IMAGE.fullmatch(value)
         and not value.endswith(f"@sha256:{placeholder_digest}")
         for value in values
+    )
+
+
+def _images_match_support(
+    server_ref: object,
+    host_ref: object,
+    evidence: SupportEvidence,
+) -> bool:
+    return bool(
+        evidence.server_digest
+        and evidence.host_digest
+        and str(server_ref or "").endswith(evidence.server_digest)
+        and str(host_ref or "").endswith(evidence.host_digest)
     )
 
 
@@ -417,9 +515,9 @@ async def get_omnigent_codex_catalog_readiness(
         and secrets.compare_digest(configured_canary_token, supplied_canary_token)
     )
     deployment_reasons = _deployment_reasons(config, bridge)
-    support_reasons, protected_evidence_age = _support_reasons(
-        acceptance_canary=acceptance_canary
-    )
+    support_evidence = _support_evidence(acceptance_canary=acceptance_canary)
+    support_reasons = list(support_evidence.reasons)
+    protected_evidence_age = support_evidence.age
     live_readiness = await _live_deployment_readiness()
     if (
         config.enabled
@@ -572,6 +670,28 @@ async def get_omnigent_codex_catalog_readiness(
         )
         .where(OmnigentPolicyVersion.state == "active")
     )).all())
+    schema_versions = (
+        await session.execute(
+            select(
+                select(func.max(OmnigentSession.schema_version)).scalar_subquery(),
+                select(func.max(OmnigentObservation.schema_version)).scalar_subquery(),
+            )
+        )
+    ).one()
+    schema_compatible = all(
+        version is None or int(version) in SUPPORTED_SCHEMA_VERSIONS
+        for version in schema_versions
+    )
+    latest_observation_at = (
+        await session.execute(select(func.max(OmnigentObservation.observed_at)))
+    ).scalar_one_or_none()
+    if latest_observation_at is not None and latest_observation_at.tzinfo is None:
+        latest_observation_at = latest_observation_at.replace(tzinfo=UTC)
+    observation_age = (
+        max(timedelta(0), now - latest_observation_at)
+        if latest_observation_at is not None
+        else None
+    )
 
     profile_views: list[ExecutionProfileReadiness] = []
     available_modes: list[str] = []
@@ -714,25 +834,59 @@ async def get_omnigent_codex_catalog_readiness(
 
     available_before_admission = any(item.available for item in profile_views)
     bridge_ready = bridge.get("conformanceState") == "ready"
+    deployed_reconciler_ready = (
+        _reconciler_generation_available()
+        and "MoonMind.AgentSession" in live_readiness.workflow_types
+        and "agent_runtime.reconcile_managed_sessions"
+        in live_readiness.activity_types
+    )
+    janitor_healthy = (
+        live_readiness.backend_ready
+        and "integration.omnigent.oauth_host_janitor"
+        in live_readiness.activity_types
+    )
+    manifest_images_ready = bool(
+        support_evidence.server_digest and support_evidence.host_digest
+    )
+    exact_image_conformant = acceptance_canary or (
+        any(
+            _images_match_support(
+                *_resolved_policy_images(policy), support_evidence
+            )
+            for policy in POLICIES.values()
+            if _policy_images_ready(policy)
+        )
+        or any(
+            _images_match_support(
+                version.document_json.get("host", {}).get("serverImageRef"),
+                version.document_json.get("host", {}).get("hostImageRef"),
+                support_evidence,
+            )
+            for _identity, version in persisted_policies
+            if version.validation_json.get("valid")
+        )
+    )
     admission = evaluate_admission_readiness(
         ReadinessInputs(
-            reconciler_generation_ready=_reconciler_generation_available(),
-            schema_compatible=True,
-            provider_snapshot_ready=bridge_ready,
-            event_transport_ready=bridge_ready,
-            server_build_ready=bool(available_modes),
-            ui_build_ready=bridge_ready,
-            host_build_ready=bool(available_modes),
+            reconciler_generation_ready=deployed_reconciler_ready,
+            schema_compatible=schema_compatible,
+            provider_snapshot_ready=(
+                bridge_ready and live_readiness.endpoint_ready
+            ),
+            event_transport_ready=bridge_ready and live_readiness.endpoint_ready,
+            server_build_ready=(
+                manifest_images_ready and live_readiness.endpoint_ready
+            ),
+            ui_build_ready=bool(support_evidence.ui_source_commit),
+            host_build_ready=(
+                manifest_images_ready and live_readiness.immutable_worker_build
+            ),
             websocket_available=_websocket_runtime_available(),
             worker_backend_ready=live_readiness.backend_ready,
             container_backend_ready=backend_ready,
-            observation_age=(
-                timedelta(0)
-                if live_readiness.endpoint_ready or bridge_ready
-                else None
-            ),
-            janitor_healthy=live_readiness.backend_ready,
-            exact_image_conformant=bool(available_modes),
+            observation_age=observation_age,
+            janitor_healthy=janitor_healthy,
+            exact_image_conformant=exact_image_conformant,
             protected_live_evidence_age=protected_evidence_age,
         )
     )

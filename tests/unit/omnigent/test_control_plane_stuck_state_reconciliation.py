@@ -11,13 +11,21 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base
+from api_service.db.models import (
+    OmnigentCleanupAuthority,
+    OmnigentCommand,
+    OmnigentTurnAttempt,
+)
 from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
 from moonmind.omnigent.control_plane import metrics, spans
 from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 from moonmind.omnigent.control_plane.records import COMMAND_STATE_DELIVERY_UNKNOWN
 from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
     StuckStateReconciliationService,
+    inspect_stuck_state,
 )
+from moonmind.omnigent.control_plane.repositories import ControlPlaneRepositories
+from moonmind.omnigent.control_plane.stuck_state import StuckStateReason
 
 
 @pytest_asyncio.fixture()
@@ -122,6 +130,7 @@ async def test_sweep_records_finding_and_dispatches_one_fenced_reconcile(session
     assert second.reconcile_requests == 0
     assert len(dispatcher.calls) == 1
     assert dispatcher.calls[0]["session_id"] == "sess-1"
+    assert dispatcher.calls[0]["workflow_id"] == "wf-sess-1"
     assert dispatcher.calls[0]["reason_code"] == (
         "moonmind_active_no_recent_evidence"
     )
@@ -145,6 +154,78 @@ async def test_sweep_records_finding_and_dispatches_one_fenced_reconcile(session
     assert len(commands) == 1
     assert decisions[0].resulting_command_id == commands[0].command_id
     assert commands[0].status == "applied"
+
+
+@pytest.mark.asyncio
+async def test_receiving_activity_validates_canonical_revision_fence_and_command(
+    session_factory,
+) -> None:
+    now = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
+    store = await _seed_stuck_session(session_factory, now=now)
+    service = StuckStateReconciliationService(
+        session_factory=session_factory,
+        dispatcher=_Dispatcher(),
+        diagnostic_publisher=_DiagnosticPublisher(),
+    )
+    await service.sweep(now=now)
+    async with store.transaction() as repos:
+        session = await repos.sessions.get("sess-1")
+        command = (await repos.commands.list_for_session("sess-1"))[0]
+    # Re-open the dispatch window to model the exact receiving Activity
+    # boundary before its acknowledged Update is recorded applied.
+    async with session_factory() as db:
+        row = await db.get(OmnigentCommand, command.command_id)
+        assert row is not None
+        row.status = "claimed"
+        row.delivery_ambiguous = False
+        await db.commit()
+    assert session is not None
+
+    accepted = await service.validate_reconcile_request(
+        session_id="sess-1",
+        workflow_id="wf-sess-1",
+        request_id=command.command_id,
+        reason_code="moonmind_active_no_recent_evidence",
+        expected_revision=session.revision,
+        expected_fencing_generation=session.fencing_generation,
+    )
+    assert accepted["accepted"] is True
+
+    with pytest.raises(ValueError, match="revision or fencing"):
+        await service.validate_reconcile_request(
+            session_id="sess-1",
+            workflow_id="wf-sess-1",
+            request_id=command.command_id,
+            reason_code="moonmind_active_no_recent_evidence",
+            expected_revision=session.revision + 1,
+            expected_fencing_generation=session.fencing_generation,
+        )
+
+    with pytest.raises(ValueError, match="durable command"):
+        await service.validate_reconcile_request(
+            session_id="sess-1",
+            workflow_id="wf-sess-1",
+            request_id=command.command_id,
+            reason_code="tampered_reason",
+            expected_revision=session.revision,
+            expected_fencing_generation=session.fencing_generation,
+        )
+
+    async with session_factory() as db:
+        row = await db.get(OmnigentCommand, command.command_id)
+        assert row is not None
+        row.status = COMMAND_STATE_DELIVERY_UNKNOWN
+        row.delivery_ambiguous = True
+        await db.commit()
+    with pytest.raises(ValueError, match="delivery ambiguity requires observation"):
+        await service.validate_reconcile_request(
+            session_id="sess-1",
+            workflow_id="wf-sess-1",
+            request_id=command.command_id,
+            reason_code="moonmind_active_no_recent_evidence",
+            expected_revision=session.revision,
+            expected_fencing_generation=session.fencing_generation,
+        )
 
 
 @pytest.mark.asyncio
@@ -311,6 +392,179 @@ async def test_sweep_records_resource_and_compatibility_metrics(
         key.startswith(metrics.DEPLOYED_BUILD_COMPATIBILITY)
         for key in snapshot["counters"]
     )
+
+
+@pytest.mark.asyncio
+async def test_service_level_detector_matrix_covers_every_durable_condition(
+    session_factory,
+) -> None:
+    """Every #3708 condition crosses actual repositories and persisted rows."""
+
+    now = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
+    old = now - timedelta(minutes=40)
+    fresh_metadata = {
+        "protected_live_evidence_at": now.isoformat(),
+        "conformance_runner_available": True,
+    }
+    store = OmnigentControlPlaneStore(session_factory)
+
+    async def create_session(
+        ordinal: int, *, attached: bool = False, compatibility: bool = True,
+        metadata=None,
+    ):
+        async with store.transaction() as repos:
+            return await repos.sessions.create(
+                session_id=f"matrix-{ordinal}",
+                moonmind_workflow_id=f"wf-matrix-{ordinal}",
+                provider="codex",
+                provider_session_ref=f"provider-{ordinal}" if attached else None,
+                compatibility_ref="compat-v1" if compatibility else None,
+                metadata=metadata or {},
+            )
+
+    async def snapshot(ordinal: int, index: dict[str, object], *, at=now):
+        async with store.transaction() as repos:
+            await repos.observations.append(
+                observation_id=f"matrix-snapshot-{ordinal}",
+                session_id=f"matrix-{ordinal}",
+                observation_type="provider_snapshot",
+                source="provider_authoritative_snapshot",
+                observed_at=at,
+                deduplication_key=f"matrix-snapshot-{ordinal}",
+                bounded_index=index,
+            )
+
+    # 1: active with no recent evidence.
+    await create_session(1)
+    async with store.transaction() as repos:
+        await repos.turn_attempts.create(
+            turn_attempt_id="matrix-turn-1",
+            session_id="matrix-1",
+            idempotency_key="matrix-turn-1",
+        )
+        await repos.sessions.update_lifecycle(
+            "matrix-1",
+            expected_revision=1,
+            expected_fencing_generation=0,
+            active_turn_attempt_id="matrix-turn-1",
+        )
+
+    # 2: provider terminal while MoonMind remains nonterminal.
+    await create_session(2, attached=True, metadata=fresh_metadata)
+    await snapshot(2, {"providerSession": {"rawStatus": "completed"}})
+
+    # 3: MoonMind terminal while the provider remains active.
+    await create_session(3, attached=True, metadata=fresh_metadata)
+    async with store.transaction() as repos:
+        await repos.sessions.mark_terminal(
+            "matrix-3", "success", expected_revision=1,
+            expected_fencing_generation=0,
+        )
+    await snapshot(3, {"providerSession": {"rawStatus": "running"}})
+
+    # 4: active turn has only liveness beyond policy.
+    await create_session(4)
+    async with store.transaction() as repos:
+        await repos.turn_attempts.create(
+            turn_attempt_id="matrix-turn-4", session_id="matrix-4",
+            idempotency_key="matrix-turn-4",
+        )
+        await repos.sessions.update_lifecycle(
+            "matrix-4", expected_revision=1, expected_fencing_generation=0,
+            active_turn_attempt_id="matrix-turn-4",
+        )
+        await repos.observations.append(
+            observation_id="matrix-liveness-4", session_id="matrix-4",
+            observation_type="liveness", source="provider_liveness",
+            observed_at=now, deduplication_key="matrix-liveness-4",
+        )
+    await snapshot(4, {"providerSession": {"rawStatus": "running"}}, at=old)
+
+    # 5: repeated reconciliation without revision/frontier progress.
+    session5 = await create_session(5)
+    async with store.transaction() as repos:
+        for ordinal in range(3):
+            await repos.decisions.append(
+                decision_id=f"matrix-decision-5-{ordinal}", session_id="matrix-5",
+                decision_code="await_observation",
+                expected_revision=session5.revision,
+                observation_frontier_digest="same-frontier",
+            )
+
+    # 6/7: orphan host and profile leases are independent findings.
+    await create_session(6)
+    await snapshot(6, {"hostLease": {"held": True, "consumerActive": False}})
+    await create_session(7)
+    await snapshot(7, {"profileLease": {"held": True, "consumerActive": False}})
+
+    # 8: cleanup claim exceeded its deadline.
+    await create_session(8)
+    async with store.transaction() as repos:
+        await repos.cleanup.claim_cleanup(
+            "matrix-8", owner_class="janitor", claim_token="matrix-cleanup-8"
+        )
+
+    # 9: admitted session never established compatibility/actual-build state.
+    await create_session(
+        9, attached=True, compatibility=False, metadata=fresh_metadata
+    )
+    await snapshot(9, {"providerSession": {"rawStatus": "running"}})
+
+    # 10: claimed command exceeded the delivery deadline.
+    await create_session(10)
+    async with store.transaction() as repos:
+        await repos.commands.record(
+            command_id="matrix-command-10", session_id="matrix-10",
+            command_type="submit_turn", idempotency_key="matrix-command-10",
+            payload_digest="sha256:" + "c" * 64,
+        )
+        await repos.commands.claim_command(
+            "matrix-command-10", owner_class="session_supervisor",
+            claim_token="matrix-command-claim-10",
+        )
+
+    # 11: protected evidence expired and its runner is unavailable.
+    await create_session(
+        11,
+        attached=True,
+        metadata={
+            "protected_live_evidence_at": (
+                now - timedelta(days=2)
+            ).isoformat(),
+            "conformance_runner_available": False,
+        },
+    )
+    await snapshot(11, {"providerSession": {"rawStatus": "running"}})
+
+    # Set deadline timestamps through the actual ORM rows because these are
+    # database-owned lifecycle timestamps, not repository input fields.
+    async with session_factory() as db:
+        (await db.get(OmnigentTurnAttempt, "matrix-turn-1")).created_at = old
+        (await db.get(OmnigentCleanupAuthority, "matrix-8")).updated_at = old
+        (await db.get(OmnigentCommand, "matrix-command-10")).updated_at = old
+        await db.commit()
+
+    expected = {
+        1: StuckStateReason.MOONMIND_ACTIVE_NO_RECENT_EVIDENCE,
+        2: StuckStateReason.PROVIDER_TERMINAL_MOONMIND_NONTERMINAL,
+        3: StuckStateReason.MOONMIND_TERMINAL_PROVIDER_ACTIVE,
+        4: StuckStateReason.ACTIVE_TURN_LIVENESS_ONLY,
+        5: StuckStateReason.REPEATED_RECONCILIATION_NO_PROGRESS,
+        6: StuckStateReason.HOST_LEASE_WITHOUT_SESSION_AUTHORITY,
+        7: StuckStateReason.PROFILE_LEASE_WITHOUT_CONSUMER,
+        8: StuckStateReason.CLEANUP_INCOMPLETE_PAST_DEADLINE,
+        9: StuckStateReason.COMPATIBILITY_UNKNOWN_AFTER_ADMISSION,
+        10: StuckStateReason.COMMAND_STUCK_CLAIMED_OR_DELIVERY_UNKNOWN,
+        11: StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE,
+    }
+    async with session_factory() as db:
+        repos = ControlPlaneRepositories.bind(db)
+        for ordinal, reason in expected.items():
+            inspection = await inspect_stuck_state(
+                repos, session_id=f"matrix-{ordinal}", now=now
+            )
+            assert inspection is not None
+            assert reason in {finding.reason for finding in inspection.findings}
 
 
 @pytest.mark.asyncio

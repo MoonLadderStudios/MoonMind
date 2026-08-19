@@ -99,6 +99,7 @@ class ReconcileDispatcher(Protocol):
         self,
         *,
         session_id: str,
+        workflow_id: str,
         request_id: str,
         reason_code: str,
         expected_revision: str,
@@ -430,6 +431,59 @@ class StuckStateReconciliationService:
                 )
         return result
 
+    async def validate_reconcile_request(
+        self,
+        *,
+        session_id: str,
+        workflow_id: str,
+        request_id: str,
+        reason_code: str,
+        expected_revision: int,
+        expected_fencing_generation: int,
+    ) -> dict[str, object]:
+        """Validate a workflow-accepted request against canonical DB authority.
+
+        The command must still be the claimed journal entry created by this
+        detector. A delivery-unknown command is deliberately rejected until a
+        later provider observation advances beyond it, so this boundary can
+        never turn ambiguous delivery into a blind retry.
+        """
+
+        async with self._session_factory() as db:
+            repos = ControlPlaneRepositories.bind(db)
+            session = await repos.sessions.load_for_update(session_id)
+            command = await repos.commands.get(request_id)
+            decision = await repos.decisions.for_resulting_command(request_id)
+            if session is None or session.moonmind_workflow_id != workflow_id:
+                raise ValueError("reconcile request does not own canonical workflow scope")
+            if (
+                session.revision != expected_revision
+                or session.fencing_generation != expected_fencing_generation
+            ):
+                raise ValueError("reconcile request lost revision or fencing authority")
+            if (
+                command is None
+                or command.session_id != session_id
+                or command.command_type != "request_reconcile"
+                or command.expected_session_revision != expected_revision
+                or command.fencing_generation != expected_fencing_generation
+                or decision is None
+                or decision.session_id != session_id
+                or decision.reason_code != reason_code
+                or decision.expected_revision != expected_revision
+                or decision.fencing_generation != expected_fencing_generation
+            ):
+                raise ValueError("reconcile request does not match its durable command")
+            if command.status != COMMAND_STATE_CLAIMED:
+                raise ValueError(
+                    "reconcile command is not freshly claimed; delivery ambiguity requires observation"
+                )
+        return {
+            "accepted": True,
+            "expectedRevision": expected_revision,
+            "expectedFencingGeneration": expected_fencing_generation,
+        }
+
     async def _inspect(
         self, session_id: str, now: datetime
     ) -> Optional[StuckStateInspection]:
@@ -682,6 +736,7 @@ class StuckStateReconciliationService:
             ):
                 await self._dispatcher.request_reconcile(
                     session_id=session.session_id,
+                    workflow_id=session.moonmind_workflow_id,
                     request_id=command_id,
                     reason_code=reason,
                     expected_revision=str(response.expected_revision),

@@ -34,12 +34,30 @@ class _Result:
     def all(self):
         return self._rows
 
+    def one(self):
+        return self._rows
+
+    def scalar_one_or_none(self):
+        return self._rows
+
 
 class _Session:
-    def __init__(self, profiles, *, slots=(), bindings=(), host_leases=(), policies=()):
+    def __init__(
+        self,
+        profiles,
+        *,
+        slots=(),
+        bindings=(),
+        host_leases=(),
+        policies=(),
+        schema_versions=(1, 1),
+        latest_observation_at=None,
+    ):
+        latest_observation_at = latest_observation_at or datetime.now(UTC)
         self._results = iter((
             _Result(profiles), _Result(slots), _Result(bindings),
-            _Result(host_leases), _Result(policies),
+            _Result(host_leases), _Result(policies), _Result(schema_versions),
+            _Result(latest_observation_at),
         ))
 
     async def execute(self, _statement):
@@ -116,6 +134,12 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
             backend_ready=True,
             enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
             enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
+            workflow_types=frozenset({"MoonMind.AgentSession"}),
+            activity_types=frozenset({
+                "agent_runtime.reconcile_managed_sessions",
+                "integration.omnigent.oauth_host_janitor",
+            }),
+            immutable_worker_build=True,
         )
 
     monkeypatch.setattr(catalog, "_live_deployment_readiness", live_readiness)
@@ -125,7 +149,18 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://omnigent:8000")
     monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "/evidence/matrix.json")
     monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", "abc123")
-    monkeypatch.setattr(catalog.Path, "read_text", lambda *_args, **_kwargs: "{}")
+    monkeypatch.setattr(
+        catalog.Path,
+        "read_text",
+        lambda *_args, **_kwargs: catalog.json.dumps({
+            "generatedAt": datetime.now(UTC).isoformat(),
+            "sourceCommit": "abc123",
+            "images": {
+                "serverDigest": "sha256:" + "1" * 64,
+                "hostDigest": "sha256:" + "2" * 64,
+            },
+        }),
+    )
     monkeypatch.setattr(catalog, "validate_acceptance_manifest", lambda *_args, **_kwargs: None)
     app = FastAPI()
     app.include_router(catalog.router)
@@ -147,6 +182,10 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
 
     assert response.status_code == 200
     assert response.json()["available"] is True
+
+
+def test_reconciler_readiness_uses_the_actual_static_workflow_registration():
+    assert catalog._reconciler_generation_available() is True
 
 
 def test_protected_first_run_canary_uses_normal_catalog_without_published_manifest(
@@ -664,18 +703,90 @@ def test_catalog_fails_closed_on_live_service_readiness(
     assert expected in {reason["code"] for reason in body["gateReasons"]}
 
 
+def test_catalog_blocks_new_admission_on_stale_persisted_observation(monkeypatch):
+    session = _Session(
+        [_profile()],
+        latest_observation_at=datetime.now(UTC) - timedelta(minutes=11),
+    )
+    body = TestClient(_app(monkeypatch, session=session)).get(
+        "/api/omnigent/codex-catalog-readiness"
+    ).json()
+    assert "observation_freshness" in body["admissionReadiness"]["blocking"]
+    assert body["admissionReadiness"]["allowHistoricalReads"] is True
+    assert body["admissionReadiness"]["allowCleanup"] is True
+
+
+def test_catalog_blocks_new_admission_when_janitor_activity_is_not_deployed(
+    monkeypatch,
+):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+
+    async def readiness():
+        return catalog.LiveDeploymentReadiness(
+            endpoint_ready=True,
+            backend_ready=True,
+            enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
+            enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
+            workflow_types=frozenset({"MoonMind.AgentSession"}),
+            activity_types=frozenset({"agent_runtime.reconcile_managed_sessions"}),
+            immutable_worker_build=True,
+        )
+
+    monkeypatch.setattr(catalog, "_live_deployment_readiness", readiness)
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+    assert "janitor" in body["admissionReadiness"]["blocking"]
+    assert body["admissionReadiness"]["allowHistoricalReads"] is True
+    assert body["admissionReadiness"]["allowCleanup"] is True
+
+
+def test_catalog_blocks_new_admission_on_stale_build_manifest(monkeypatch):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+    monkeypatch.setattr(
+        catalog.Path,
+        "read_text",
+        lambda *_args, **_kwargs: catalog.json.dumps({
+            "generatedAt": (datetime.now(UTC) - timedelta(days=2)).isoformat(),
+            "sourceCommit": "abc123",
+            "images": {
+                "serverDigest": "sha256:" + "9" * 64,
+                "hostDigest": "sha256:" + "8" * 64,
+            },
+        }),
+    )
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+    assert "exact_image" in body["admissionReadiness"]["blocking"]
+    assert body["admissionReadiness"]["allowHistoricalReads"] is True
+    assert body["admissionReadiness"]["allowCleanup"] is True
+
+
 @pytest.mark.asyncio
 async def test_live_readiness_requires_worker_route_backend_and_network(monkeypatch):
     responses = iter([
         _HealthResponse(),
         _HealthResponse({
             "ready": True,
+            "buildId": "build-1",
+            "registryFingerprint": "sha256:registry",
+            "immutableReleaseIdentity": True,
             "taskQueues": ["mm.activity.agent_runtime"],
+            "activityTypes": [
+                "agent_runtime.reconcile_managed_sessions",
+                "integration.omnigent.oauth_host_janitor",
+            ],
             "containerBackend": {
                 "ready": True,
                 "enforcedNetworkRefs": [OMNIGENT_EGRESS_NETWORK_REF],
                 "enforcedEgressProfileRefs": [OMNIGENT_EGRESS_PROFILE.ref],
             },
+        }),
+        _HealthResponse({
+            "ready": True,
+            "buildId": "build-1",
+            "registryFingerprint": "sha256:workflow-registry",
+            "immutableReleaseIdentity": True,
+            "taskQueues": ["mm.workflow"],
+            "workflowTypes": ["MoonMind.AgentSession"],
+            "activityTypes": [],
         }),
     ])
 
@@ -700,6 +811,12 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
         backend_ready=True,
         enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
         enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
+        workflow_types=frozenset({"MoonMind.AgentSession"}),
+        activity_types=frozenset({
+            "agent_runtime.reconcile_managed_sessions",
+            "integration.omnigent.oauth_host_janitor",
+        }),
+        immutable_worker_build=True,
     )
 
 

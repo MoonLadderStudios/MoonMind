@@ -11579,6 +11579,58 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.reconcile_managed_sessions"
         )
         action_payload = dict(payload or {})
+        omnigent_reconcile_request = action_payload.get("omnigentReconcileRequest")
+        stuck_state_service = self._omnigent_stuck_state_service
+        if stuck_state_service is None and self._artifact_service is not None:
+            from api_service.db.base import async_session_maker
+            from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
+                StuckStateReconciliationService,
+            )
+            from moonmind.workflows.temporal.activities.omnigent_stuck_state import (
+                TemporalOmnigentReconcileDispatcher,
+                TemporalStuckStateDiagnosticPublisher,
+            )
+
+            stuck_state_service = StuckStateReconciliationService(
+                session_factory=async_session_maker,
+                dispatcher=TemporalOmnigentReconcileDispatcher(
+                    self._client_adapter
+                ),
+                diagnostic_publisher=TemporalStuckStateDiagnosticPublisher(
+                    self._artifact_service
+                ),
+            )
+        validated_omnigent_request = None
+        if isinstance(omnigent_reconcile_request, Mapping):
+            if stuck_state_service is None:
+                raise TemporalActivityRuntimeError(
+                    "Omnigent reconcile request requires control-plane persistence"
+                )
+            validated_omnigent_request = (
+                await stuck_state_service.validate_reconcile_request(
+                    session_id=str(
+                        omnigent_reconcile_request.get("sessionId") or ""
+                    ),
+                    workflow_id=str(
+                        action_payload.get("omnigentWorkflowId") or ""
+                    ),
+                    request_id=str(
+                        omnigent_reconcile_request.get("requestId") or ""
+                    ),
+                    reason_code=str(
+                        omnigent_reconcile_request.get("reasonCode") or ""
+                    ),
+                    expected_revision=int(
+                        omnigent_reconcile_request.get("expectedRevision") or 0
+                    ),
+                    expected_fencing_generation=int(
+                        omnigent_reconcile_request.get(
+                            "expectedFencingGeneration"
+                        )
+                        or 0
+                    ),
+                )
+            )
         action_kind = str(action_payload.get("actionKind") or "").strip()
         if action_kind:
             if action_kind not in {
@@ -11695,26 +11747,9 @@ class TemporalAgentRuntimeActivities:
         # sweeper owner for both managed-runtime reattachment and canonical
         # Omnigent stuck-state inspection.  Reusing it adds no idle container or
         # second scheduling authority (MoonLadderStudios/MoonMind#3708).
-        stuck_state_service = self._omnigent_stuck_state_service
-        if stuck_state_service is None and self._artifact_service is not None:
-            from api_service.db.base import async_session_maker
-            from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
-                StuckStateReconciliationService,
-            )
-            from moonmind.workflows.temporal.activities.omnigent_stuck_state import (
-                TemporalOmnigentReconcileDispatcher,
-                TemporalStuckStateDiagnosticPublisher,
-            )
-
-            stuck_state_service = StuckStateReconciliationService(
-                session_factory=async_session_maker,
-                dispatcher=TemporalOmnigentReconcileDispatcher(
-                    self._client_adapter
-                ),
-                diagnostic_publisher=TemporalStuckStateDiagnosticPublisher(
-                    self._artifact_service
-                ),
-            )
+        if validated_omnigent_request is not None:
+            summary["omnigentReconcileRequest"] = validated_omnigent_request
+            return summary
         if stuck_state_service is not None:
             try:
                 stuck_result = await _await_with_activity_heartbeats(

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, AsyncIterator, Callable, Optional, Sequence
 
 from sqlalchemy import case, func, or_, select
@@ -812,12 +812,35 @@ class SessionRepository(_RepositoryBase):
                 f"Session {session_id!r} revision {row.revision} != expected "
                 f"{expected_revision}; refusing terminal write"
             )
+        terminal_observed_at = (
+            await self._session.execute(
+                select(func.max(OmnigentObservation.observed_at)).where(
+                    OmnigentObservation.session_id == session_id,
+                    OmnigentObservation.observation_type.in_(
+                        ("snapshot", "provider_snapshot")
+                    ),
+                )
+            )
+        ).scalar_one_or_none()
         row.terminal_state = terminal_state
         if terminal_evidence_ref is not None:
             row.terminal_evidence_ref = terminal_evidence_ref
         row.revision = row.revision + 1
         await self._session.flush()
         await self._session.refresh(row)
+        if terminal_observed_at is not None:
+            observed = (
+                terminal_observed_at.replace(tzinfo=UTC)
+                if terminal_observed_at.tzinfo is None
+                else terminal_observed_at
+            )
+            try:
+                metrics.observe(
+                    metrics.PROVIDER_TERMINAL_TO_MOONMIND_TERMINAL_LATENCY,
+                    max(0.0, (datetime.now(UTC) - observed).total_seconds()),
+                )
+            except Exception:
+                pass
         return _session_record(row)
 
 
@@ -1121,6 +1144,12 @@ class ObservationRepository(_RepositoryBase):
             }
             else spans.OBSERVATION_LOAD
         )
+        schema_value = (bounded_index or {}).get("schemaVersion")
+        if schema_value not in (None, 1, "1"):
+            try:
+                metrics.increment(metrics.UNKNOWN_SCHEMA_VALUE)
+            except Exception:
+                pass
         with spans.omnigent_span(
             span_name,
             observation_source=source,
@@ -1702,6 +1731,19 @@ class DecisionRepository(_RepositoryBase):
                 decision_class=metric_decision_class,
                 reason_class=reason_class,
             )
+            session = await self._session.get(OmnigentSession, session_id)
+            if session is not None and session.updated_at is not None:
+                updated = (
+                    session.updated_at.replace(tzinfo=UTC)
+                    if session.updated_at.tzinfo is None
+                    else session.updated_at
+                )
+                metrics.observe(
+                    metrics.RECONCILIATION_CONVERGENCE_LATENCY,
+                    max(0.0, (datetime.now(UTC) - updated).total_seconds()),
+                )
+            if decision_code == "synthesize_terminal_from_snapshot":
+                metrics.increment(metrics.SNAPSHOT_RECOVERED_TERMINAL)
         except Exception:
             # Metrics are auxiliary; a recorder/exporter outage must not change
             # the durable reconciliation decision.
@@ -1806,6 +1848,21 @@ class DecisionRepository(_RepositoryBase):
             .order_by(
                 OmnigentReconciliationDecision.created_at.desc(),
                 OmnigentReconciliationDecision.decision_id.desc(),
+            )
+            .limit(1)
+        )
+        row = (await self._session.execute(stmt)).scalars().first()
+        return _decision_record(row) if row is not None else None
+
+    async def for_resulting_command(
+        self, command_id: str
+    ) -> Optional[DecisionRecord]:
+        """Return the unique decision that authorized a durable command."""
+
+        stmt = (
+            select(OmnigentReconciliationDecision)
+            .where(
+                OmnigentReconciliationDecision.resulting_command_id == command_id
             )
             .limit(1)
         )

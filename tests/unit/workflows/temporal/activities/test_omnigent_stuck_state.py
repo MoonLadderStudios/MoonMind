@@ -14,12 +14,12 @@ from moonmind.workflows.temporal.activities.omnigent_stuck_state import (
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_signals_the_canonical_session_supervisor_contract() -> None:
+async def test_dispatcher_updates_the_canonical_session_supervisor_contract() -> None:
     class _Client:
         def __init__(self) -> None:
             self.calls = []
 
-        async def signal_workflow(self, *args) -> None:
+        async def update_workflow(self, *args) -> None:
             self.calls.append(args)
 
     client = _Client()
@@ -27,6 +27,7 @@ async def test_dispatcher_signals_the_canonical_session_supervisor_contract() ->
 
     await dispatcher.request_reconcile(
         session_id="sess-1",
+        workflow_id="wf-1",
         request_id="ocm-1",
         reason_code="provider_terminal_moonmind_nonterminal",
         expected_revision="7",
@@ -35,11 +36,14 @@ async def test_dispatcher_signals_the_canonical_session_supervisor_contract() ->
 
     assert client.calls == [
         (
-            "omnigent-session:sess-1",
-            "operator_reconcile_requested",
+            "wf-1:session:codex_cli",
+            "ReconcileOmnigentSession",
             {
+                "sessionId": "sess-1",
                 "requestId": "ocm-1",
                 "reasonCode": "provider_terminal_moonmind_nonterminal",
+                "expectedRevision": 7,
+                "expectedFencingGeneration": 3,
             },
         )
     ]

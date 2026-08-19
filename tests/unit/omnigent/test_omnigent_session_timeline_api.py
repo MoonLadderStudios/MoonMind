@@ -20,6 +20,7 @@ import api_service.api.routers.omnigent_session_timeline as timeline_api
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from moonmind.omnigent.control_plane.records import (
+    DecisionRecord,
     ObservationRecord,
     SessionRecord,
     TurnAttemptRecord,
@@ -185,8 +186,65 @@ async def test_timeline_endpoint_requires_operator_permission(monkeypatch, sessi
     app = _build_app(session_record, unauthorized)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/api/omnigent/sessions/sess-1/timeline")
-    assert resp.status_code == 403
+        responses = [
+            await client.get(f"/api/omnigent/sessions/sess-1/{suffix}")
+            for suffix in ("timeline", "trace", "logs")
+        ]
+    assert [response.status_code for response in responses] == [403, 403, 403]
+
+
+@pytest.mark.asyncio
+async def test_timeline_links_redirect_through_authorized_server_routes(
+    monkeypatch, session_record
+):
+    decision = DecisionRecord(
+        decision_id="dec-1",
+        session_id="sess-1",
+        decision_code="await_observation",
+        trace_ref="trace/one",
+        created_at=NOW,
+    )
+    session_record = SessionRecord(
+        **{
+            **session_record.__dict__,
+            "moonmind_run_id": "run/one",
+            "last_decision_ref": "dec-1",
+        }
+    )
+    repos = _FakeRepos(session_record, latest_decision=decision)
+    monkeypatch.setattr(
+        timeline_api.ControlPlaneRepositories,
+        "bind",
+        classmethod(lambda cls, db: repos),
+    )
+    monkeypatch.setenv(
+        "MOONMIND_TRACE_URL_TEMPLATE", "https://telemetry.example/traces/{trace_id}"
+    )
+    monkeypatch.setenv(
+        "MOONMIND_LOGS_URL_TEMPLATE",
+        "https://telemetry.example/logs/{workflow_id}/{run_id}",
+    )
+    app = _build_app(session_record, _FakeUser())
+    transport = ASGITransport(app=app)
+    async with AsyncClient(
+        transport=transport, base_url="http://test", follow_redirects=False
+    ) as client:
+        timeline = (
+            await client.get("/api/omnigent/sessions/sess-1/timeline")
+        ).json()
+        trace = await client.get("/api/omnigent/sessions/sess-1/trace")
+        logs = await client.get("/api/omnigent/sessions/sess-1/logs")
+
+    assert timeline["links"] == {
+        "trace": "/api/omnigent/sessions/sess-1/trace",
+        "logs": "/api/omnigent/sessions/sess-1/logs",
+    }
+    assert trace.status_code == 307
+    assert trace.headers["location"] == "https://telemetry.example/traces/trace%2Fone"
+    assert logs.status_code == 307
+    assert logs.headers["location"] == (
+        "https://telemetry.example/logs/wf-1/run%2Fone"
+    )
 
 
 #: A durably-old turn start so the absence of observations is aged past the

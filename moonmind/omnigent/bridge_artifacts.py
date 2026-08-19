@@ -10,6 +10,7 @@ import hashlib
 import json
 import mimetypes
 import os.path
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from re import sub
@@ -17,6 +18,8 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from moonmind.omnigent.bridge_security import redact_raw_events
+from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.control_plane import spans as control_plane_spans
 from moonmind.omnigent.failure_classification import (
     OmnigentFailureReason,
     classify_omnigent_failure,
@@ -1430,7 +1433,7 @@ def _capture_resource_projection(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _build_capture_bundle(
+async def _build_capture_bundle_impl(
     *,
     client: OmnigentHttpClient | None,
     artifact_gateway: OmnigentArtifactGateway,
@@ -1858,6 +1861,26 @@ async def _build_capture_bundle(
         resource_harvest_failure_class=resource_harvest_failure_class,
         resource_projection=resource_projection,
     )
+
+
+async def _build_capture_bundle(**kwargs: Any) -> OmnigentCaptureBundle:
+    """Harvest and publish evidence at one observable Activity-side boundary."""
+
+    started = time.monotonic()
+    with control_plane_spans.omnigent_span(
+        control_plane_spans.EVIDENCE_HARVEST,
+        runtime="omnigent",
+        provider_status_class=str(kwargs.get("terminal_status") or "unknown"),
+    ):
+        bundle = await _build_capture_bundle_impl(**kwargs)
+    elapsed = time.monotonic() - started
+    control_plane_metrics.observe(
+        control_plane_metrics.EVIDENCE_HARVEST_LATENCY, elapsed
+    )
+    control_plane_metrics.observe(
+        control_plane_metrics.EVIDENCE_PUBLICATION_LATENCY, elapsed
+    )
+    return bundle
 
 
 def _jsonl(events: list[dict[str, Any]]) -> str:
