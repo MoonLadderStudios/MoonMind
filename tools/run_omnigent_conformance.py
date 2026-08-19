@@ -21,11 +21,11 @@ from moonmind.omnigent.conformance import (  # noqa: E402
     assert_secret_free,
 )
 
-# Activation contract for the bounded fake/stock-compatible provider path.  The
-# Tier-1 exact-artifact driver (tools/_exact_artifact_runtime_probes.py) engages
-# it explicitly via ``--fake-provider`` and via this env var, which the exact
-# image carries.  Consumption is explicit and recorded in the evidence (an
-# observable runtime mode switch), never a hidden fallback.
+# Activation contract for the bounded fake/stock-compatible provider path.  A
+# caller engages it explicitly via ``--fake-provider`` or this env var; the
+# selection is recorded in the published evidence (an observable runtime mode
+# switch), never a hidden fallback.  The Tier-1 exact-artifact gate does not use
+# it: that gate probes image capabilities and runs no provider execution.
 FAKE_PROVIDER_ENV = "MOONMIND_OMNIGENT_FAKE_PROVIDER"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
 

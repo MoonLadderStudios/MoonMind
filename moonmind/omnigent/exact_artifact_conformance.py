@@ -7,9 +7,15 @@ decision for the required *Tier-1 exact-artifact* gate: given a runtime
 capability-probe report gathered from the **exact deployable images** by
 immutable digest, it fails closed unless every required runtime capability is
 present in the real image, the probed digests match the admitted compatibility
-manifest, a bounded fake-provider execution converged through the exact images,
-restart + terminal replay works after the fake host is removed, and the
-retained evidence passes secret scanning.
+manifest, and the retained evidence passes secret scanning.
+
+The gate requires only capabilities the Tier-1 driver actually exercises against
+the image.  Restart and terminal replay *after a fake host is removed* is a
+provider-execution authority handoff that the noncredentialed driver does not
+perform, so this gate does not assert it; that boundary is owned by the
+reliability-journey and embedded-recovery gates, which run on the same commit
+under the Omnigent contract gate.  Deriving a claim from an unrelated exit
+status would let the gate advertise a boundary it never crossed.
 
 The gate deliberately operates on a *report* rather than performing the Docker
 build/probe itself.  Assembling that report from the real entrypoints requires
@@ -28,7 +34,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
 from moonmind.omnigent.conformance import (
     ConformanceContractError,
@@ -64,6 +70,9 @@ REQUIRED_SERVER_CAPABILITIES = (
     "browser_facing_deps",
     "migrations_clean_apply",
     "migrations_prior_schema_upgrade",
+    # The deployable process must survive a restart against the schema it just
+    # migrated and serve liveness again through its own entrypoint.
+    "api_restart_against_existing_schema",
 )
 
 REQUIRED_WORKER_CAPABILITIES = (
@@ -85,11 +94,6 @@ REQUIRED_CAPABILITIES: Mapping[str, tuple[str, ...]] = {
     "worker": REQUIRED_WORKER_CAPABILITIES,
     "ui": REQUIRED_UI_CAPABILITIES,
 }
-
-# A bounded fake-provider execution through the exact images must converge to a
-# terminal success state and its history must replay after the fake host is
-# removed.
-FAKE_PROVIDER_TERMINAL_STATES = ("converged", "succeeded", "completed")
 
 _DIGEST_REF = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -152,8 +156,7 @@ def evaluate_exact_artifact_conformance(
 
     ``report`` is the evidence gathered from the exact deployable images:
     ``images`` (digest-pinned refs per role), ``capabilities`` (per-role probe
-    results from the real entrypoint), ``fakeProviderExecution`` (a bounded
-    fake-provider run + restart/terminal replay), and ``secretScan``.
+    results from the real entrypoint), and ``secretScan``.
 
     ``required_digests`` is the admitted compatibility manifest: the digests
     the deployable images must match.  The returned document is validated
@@ -216,40 +219,6 @@ def evaluate_exact_artifact_conformance(
                 GateFailure(
                     f"digest_mismatch:{role}",
                     f"{role} image digest does not match the admitted manifest",
-                )
-            )
-
-    # --- Bounded fake-provider execution + restart/terminal replay -----------
-    execution = report.get("fakeProviderExecution")
-    if not isinstance(execution, Mapping):
-        failures.append(
-            GateFailure(
-                "fake_provider_execution_missing",
-                "no bounded fake-provider execution through the exact images",
-            )
-        )
-    else:
-        terminal_state = str(execution.get("terminalState", "")).strip().lower()
-        if terminal_state not in FAKE_PROVIDER_TERMINAL_STATES:
-            failures.append(
-                GateFailure(
-                    "fake_provider_not_converged",
-                    "fake-provider execution did not reach a terminal success state "
-                    f"(observed {terminal_state or 'unknown'!r})",
-                )
-            )
-        if execution.get("restartAfterHostRemoval") is not True:
-            failures.append(
-                GateFailure(
-                    "restart_after_host_removal_failed",
-                    "restart did not succeed after the fake host was removed",
-                )
-            )
-        if execution.get("terminalReplayAfterHostRemoval") is not True:
-            failures.append(
-                GateFailure(
-                    "terminal_replay_after_host_removal_failed",
-                    "terminal replay did not succeed after the fake host was removed",
                 )
             )
 
@@ -348,7 +317,6 @@ __all__ = [
     "REQUIRED_SERVER_CAPABILITIES",
     "REQUIRED_WORKER_CAPABILITIES",
     "REQUIRED_UI_CAPABILITIES",
-    "FAKE_PROVIDER_TERMINAL_STATES",
     "ExactArtifactConformanceError",
     "GateFailure",
     "evaluate_exact_artifact_conformance",

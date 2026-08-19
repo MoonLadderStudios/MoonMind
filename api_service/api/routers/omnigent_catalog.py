@@ -56,6 +56,10 @@ from moonmind.omnigent.exact_artifact_conformance import (
     ExactArtifactConformanceError,
     assert_exact_artifact_evidence,
 )
+from moonmind.omnigent.live_verification_health import (
+    LiveVerificationHealthError,
+    assert_live_health_projection,
+)
 from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
 from moonmind.omnigent.cutover import effective_phase
 from moonmind.omnigent.remediation_matrix import load_remediation_release_status
@@ -270,18 +274,29 @@ def _support_reasons(*, acceptance_canary: bool = False) -> list[GateReason]:
         reasons.append(_reason("exact_artifact_evidence_unavailable"))
 
     # --- Fresh protected-live verification projection ------------------------
+    # Revalidated at *consumption*, not just at publication: the versioned
+    # schema, the ready verdict, the deployed commit, the projection's own
+    # freshness window, and the acceptance expiry it inherits. A once-ready file
+    # must stop being accepted when its manifest expires or scheduled
+    # monitoring stops publishing.
     projection_path = os.getenv("MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION", "").strip()
     try:
         if not projection_path or not source_commit:
-            raise ValueError("live-verification projection is not configured")
+            raise LiveVerificationHealthError(
+                "live-verification projection is not configured"
+            )
         projection = json.loads(Path(projection_path).read_text(encoding="utf-8"))
-        if (
-            not isinstance(projection, dict)
-            or projection.get("rolloutReady") is not True
-            or projection.get("deployedCommit") != source_commit
-        ):
-            raise ValueError("live-verification projection is stale or not ready")
-    except (OSError, json.JSONDecodeError, ValueError):
+        if not isinstance(projection, dict):
+            raise LiveVerificationHealthError(
+                "live-verification projection must be an object"
+            )
+        assert_live_health_projection(projection, expected_commit=source_commit)
+    except (
+        OSError,
+        json.JSONDecodeError,
+        LiveVerificationHealthError,
+        ConformanceContractError,
+    ):
         reasons.append(_reason("live_verification_stale"))
 
     return reasons

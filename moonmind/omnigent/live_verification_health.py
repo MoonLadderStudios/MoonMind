@@ -26,12 +26,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from moonmind.omnigent.conformance import (
     ConformanceContractError,
-    SECRET_PATTERN,
+    SESSION_BEARING_KEYS,
     assert_secret_free,
+    redact_secrets,
 )
 
 LIVE_VERIFICATION_HEALTH_VERSION = "moonmind.omnigent.live-verification-health/v1"
@@ -53,6 +54,14 @@ REQUIRED_LIVE_MATRIX_MODES = (
 # A scheduled canary that stays queued longer than this is treated as a
 # stalled protected runner, not a passing gate.
 DEFAULT_MAX_QUEUE_AGE_SECONDS = 6 * 60 * 60
+
+# The readiness projection is published by an hourly schedule, so a consumer
+# that reads one older than this is reading a snapshot whose producer has
+# stopped: it is stale authority, not evidence of readiness.
+LIVE_HEALTH_PROJECTION_MAX_AGE_SECONDS = 3 * 60 * 60
+
+# Tolerance for small clock differences between the publisher and the consumer.
+_CLOCK_SKEW_TOLERANCE_SECONDS = 60
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _REDACTED = "[redacted]"
@@ -299,8 +308,77 @@ def evaluate_live_verification_health(
     return projection
 
 
+def assert_live_health_projection(
+    projection: Mapping[str, Any],
+    *,
+    expected_commit: str,
+    now: datetime | None = None,
+    max_age_seconds: int = LIVE_HEALTH_PROJECTION_MAX_AGE_SECONDS,
+) -> None:
+    """Fail closed unless a live-health projection is *currently* authoritative.
+
+    A projection is a monitoring snapshot, not a permanent verdict.  Consumers
+    must revalidate it at the point of use: a once-ready file otherwise stays
+    accepted forever after its acceptance manifest expires, the protected runner
+    goes offline, or scheduled monitoring stops publishing. This checks the
+    versioned schema, the ready verdict, the deployed commit, the projection's
+    own freshness window, and the acceptance evidence expiry it was derived
+    from.
+    """
+
+    observed_at = now or datetime.now(timezone.utc)
+    if not isinstance(projection, Mapping):
+        raise LiveVerificationHealthError("live-health projection must be an object")
+    if projection.get("schemaVersion") != LIVE_VERIFICATION_HEALTH_VERSION:
+        raise LiveVerificationHealthError(
+            "live-health projection schema is missing or unsupported"
+        )
+    if projection.get("rolloutReady") is not True:
+        raise LiveVerificationHealthError("live-health projection is not rollout ready")
+    if projection.get("deployedCommit") != expected_commit:
+        raise LiveVerificationHealthError(
+            "live-health projection was produced for a different deployed commit"
+        )
+
+    generated_at = _parse_timestamp(
+        projection.get("generatedAt"), field="projection generatedAt"
+    )
+    age_seconds = (observed_at - generated_at).total_seconds()
+    if age_seconds < -_CLOCK_SKEW_TOLERANCE_SECONDS:
+        raise LiveVerificationHealthError("live-health projection is future-dated")
+    if age_seconds > max_age_seconds:
+        raise LiveVerificationHealthError(
+            "live-health projection is older than the freshness policy; scheduled "
+            "monitoring may have stopped publishing"
+        )
+
+    # The projection inherits the acceptance evidence's expiry: once that window
+    # closes the protected tier is no longer proven, however recent the
+    # projection itself is.
+    expires_at_raw = projection.get("acceptanceExpiresAt")
+    if expires_at_raw is None:
+        raise LiveVerificationHealthError(
+            "live-health projection carries no acceptance expiry"
+        )
+    expires_at = _parse_timestamp(
+        expires_at_raw, field="projection acceptanceExpiresAt"
+    )
+    if observed_at >= expires_at:
+        raise LiveVerificationHealthError("acceptance evidence behind the projection expired")
+
+    assert_secret_free(projection)
+
+
 def _redact(text: str) -> str:
-    return SECRET_PATTERN.sub(_REDACTED, text)
+    """Redact the *complete* credential, not just its header or key name.
+
+    Uses the shared canonical redaction so a standard bearer authorization
+    header, a JWT, or a cookie is removed in full before the diagnostics
+    document is published; truncation to ``max_line_length`` happens after
+    redaction so a bounded line can never re-expose a trimmed credential.
+    """
+
+    return redact_secrets(text, placeholder=_REDACTED)
 
 
 def build_safe_failure_diagnostics(
@@ -337,7 +415,7 @@ def build_safe_failure_diagnostics(
     safe_runner_health: dict[str, Any] = {}
     if runner_health is not None:
         for key, value in runner_health.items():
-            if str(key).strip().lower() in {"token", "password", "authorization"}:
+            if str(key).strip().lower() in SESSION_BEARING_KEYS:
                 continue
             safe_runner_health[str(key)] = (
                 _redact(value) if isinstance(value, str) else value

@@ -24,20 +24,11 @@ def _signals(role: str) -> list[dict[str, object]]:
     return [gather.signal(name, True, f"{role} {name}") for name in REQUIRED_CAPABILITIES[role]]
 
 
-def _fake_provider() -> dict[str, object]:
-    return {
-        "terminalState": "converged",
-        "restartAfterHostRemoval": True,
-        "terminalReplayAfterHostRemoval": True,
-    }
-
-
 def test_build_runtime_evidence_marks_secret_scan_passed() -> None:
     evidence = gather.build_runtime_evidence(
         server=_signals("server"),
         worker=_signals("worker"),
         ui=_signals("ui"),
-        fake_provider_execution=_fake_provider(),
     )
     assert evidence["secretScan"]["status"] == "passed"
     assert set(evidence["capabilities"]) == {"server", "worker", "ui"}
@@ -48,7 +39,6 @@ def test_runtime_evidence_feeds_a_passing_gate() -> None:
         server=_signals("server"),
         worker=_signals("worker"),
         ui=_signals("ui"),
-        fake_provider_execution=_fake_provider(),
     )
     report = {
         "sourceCommit": COMMIT,
@@ -58,7 +48,6 @@ def test_runtime_evidence_feeds_a_passing_gate() -> None:
             "ui": f"img@{UI_DIGEST}",
         },
         "capabilities": evidence["capabilities"],
-        "fakeProviderExecution": evidence["fakeProviderExecution"],
         "secretScan": evidence["secretScan"],
     }
     projection = evaluate_exact_artifact_conformance(
@@ -80,5 +69,4 @@ def test_build_runtime_evidence_rejects_secret_material() -> None:
             server=tainted,
             worker=_signals("worker"),
             ui=_signals("ui"),
-            fake_provider_execution=_fake_provider(),
         )

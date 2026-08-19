@@ -1,18 +1,87 @@
 [
-  {"id": 3808959407, "disposition": "addressed", "rationale": "conversions.py CodeQL 'non-iterable for loop': iterate the materialized LOGICAL_OPERATION_ORDER tuple (added in scenario.py) instead of the enum class."},
-  {"id": 3808959417, "disposition": "addressed", "rationale": "Unused _TERMINAL_DECISIONS is now consumed by the strengthened compatibility_safety invariant."},
-  {"id": 3808971137, "disposition": "addressed", "rationale": "P1: image smoke now runs the packaged module 'python -m moonmind.omnigent.faultlab.image_smoke' (ships in the image's moonmind) instead of an uncopied tools/ driver; tools wrapper delegates."},
-  {"id": 3808971140, "disposition": "addressed", "rationale": "P2: compatibility_safety now inspects the journal's per-round effective observation fault and rejects any terminal-recording decision made during an UNKNOWN_VOCAB round; JournalEntry carries the effective fault; detection proven in test_invariant_predicates.py."},
-  {"id": 3808971144, "disposition": "addressed", "rationale": "P2: exported the production merge reducer (mergeObservabilityTimelineRows) and mapEventsToTimelineRows; the browser test now asserts the parse layer preserves the raw frontier and drives the real production dedup/order instead of repairing output with its own helper; added a reconnect-idempotency case. Verified via typecheck, lint, 198 component tests, and the pure merge logic under jsdom."},
-  {"id": 3808971146, "disposition": "addressed", "rationale": "P2: each image-smoke role leg now resolves its real startup module (api->api_service.main, worker->moonmind.workflows.temporal.worker_runtime) in the exact image via find_spec and records the role in the report, so a role-specific stripped dependency fails the smoke rather than running an identical command twice."},
-  {"id": 3808971149, "disposition": "addressed", "rationale": "P1: project_run now preserves the attempt journal and fault disposition (attempts, crash_windows, per-attempt responses, delivered, run-level crashes) so a faulted authority handoff replays as ambiguity; added test_projection.py and a boundary test_control_plane_faultlab.py case replaying a pre-receipt crash-and-resume proving at-most-once."},
-  {"id": 3808971152, "disposition": "addressed", "rationale": "P2: scenario_to_plan now raises UnrepresentableScenarioStepError for any step FaultPlan cannot represent (non-canonical observation steps, submit steps with extra transport disorder); _decode_observation_fault tightened to compare all fault-bearing fields. Covered by test_scenario_format.py."},
-  {"id": 3808971154, "disposition": "addressed", "rationale": "P2: ingest_incident validates the plan violates the *named* invariant and minimizes against an oracle targeting that invariant; unknown invariant names raise. Covered by test_corpus.py."},
-  {"id": 3808971158, "disposition": "addressed", "rationale": "P2: report provenance is now the image's own verified identity (imageRef pinned digest + imageBuildId read from /app/.moonmind-build-id inside the image) instead of the unrelated workflow-checkout github.sha; schema bumped to v2."},
-  {"id": 3808971161, "disposition": "addressed", "rationale": "P2: is_deterministic now compares the complete bounded observable trace (journal incl. crash window/fault, phases, provider requests/side-effects/observations, cleanup effects, crashes, distinct commands, reference final phase, and final durable state) rather than only the reduced decision journal."},
-  {"id": 3808971163, "disposition": "addressed", "rationale": "P2: lease_safety now correlates RELEASE_LEASES decisions with the observation fault active in their round and flags a release performed while a consumer was observed active, not only incomplete cleanup. Detection proven in test_invariant_predicates.py."},
-  {"id": 3808971166, "disposition": "addressed", "rationale": "P2: added explicit fencing-generation authority to the trace (cleanup_effects records the generation each cleanup side effect executed under); cleanup_safety asserts every cleanup effect targeted the authorized (final) generation, rejecting a stale-generation cleanup. Detection proven in test_invariant_predicates.py."},
-  {"id": 3808971170, "disposition": "addressed", "rationale": "P2: the Temporal test now deterministically drives the workflow across the Continue-As-New threshold and proves it via the run chain (>=1 WorkflowExecutionContinuedAsNew event, a successor run, and the successor restoring the preserved session epoch) instead of asserting sessionEpoch >= 1."},
-  {"id": 3808971171, "disposition": "addressed", "rationale": "P2: a failing generated seed now serializes a reproduction-complete secret-safe bundle via the new write_diagnostic_bundle helper into MOONMIND_FAULTLAB_DIAGNOSTICS_DIR (default artifacts/faultlab-generated), and the unit-fast CI job uploads it on failure. Rotating sweep refactored onto the shared helper."},
-  {"id": 4967120959, "disposition": "not-applicable", "rationale": "Informational Codex review summary body; no actionable request."}
+  {
+    "id": 3810002054,
+    "disposition": "addressed",
+    "rationale": "Removed the unnecessary lambda wrapper in tools/omnigent_exact_artifact_probe.py; _probe_import already returns the callable."
+  },
+  {
+    "id": 3810002061,
+    "disposition": "addressed",
+    "rationale": "Dropped the unused Iterable import from moonmind/omnigent/exact_artifact_conformance.py."
+  },
+  {
+    "id": 3810002064,
+    "disposition": "addressed",
+    "rationale": "Dropped the unused Iterable import from moonmind/omnigent/live_verification_health.py."
+  },
+  {
+    "id": 3810006712,
+    "disposition": "addressed",
+    "rationale": "Probe assets now reach the deployable image through an explicit read-only /probe mount with PYTHONPATH=/app, so no test-only asset is baked into the production image and imports still resolve from the artifact under test. The browser controller's Playwright runtime is installed on the CI host and drives the container's hosted origin. Docker runs now use the locally resolvable sha256:<image id> content id, which fixes the 'pull access denied' failure the unpullable repo digest caused."
+  },
+  {
+    "id": 3810006715,
+    "disposition": "addressed",
+    "rationale": "The exact-artifact job now starts temporalio/auto-setup (the same image and configuration canonical Compose uses) on the job's PostgreSQL and waits for 127.0.0.1:7233; the worker probe requires an explicit --temporal-address and passes TEMPORAL_ADDRESS plus the POSTGRES_* settings the image actually reads."
+  },
+  {
+    "id": 3810006717,
+    "disposition": "addressed",
+    "rationale": "Each migration scenario now runs against its own freshly created database (reset_database drops and recreates moonmind_exact_artifact_clean / _prior), and the prior-schema case materializes the real revision preceding head via 'alembic show head' and then upgrades, instead of stamping base over an already-migrated schema."
+  },
+  {
+    "id": 3810006720,
+    "disposition": "addressed",
+    "rationale": "The fabricated booleans are gone: the fake-provider probe and the fakeProviderExecution gate section were removed rather than kept on an unrelated exit status. In their place the server probe performs a real bounded execution boundary it can observe -- docker restart of the deployable container against the schema it just migrated, requiring liveness again -- surfaced as the new required capability api_restart_against_existing_schema. Restart/terminal replay after fake-host removal is now explicitly documented as owned by the reliability-journey and embedded-recovery gates that actually exercise it, which the Omnigent contract gate selects on the same commit."
+  },
+  {
+    "id": 3810006726,
+    "disposition": "addressed",
+    "rationale": "assemble_omnigent_live_status now retrieves the acceptance manifest published by the newest passing live-conformance run (select_manifest_artifact + gh run download) before evaluation, with an explicit --manifest override; a genuine absence still yields None so the projection stays fail-closed."
+  },
+  {
+    "id": 3810006731,
+    "disposition": "addressed",
+    "rationale": "Added the canonical redact_secrets in moonmind/omnigent/conformance.py whose patterns span the complete credential -- the whole session-bearing header value to end of line, JWTs, cookies, bare Bearer/Basic credentials, and token bodies after known prefixes -- so redaction is no longer a header-name-only strip. Redaction runs before line truncation, assert_secret_free now also rejects the wider set of credential-bearing keys, and tests assert the published logTail passes an independent secret scan."
+  },
+  {
+    "id": 3810006732,
+    "disposition": "addressed",
+    "rationale": "Added the real production API command api_service/entrypoint.sh to EXACT_ARTIFACT_EXACT, replaced the nonexistent api_service/docker/entrypoint.sh in the selector test with real repository paths, and added a guard test asserting every exact-path inventory entry exists so a typo cannot mask a coverage gap again. Also removed the nonexistent uv.lock entry and the compose entries the globs already cover."
+  },
+  {
+    "id": 3810006739,
+    "disposition": "addressed",
+    "rationale": "Compose now bind-mounts ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence} read-only at /workspace/omnigent-evidence and defaults all three evidence refs to files inside it, so the default deployment consumes real evidence with no per-file configuration. tools/materialize_omnigent_evidence.py is the automatic materialization path: it copies the newest unexpired document published for the deployed commit into that directory, refusing evidence for another commit. Compose defaults and the mount are pinned by test_compose_foundation."
+  },
+  {
+    "id": 3810006744,
+    "disposition": "addressed",
+    "rationale": "Added assert_live_health_projection and used it at the catalog consumption boundary: it validates the versioned schema, the ready verdict, the deployed commit, the projection's own age against the hourly publication cadence, and the acceptance expiry it inherits. Tests cover expired acceptance windows, a stalled publisher, and a foreign schema."
+  },
+  {
+    "id": 3810006749,
+    "disposition": "addressed",
+    "rationale": "Both migration commands now pass the repository's explicit configuration (-c api_service/migrations/alembic.ini), matching the alembic-migration-gate invocation, and run with -w /app so script_location resolves."
+  },
+  {
+    "id": 3810006755,
+    "disposition": "addressed",
+    "rationale": "The server and UI probes share one container lifetime: _probe_server_and_ui starts the API container, probes routes, runs the browser capture against that live hosted origin, then performs the restart probe before teardown. A test asserts the capture happens between container start and removal, and that the UI signals fail closed when the API never starts."
+  },
+  {
+    "id": 3810006759,
+    "disposition": "addressed",
+    "rationale": "The hosted capture no longer counts any same-origin request. It now requires three concrete facts: a request under the image's compiled-bundle mount /static/workflow_console/dist/, a parseable #moonmind-ui-boot payload, and rendered content in #dashboard-app-root. A hermetic contract test pins each selector and the bundle prefix to the real template and static mount."
+  },
+  {
+    "id": 3810006765,
+    "disposition": "addressed",
+    "rationale": "aggregate_provider_runner_fleet replaces first-match selection: the tier is online when at least one labeled runner is online, and busy only when no online runner is idle, with matching/online/idle counts reported. Tests cover an offline runner ordered ahead of an online one and mixed busy/idle fleets."
+  },
+  {
+    "id": 4968365371,
+    "disposition": "not-applicable",
+    "rationale": "Codex review summary body with no actionable request of its own; every inline finding it introduced is dispositioned above."
+  }
 ]

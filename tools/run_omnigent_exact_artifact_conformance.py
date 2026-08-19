@@ -12,11 +12,11 @@ digest**:
   deployed process retains the required import/introspection capabilities (for
   example the Uvicorn WebSocket implementation dropped in #3697);
 * it merges those results with the *runtime* evidence gathered by the
-  surrounding workflow steps (HTTP/SSE/WebSocket route handshakes, database
-  migrations against a clean PostgreSQL, worker task-queue/readiness
-  advertisement, the compiled native-UI hosted-bootstrap / no-root-``/v1``
-  network capture, and a bounded fake-provider execution + restart/terminal
-  replay after the fake host is removed); and
+  surrounding workflow steps (HTTP/SSE/WebSocket route handshakes, clean and
+  materialized-prior-revision database migrations, an entrypoint restart
+  against the migrated schema, worker task-queue/readiness advertisement
+  against a real Temporal server, and the compiled native-UI hosted-boot /
+  no-root-``/v1`` network capture); and
 * it feeds the assembled report to
   :func:`moonmind.omnigent.exact_artifact_conformance.evaluate_exact_artifact_conformance`,
   which is the authoritative fail-closed decision, then writes the retained
@@ -52,6 +52,14 @@ from moonmind.omnigent.exact_artifact_conformance import (  # noqa: E402
 IN_IMAGE_PROBE = "tools/omnigent_exact_artifact_probe.py"
 IN_IMAGE_ROLES = ("server", "worker")
 
+# The probe harness is supplied to the deployable image through an explicit
+# read-only mount rather than being copied into the production image, which
+# keeps the deployable artifact free of test-only assets.  ``PYTHONPATH`` points
+# at the image's own application root only, so every import the probe resolves
+# comes from the artifact under test and never from the mount.
+PROBE_MOUNT = "/probe"
+APP_ROOT = "/app"
+
 
 class DriverError(RuntimeError):
     """Raised when the exact-artifact driver cannot produce a verdict."""
@@ -66,20 +74,40 @@ def _require_docker() -> None:
         )
 
 
+def in_image_probe_command(image: str, role: str) -> list[str]:
+    """Build the ``docker run`` command for the in-image capability probe.
+
+    ``image`` must be locally resolvable.  A locally built image has no registry
+    repo digest, so ``name@sha256:<image id>`` is unpullable and Docker would try
+    to reach a registry; the caller therefore passes the ``sha256:<image id>``
+    content id, which is both immutable and locally resolvable.
+    """
+
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        "host",
+        "-w",
+        APP_ROOT,
+        "-e",
+        f"PYTHONPATH={APP_ROOT}",
+        "-v",
+        f"{REPO_ROOT}:{PROBE_MOUNT}:ro",
+        "--entrypoint",
+        "python",
+        image,
+        f"{PROBE_MOUNT}/{IN_IMAGE_PROBE}",
+        "--role",
+        role,
+    ]
+
+
 def run_in_image_probe(image: str, role: str) -> list[dict[str, Any]]:
-    """Run the in-image capability probe inside the exact image by digest."""
+    """Run the in-image capability probe inside the exact image."""
     completed = subprocess.run(
-        [
-            "docker",
-            "run",
-            "--rm",
-            "--entrypoint",
-            "python",
-            image,
-            IN_IMAGE_PROBE,
-            "--role",
-            role,
-        ],
+        in_image_probe_command(image, role),
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
@@ -130,8 +158,8 @@ def assemble_report(
     """Assemble the exact-artifact report from probe + runtime evidence.
 
     ``runtime_evidence`` is the JSON gathered by the surrounding workflow's
-    Docker/Compose steps: ``capabilities`` (per-role runtime signals),
-    ``fakeProviderExecution``, and ``secretScan``.
+    Docker/Compose steps: ``capabilities`` (per-role runtime signals) and
+    ``secretScan``.
     """
     runtime_caps = runtime_evidence.get("capabilities") or {}
     if not isinstance(runtime_caps, Mapping):
@@ -140,7 +168,6 @@ def assemble_report(
         "sourceCommit": source_commit,
         "images": dict(images),
         "capabilities": _merge_capabilities(in_image_probes, runtime_caps),
-        "fakeProviderExecution": runtime_evidence.get("fakeProviderExecution"),
         "secretScan": runtime_evidence.get("secretScan") or {"status": "unknown"},
     }
 
@@ -171,6 +198,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--server-image", required=True)
     parser.add_argument("--worker-image", required=True)
     parser.add_argument("--ui-image", required=True)
+    parser.add_argument(
+        "--runnable-image",
+        required=True,
+        help="Locally resolvable reference to the same immutable artifact used "
+        "for the docker runs — the 'sha256:<image id>' content id for a locally "
+        "built image, which no registry can resolve by repo digest.",
+    )
     parser.add_argument("--source-commit", required=True)
     parser.add_argument(
         "--runtime-evidence",
@@ -202,7 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         _require_docker()
         in_image_probes = {
-            role: run_in_image_probe(images[role], role) for role in IN_IMAGE_ROLES
+            role: run_in_image_probe(args.runnable_image, role)
+            for role in IN_IMAGE_ROLES
         }
         runtime_evidence = json.loads(args.runtime_evidence.read_text(encoding="utf-8"))
         if not isinstance(runtime_evidence, Mapping):

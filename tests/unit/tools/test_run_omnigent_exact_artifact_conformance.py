@@ -42,7 +42,7 @@ def test_require_docker_fails_loud_when_missing(monkeypatch) -> None:
 
 def test_assemble_report_merges_runtime_over_in_image() -> None:
     # In-image probe reports the import-level subset only; runtime evidence
-    # supplies the entrypoint/route/migration/fake-provider capabilities.
+    # supplies the entrypoint/route/migration/restart capabilities.
     in_image = {
         "server": [
             {"name": "uvicorn_websocket_impl", "ok": True, "detail": "impl present"},
@@ -54,11 +54,6 @@ def test_assemble_report_merges_runtime_over_in_image() -> None:
     }
     runtime_evidence = {
         "capabilities": {role: _signals(role) for role in REQUIRED_CAPABILITIES},
-        "fakeProviderExecution": {
-            "terminalState": "converged",
-            "restartAfterHostRemoval": True,
-            "terminalReplayAfterHostRemoval": True,
-        },
         "secretScan": {"status": "passed"},
     }
     report = driver.assemble_report(
@@ -97,3 +92,31 @@ def test_load_required_digests_reads_manifest(tmp_path) -> None:
     )
     digests = driver.load_required_digests(manifest, IMAGES)
     assert digests["server"] == SERVER_DIGEST
+
+
+def test_assembled_report_carries_no_unexercised_provider_execution() -> None:
+    """The driver runs no provider execution, so it records none."""
+    report = driver.assemble_report(
+        images=IMAGES,
+        source_commit=COMMIT,
+        in_image_probes={},
+        runtime_evidence={
+            "capabilities": {role: _signals(role) for role in REQUIRED_CAPABILITIES},
+            "secretScan": {"status": "passed"},
+            # Even if an upstream document carried one, the driver must not
+            # promote an unexercised claim into the gate's report.
+            "fakeProviderExecution": {"terminalState": "converged"},
+        },
+    )
+
+    assert "fakeProviderExecution" not in report
+
+
+def test_in_image_probe_runs_the_locally_resolvable_content_id() -> None:
+    """A locally loaded image has no repo digest, so `name@sha256:` is unpullable."""
+    runnable = "sha256:" + "a" * 64
+    command = driver.in_image_probe_command(runnable, "worker")
+
+    assert command[:3] == ["docker", "run", "--rm"]
+    assert command[command.index(runnable) - 1] == "python"
+    assert command[-2:] == ["--role", "worker"]

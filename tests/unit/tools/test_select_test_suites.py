@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tools import select_test_suites
@@ -9,6 +11,8 @@ from tools.select_test_suites import (
     is_omnigent_contract_owned,
     select_suites,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _outputs(paths: list[str], **kwargs) -> dict[str, str]:
@@ -405,15 +409,15 @@ def test_docs_only_change_never_selects_omnigent_gate() -> None:
         # Dependency and lockfile changes must always select the gate.
         "package-lock.json",
         "package.json",
-        "uv.lock",
         "poetry.lock",
+        "pyproject.toml",
         # Dockerfiles, Compose, startup scripts, and runtime entrypoints.
         "api_service/Dockerfile",
-        "frontend/Dockerfile",
         "docker-compose.test.yaml",
         "docker-compose.yaml",
-        "api_service/docker/entrypoint.sh",
-        "docker/worker/start.sh",
+        # The production API command installed as the image CMD.
+        "api_service/entrypoint.sh",
+        "api_service/docker/moonmind-docker-wrapper.sh",
         "tools/start-worker.sh",
         # The exact-artifact gate implementation itself.
         "moonmind/omnigent/exact_artifact_conformance.py",
@@ -422,8 +426,28 @@ def test_docs_only_change_never_selects_omnigent_gate() -> None:
     ],
 )
 def test_deployable_artifact_change_selects_exact_artifact(changed_path: str) -> None:
+    # Every parametrized path is a real repository path, so a typo cannot mask a
+    # missing inventory entry (the ``api_service/docker/entrypoint.sh`` gap).
+    assert (REPO_ROOT / changed_path).exists(), changed_path
     assert is_exact_artifact_owned(changed_path), changed_path
     assert _outputs([changed_path])["exact_artifact"] == "true", changed_path
+
+
+@pytest.mark.parametrize(
+    "inventory_name",
+    ["EXACT_ARTIFACT_EXACT", "OMNIGENT_CONTRACT_EXACT", "OMNIGENT_FACADE_EXACT"],
+)
+def test_exact_path_inventories_reference_real_repository_paths(
+    inventory_name: str,
+) -> None:
+    """An exact-path inventory entry that does not exist owns nothing.
+
+    Prefix and glob rules may legitimately anticipate future files, but an
+    exact path is only useful if it is the path the repository actually uses.
+    """
+    inventory = getattr(select_test_suites, inventory_name)
+    missing = sorted(path for path in inventory if not (REPO_ROOT / path).exists())
+    assert not missing, f"{inventory_name} references nonexistent paths: {missing}"
 
 
 def test_omnigent_owned_change_selects_exact_artifact() -> None:

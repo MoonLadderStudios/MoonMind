@@ -738,10 +738,32 @@ def _write_exact_artifact_evidence(tmp_path, *, commit=_EXACT_COMMIT, verdict="p
     return path
 
 
-def _write_live_projection(tmp_path, *, commit=_EXACT_COMMIT, ready=True):
-    path = tmp_path / "live-projection.json"
+def _write_live_projection(
+    tmp_path,
+    *,
+    commit=_EXACT_COMMIT,
+    ready=True,
+    generated_ago=timedelta(minutes=5),
+    expires_in=timedelta(days=20),
+    schema_version=None,
+    filename="live-projection.json",
+):
+    from moonmind.omnigent.live_verification_health import (
+        LIVE_VERIFICATION_HEALTH_VERSION,
+    )
+
+    now = datetime.now(UTC)
+    path = tmp_path / filename
     path.write_text(
-        json.dumps({"rolloutReady": ready, "deployedCommit": commit}),
+        json.dumps(
+            {
+                "schemaVersion": schema_version or LIVE_VERIFICATION_HEALTH_VERSION,
+                "rolloutReady": ready,
+                "deployedCommit": commit,
+                "generatedAt": (now - generated_ago).isoformat(),
+                "acceptanceExpiresAt": (now + expires_in).isoformat(),
+            }
+        ),
         encoding="utf-8",
     )
     return path
@@ -825,3 +847,54 @@ def test_support_reasons_canary_bypasses_all_support_evidence(monkeypatch, tmp_p
     monkeypatch.delenv("MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE", raising=False)
     monkeypatch.delenv("MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION", raising=False)
     assert catalog._support_reasons(acceptance_canary=True) == []
+
+
+def test_support_reasons_flag_expired_acceptance_window(monkeypatch, tmp_path):
+    """A once-ready projection stops being accepted when its manifest expires."""
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION",
+        str(
+            _write_live_projection(
+                tmp_path,
+                expires_in=-timedelta(minutes=1),
+                filename="expired-projection.json",
+            )
+        ),
+    )
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "live_verification_stale" in codes
+
+
+def test_support_reasons_flag_projection_whose_publisher_stopped(monkeypatch, tmp_path):
+    """Scheduled monitoring stopping must not leave a stale ready verdict."""
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION",
+        str(
+            _write_live_projection(
+                tmp_path,
+                generated_ago=timedelta(days=2),
+                filename="stale-projection.json",
+            )
+        ),
+    )
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "live_verification_stale" in codes
+
+
+def test_support_reasons_flag_unversioned_projection(monkeypatch, tmp_path):
+    """An unversioned or foreign-schema document is not authoritative."""
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION",
+        str(
+            _write_live_projection(
+                tmp_path,
+                schema_version="something.else/v9",
+                filename="unversioned-projection.json",
+            )
+        ),
+    )
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "live_verification_stale" in codes

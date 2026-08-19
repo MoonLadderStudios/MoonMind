@@ -45,11 +45,6 @@ def _passing_report(**overrides) -> dict[str, object]:
             "ui": f"ghcr.io/moonladderstudios/moonmind-ui@{UI_DIGEST}",
         },
         "capabilities": {role: _capabilities(role) for role in REQUIRED_CAPABILITIES},
-        "fakeProviderExecution": {
-            "terminalState": "converged",
-            "restartAfterHostRemoval": True,
-            "terminalReplayAfterHostRemoval": True,
-        },
         "secretScan": {"status": "passed"},
     }
     report.update(overrides)
@@ -123,41 +118,42 @@ def test_unknown_required_digest_fails_closed() -> None:
     )
 
 
-def test_fake_provider_not_converged_fails_closed() -> None:
+def test_failed_entrypoint_restart_fails_closed() -> None:
+    """A deployable process that cannot restart against its own schema fails."""
     report = _passing_report()
-    report["fakeProviderExecution"]["terminalState"] = "running"
+    for entry in report["capabilities"]["server"]:
+        if entry["name"] == "api_restart_against_existing_schema":
+            entry["ok"] = False
+            entry["detail"] = "entrypoint did not become healthy again"
     projection = evaluate_exact_artifact_conformance(
         report, required_digests=REQUIRED_DIGESTS
     )
     assert projection["verdict"] == "failed"
     assert any(
-        failure["code"] == "fake_provider_not_converged"
+        failure["code"] == "failed_capability:server:api_restart_against_existing_schema"
         for failure in projection["failures"]
     )
 
 
-def test_missing_restart_replay_fails_closed() -> None:
+def test_gate_does_not_assert_unexercised_provider_execution() -> None:
+    """The Tier-1 gate must not claim a boundary its driver never crosses.
+
+    This driver runs no provider execution, so restart/terminal replay after a
+    fake host is removed is owned by the reliability-journey and
+    embedded-recovery gates. Requiring it here could only be satisfied by
+    reusing an unrelated exit status, which is fabricated evidence.
+    """
+    required = {name for names in REQUIRED_CAPABILITIES.values() for name in names}
+    assert "restart_after_host_removal" not in required
+    assert "terminal_replay_after_host_removal" not in required
+    # A report that carries no provider-execution section still passes, because
+    # the gate never asserted one.
     report = _passing_report()
-    report["fakeProviderExecution"]["terminalReplayAfterHostRemoval"] = False
-    report["fakeProviderExecution"]["restartAfterHostRemoval"] = False
+    assert "fakeProviderExecution" not in report
     projection = evaluate_exact_artifact_conformance(
         report, required_digests=REQUIRED_DIGESTS
     )
-    codes = {failure["code"] for failure in projection["failures"]}
-    assert "restart_after_host_removal_failed" in codes
-    assert "terminal_replay_after_host_removal_failed" in codes
-
-
-def test_missing_fake_provider_execution_fails_closed() -> None:
-    report = _passing_report()
-    del report["fakeProviderExecution"]
-    projection = evaluate_exact_artifact_conformance(
-        report, required_digests=REQUIRED_DIGESTS
-    )
-    assert any(
-        failure["code"] == "fake_provider_execution_missing"
-        for failure in projection["failures"]
-    )
+    assert projection["verdict"] == "passed"
 
 
 def test_secret_scan_not_passed_fails_closed() -> None:

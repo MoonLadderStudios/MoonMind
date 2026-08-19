@@ -248,15 +248,15 @@ OMNIGENT_FACADE_PREFIXES = ("frontend/src/features/workflow-native-chat/",)
 EXACT_ARTIFACT_EXACT = {
     # Dependency and lockfile changes must always select this gate.
     "pyproject.toml",
-    "uv.lock",
     "poetry.lock",
     "package.json",
     "package-lock.json",
-    # Compose, startup scripts, and runtime entrypoints.
-    "docker-compose.yaml",
-    "docker-compose.yml",
-    "docker-compose.test.yaml",
+    # Startup scripts and runtime entrypoints.  ``api_service/entrypoint.sh``
+    # is the production API command installed as the image ``CMD``, so a change
+    # to how Uvicorn is launched must always select this gate.  Compose files
+    # are covered by the ``docker-compose*`` globs below.
     ".env-template",
+    "api_service/entrypoint.sh",
     "tools/start-worker.sh",
     # The exact-artifact gate implementation itself.
     "moonmind/omnigent/exact_artifact_conformance.py",

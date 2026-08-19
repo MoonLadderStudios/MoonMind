@@ -165,19 +165,45 @@ where the protected tier is required.
 - **Tier 1 — required noncredentialed exact-artifact conformance.** The
   `omnigent-exact-artifact` job in `.github/workflows/pytest-unit-tests.yml`
   runs for every affected PR on standard Docker-enabled merge infrastructure
-  with no protected credentials. It builds the exact deployable image, tests it
-  by immutable digest through its real entrypoints — the in-image capability
-  probe (`tools/omnigent_exact_artifact_probe.py`, which proves Uvicorn resolves
-  an installed WebSocket implementation so a #3697-style drop fails closed),
-  HTTP/SSE/WebSocket route handshakes, clean and prior-schema PostgreSQL
-  migrations, worker task-queue/readiness advertisement, and the compiled
-  native UI consuming the hosted bootstrap with no root `/v1/*` traffic — and
-  drives a bounded fake-provider execution plus restart/terminal replay after
-  the fake host is removed. `tools/run_omnigent_exact_artifact_conformance.py`
-  is the authoritative fail-closed decision
-  (`moonmind.omnigent.exact_artifact_conformance`). Dependency and lockfile
-  changes always select this gate, and the `ci-required` aggregator fails when
-  it is selected but skipped, cancelled, or neutral.
+  with no protected credentials. It builds the exact deployable image and tests
+  that immutable artifact through its real entrypoints:
+  - the in-image capability probe (`tools/omnigent_exact_artifact_probe.py`,
+    which proves Uvicorn resolves an installed WebSocket implementation so a
+    #3697-style drop fails closed);
+  - HTTP/SSE/WebSocket route handshakes against the running container, where a
+    fall-through 404 fails the gate;
+  - clean and prior-schema PostgreSQL migrations, each against its **own**
+    freshly created database, invoked with the repository's explicit
+    `api_service/migrations/alembic.ini`; the prior-schema case materializes the
+    revision preceding head and then upgrades, which is what a deployment onto
+    an existing database does;
+  - a restart of the deployable process against the schema it just migrated;
+  - worker task-queue and readiness advertisement against a real Temporal
+    server, which the worker must connect to before it can report ready; and
+  - a browser capture proving the compiled native UI baked into the image is
+    fetched from the deployable origin, renders from its injected boot payload,
+    and issues no root `/v1/*` or cross-origin upstream request.
+
+  The image is referenced by its immutable content id for every `docker run`
+  (a locally built image has no registry repo digest, so `name@sha256:<id>` is
+  unpullable), and probe assets reach the container through an explicit
+  read-only `/probe` mount with `PYTHONPATH=/app`, so the deployable image
+  carries no test-only assets and the mount never shadows the artifact under
+  test. The browser controller's Playwright runtime lives on the CI host for the
+  same reason.
+
+  **Not asserted by Tier 1:** restart and terminal replay *after a fake provider
+  host is removed*. This job runs no provider execution, so claiming that
+  boundary would mean deriving it from an unrelated exit status. It is owned by
+  the reliability-journey and embedded-recovery gates, which the Omnigent
+  contract gate selects on the same commit.
+
+  `tools/run_omnigent_exact_artifact_conformance.py` is the authoritative
+  fail-closed decision (`moonmind.omnigent.exact_artifact_conformance`).
+  Dependency, lockfile, Dockerfile, Compose, and runtime-entrypoint changes
+  (including `api_service/entrypoint.sh`, the image `CMD`) always select this
+  gate, and the `ci-required` aggregator fails when it is selected but skipped,
+  cancelled, or neutral.
 - **Tier 2 — credentialed protected provider canary.** The credentialed
   publication gate below, run on the dedicated
   `omnigent-provider-verification` runner.
@@ -191,6 +217,44 @@ where the protected tier is required.
 `protectedTierReady` from non-secret runner/queue/freshness/matrix signals; the
 publication/readiness support gate reuses `rolloutReady` so a Tier-4 outage
 fails rollout closed while leaving Tier 1 protecting PRs.
+
+`tools/assemble_omnigent_live_status.py` retrieves the acceptance manifest
+published by the newest passing live-conformance run before evaluation, so
+freshness and digest signals reflect real published evidence rather than a
+permanently absent manifest. Runner health is aggregated across the whole
+provider-verification fleet: the tier is online when at least one labeled runner
+is online, and busy only when no online runner is idle.
+
+### Deployed release-support evidence
+
+The Omnigent catalog reports release support from three published documents:
+the #3508 acceptance manifest, the Tier-1 exact-artifact projection, and the
+protected-live readiness projection. Compose bind-mounts
+`${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}` read-only at
+`/workspace/omnigent-evidence` and defaults all three refs to files inside it,
+so the default deployment needs no per-file configuration. Populate it with:
+
+```bash
+python tools/materialize_omnigent_evidence.py --commit "$DEPLOYED_COMMIT"
+```
+
+which copies the newest unexpired document *published for that commit* into the
+mounted directory. Evidence for another commit, an expired artifact, or a
+missing document is never written, so the catalog keeps its fail-closed support
+reason instead of reading stale authority.
+
+Freshness is revalidated at **consumption**, not only at publication:
+`assert_live_health_projection` checks the versioned schema, the ready verdict,
+the deployed commit, the projection's own age against the hourly publication
+cadence, and the acceptance expiry it inherits. A once-ready file therefore stops
+being accepted when its manifest expires, the protected runner goes offline, or
+scheduled monitoring stops publishing.
+
+Retained failure evidence is redacted through the canonical
+`moonmind.omnigent.conformance.redact_secrets`, whose patterns span the complete
+credential — the whole session-bearing header value, JWTs, cookies, and token
+bodies — so a bounded `logTail` cannot publish a credential that survived a
+header-name-only substitution.
 
 ## Credentialed CI publication
 

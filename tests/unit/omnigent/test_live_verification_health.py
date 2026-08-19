@@ -263,3 +263,165 @@ def test_safe_failure_diagnostics_requires_core_fields() -> None:
             setup_stage="setup",
             failure_summary="   ",
         )
+
+
+# --- Complete credential redaction -------------------------------------------
+
+
+def test_bearer_authorization_header_is_redacted_in_full() -> None:
+    """Redaction must remove the credential, not just the header name.
+
+    A pattern that stops at the first separator leaves the token after the
+    whitespace verbatim in the published ``logTail`` while the document still
+    claims ``secretScan.status == "passed"``, converting withheld failure output
+    into a credential leak.
+    """
+    secret = "sk-live-9f8e7d6c5b4a39281706"
+    diagnostics = build_safe_failure_diagnostics(
+        mode="product",
+        outcome="failure",
+        setup_stage="host_registration",
+        failure_summary="request rejected",
+        log_tail=[f"GET /v1/hosts Authorization: Bearer {secret}"],
+        now=NOW,
+    )
+
+    joined = "\n".join(diagnostics["logTail"])
+    assert secret not in joined
+    assert "Bearer" not in joined
+    assert diagnostics["secretScan"]["status"] == "passed"
+    # The published document must independently pass secret scanning.
+    from moonmind.omnigent.conformance import assert_secret_free
+
+    assert_secret_free(diagnostics)
+
+
+@pytest.mark.parametrize(
+    "line, secret",
+    [
+        (
+            "set-cookie: session=8d2f4c9ab13e5f70; Path=/; HttpOnly",
+            "8d2f4c9ab13e5f70",
+        ),
+        (
+            "cookie: mm_session=41f0e9cbd7a2; theme=dark",
+            "41f0e9cbd7a2",
+        ),
+        (
+            "assertion eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jV",
+            "dozjgNryP4J3jV",
+        ),
+        (
+            "x-api-key: 7c1d9e0fa5b34826",
+            "7c1d9e0fa5b34826",
+        ),
+        (
+            "proxy-authorization: Basic bW9vbjptaW5kMTIzNA==",
+            "bW9vbjptaW5kMTIzNA==",
+        ),
+    ],
+)
+def test_session_bearing_material_is_redacted(line: str, secret: str) -> None:
+    diagnostics = build_safe_failure_diagnostics(
+        mode="browser",
+        outcome="failure",
+        setup_stage="browser_capture",
+        failure_summary="capture failed",
+        log_tail=[line],
+        now=NOW,
+    )
+
+    assert secret not in "\n".join(diagnostics["logTail"])
+
+
+def test_line_truncation_cannot_reexpose_a_trimmed_credential() -> None:
+    """Redaction happens before bounding, so a long line stays safe."""
+    secret = "ghp_" + "0123456789abcdef" * 2
+    diagnostics = build_safe_failure_diagnostics(
+        mode="product",
+        outcome="failure",
+        setup_stage="host_registration",
+        failure_summary="failed",
+        log_tail=["x" * 480 + " " + secret],
+        max_line_length=520,
+        now=NOW,
+    )
+
+    assert secret not in "\n".join(diagnostics["logTail"])
+
+
+def test_runner_health_drops_session_bearing_keys() -> None:
+    diagnostics = build_safe_failure_diagnostics(
+        mode="product",
+        outcome="failure",
+        setup_stage="host_registration",
+        failure_summary="failed",
+        runner_health={
+            "status": "online",
+            "Cookie": "session=abcd1234efgh",
+            "authorization": "Bearer nope1234nope",
+        },
+        now=NOW,
+    )
+
+    assert diagnostics["runnerHealth"] == {"status": "online"}
+
+
+# --- Projection freshness revalidation at consumption ------------------------
+
+
+def _projection(**overrides):
+    projection = _evaluate()
+    projection.update(overrides)
+    return projection
+
+
+def test_assert_live_health_projection_accepts_a_current_ready_projection() -> None:
+    from moonmind.omnigent.live_verification_health import (
+        assert_live_health_projection,
+    )
+
+    assert_live_health_projection(_projection(), expected_commit=COMMIT, now=NOW)
+
+
+def test_assert_live_health_projection_rejects_expired_acceptance_window() -> None:
+    from moonmind.omnigent.live_verification_health import (
+        assert_live_health_projection,
+    )
+
+    projection = _projection()
+    with pytest.raises(LiveVerificationHealthError):
+        assert_live_health_projection(
+            projection, expected_commit=COMMIT, now=NOW + timedelta(days=30)
+        )
+
+
+def test_assert_live_health_projection_rejects_a_stalled_publisher() -> None:
+    from moonmind.omnigent.live_verification_health import (
+        assert_live_health_projection,
+    )
+
+    projection = _projection()
+    with pytest.raises(LiveVerificationHealthError):
+        assert_live_health_projection(
+            projection, expected_commit=COMMIT, now=NOW + timedelta(hours=6)
+        )
+
+
+def test_assert_live_health_projection_rejects_foreign_schema_and_commit() -> None:
+    from moonmind.omnigent.live_verification_health import (
+        assert_live_health_projection,
+    )
+
+    with pytest.raises(LiveVerificationHealthError):
+        assert_live_health_projection(
+            _projection(schemaVersion="other/v1"), expected_commit=COMMIT, now=NOW
+        )
+    with pytest.raises(LiveVerificationHealthError):
+        assert_live_health_projection(
+            _projection(), expected_commit="different", now=NOW
+        )
+    with pytest.raises(LiveVerificationHealthError):
+        assert_live_health_projection(
+            _projection(rolloutReady=False), expected_commit=COMMIT, now=NOW
+        )

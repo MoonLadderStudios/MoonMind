@@ -99,7 +99,7 @@ def probe_docker_or_compose() -> dict[str, object]:
 # Runtime-only capabilities (route handshakes, migrations, worker task-queue /
 # readiness advertisement, fake-provider convergence) are added by the driver.
 _SERVER_PROBES: tuple[Callable[[], dict[str, object]], ...] = (
-    lambda: _probe_import("api_entrypoint_import", "api_service.main")(),
+    _probe_import("api_entrypoint_import", "api_service.main"),
     probe_uvicorn_websocket,
     _probe_import("omnigent_adapters_import", "moonmind.omnigent.execute"),
     _probe_import("opentelemetry_init", "opentelemetry"),
