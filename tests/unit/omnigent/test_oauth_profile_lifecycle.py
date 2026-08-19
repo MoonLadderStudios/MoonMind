@@ -50,6 +50,7 @@ from moonmind.omnigent.execution_profiles import (
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.oauth_hosts import (
+    HOST_CLEANUP_CLAIMED_ERROR_CODE,
     HOST_PROFILE_BUSY_ERROR_CODE,
     OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
@@ -1088,15 +1089,44 @@ def test_runtime_script_snapshot_materializes_owned_step_identity(tmp_path) -> N
         f"export MOONMIND_AGENT_RUN_ID='{execution_id}'\n"
         "export MOONMIND_TASK_WORKFLOW_ID='workflow-1'\n"
         "export MOONMIND_RUNTIME_ID='codex_cli'\n"
+        "export MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE="
+        "'/opt/moonmind/capabilities/container-jobs'\n"
+        "export MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE="
+        "'/opt/moonmind/capabilities/execution-fanout'\n"
     )
     assert "must-not-be-persisted" not in profile.read_text(encoding="utf-8")
-    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in profile.read_text(
+    assert "export MOONMIND_CONTAINER_JOBS_BEARER_TOKEN=" not in profile.read_text(
         encoding="utf-8"
     )
-    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in profile.read_text(
+    assert "export MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=" not in profile.read_text(
         encoding="utf-8"
     )
+    assert (target / "capabilities" / "container-jobs").read_text(
+        encoding="utf-8"
+    ) == "must-not-be-persisted\n"
+    assert (target / "capabilities" / "execution-fanout").read_text(
+        encoding="utf-8"
+    ) == "also-must-not-be-persisted\n"
     assert profile.stat().st_mode & 0o777 == 0o444
+    retried = runtime._prepare_runtime_scripts(
+        "workspace-key",
+        current_step_execution_id=execution_id,
+        runtime_environment={
+            "MOONMIND_URL": "http://api:8000",
+            "MOONMIND_AGENT_RUN_ID": execution_id,
+            "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
+            "MOONMIND_RUNTIME_ID": "codex_cli",
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "retry-container-capability",
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "retry-fanout-capability",
+        },
+    )
+    assert retried == target
+    assert (target / "capabilities" / "container-jobs").read_text(
+        encoding="utf-8"
+    ) == "retry-container-capability\n"
+    assert (target / "capabilities" / "execution-fanout").read_text(
+        encoding="utf-8"
+    ) == "retry-fanout-capability\n"
     with pytest.raises(OmnigentOAuthHostError) as mismatch:
         runtime._prepare_runtime_scripts(
             "workspace-key",
@@ -1422,8 +1452,8 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     assert runtime_profile_environment["MOONMIND_URL"] == "http://api:8000"
     assert runtime_profile_environment["MOONMIND_TASK_WORKFLOW_ID"] == "workflow-1"
     assert runtime_profile_environment["MOONMIND_AGENT_RUN_ID"] == "step-1"
-    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in runtime_profile_environment
-    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in runtime_profile_environment
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in runtime_profile_environment
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in runtime_profile_environment
     assert state["launches"] == 1
     assert state["manifest_checks"] == 2
 
@@ -1460,6 +1490,36 @@ async def test_daemon_workspace_root_uses_selected_daemon_volume_mountpoint(
         "agent_workspaces",
         check=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_static_host_rejects_execution_fanout_before_materialization(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace(), workspace_root=tmp_path)
+    runtime._prepare_skill_projection = AsyncMock()  # type: ignore[method-assign]
+    runtime._attest_egress = AsyncMock()  # type: ignore[method-assign]
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-static@1",
+        provider_profile_id="codex",
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime.prepare_host(
+            binding=_binding(),
+            host_lease=_host_lease(),
+            workspace_key="workspace-1",
+            workspace_locator={"kind": "sandbox", "workspaceId": "sandbox-1"},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            required_capabilities=("execution.fanout",),
+            effective_launch=launch,
+        )
+
+    assert exc_info.value.code == "OMNIGENT_RUNTIME_CAPABILITY_UNSUPPORTED"
+    runtime._prepare_skill_projection.assert_not_awaited()
+    runtime._attest_egress.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1647,9 +1707,13 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         runtime_scripts=tmp_path,
         current_step_execution_id="workflow:run:node-1:execution:1",
         container_job_environment={
-            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "scoped-test-token",
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE": (
+                "/opt/moonmind/capabilities/container-jobs"
+            ),
             "MOONMIND_CONTAINER_JOBS_MCP_URL": "http://api:8000/mcp/container",
-            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "fanout-test-token",
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": (
+                "/opt/moonmind/capabilities/execution-fanout"
+            ),
         },
         effective_launch=effective_launch,
         egress_attestation=_egress_attestation(),
@@ -1707,24 +1771,25 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH="
         "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
         "MOONMIND_ACTIVE_SKILLS_DIR,MOONMIND_STEP_EXECUTION_ID,"
-        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN,"
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE,"
         "MOONMIND_CONTAINER_JOBS_MCP_URL,"
-        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE"
     ) in commands[2]
-    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in commands[2]
-    assert "scoped-test-token" not in commands[2]
-    assert "fanout-test-token" not in commands[2]
+    assert (
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE="
+        "/opt/moonmind/capabilities/container-jobs"
+    ) in commands[2]
+    assert (
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE="
+        "/opt/moonmind/capabilities/execution-fanout"
+    ) in commands[2]
     assert (
         "MOONMIND_CONTAINER_JOBS_MCP_URL=http://api:8000/mcp/container"
         in commands[2]
     )
     launch_environment = runtime._run.await_args_list[2].kwargs["env"]
-    assert launch_environment["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"] == (
-        "scoped-test-token"
-    )
-    assert launch_environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"] == (
-        "fanout-test-token"
-    )
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in launch_environment
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in launch_environment
     assert "NO_PROXY=localhost,127.0.0.1" in commands[2]
     assert "no_proxy=localhost,127.0.0.1" in commands[2]
     assert commands[2][commands[2].index("--stop-timeout") + 1] == "20"
@@ -1770,6 +1835,11 @@ def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
         current_workflow_id="workflow-1",
         current_step_execution_id="agent-run-1",
         timeout_seconds=3600,
+        required_capabilities=("docker", "execution.fanout"),
+        execution_fanout_authorization={
+            "authorized": True,
+            "sourceKind": "built_in",
+        },
     )
 
     assert environment["MOONMIND_CONTAINER_JOBS_MCP_URL"] == (
@@ -1792,6 +1862,77 @@ def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
     assert fanout.parent_workflow_id == "workflow-1"
     assert fanout.agent_run_id == "agent-run-1"
     assert fanout.session_id == "host-lease-1"
+
+
+def test_omnigent_runtime_authority_is_not_minted_without_required_capabilities(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    monkeypatch.setattr(
+        settings.security, "JWT_SECRET_KEY", "test-container-capability-secret"
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    environment = runtime._container_job_environment(
+        binding=_binding().model_copy(
+            update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+        ),
+        host_lease=_host_lease(),
+        workspace_locator={
+            "kind": "sandbox",
+            "workspaceId": "sandbox-1",
+            "relativePath": "repo",
+        },
+        current_workflow_id="workflow-1",
+        current_step_execution_id="agent-run-1",
+        timeout_seconds=3600,
+        required_capabilities=(),
+    )
+
+    assert environment["MOONMIND_URL"] == "http://api:8000"
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in environment
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
+
+
+def test_omnigent_fanout_mint_rejects_denied_skill_authorization(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        runtime._container_job_environment(
+            binding=_binding().model_copy(
+                update={
+                    "static_host_id": None,
+                    "host_launch_profile_ref": "codex-oauth-v1",
+                }
+            ),
+            host_lease=_host_lease(),
+            workspace_locator={
+                "kind": "sandbox",
+                "workspaceId": "sandbox-1",
+                "relativePath": "repo",
+            },
+            current_workflow_id="workflow-1",
+            current_step_execution_id="agent-run-1",
+            timeout_seconds=3600,
+            required_capabilities=("execution.fanout",),
+            execution_fanout_authorization={
+                "authorized": False,
+                "sourceKind": "repo",
+            },
+        )
+
+    assert exc_info.value.code == "authorization_denied"
 
 
 @pytest.mark.asyncio
@@ -2099,13 +2240,22 @@ async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> No
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
     lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
+    _, runtime_scripts = runtime._runtime_scripts_target(lease.lease_id)
+    capability_dir = runtime_scripts / "capabilities"
+    capability_dir.mkdir(parents=True)
+    (capability_dir / "execution-fanout").write_text(
+        "expired-test-capability\n",
+        encoding="utf-8",
+    )
 
-    await runtime.stop_host(binding=binding, host_lease=lease)
+    result = await runtime.stop_host(binding=binding, host_lease=lease)
 
     commands = [call.args for call in runtime._run.await_args_list]
     assert commands[0][:3] == ("docker", "inspect", "--format")
     assert ("docker", "volume", "rm", "-f", "mm-host-lease-1-artifacts") in commands
     assert ("docker", "volume", "rm", "-f", "mm-host-lease-1-cache") in commands
+    assert result["resourceCleanup"]["runtimeCapabilityFilesRemoved"] is True
+    assert not runtime_scripts.exists()
 
 
 @pytest.mark.asyncio
@@ -2172,6 +2322,7 @@ async def test_stop_host_publishes_resolvable_terminal_egress_and_cleanup_author
         "containerPresent": False,
         "mode": "on_demand_remove",
         "remainingOwnedVolumes": [],
+        "runtimeCapabilityFilesRemoved": True,
     }
     assert terminal["launchEvidenceRef"] == "artifact://omnigent/launch.json"
 
@@ -3199,6 +3350,45 @@ async def test_host_repository_creates_idempotent_binding_and_lease(tmp_path) ->
             new_status="starting",
         )
         assert starting.status == "starting"
+        claimed = await repository.claim_host_lease_cleanup(
+            first.lease_id,
+            expected_status="starting",
+            expected_last_heartbeat_at=starting.last_heartbeat_at,
+        )
+        assert claimed is not None
+        assert claimed.status == "draining"
+        assert 89 <= (
+            claimed.expires_at - claimed.last_heartbeat_at
+        ).total_seconds() <= 90
+        assert (
+            await repository.claim_host_lease_cleanup(
+                first.lease_id,
+                expected_status="starting",
+                expected_last_heartbeat_at=starting.last_heartbeat_at,
+            )
+            is None
+        )
+        with pytest.raises(OmnigentOAuthHostError) as heartbeat_error:
+            await repository.heartbeat_host_lease(first.lease_id)
+        assert heartbeat_error.value.code == HOST_CLEANUP_CLAIMED_ERROR_CODE
+
+        await repository.mark_host_lease_stopped(first.lease_id)
+        restarted = await repository.restart_host_lease(first.lease_id)
+        heartbeat_result, cleanup_result = await asyncio.gather(
+            repository.heartbeat_host_lease(first.lease_id),
+            repository.claim_host_lease_cleanup(
+                first.lease_id,
+                expected_status="starting",
+                expected_last_heartbeat_at=restarted.last_heartbeat_at,
+            ),
+            return_exceptions=True,
+        )
+        heartbeat_won = not isinstance(heartbeat_result, BaseException)
+        cleanup_won = (
+            not isinstance(cleanup_result, BaseException)
+            and cleanup_result is not None
+        )
+        assert heartbeat_won is not cleanup_won
     finally:
         await engine.dispose()
 
@@ -3324,6 +3514,8 @@ async def test_coordinator_waits_for_canceled_host_cleanup_before_rerun(
 async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
     actions: list[str] = []
     lifecycle: list[tuple[str, str | None]] = []
+    preflight_heartbeat_observed = asyncio.Event()
+    heartbeat_calls: list[str] = []
     provider_lease = SimpleNamespace(
         profile_id="codex",
         runtime_id="codex_cli",
@@ -3363,6 +3555,14 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
             actions.append("host_lease_created")
             return self.lease
 
+        async def get_host_lease(self, _lease_id):
+            return self.lease
+
+        async def claim_host_lease_cleanup(self, _lease_id, **_kwargs):
+            self.lease = self.lease.model_copy(update={"status": "draining"})
+            actions.append("host_draining")
+            return self.lease
+
         async def transition_host_lease(
             self, _lease_id, *, expected_status, new_status, fields=None
         ):
@@ -3381,8 +3581,15 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         async def mark_host_lease_failed(self, *_args, **_kwargs):
             actions.append("host_failed")
 
+        async def heartbeat_host_lease(self, lease_id, *, ttl_seconds):
+            assert ttl_seconds == 5400
+            heartbeat_calls.append(lease_id)
+            preflight_heartbeat_observed.set()
+            return self.lease
+
     class Runtime:
         async def prepare_host(self, **_kwargs):
+            await preflight_heartbeat_observed.wait()
             actions.append("preflight")
             return {
                 "hostId": "host-1",
@@ -3463,6 +3670,8 @@ async def test_coordinator_releases_provider_lease_after_host_cleanup() -> None:
         )
     )
     assert result.summary == "done"
+    assert heartbeat_calls
+    assert set(heartbeat_calls) == {"host-lease-1"}
     assert actions[0] == "bridge_envelope_created"
     assert actions[-1] == "terminal"
     assert actions.index("host_stopped") < actions.index("profile_lease_release")
@@ -3565,6 +3774,13 @@ async def _drive_authority_chain_coordinator(
             })
 
         async def create_or_get_host_lease(self, **_kwargs):
+            return self.lease
+
+        async def get_host_lease(self, _lease_id):
+            return self.lease
+
+        async def claim_host_lease_cleanup(self, _lease_id, **_kwargs):
+            self.lease = self.lease.model_copy(update={"status": "draining"})
             return self.lease
 
         async def transition_host_lease(
@@ -4171,6 +4387,13 @@ async def test_coordinator_records_runner_preflight_block_before_execution() -> 
         async def create_or_get_host_lease(self, **_kwargs):
             return self.lease
 
+        async def get_host_lease(self, _lease_id):
+            return self.lease
+
+        async def claim_host_lease_cleanup(self, _lease_id, **_kwargs):
+            self.lease = self.lease.model_copy(update={"status": "draining"})
+            return self.lease
+
         async def transition_host_lease(
             self, _lease_id, *, expected_status, new_status, fields=None
         ):
@@ -4716,6 +4939,13 @@ async def _run_coordinator_failure_case(
                 raise error
             return self.lease
 
+        async def get_host_lease(self, _lease_id):
+            return self.lease
+
+        async def claim_host_lease_cleanup(self, _lease_id, **_kwargs):
+            self.lease = self.lease.model_copy(update={"status": "draining"})
+            return self.lease
+
         async def transition_host_lease(
             self, _lease_id, *, expected_status, new_status, fields=None
         ):
@@ -4964,6 +5194,29 @@ async def test_cancelled_attempt_defers_host_and_profile_cleanup_to_retry_or_jan
         and payload["status"] == "waiting"
         for event_type, payload in events
     )
+
+
+@pytest.mark.asyncio
+async def test_janitor_cleanup_claim_relinquishes_coordinator_cleanup() -> None:
+    events, actions, owner_calls = await _run_coordinator_failure_case(
+        fail_at="session_create",
+        code=HOST_CLEANUP_CLAIMED_ERROR_CODE,
+        injected_error=OmnigentOAuthHostError(
+            "host lease cleanup is owned by the janitor",
+            code=HOST_CLEANUP_CLAIMED_ERROR_CODE,
+        ),
+    )
+
+    cleanup_event = next(
+        payload
+        for event_type, payload in events
+        if event_type == "host_cleanup" and payload["status"] == "waiting"
+    )
+    assert cleanup_event["code"] == HOST_CLEANUP_CLAIMED_ERROR_CODE
+    assert cleanup_event["metadata"]["janitorRequired"] is True
+    assert "host_stop" not in owner_calls
+    assert "host_remove" not in owner_calls
+    assert "provider_released" not in actions
 
 
 @pytest.mark.asyncio

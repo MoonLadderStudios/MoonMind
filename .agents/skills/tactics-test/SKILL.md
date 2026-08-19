@@ -1,6 +1,9 @@
 ---
 name: tactics-test
 description: Run Unreal Engine build and automation test workflows for Tactics through MoonMind's shared Docker backend, with a portable direct-Docker fallback outside MoonMind.
+metadata:
+  required-capabilities:
+    - docker
 ---
 
 # Dood Unreal Tactics Build Test
@@ -13,7 +16,7 @@ Run Linux Unreal build and targeted automation tests for `Tactics.uproject`. Ins
 
 - Repository path (defaults to the active managed workspace inside MoonMind and
   `/mnt/d/Unreal/Tactics` in the direct-Docker fallback)
-- Inside MoonMind: `containerJobs` capability and an operator-provisioned `tactics-unreal` image source
+- Inside MoonMind: `docker` capability and an operator-provisioned `tactics-unreal` image source
 - Outside MoonMind: Docker CLI access and a reachable daemon
 - Container image with the Unreal toolchain in the selected execution substrate
 

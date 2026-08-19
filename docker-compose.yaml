@@ -16,7 +16,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    networks: [local-network]
+    networks: [control-plane-network]
     restart: unless-stopped
 
   api:
@@ -76,6 +76,7 @@ services:
       # (terminal exec, OAuth auth-runner teardown). SYSTEM_DOCKER_HOST is a
       # trusted-worker-only backend selector and is not read by the API service.
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_CONTROL_PLANE_NETWORK=${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
       - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
@@ -119,7 +120,7 @@ services:
       - workflow_workspaces:/work/runs:ro
     command: sh /app/api_service/entrypoint.sh
     networks:
-      - local-network
+      - control-plane-network
       - docker-proxy-network
     healthcheck:
       test: [
@@ -163,7 +164,7 @@ services:
     expose:
       - "5432"
     networks:
-      local-network:
+      control-plane-network:
         aliases:
           - moonmind-api-db
           - temporal-db
@@ -201,7 +202,7 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      local-network:
+      control-plane-network:
         aliases:
           - temporal-internal
       sandbox-egress-network:
@@ -228,7 +229,7 @@ services:
     volumes:
       - minio-data:/data
     networks:
-      local-network:
+      control-plane-network:
         aliases:
           - moonmind-temporal-artifacts-s3
       sandbox-egress-network:
@@ -253,7 +254,7 @@ services:
       temporal:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
 
   temporal-visibility-rehearsal:
@@ -279,7 +280,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
 
   temporal-admin-tools:
@@ -294,7 +295,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-ui:
@@ -310,7 +311,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-workflow:
@@ -375,7 +376,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-artifacts:
@@ -431,7 +432,7 @@ services:
       minio:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-llm:
@@ -489,7 +490,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-sandbox:
@@ -617,6 +618,7 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_CONTROL_PLANE_NETWORK=${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
       - MOONMIND_CONTAINER_BACKEND_ENABLED=${MOONMIND_CONTAINER_BACKEND_ENABLED:-true}
       - MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB=${MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB:-}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
@@ -713,7 +715,7 @@ services:
       docker-proxy:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
       - docker-proxy-network
     restart: unless-stopped
 
@@ -739,6 +741,7 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_CONTROL_PLANE_NETWORK=${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
       - MOONMIND_DEPLOYMENT_PROJECT_DIR=${MOONMIND_DEPLOYMENT_PROJECT_DIR:-}
       - MOONMIND_DEPLOYMENT_COMPOSE_FILE=${MOONMIND_DEPLOYMENT_COMPOSE_FILE:-}
       - MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR=/workspace/host_project
@@ -783,7 +786,7 @@ services:
       docker-proxy:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
       - docker-proxy-network
     restart: unless-stopped
 
@@ -843,7 +846,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   qdrant:
@@ -854,7 +857,7 @@ services:
     volumes:
       - qdrant-storage:/qdrant/storage
     networks:
-      - local-network
+      - control-plane-network
 
   omnigent-tools-init:
     image: ${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}
@@ -900,7 +903,7 @@ services:
       omnigent-tools-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   omnigent-host-claude:
@@ -1140,7 +1143,7 @@ services:
       - ./init_db:/app/init_db
     command: sh /app/init_db/init_db_entrypoint.sh
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
     depends_on:
       postgres:
@@ -1190,7 +1193,7 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
 
   omnigent:
@@ -1243,7 +1246,7 @@ services:
       omnigent-db-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
       - omnigent-egress-network
     restart: unless-stopped
 
@@ -1312,7 +1315,7 @@ services:
       - "3128"
       - "3129"
     networks:
-      local-network: {}
+      control-plane-network: {}
       sandbox-egress-network: {}
       restricted-egress-network: {}
       omnigent-egress-network:
@@ -1356,8 +1359,8 @@ volumes:
   omnigent-data:
 
 networks:
-  local-network:
-    external: true
+  control-plane-network:
+    name: ${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
   docker-proxy-network:
     name: ${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
     internal: true

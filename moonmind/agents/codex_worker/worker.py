@@ -544,7 +544,12 @@ class CodexWorkerConfig:
     jules_retry_delay_seconds: float = 1.0
     jules_poll_interval_seconds: float = 10.0
     jules_max_inflight: int = 15
-    worker_capabilities: tuple[str, ...] = ("codex", "git", "gh")
+    worker_capabilities: tuple[str, ...] = (
+        "codex",
+        "git",
+        "gh",
+        "execution.fanout",
+    )
     docker_binary: str = "docker"
     container_workspace_volume: str | None = None
     container_default_timeout_seconds: int = 3600
@@ -859,13 +864,20 @@ class CodexWorkerConfig:
                 runtime_caps = ["codex", "claude"]
                 if jules_gate.enabled:
                     runtime_caps.append("jules")
-                worker_capabilities = tuple([*runtime_caps, "git", "gh"])
+                worker_capabilities = tuple(
+                    [*runtime_caps, "git", "gh", "execution.fanout"]
+                )
             else:
                 worker_capability_runtime = {
                     "codex_cli": "codex",
                     "claude_code": "claude",
                 }.get(worker_runtime, worker_runtime)
                 worker_capabilities = (worker_capability_runtime, "git", "gh")
+                if worker_capability_runtime in {"codex", "claude"}:
+                    worker_capabilities = (
+                        *worker_capabilities,
+                        "execution.fanout",
+                    )
 
         docker_binary = (
             str(source.get("MOONMIND_DOCKER_BINARY", "docker")).strip() or "docker"

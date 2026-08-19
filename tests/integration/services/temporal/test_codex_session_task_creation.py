@@ -287,7 +287,7 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
         workspace_volume_name="agent_workspaces",
         codex_volume_name="codex_auth_volume",
         workspace_root=str(workspace_root),
-        network_name="local-network",
+        network_name="moonmind_control-plane-network",
         moonmind_url=moonmind_url,
         command_runner=_fake_runner,
         ready_poll_interval_seconds=0,
@@ -297,7 +297,7 @@ async def test_codex_session_launch_environment_can_create_child_tasks(
         await controller.launch_session(request)
         run_command, run_env = _managed_session_run_command(commands)
 
-        assert ("--network", "local-network") == (
+        assert ("--network", "moonmind_control-plane-network") == (
             run_command[run_command.index("--network")],
             run_command[run_command.index("--network") + 1],
         )

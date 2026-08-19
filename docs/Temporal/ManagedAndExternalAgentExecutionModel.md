@@ -398,8 +398,11 @@ The generic Container Jobs plane owns reusable workspace-resolution and daemon-t
 
 Direct managed runtimes receive a workflow-scoped workspace and artifact area, runtime-specific credential materialization, immutable Skill projection, and bounded temporary state. Runtime-owned environment values take precedence over untrusted passthrough values.
 
-Managed sessions and profile-bound Omnigent hosts that may queue child work
-receive a separate short-lived execution fan-out bearer. That bearer is bound
+Managed sessions and profile-bound Omnigent hosts whose normalized
+`requiredCapabilities` include `execution.fanout` receive a separate short-lived
+execution fan-out bearer after policy authorization. The requirement is derived
+automatically when a resolved Skill declares `sideEffect.kind: enqueue_children`,
+so the supported batch path requires no operator permission toggle. That bearer is bound
 to the parent Workflow Execution, agent run, runtime session, and runtime id; it
 is not interchangeable with the container-job bearer or a user API token. The
 execution API accepts the bearer only for idempotent task/workflow child
@@ -407,6 +410,22 @@ requests with `runtimeInheritance="caller"`, rejects schedule and direct-create
 shapes, records the authoritative `parentWorkflowId`, and limits describe calls
 to children of that parent. Restricted Omnigent egress additionally requires
 the fan-out marker and bearer on the exact create and child-describe paths.
+Profile-bound Omnigent hosts expose the bearer through a lease-owned read-only
+file and pass only its non-secret selector into runner and login-shell
+environments. Hosts without the requirement receive neither the bearer nor the
+selector.
+
+The Run workflow derives the mint authorization from immutable resolved-Skill
+provenance and carries it in `stepExecution.skillSourcePolicy.executionFanout`.
+Built-in and deployment-managed Skills are eligible; repo/local Skills and
+top-level-only declarations are denied before runtime launch. The absent field
+is a replay marker for already-scheduled launch payloads, not a current default.
+
+The Run workflow derives the mint authorization from immutable resolved-Skill
+provenance and carries it in `stepExecution.skillSourcePolicy.executionFanout`.
+Built-in and deployment-managed Skills are eligible; repo/local Skills and
+top-level-only declarations are denied before runtime launch. The absent field
+is a replay marker for already-scheduled launch payloads, not a current default.
 
 ### 11.2 Profile-bound Omnigent hosts
 

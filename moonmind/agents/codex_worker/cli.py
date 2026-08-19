@@ -134,7 +134,7 @@ def _effective_worker_capabilities(
     if configured:
         return configured
     if runtime == "universal":
-        capabilities = ["codex", "claude", "git", "gh"]
+        capabilities = ["codex", "claude", "git", "gh", "execution.fanout"]
         if _jules_runtime_gate_from_env(source).enabled:
             capabilities.insert(2, "jules")
         return tuple(capabilities)
@@ -142,7 +142,10 @@ def _effective_worker_capabilities(
         "codex_cli": "codex",
         "claude_code": "claude",
     }.get(runtime, runtime)
-    return (normalized_runtime, "git", "gh")
+    capabilities = (normalized_runtime, "git", "gh")
+    if normalized_runtime in {"codex", "claude"}:
+        return (*capabilities, "execution.fanout")
+    return capabilities
 
 def _jules_runtime_gate_from_env(source: Mapping[str, str]):
     """Return Jules runtime gate state derived from worker environment."""

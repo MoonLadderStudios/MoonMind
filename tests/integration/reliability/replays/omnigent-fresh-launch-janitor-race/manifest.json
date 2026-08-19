@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "escaped-failure-replay/v1",
+  "incidentWorkflowId": "mm:4ce41531-205c-4b9a-aa90-33ae8396e17c",
+  "childWorkflowId": "mm:4ce41531-205c-4b9a-aa90-33ae8396e17c:agent:node-1:execution2:retry1",
+  "janitorWorkflowId": "omnigent-oauth-host-janitor-run-2026-08-18T16:25:00Z",
+  "activityType": "integration.omnigent.profile_bound_execute",
+  "failureCode": "OMNIGENT_EGRESS_CLEANUP_AUTHORITY_MISMATCH",
+  "failureShape": "the scheduled janitor treated the deterministic container as missing while the fresh starting lease was still materializing it, stopped the active owner, and caused an activity retry to encounter the stopped generation's cleanup authority",
+  "leaseStatusAtJanitorScan": "starting",
+  "containerStateAtJanitorScan": "not_yet_materialized",
+  "heartbeatAgeSeconds": 5,
+  "heartbeatTimeoutSeconds": 90,
+  "observedRetryFailure": "live host identity changed from durable cleanup authority"
+}

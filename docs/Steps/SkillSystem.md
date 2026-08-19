@@ -1,8 +1,10 @@
 # Skill System
 
+**Document Class:** Canonical declarative
+**Viewpoint:** Module Architecture View
 Status: Desired State
 Owners: MoonMind Engineering
-Last Updated: 2026-07-11
+Last Updated: 2026-08-18
 Canonical for: agent skills, Skill steps, skill-set resolution, runtime skill materialization, `.agents/skills` path policy
 Related: `docs/Steps/StepTypes.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Workflows/WorkflowArchitecture.md`, `docs/Workflows/RequiredCapabilities.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`, `docs/UI/WorkflowConsoleArchitecture.md`, `AGENTS.md`
 
@@ -1241,6 +1243,14 @@ Rules:
 4. A Tool invoked by an agent is still a Tool.
 5. Tool outputs remain Tool outputs and artifact refs.
 6. Agent decisions about which Tool to use belong to the Skill step/runtime policy, not to the Tool registry.
+
+Skill side-effect metadata may contribute a normalized Required Capability
+without becoming an authorization grant itself. Specifically,
+`sideEffect.kind: enqueue_children` derives `execution.fanout` during backend
+normalization. Policy must authorize and materialize the scoped runtime
+capability before launch; the Skill author and operator do not manage a separate
+permission checkbox. See
+[Required Capabilities](../Workflows/RequiredCapabilities.md#75-executionfanout).
 
 ---
 

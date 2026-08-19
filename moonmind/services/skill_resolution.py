@@ -11,6 +11,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.config.settings import settings
+from moonmind.security.execution_fanout_capabilities import (
+    EXECUTION_FANOUT_REQUIRED_CAPABILITY,
+)
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
     AgentSkillProvenance,
@@ -453,10 +456,20 @@ def _required_capabilities_from_frontmatter(
     metadata = frontmatter.get("metadata") or {}
     if not isinstance(metadata, dict):
         raise ValueError(f"skill '{owner}' metadata must be a mapping")
-    return _required_capabilities_from_metadata(
-        metadata.get(_REQUIRED_CAPABILITIES_METADATA_KEY),
-        owner=owner,
+    required = list(
+        _required_capabilities_from_metadata(
+            metadata.get(_REQUIRED_CAPABILITIES_METADATA_KEY),
+            owner=owner,
+        )
     )
+    side_effect = _side_effect_metadata_from_frontmatter(frontmatter, owner=owner)
+    side_effect_kind = str(side_effect.get("kind") or "").strip().lower()
+    if (
+        side_effect_kind == "enqueue_children"
+        and EXECUTION_FANOUT_REQUIRED_CAPABILITY not in required
+    ):
+        required.append(EXECUTION_FANOUT_REQUIRED_CAPABILITY)
+    return tuple(required)
 
 
 def extract_required_capabilities_from_skill_markdown(

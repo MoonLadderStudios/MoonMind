@@ -9,6 +9,7 @@ from moonmind.security.container_job_capabilities import (
 from moonmind.security.execution_fanout_capabilities import (
     ExecutionFanoutCapabilityError,
     mint_execution_fanout_capability,
+    require_execution_fanout_authorization,
     verify_execution_fanout_capability,
 )
 
@@ -64,4 +65,20 @@ def test_container_job_bearer_cannot_authorize_execution_fanout() -> None:
     with pytest.raises(ExecutionFanoutCapabilityError, match="unsupported"):
         verify_execution_fanout_capability(
             container_token, secret="test-secret", now=120
+        )
+
+
+def test_fanout_mint_requires_explicit_current_skill_authorization() -> None:
+    assert require_execution_fanout_authorization([], {"authorized": False}) is False
+    assert require_execution_fanout_authorization(
+        ["execution.fanout"], {"authorized": True, "sourceKind": "built_in"}
+    ) is True
+    assert require_execution_fanout_authorization(
+        ["execution.fanout"], None
+    ) is True
+
+    with pytest.raises(ExecutionFanoutCapabilityError, match="not authorized"):
+        require_execution_fanout_authorization(
+            ["execution.fanout"],
+            {"authorized": False, "sourceKind": "repo"},
         )

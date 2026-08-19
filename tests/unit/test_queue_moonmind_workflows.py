@@ -211,6 +211,59 @@ def test_request_headers_prefer_scoped_execution_fanout_bearer(
     assert headers["X-MoonMind-Execution-Fanout"] == "v1"
 
 
+def test_request_headers_read_scoped_execution_fanout_bearer_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    capability_file = tmp_path / "execution-fanout"
+    capability_file.write_text("fanout-file-capability\n", encoding="utf-8")
+    monkeypatch.delenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", raising=False)
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
+        str(capability_file),
+    )
+
+    headers = module["_request_headers"]()
+
+    assert headers["Authorization"] == "Bearer fanout-file-capability"
+    assert headers["X-MoonMind-Execution-Fanout"] == "v1"
+
+
+def test_execution_fanout_capability_file_takes_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    capability_file = tmp_path / "execution-fanout"
+    capability_file.write_text("file-capability\n", encoding="utf-8")
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
+        str(capability_file),
+    )
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN",
+        "environment-capability",
+    )
+
+    assert module["_read_execution_fanout_token"]() == "file-capability"
+
+
+def test_missing_execution_fanout_capability_file_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    monkeypatch.delenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", raising=False)
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
+        str(tmp_path / "missing"),
+    )
+
+    with pytest.raises(RuntimeError, match="capability file is unavailable"):
+        module["_request_headers"]()
+
+
 def test_manifest_binds_scoped_fanout_request_to_caller_runtime(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

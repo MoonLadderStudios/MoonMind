@@ -1,15 +1,17 @@
 # Secrets System
 
+**Document Class:** Canonical declarative
+**Viewpoint:** Cross-Cutting Concept
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 Status: **Design Draft**
 Owners: MoonMind Engineering
-Last Updated: 2026-06-11
+Last Updated: 2026-08-18
 
 > [!NOTE]
 > This document defines the desired-state MoonMind Secrets System.
 > It is a declarative contract for how secrets are referenced, stored, resolved, materialized, and audited.
-> Phase sequencing, migration work, and implementation checklists belong in .
+> Phase sequencing, migration work, and implementation checklists belong in `docs/tmp/`.
 
 ---
 
@@ -157,6 +159,13 @@ Secret values should be resolved as late as practical and exposed to as little c
 ### 4.5 Proxy First
 
 If MoonMind itself is making the provider or tool call, the preferred design is for the caller to use a MoonMind-issued capability or internal token rather than receiving the provider secret directly.
+
+Runtime capability values follow the same rule. For example, an Omnigent run
+with the policy-authorized `execution.fanout` requirement receives a
+short-lived, parent-scoped MoonMind capability through a lease-owned read-only
+file. The runtime environment contains only the file selector; runs without the
+requirement receive no capability. This avoids distributing a user API token or
+provider credential while keeping built-in batch Skills automatic by default.
 
 ### 4.6 Fail Fast
 

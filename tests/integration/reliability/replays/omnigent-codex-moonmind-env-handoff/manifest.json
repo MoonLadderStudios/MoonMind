@@ -2,12 +2,13 @@
   "incidentWorkflowId": "mm:2d8480da-045c-4569-81b3-5b0b0a0ee9a0-2026-08-17T17:24:13Z",
   "stepExecutionId": "mm:2d8480da-045c-4569-81b3-5b0b0a0ee9a0:node-1:execution:4",
   "moonmindUrl": "http://api:8000",
+  "requiredCapabilities": ["execution.fanout"],
   "workspaceLocator": {
     "kind": "sandbox",
     "workspaceId": "3ed3af7e63985a76afeae4ab",
     "relativePath": "repo"
   },
   "terminalFailureCode": "CHILD_WORKFLOW_QUEUE_FAILED",
-  "failureShape": "the on-demand host and Omnigent runner received MoonMind execution variables, but the Codex harness filtered them before the skill helper ran; all matched child workflow submissions failed because MOONMIND_URL was missing",
+  "failureShape": "the on-demand host and Omnigent runner received MoonMind execution variables, but the Codex harness filtered the scoped fan-out bearer before the skill helper ran; all matched child workflow submissions failed at the restricted proxy",
   "boundary": "MoonMind on-demand host to Omnigent runner to Codex tool login shell"
 }

@@ -10,7 +10,7 @@ import re
 import shutil
 import tarfile
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -56,8 +56,12 @@ from moonmind.schemas.workspace_locator_models import (
 from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
+from moonmind.security.docker_networks import resolve_control_plane_network
 from moonmind.security.execution_fanout_capabilities import (
+    EXECUTION_FANOUT_REQUIRED_CAPABILITY,
+    ExecutionFanoutCapabilityError,
     mint_execution_fanout_capability,
+    require_execution_fanout_authorization,
 )
 from moonmind.security.egress import (
     EgressAttestation,
@@ -188,6 +192,8 @@ _RUNTIME_EXECUTION_PROFILE_ENV_NAMES = (
     "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND",
     "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID",
     "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH",
+    "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE",
+    "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
 )
 _SECRET_RUNTIME_ENV_NAMES = frozenset(
     {
@@ -195,6 +201,17 @@ _SECRET_RUNTIME_ENV_NAMES = frozenset(
         "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN",
     }
 )
+_RUNTIME_CAPABILITY_FILE_ENV = {
+    "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": (
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE",
+        "container-jobs",
+    ),
+    "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": (
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
+        "execution-fanout",
+    ),
+}
+_RUNTIME_CAPABILITY_MOUNT_ROOT = "/opt/moonmind/capabilities"
 _DIGEST_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _PLACEHOLDER_DIGEST = "0" * 64
 _SAFE_NETWORK = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
@@ -292,8 +309,10 @@ class OmnigentOAuthHostRuntime:
             else:
                 tag = os.getenv("OMNIGENT_HOST_IMAGE_TAG", "latest")
                 self._image = f"{base_image}:{tag}"
-        self._network = network or os.getenv(
-            "OMNIGENT_HOST_NETWORK", "local-network"
+        self._network = (
+            network
+            or os.getenv("OMNIGENT_HOST_NETWORK")
+            or resolve_control_plane_network()
         )
         self._server_url = server_url or os.getenv(
             "OMNIGENT_SERVER_INTERNAL_URL", "http://omnigent:8000"
@@ -398,6 +417,7 @@ class OmnigentOAuthHostRuntime:
         cleanup_authority_store: Any | None = None,
         target_repository: str = "",
         required_capabilities: tuple[str, ...] = (),
+        execution_fanout_authorization: Mapping[str, Any] | None = None,
         github_token: str | None = None,
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
@@ -426,6 +446,26 @@ class OmnigentOAuthHostRuntime:
             raise OmnigentOAuthHostError(
                 "effective launch provider does not match the OAuth host binding",
                 code=HostPreflightFailure.BINDING_MISMATCH.value,
+            )
+        normalized_capabilities = {
+            str(item or "").strip().lower() for item in required_capabilities
+        }
+        try:
+            require_execution_fanout_authorization(
+                required_capabilities,
+                execution_fanout_authorization,
+            )
+        except ExecutionFanoutCapabilityError as exc:
+            raise OmnigentOAuthHostError(
+                str(exc), code="authorization_denied"
+            ) from exc
+        if (
+            EXECUTION_FANOUT_REQUIRED_CAPABILITY in normalized_capabilities
+            and not binding.host_launch_profile_ref
+        ):
+            raise OmnigentOAuthHostError(
+                "execution fan-out requires a run-dedicated Omnigent host",
+                code="OMNIGENT_RUNTIME_CAPABILITY_UNSUPPORTED",
             )
         skill_projection = await self._prepare_skill_projection(
             workspace_key=workspace_key,
@@ -480,12 +520,17 @@ class OmnigentOAuthHostRuntime:
                 current_workflow_id=current_workflow_id,
                 current_step_execution_id=current_step_execution_id,
                 timeout_seconds=int(launch["limits"]["timeoutSeconds"]),
+                required_capabilities=required_capabilities,
+                execution_fanout_authorization=execution_fanout_authorization,
             )
             daemon_runtime_scripts = self._prepare_daemon_runtime_scripts(
-                workspace_key,
+                host_lease.lease_id,
                 current_step_execution_id=current_step_execution_id,
                 runtime_environment=container_job_environment,
                 daemon_workspace_root=daemon_workspace_root,
+            )
+            host_runtime_environment = self._host_runtime_environment(
+                container_job_environment
             )
             if "gh" in {item.strip().lower() for item in required_capabilities}:
                 await self._initialize_required_tools()
@@ -503,7 +548,7 @@ class OmnigentOAuthHostRuntime:
                 runtime_scripts=daemon_runtime_scripts,
                 current_step_execution_id=current_step_execution_id,
                 github_token=github_token,
-                container_job_environment=container_job_environment,
+                container_job_environment=host_runtime_environment,
                 effective_launch=launch,
                 egress_attestation=egress_attestation,
             )
@@ -1622,7 +1667,7 @@ class OmnigentOAuthHostRuntime:
 
     def _prepare_runtime_scripts(
         self,
-        workspace_key: str,
+        owner_key: str,
         *,
         current_step_execution_id: str,
         runtime_environment: Mapping[str, str] | None = None,
@@ -1663,6 +1708,12 @@ class OmnigentOAuthHostRuntime:
             "MOONMIND_ACTIVE_SKILLS_DIR": "/opt/moonmind-skills",
         }
         supplied_environment = dict(runtime_environment or {})
+        capability_files: dict[str, str] = {}
+        for secret_name, (_, filename) in _RUNTIME_CAPABILITY_FILE_ENV.items():
+            secret_value = str(supplied_environment.get(secret_name) or "").strip()
+            if secret_value:
+                capability_files[filename] = secret_value
+        supplied_environment = self._host_runtime_environment(supplied_environment)
         for name in _RUNTIME_EXECUTION_PROFILE_ENV_NAMES:
             value = str(supplied_environment.get(name) or "").strip()
             if value:
@@ -1685,14 +1736,7 @@ class OmnigentOAuthHostRuntime:
             )
         )
 
-        digest = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()[:24]
-        target_parent = (self._workspace_root / ".omnigent-runtime-scripts").resolve()
-        target = (target_parent / digest).resolve()
-        if not target.is_relative_to(target_parent):
-            raise OmnigentOAuthHostError(
-                "Omnigent runtime script target escaped its owned root",
-                code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
-            )
+        target_parent, target = self._runtime_scripts_target(owner_key)
         if target.is_dir():
             if any(not (target / name).is_file() for name in required_scripts):
                 raise OmnigentOAuthHostError(
@@ -1713,11 +1757,55 @@ class OmnigentOAuthHostRuntime:
                     "Omnigent runtime execution profile does not match its owner",
                     code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
                 )
+            capability_dir = target / "capabilities"
+            if capability_dir.is_dir() and any(
+                path.is_symlink() for path in capability_dir.iterdir()
+            ):
+                raise OmnigentOAuthHostError(
+                    "Omnigent runtime capability files do not match their owner",
+                    code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
+                )
+            existing_capability_files = (
+                {path.name for path in capability_dir.iterdir() if path.is_file()}
+                if capability_dir.is_dir()
+                else set()
+            )
+            if existing_capability_files != set(capability_files):
+                raise OmnigentOAuthHostError(
+                    "Omnigent runtime capability files do not match their owner",
+                    code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
+                )
+            if capability_files:
+                try:
+                    capability_dir.chmod(0o700)
+                    for filename, secret_value in capability_files.items():
+                        descriptor, temporary_name = tempfile.mkstemp(
+                            prefix=f".{filename}-",
+                            dir=capability_dir,
+                        )
+                        os.close(descriptor)
+                        temporary = Path(temporary_name)
+                        try:
+                            temporary.write_text(
+                                secret_value + "\n", encoding="utf-8"
+                            )
+                            temporary.chmod(0o444)
+                            os.replace(temporary, capability_dir / filename)
+                        finally:
+                            if temporary.exists():
+                                temporary.unlink()
+                except OSError as exc:
+                    raise OmnigentOAuthHostError(
+                        "Omnigent runtime capability files could not be refreshed",
+                        code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
+                    ) from exc
+                finally:
+                    capability_dir.chmod(0o555)
             return target
 
         target_parent.mkdir(parents=True, exist_ok=True)
         staging = Path(
-            tempfile.mkdtemp(prefix=f".{digest}-", dir=target_parent)
+            tempfile.mkdtemp(prefix=f".{target.name}-", dir=target_parent)
         ).resolve()
         try:
             shutil.copytree(source, staging, dirs_exist_ok=True)
@@ -1727,6 +1815,14 @@ class OmnigentOAuthHostRuntime:
                 encoding="utf-8",
             )
             execution_profile.chmod(0o444)
+            if capability_files:
+                capability_dir = staging / "capabilities"
+                capability_dir.mkdir(mode=0o700)
+                for filename, secret_value in capability_files.items():
+                    capability_file = capability_dir / filename
+                    capability_file.write_text(secret_value + "\n", encoding="utf-8")
+                    capability_file.chmod(0o444)
+                capability_dir.chmod(0o555)
             try:
                 os.replace(staging, target)
             except FileExistsError:
@@ -1745,9 +1841,62 @@ class OmnigentOAuthHostRuntime:
             )
         return target
 
+    def _runtime_scripts_target(self, owner_key: str) -> tuple[Path, Path]:
+        normalized_owner = str(owner_key or "").strip()
+        if not normalized_owner:
+            raise OmnigentOAuthHostError(
+                "Omnigent runtime script owner is unavailable",
+                code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
+            )
+        digest = hashlib.sha256(normalized_owner.encode("utf-8")).hexdigest()[:24]
+        target_parent = (self._workspace_root / ".omnigent-runtime-scripts").resolve()
+        target = (target_parent / digest).resolve()
+        if not target.is_relative_to(target_parent):
+            raise OmnigentOAuthHostError(
+                "Omnigent runtime script target escaped its owned root",
+                code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
+            )
+        return target_parent, target
+
+    def _remove_runtime_scripts(self, owner_key: str) -> bool:
+        """Remove one stopped lease's runtime scripts and capability files."""
+
+        _, target = self._runtime_scripts_target(owner_key)
+        if not target.exists():
+            return True
+        if target.is_symlink() or any(path.is_symlink() for path in target.rglob("*")):
+            raise OmnigentOAuthHostError(
+                "Omnigent runtime script cleanup found an unsupported symlink",
+                code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+            )
+        for path in sorted(target.rglob("*"), reverse=True):
+            path.chmod(0o700 if path.is_dir() else 0o600)
+        target.chmod(0o700)
+        shutil.rmtree(target)
+        return not target.exists()
+
+    @staticmethod
+    def _host_runtime_environment(
+        runtime_environment: Mapping[str, str] | None,
+    ) -> dict[str, str]:
+        """Replace secret runtime values with lease-owned file selectors."""
+
+        supplied = dict(runtime_environment or {})
+        visible = {
+            key: value
+            for key, value in supplied.items()
+            if key not in _SECRET_RUNTIME_ENV_NAMES
+        }
+        for secret_name, (file_env_name, filename) in _RUNTIME_CAPABILITY_FILE_ENV.items():
+            if str(supplied.get(secret_name) or "").strip():
+                visible[file_env_name] = (
+                    f"{_RUNTIME_CAPABILITY_MOUNT_ROOT}/{filename}"
+                )
+        return visible
+
     def _prepare_daemon_runtime_scripts(
         self,
-        workspace_key: str,
+        owner_key: str,
         *,
         current_step_execution_id: str,
         runtime_environment: Mapping[str, str] | None = None,
@@ -1755,7 +1904,7 @@ class OmnigentOAuthHostRuntime:
     ) -> Path:
         return daemon_visible_workspace_path(
             self._prepare_runtime_scripts(
-                workspace_key,
+                owner_key,
                 current_step_execution_id=current_step_execution_id,
                 runtime_environment=runtime_environment,
             ),
@@ -1903,10 +2052,20 @@ class OmnigentOAuthHostRuntime:
                 name for name in volume_names if await self._volume_present(name)
             ]
             cleanup_ok = not container_present and not remaining_volumes
+            runtime_files_removed = False
+            if cleanup_ok:
+                try:
+                    runtime_files_removed = self._remove_runtime_scripts(
+                        host_lease.lease_id
+                    )
+                except (OSError, OmnigentOAuthHostError):
+                    runtime_files_removed = False
+                cleanup_ok = runtime_files_removed
             cleanup_result = "succeeded" if cleanup_ok else "failed"
             resource_cleanup = {
                 "containerPresent": container_present,
                 "remainingOwnedVolumes": remaining_volumes,
+                "runtimeCapabilityFilesRemoved": runtime_files_removed,
                 "mode": "on_demand_remove",
             }
 
@@ -2034,6 +2193,29 @@ class OmnigentOAuthHostRuntime:
         if result[0] != 0:
             return []
         return [line.strip() for line in result[1].splitlines() if line.strip()]
+
+    async def managed_container_host_lease_ref(
+        self, container_name: str
+    ) -> str | None:
+        """Return the durable lease identity carried by a managed container."""
+
+        result = await self._run(
+            "docker", "inspect", "--format",
+            (
+                '{{index .Config.Labels "moonmind.kind"}}|'
+                '{{index .Config.Labels "moonmind.host_lease_id"}}'
+            ),
+            container_name, check=False,
+        )
+        if result[0] != 0:
+            return None
+        kind, separator, lease_ref = result[1].strip().partition("|")
+        if not separator or kind != "omnigent-oauth-host":
+            raise OmnigentOAuthHostError(
+                "refusing to inspect a container outside Omnigent ownership",
+                code="OMNIGENT_HOST_OWNERSHIP_MISMATCH",
+            )
+        return lease_ref.strip() or None
 
     async def remove_container(self, container_name: str) -> None:
         # Janitor discovery is label-scoped; never accept an arbitrary name.
@@ -2283,12 +2465,13 @@ class OmnigentOAuthHostRuntime:
                 ]
             )
         for key, value in sorted(dict(container_job_environment or {}).items()):
-            runner_env_passthrough.append(key)
             if key in _SECRET_RUNTIME_ENV_NAMES:
-                child_env[key] = value
-                args.extend(["--env", key])
-            else:
-                args.extend(["--env", f"{key}={value}"])
+                raise OmnigentOAuthHostError(
+                    "Omnigent host launch received a raw runtime capability",
+                    code="OMNIGENT_RUNTIME_CAPABILITY_EXPOSURE",
+                )
+            runner_env_passthrough.append(key)
+            args.extend(["--env", f"{key}={value}"])
         args.extend(
             [
                 "--env",
@@ -2315,8 +2498,10 @@ class OmnigentOAuthHostRuntime:
         current_workflow_id: str,
         current_step_execution_id: str,
         timeout_seconds: int,
+        required_capabilities: Sequence[str] = (),
+        execution_fanout_authorization: Mapping[str, Any] | None = None,
     ) -> dict[str, str]:
-        """Mint one sandbox-scoped container-job capability for this host lease."""
+        """Materialize only the runtime capabilities declared for this host lease."""
 
         locator = WORKSPACE_LOCATOR_ADAPTER.validate_python(workspace_locator)
         if not isinstance(locator, SandboxWorkspaceLocator):
@@ -2343,52 +2528,73 @@ class OmnigentOAuthHostRuntime:
             )
         runtime_id = binding.credential_mount_ref.auth_volume_ref.runtime_id
         session_scope = host_lease.lease_id
-        token = mint_container_job_session_capability(
-            secret=str(settings.security.JWT_SECRET_KEY or ""),
-            owner=OwnerIdentity(
-                principalId=agent_run_id,
-                principalType="service",
-            ),
-            agent_run_id=agent_run_id,
-            workflow_id=current_workflow_id,
-            step_id=current_step_execution_id,
-            session_id=session_scope,
-            runtime_id=runtime_id,
-            source_kind="omnigent",
-            workspace_kind="sandbox",
-            workspace_id=locator.workspace_id,
-            workspace_relative_path=locator.relative_path,
-            lifetime_seconds=timeout_seconds,
-        )
-        execution_fanout_token = mint_execution_fanout_capability(
-            secret=str(settings.security.JWT_SECRET_KEY or ""),
-            parent_workflow_id=current_workflow_id,
-            agent_run_id=agent_run_id,
-            step_id=current_step_execution_id,
-            session_id=session_scope,
-            runtime_id=runtime_id,
-            source_kind="omnigent",
-            lifetime_seconds=timeout_seconds,
-        )
-        return {
+        normalized_capabilities = {
+            str(item or "").strip().lower() for item in required_capabilities
+        }
+        try:
+            require_execution_fanout_authorization(
+                required_capabilities,
+                execution_fanout_authorization,
+            )
+        except ExecutionFanoutCapabilityError as exc:
+            raise OmnigentOAuthHostError(
+                str(exc), code="authorization_denied"
+            ) from exc
+        environment = {
             "MOONMIND_URL": moonmind_url,
             "MOONMIND_AGENT_RUN_ID": agent_run_id,
             "MOONMIND_TASK_WORKFLOW_ID": current_workflow_id,
             "MOONMIND_STEP_ID": current_step_execution_id,
             "MOONMIND_RUNTIME_ID": runtime_id,
-            "MOONMIND_CONTAINER_JOBS_MCP_URL": (
-                moonmind_url.rstrip("/") + "/mcp/container"
-            ),
-            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": token,
-            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": execution_fanout_token,
-            "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "omnigent",
-            "MOONMIND_CONTAINER_JOBS_SESSION_ID": session_scope,
-            "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND": "sandbox",
-            "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID": locator.workspace_id,
-            "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH": (
-                locator.relative_path
-            ),
         }
+        if "docker" in normalized_capabilities:
+            environment.update(
+                {
+                    "MOONMIND_CONTAINER_JOBS_MCP_URL": (
+                        moonmind_url.rstrip("/") + "/mcp/container"
+                    ),
+                    "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": (
+                        mint_container_job_session_capability(
+                            secret=str(settings.security.JWT_SECRET_KEY or ""),
+                            owner=OwnerIdentity(
+                                principalId=agent_run_id,
+                                principalType="service",
+                            ),
+                            agent_run_id=agent_run_id,
+                            workflow_id=current_workflow_id,
+                            step_id=current_step_execution_id,
+                            session_id=session_scope,
+                            runtime_id=runtime_id,
+                            source_kind="omnigent",
+                            workspace_kind="sandbox",
+                            workspace_id=locator.workspace_id,
+                            workspace_relative_path=locator.relative_path,
+                            lifetime_seconds=timeout_seconds,
+                        )
+                    ),
+                    "MOONMIND_CONTAINER_JOBS_SOURCE_KIND": "omnigent",
+                    "MOONMIND_CONTAINER_JOBS_SESSION_ID": session_scope,
+                    "MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND": "sandbox",
+                    "MOONMIND_CONTAINER_JOBS_WORKSPACE_ID": locator.workspace_id,
+                    "MOONMIND_CONTAINER_JOBS_WORKSPACE_RELATIVE_PATH": (
+                        locator.relative_path
+                    ),
+                }
+            )
+        if EXECUTION_FANOUT_REQUIRED_CAPABILITY in normalized_capabilities:
+            environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"] = (
+                mint_execution_fanout_capability(
+                    secret=str(settings.security.JWT_SECRET_KEY or ""),
+                    parent_workflow_id=current_workflow_id,
+                    agent_run_id=agent_run_id,
+                    step_id=current_step_execution_id,
+                    session_id=session_scope,
+                    runtime_id=runtime_id,
+                    source_kind="omnigent",
+                    lifetime_seconds=timeout_seconds,
+                )
+            )
+        return environment
 
     async def _assert_container_owned(self, container_name: str, lease_id: str) -> None:
         result = await self._run(

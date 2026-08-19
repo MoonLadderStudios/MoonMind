@@ -10,12 +10,41 @@ SQLAlchemy from domain and application code.
 
 from __future__ import annotations
 
-from . import telemetry
+from . import metrics, spans, telemetry
 from .backfill import (
     BackfillPlan,
     BackfillReport,
     plan_backfill,
     run_backfill,
+)
+from .readiness import (
+    AdmissionReadiness,
+    CapabilityReadiness,
+    ReadinessCapability,
+    ReadinessInputs,
+    ReadinessState,
+    evaluate_admission_readiness,
+)
+from .spans import (
+    OMNIGENT_SPANS,
+    SAFE_SPAN_ATTRIBUTES,
+    omnigent_span,
+    sanitize_span_attributes,
+)
+from .stuck_state import (
+    AutomatedResponse,
+    ResponseAction,
+    SessionSignals,
+    StuckStateFinding,
+    StuckStatePolicy,
+    StuckStateReason,
+    detect_stuck_state,
+    plan_response,
+)
+from .timeline import (
+    SessionTimeline,
+    TimelineStatus,
+    build_timeline,
 )
 from .records import (
     ALIAS_STATE_ACTIVE,
@@ -140,4 +169,31 @@ __all__ = [
     "plan_backfill",
     "run_backfill",
     "telemetry",
+    "metrics",
+    "spans",
+    # semantic spans
+    "OMNIGENT_SPANS",
+    "SAFE_SPAN_ATTRIBUTES",
+    "omnigent_span",
+    "sanitize_span_attributes",
+    # operator timeline
+    "SessionTimeline",
+    "TimelineStatus",
+    "build_timeline",
+    # stuck-state detector + automated response
+    "AutomatedResponse",
+    "ResponseAction",
+    "SessionSignals",
+    "StuckStateFinding",
+    "StuckStatePolicy",
+    "StuckStateReason",
+    "detect_stuck_state",
+    "plan_response",
+    # new-admission readiness
+    "AdmissionReadiness",
+    "CapabilityReadiness",
+    "ReadinessCapability",
+    "ReadinessInputs",
+    "ReadinessState",
+    "evaluate_admission_readiness",
 ]
