@@ -192,18 +192,33 @@ def test_command_stuck_claimed():
     assert StuckStateReason.COMMAND_STUCK_CLAIMED_OR_DELIVERY_UNKNOWN in _reasons(findings)
 
 
-def test_live_conformance_evidence_stale_is_observe_only():
-    signals = SessionSignals(
+def test_live_conformance_evidence_requests_reconcile_at_exact_deadline():
+    just_fresh = SessionSignals(
+        last_event_at=NOW,
+        last_snapshot_at=NOW,
+        conformance_evidence_at=(
+            NOW - POLICY.conformance_max_age + timedelta(seconds=1)
+        ),
+    )
+    assert StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE not in _reasons(
+        detect_stuck_state(
+            session=_session(), signals=just_fresh, now=NOW, policy=POLICY
+        )
+    )
+
+    at_deadline = SessionSignals(
         last_event_at=NOW,
         last_snapshot_at=NOW,
         conformance_evidence_at=NOW - POLICY.conformance_max_age,
     )
-    findings = detect_stuck_state(session=_session(), signals=signals, now=NOW, policy=POLICY)
+    findings = detect_stuck_state(
+        session=_session(), signals=at_deadline, now=NOW, policy=POLICY
+    )
     conformance = [f for f in findings if f.reason is StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE]
-    assert conformance and conformance[0].action is ResponseAction.OBSERVE
+    assert conformance and conformance[0].action is ResponseAction.RECONCILE
 
 
-def test_missing_live_conformance_evidence_after_admission_is_observe_only():
+def test_missing_live_conformance_evidence_after_admission_requests_reconcile():
     signals = SessionSignals(
         last_event_at=NOW,
         last_snapshot_at=NOW,
@@ -220,7 +235,7 @@ def test_missing_live_conformance_evidence_after_admission_is_observe_only():
         for finding in findings
         if finding.reason is StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE
     ]
-    assert conformance and conformance[0].action is ResponseAction.OBSERVE
+    assert conformance and conformance[0].action is ResponseAction.RECONCILE
 
 
 def test_no_false_positive_just_before_deadline():
@@ -266,7 +281,7 @@ def test_persistent_ambiguity_escalates_to_quarantine():
     assert "reasons" in response.diagnostics
 
 
-def test_observe_only_findings_do_not_reconcile_or_quarantine():
+def test_live_conformance_first_response_is_a_fenced_reconcile():
     session = _session()
     signals = SessionSignals(
         last_event_at=NOW,
@@ -276,6 +291,8 @@ def test_observe_only_findings_do_not_reconcile_or_quarantine():
     findings = detect_stuck_state(session=session, signals=signals, now=NOW, policy=POLICY)
     response = plan_response(session=session, findings=findings)
     assert response is not None
-    assert response.reconcile is False
+    assert response.reconcile is True
     assert response.quarantine is False
+    assert response.expected_revision == session.revision
+    assert response.expected_fencing_generation == session.fencing_generation
     assert response.remediation is not None

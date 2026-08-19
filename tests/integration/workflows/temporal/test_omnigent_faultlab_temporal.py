@@ -175,7 +175,7 @@ async def fault_reconcile_managed_sessions(payload: dict[str, Any]) -> dict[str,
     assert request == {
         "sessionId": "sess:faultlab:temporal",
         "requestId": "ocm-faultlab",
-        "reasonCode": "provider_terminal_moonmind_nonterminal",
+        "reasonCode": "live_conformance_evidence_stale",
         "expectedRevision": 7,
         "expectedFencingGeneration": 3,
     }
@@ -309,7 +309,7 @@ async def test_temporal_stuck_state_update_reaches_registered_session_workflow()
                     {
                         "sessionId": "sess:faultlab:temporal",
                         "requestId": "ocm-faultlab",
-                        "reasonCode": "provider_terminal_moonmind_nonterminal",
+                        "reasonCode": "live_conformance_evidence_stale",
                         "expectedRevision": 7,
                         "expectedFencingGeneration": 3,
                     },
@@ -320,7 +320,7 @@ async def test_temporal_stuck_state_update_reaches_registered_session_workflow()
                     {
                         "sessionId": "sess:faultlab:temporal",
                         "requestId": "ocm-faultlab",
-                        "reasonCode": "provider_terminal_moonmind_nonterminal",
+                        "reasonCode": "live_conformance_evidence_stale",
                         "expectedRevision": 7,
                         "expectedFencingGeneration": 3,
                     },
@@ -328,7 +328,7 @@ async def test_temporal_stuck_state_update_reaches_registered_session_workflow()
                 assert duplicate == {"accepted": True, "alreadyApplied": True}
                 status = await handle.query("get_status")
                 assert status["lastControlReason"] == (
-                    "provider_terminal_moonmind_nonterminal"
+                    "live_conformance_evidence_stale"
                 )
                 await handle.execute_update(
                     "TerminateSession", {"requestId": "terminate-reconcile-test"}

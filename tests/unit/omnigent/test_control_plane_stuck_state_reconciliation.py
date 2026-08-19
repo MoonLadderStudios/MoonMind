@@ -581,10 +581,8 @@ async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
     """Exercise every detector condition through the repository-backed service.
 
     Each case begins on the safe side of its condition, advances only durable
-    records across the boundary, proves one idempotent fenced request where the
-    response is actionable, and proves persistent ambiguity is quarantined only
-    after a diagnostic exists. The live-conformance condition is deliberately
-    OBSERVE-only and never mutates the session.
+    records across the boundary, proves one idempotent fenced request, and proves
+    persistent ambiguity is quarantined only after a diagnostic exists.
     """
 
     baseline_now = datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
@@ -809,9 +807,24 @@ async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
             assert session_row is not None
             session_row.metadata_ = {
                 "protected_live_evidence_at": (
-                    trigger_now - timedelta(days=2)
+                    trigger_now
+                    - policy.conformance_max_age
+                    + timedelta(seconds=1)
                 ).isoformat(),
-                "conformance_runner_available": False,
+                "conformance_runner_available": True,
+            }
+            await db.commit()
+        predeadline = await service.sweep(now=trigger_now)
+        assert predeadline.findings_recorded == 0
+        assert predeadline.reconcile_requests == 0
+        async with session_factory() as db:
+            session_row = await db.get(OmnigentSession, session_id)
+            assert session_row is not None
+            session_row.metadata_ = {
+                "protected_live_evidence_at": (
+                    trigger_now - policy.conformance_max_age
+                ).isoformat(),
+                "conformance_runner_available": True,
             }
             await db.commit()
 
@@ -833,26 +846,21 @@ async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
 
     assert first.findings_recorded == 1
     assert duplicate.findings_recorded == 0
-    if reason is StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE:
-        assert first.observation_only == 1
-        assert dispatcher.calls == []
-        assert publisher.payloads == []
-        assert all(result.quarantined == 0 for result in later)
-    else:
-        assert first.reconcile_requests == 1
-        assert len(dispatcher.calls) == 1
-        call = dispatcher.calls[0]
-        assert call == {
-            "session_id": session_id,
-            "workflow_id": workflow_id,
-            "request_id": call["request_id"],
-            "reason_code": reason.value,
-            "expected_revision": str(before.revision),
-            "expected_fencing_generation": str(before.fencing_generation),
-        }
-        assert sum(result.quarantined for result in later) == 1
-        assert len(publisher.payloads) == 1
-        assert publisher.payloads[0]["payload"]["reasons"][0] == reason.value
+    assert first.observation_only == 0
+    assert first.reconcile_requests == 1
+    assert len(dispatcher.calls) == 1
+    call = dispatcher.calls[0]
+    assert call == {
+        "session_id": session_id,
+        "workflow_id": workflow_id,
+        "request_id": call["request_id"],
+        "reason_code": reason.value,
+        "expected_revision": str(before.revision),
+        "expected_fencing_generation": str(before.fencing_generation),
+    }
+    assert sum(result.quarantined for result in later) == 1
+    assert len(publisher.payloads) == 1
+    assert publisher.payloads[0]["payload"]["reasons"][0] == reason.value
 
     async with store.transaction() as repos:
         after = await repos.sessions.get(session_id)
@@ -869,17 +877,15 @@ async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
     assert sum(
         command.command_type == "submit_turn" for command in commands_after
     ) == submit_count_before
-    if reason is StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE:
-        assert after.historical_read_state != "quarantined"
-        assert all(decision.decision_code == "stuck_state_observed" for decision in decisions)
-        assert len(stuck_observations) == 4
-    else:
-        assert after.historical_read_state == "quarantined"
-        assert sum(
-            command.command_type == "request_reconcile"
-            for command in commands_after
-        ) == 1
-        assert len(stuck_observations) == 4
+    assert after.historical_read_state == "quarantined"
+    assert any(
+        decision.decision_code == "quarantine_ambiguous_state"
+        for decision in decisions
+    )
+    assert sum(
+        command.command_type == "request_reconcile" for command in commands_after
+    ) == 1
+    assert len(stuck_observations) == 4
 
 
 @pytest.mark.asyncio

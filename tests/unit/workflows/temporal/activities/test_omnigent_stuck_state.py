@@ -29,7 +29,7 @@ async def test_dispatcher_updates_the_canonical_session_supervisor_contract() ->
         session_id="sess-1",
         workflow_id="wf-1",
         request_id="ocm-1",
-        reason_code="provider_terminal_moonmind_nonterminal",
+        reason_code="live_conformance_evidence_stale",
         expected_revision="7",
         expected_fencing_generation="3",
     )
@@ -41,7 +41,7 @@ async def test_dispatcher_updates_the_canonical_session_supervisor_contract() ->
             {
                 "sessionId": "sess-1",
                 "requestId": "ocm-1",
-                "reasonCode": "provider_terminal_moonmind_nonterminal",
+                "reasonCode": "live_conformance_evidence_stale",
                 "expectedRevision": 7,
                 "expectedFencingGeneration": 3,
             },
@@ -75,7 +75,10 @@ async def test_diagnostic_publisher_uses_restricted_durable_artifact_authority()
     artifact_id = await publisher.publish(
         session=session,
         decision_id="odc-1",
-        payload={"reason": "persistent_ambiguity", "password": "must-redact"},
+        payload={
+            "reason": "live_conformance_evidence_stale",
+            "password": "must-redact",
+        },
     )
 
     assert artifact_id == "art-diagnostic"
@@ -83,4 +86,5 @@ async def test_diagnostic_publisher_uses_restricted_durable_artifact_authority()
     assert artifacts.created[0]["metadata_json"]["issue"] == (
         "MoonLadderStudios/MoonMind#3708"
     )
+    assert b"live_conformance_evidence_stale" in artifacts.written[0]["payload"]
     assert b"must-redact" not in artifacts.written[0]["payload"]

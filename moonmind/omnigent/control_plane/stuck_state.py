@@ -338,7 +338,7 @@ def detect_stuck_state(
         findings.append(
             StuckStateFinding(
                 reason=StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE,
-                action=ResponseAction.OBSERVE,
+                action=ResponseAction.RECONCILE,
                 detail=(
                     "live-conformance evidence is absent, expired, or its runner is unavailable"
                 ),
