@@ -416,6 +416,24 @@ class SessionRepository(_RepositoryBase):
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         return _session_record(row) if row is not None else None
 
+    async def list_for_workflow(
+        self, moonmind_workflow_id: str, *, moonmind_run_id: Optional[str] = None
+    ) -> list[SessionRecord]:
+        """Return canonical sessions for one Workflow/run in durable order.
+
+        Turn attempts are deliberately not part of this lookup: a newer attempt
+        can never supersede the Workflow Chat authority owned by its session.
+        """
+
+        stmt = select(OmnigentSession).where(
+            OmnigentSession.moonmind_workflow_id == moonmind_workflow_id
+        )
+        if moonmind_run_id is not None:
+            stmt = stmt.where(OmnigentSession.moonmind_run_id == moonmind_run_id)
+        stmt = stmt.order_by(OmnigentSession.created_at, OmnigentSession.session_id)
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_session_record(row) for row in rows]
+
     async def allocate_chat_binding(
         self, session_id: str, chat_binding_id: str
     ) -> SessionRecord:

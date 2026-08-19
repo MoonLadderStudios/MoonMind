@@ -40,6 +40,7 @@ from moonmind.omnigent.bridge_store import (
     bridge_failure_class,
     coalesce_bridge_status,
 )
+from moonmind.omnigent.control_plane import TurnSourceKind
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRuntimeStepExecutionLaunch,
@@ -448,10 +449,17 @@ async def test_egress_cleanup_authority_survives_newer_continuation_row(store) -
         launch_evidence_ref="artifact://launch-egress",
     )
 
-    # The production repository-publication continuation owns a new bridge row
-    # while deliberately reusing the same host lease. It must not hide the
-    # launch row's immutable cleanup authority from a later janitor process.
-    await store.bind_profile_authorization(request=continuation, **authorization)
+    # A repository-publication continuation owns a new canonical turn attempt,
+    # not a second bridge/session row, while retaining cleanup authority.
+    initial_row = await store.get_existing("initial")
+    assert initial_row is not None
+    await store.submit_canonical_turn(
+        request=continuation,
+        bridge_session_id=initial_row.bridge_session_id,
+        source_kind=TurnSourceKind.REPOSITORY_CONTINUATION,
+        effective_launch_snapshot=effective_launch,
+        caller_id="repository_publication_controller",
+    )
 
     authority = await store.get_egress_cleanup_authority(
         host_lease_ref="lease-1"
@@ -473,6 +481,7 @@ async def test_egress_cleanup_authority_survives_newer_continuation_row(store) -
         "initial:repository-continuation:1"
     )
     assert continuation_row is not None
+    assert continuation_row.bridge_session_id == initial_row.bridge_session_id
     assert continuation_row.terminal_refs["egressEvidenceRef"] == (
         "artifact://terminal-egress"
     )
@@ -1777,8 +1786,9 @@ async def _seed_chat_session(
 ):
     """Create a bridge row and drive it to the requested lifecycle state."""
 
-    await store.get_or_create(
-        request=_request(key),
+    request = _request(key)
+    bridge = await store.get_or_create(
+        request=request,
         endpoint_ref="default",
         agent_id="agent-1",
         agent_name="codex",
@@ -1786,12 +1796,19 @@ async def _seed_chat_session(
         workflow_id=workflow_id,
         agent_run_id=agent_run_id,
     )
+    await store.establish_canonical_authority(request=request, bridge=bridge)
     if session_id is not None:
         await store.attach_session(key, session_id)
         await store.record_session_created(
             key, session_id=session_id, capabilities=capabilities
         )
     if terminal_status is not None:
+        await store.record_canonical_turn_terminal(
+            key, terminal_state=terminal_status
+        )
+        await store.mark_canonical_session_terminal(
+            bridge.bridge_session_id, terminal_state=terminal_status
+        )
         await store.mark_terminal(key, status=terminal_status)
     if delete_session and session_id is not None:
         await store.record_provider_session_deleted(session_id)
@@ -1952,8 +1969,9 @@ async def test_resolve_chat_binding_cleaned_up_session(store):
         delete_session=True,
     )
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
-    assert resolution.state == CHAT_BINDING_STATE_UNAVAILABLE
-    assert resolution.unavailable_reason == "session_cleaned_up"
+    assert resolution.state == CHAT_BINDING_STATE_ENDED
+    assert resolution.read_only is True
+    assert resolution.chat_binding_id
 
 
 @pytest.mark.asyncio
@@ -2096,9 +2114,8 @@ async def _set_updated_at(store, bridge_session_id: str, when: datetime) -> None
 
 
 @pytest.mark.asyncio
-async def test_resolve_chat_binding_fails_closed_when_latest_terminal_cleaned_up(store):
-    """Never replay an older run's transcript when the newest terminal session
-    was cleaned up (MoonLadderStudios/MoonMind#3633)."""
+async def test_resolve_chat_binding_keeps_latest_terminal_history_after_cleanup(store):
+    """Provider cleanup preserves the newest session's durable transcript."""
 
     base = datetime(2026, 1, 1, tzinfo=UTC)
     # Older terminal session whose transcript is still present.
@@ -2126,8 +2143,9 @@ async def test_resolve_chat_binding_fails_closed_when_latest_terminal_cleaned_up
     await _set_updated_at(store, new_row.bridge_session_id, base + timedelta(minutes=5))
 
     resolution = await store.resolve_chat_binding(workflow_id="mm:wf-1")
-    assert resolution.state == CHAT_BINDING_STATE_UNAVAILABLE
-    assert resolution.unavailable_reason == "session_cleaned_up"
+    assert resolution.state == CHAT_BINDING_STATE_ENDED
+    assert resolution.read_only is True
+    assert resolution.chat_binding_id == new_row.chat_binding_id
 
 
 @pytest.mark.asyncio

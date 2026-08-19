@@ -440,7 +440,7 @@ async def _omnigent_execute_activity(
             )
             if not isinstance(recovery_payload, dict):
                 raise ValueError("checkpoint recovery payload is invalid")
-            decision = _checkpoint_recovery_decision(
+            immutable_decision = _checkpoint_recovery_decision(
                 recovery_payload,
                 live_authority=authority,
                 live_reattach_authorized=bool(
@@ -456,6 +456,75 @@ async def _omnigent_execute_activity(
                     == checkpoint.provider_profile_id
                 ),
             )
+            if immutable_decision["recoveryAction"] == "branch_required":
+                decision = immutable_decision
+            else:
+                from moonmind.omnigent.control_plane import (
+                    ImmutableSessionDimensions,
+                    RecoveryEvidence,
+                )
+
+                canonical = await run_store.get_canonical_session(
+                    checkpoint.bridge_session_id
+                )
+                if canonical is None:
+                    decision = {
+                        "recoveryAction": "resume_unavailable",
+                        "reasonCodes": ["canonical_session_authority_missing"],
+                    }
+                else:
+                    canonical_dimensions = ImmutableSessionDimensions.from_session(
+                        canonical
+                    )
+                    typed_decision = await run_store.decide_canonical_recovery(
+                        checkpoint.bridge_session_id,
+                        intent_dimensions=canonical_dimensions,
+                        live_authority=RecoveryEvidence(
+                            intent_dimensions=canonical_dimensions,
+                            session_dimensions=canonical_dimensions,
+                            provider_profile_lease_current=bool(
+                                authority.get("provider_lease")
+                                and authority["provider_lease"].get("active") is True
+                            ),
+                            host_available=authority.get("host_registered") is True,
+                            provider_session_reachable=(
+                                authority.get("session_valid") is True
+                            ),
+                            cursor_present=bool(
+                                checkpoint.last_bridge_event_cursor
+                                and str(checkpoint.last_bridge_event_cursor).isdecimal()
+                            ),
+                            first_message_consistent=(
+                                authority.get("first_message_consistent") is True
+                            ),
+                            credential_generation_current=(
+                                authority.get("current_credential_generation")
+                                == checkpoint.credential_generation
+                            ),
+                            workspace_artifact_valid=bool(
+                                checkpoint.validation.valid
+                                and checkpoint.validation.workspace_cold_restore_available
+                                and checkpoint.workspace_checkpoint_ref
+                                and checkpoint.head_ref
+                            ),
+                            session_evidence_valid=bool(
+                                checkpoint.validation.valid
+                                and checkpoint.external_state_ref
+                                and (
+                                    checkpoint.capture_manifest_ref
+                                    or checkpoint.terminal_ref
+                                    or checkpoint.diagnostics_ref
+                                )
+                            ),
+                        ),
+                    )
+                    decision = {
+                        "recoveryAction": typed_decision.mode.value,
+                        "reasonCodes": [typed_decision.reason],
+                        "changedDimensions": list(
+                            typed_decision.changed_dimensions
+                        ),
+                    }
             recovery_payload["recoveryDecision"] = decision
             recovery_payload["recoveryAction"] = decision["recoveryAction"]
             if decision["recoveryAction"] == "resume_unavailable":
@@ -465,11 +534,6 @@ async def _omnigent_execute_activity(
                 raise ValueError(
                     "checkpoint resume unavailable: "
                     + ",".join(map(str, reasons[:20]))
-                )
-            if decision["recoveryAction"] == "cold_restore":
-                raise ValueError(
-                    "checkpoint cold restore requires an owned workspace restoration "
-                    "boundary before Omnigent launch"
                 )
             return await coordinator.recover_from_checkpoint(
                 request=request,

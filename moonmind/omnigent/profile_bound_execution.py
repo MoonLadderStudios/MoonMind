@@ -1717,22 +1717,22 @@ class OmnigentProfileBoundExecutionCoordinator:
                             )
                         },
                     )
-                    continuation_bridge = (
-                        await self._run_store.bind_profile_authorization(
-                            request=continuation_request,
-                            endpoint_ref=binding.endpoint_ref,
-                            provider_profile_id=profile_id,
-                            provider_lease_id=provider_lease.lease_id,
-                            credential_generation=host_lease.credential_generation,
-                            host_binding_ref=binding.binding_ref,
-                            host_lease_ref=host_lease.lease_id,
-                            omnigent_host_id=host_id,
-                            effective_launch_snapshot=effective_launch,
-                        )
+                    from moonmind.omnigent.control_plane import (
+                        TurnSourceKind,
+                        compute_digest,
                     )
-                    authority_bridge_session_id = str(
-                        continuation_bridge.bridge_session_id
+
+                    await self._run_store.submit_canonical_turn(
+                        request=continuation_request,
+                        bridge_session_id=bridge.bridge_session_id,
+                        source_kind=TurnSourceKind.REPOSITORY_CONTINUATION,
+                        instruction_digest=compute_digest(
+                            _REPOSITORY_PUBLICATION_CONTINUATION_PROMPT
+                        ),
+                        effective_launch_snapshot=effective_launch,
+                        caller_id="repository_publication_controller",
                     )
+                    authority_bridge_session_id = bridge.bridge_session_id
                     authority_idempotency_key = continuation_request.idempotency_key
                     continuation_result = await self._execute_with_host_lease_heartbeat(
                         self._execute(
@@ -1751,7 +1751,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                                     "endpointRef": binding.endpoint_ref,
                                     "omnigentHostId": host_id,
                                     "bridgeSessionId": (
-                                        continuation_bridge.bridge_session_id
+                                        bridge.bridge_session_id
                                     ),
                                     "effectiveLaunchRef": effective_launch["snapshotRef"],
                                 },
@@ -1977,10 +1977,66 @@ class OmnigentProfileBoundExecutionCoordinator:
                     )
             raise
         finally:
+            # Attempt terminality is authoritative before cleanup admission.
+            # Completing a turn never terminalizes the provider session, but an
+            # accepted continuation must stop host/profile cleanup until its own
+            # terminal evidence is durable (MoonLadderStudios/MoonMind#3707).
+            for deferred_terminal in deferred_bridge_terminals:
+                try:
+                    terminal_refs = deferred_terminal["terminalRefs"]
+                    terminal_evidence_ref = next(
+                        (
+                            str(terminal_refs[key])
+                            for key in (
+                                "captureManifestRef",
+                                "finalSnapshotRef",
+                                "diagnosticsRef",
+                            )
+                            if terminal_refs.get(key)
+                        ),
+                        None,
+                    )
+                    await self._run_store.record_canonical_turn_terminal(
+                        deferred_terminal["idempotencyKey"],
+                        terminal_state=deferred_terminal["status"],
+                        terminal_evidence_ref=terminal_evidence_ref,
+                    )
+                    await self._run_store.mark_terminal(
+                        deferred_terminal["idempotencyKey"],
+                        status=deferred_terminal["status"],
+                        terminal_refs=terminal_refs,
+                    )
+                except Exception as terminal_exc:
+                    attempt_cleanup_deferred_code = (
+                        attempt_cleanup_deferred_code
+                        or type(terminal_exc).__name__
+                    )
+                    authority_reasons.append(
+                        {
+                            "stage": "terminal_evidence_commit",
+                            "code": type(terminal_exc).__name__,
+                            "failureClass": "system_error",
+                            "remediationAction": "inspect_cleanup_diagnostics",
+                        }
+                    )
+
             safe_to_release_provider = host_lease is None
+            canonical_cleanup_claim = None
+            canonical_cleanup_token = (
+                f"profile-bound-cleanup:{host_lease.lease_id}"
+                if host_lease is not None
+                else None
+            )
             if host_lease is not None and binding is not None:
                 if attempt_cleanup_deferred_code is None:
                     try:
+                        if authority_bridge_session_id and canonical_cleanup_token:
+                            canonical_cleanup_claim = (
+                                await self._run_store.claim_canonical_cleanup(
+                                    authority_bridge_session_id,
+                                    claim_token=canonical_cleanup_token,
+                                )
+                            )
                         claimed_cleanup_lease = await self._claim_host_cleanup(
                             host_lease.lease_id
                         )
@@ -2060,6 +2116,16 @@ class OmnigentProfileBoundExecutionCoordinator:
                         )
                         authority_cleanup_evidence = dict(cleanup_evidence or {})
                         await self._hosts.mark_host_lease_stopped(host_lease.lease_id)
+                        if (
+                            authority_bridge_session_id
+                            and canonical_cleanup_token
+                            and canonical_cleanup_claim is not None
+                        ):
+                            await self._run_store.complete_canonical_cleanup(
+                                authority_bridge_session_id,
+                                generation=canonical_cleanup_claim.record.generation,
+                                claim_token=canonical_cleanup_token,
+                            )
                         safe_to_release_provider = True
                         await emit(
                             "host_cleanup",
@@ -2147,22 +2213,6 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 ),
                             },
                         )
-            for deferred_terminal in deferred_bridge_terminals:
-                try:
-                    await self._run_store.mark_terminal(
-                        deferred_terminal["idempotencyKey"],
-                        status=deferred_terminal["status"],
-                        terminal_refs=deferred_terminal["terminalRefs"],
-                    )
-                except Exception as terminal_exc:
-                    authority_reasons.append(
-                        {
-                            "stage": "terminal_evidence_commit",
-                            "code": type(terminal_exc).__name__,
-                            "failureClass": "system_error",
-                            "remediationAction": "inspect_cleanup_diagnostics",
-                        }
-                    )
             lease_released = provider_lease is None
             if provider_lease is not None:
                 if safe_to_release_provider:
@@ -2209,6 +2259,33 @@ class OmnigentProfileBoundExecutionCoordinator:
                         remediation_action="inspect_cleanup_diagnostics",
                         metadata={"leaseReleased": False, "janitorRequired": True},
                         ignore_errors=True,
+                    )
+            if (
+                authority_bridge_session_id
+                and safe_to_release_provider
+                and lease_released
+                and attempt_cleanup_deferred_code is None
+            ):
+                try:
+                    await self._run_store.mark_canonical_session_terminal(
+                        authority_bridge_session_id,
+                        terminal_state=terminal_status,
+                        terminal_evidence_ref=(
+                            str(
+                                authority_cleanup_evidence.get("evidenceRef")
+                                or ""
+                            ).strip()
+                            or None
+                        ),
+                    )
+                except Exception as session_terminal_exc:
+                    authority_reasons.append(
+                        {
+                            "stage": "session_terminal_commit",
+                            "code": type(session_terminal_exc).__name__,
+                            "failureClass": "system_error",
+                            "remediationAction": "inspect_cleanup_diagnostics",
+                        }
                     )
             janitor_required = provider_lease is not None and not lease_released
             # Emit the single unified, bounded, credential-free authority chain
@@ -2390,6 +2467,10 @@ class OmnigentProfileBoundExecutionCoordinator:
         if mode == OmnigentRecoveryMode.LIVE_REATTACH:
             if request.execution_profile_ref != checkpoint.provider_profile_id:
                 raise ValueError("live reattach Provider Profile mismatch")
+            if request.idempotency_key == checkpoint.idempotency_key:
+                raise ValueError(
+                    "checkpoint resume requires a new turn idempotency key"
+                )
             profile = await self._resolve_profile(checkpoint.provider_profile_id)
             runtime_id = str(getattr(profile.runtime_id, "value", profile.runtime_id))
             harness = (
@@ -2398,13 +2479,20 @@ class OmnigentProfileBoundExecutionCoordinator:
             live_request = _bind_candidate_workspace(request, candidate_workspace)
             live_request = live_request.model_copy(
                 update={
-                    "idempotency_key": checkpoint.idempotency_key,
                     "input_refs": list(
                         dict.fromkeys(
                             [*live_request.input_refs, checkpoint.external_state_ref]
                         )
                     ),
                 }
+            )
+            from moonmind.omnigent.control_plane import TurnSourceKind
+
+            await self._run_store.submit_canonical_turn(
+                request=live_request,
+                bridge_session_id=checkpoint.bridge_session_id,
+                source_kind=TurnSourceKind.CHECKPOINT_RESUME,
+                caller_id="checkpoint_recovery_controller",
             )
             return await self._execute(
                 _bind_exact_host(

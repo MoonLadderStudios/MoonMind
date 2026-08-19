@@ -1,6 +1,7 @@
 """PostgreSQL coverage for the decisive Omnigent control-plane invariants.
 
-Source: MoonLadderStudios/MoonMind#3703 ([Omnigent control plane 2/11]).
+Source: MoonLadderStudios/MoonMind#3703 ([Omnigent control plane 2/11]) and
+MoonLadderStudios/MoonMind#3707 ([Omnigent control plane 6/11]).
 
 The uniqueness and concurrency cases that decide whether a second canonical
 chat authority can be created must be proven on PostgreSQL, not only SQLite,
@@ -20,7 +21,11 @@ from moonmind.omnigent.control_plane import (
     ControlPlaneOutcome,
     FencingConflictError,
     FencingScope,
+    ImmutableSessionDimensions,
+    OmnigentTurnService,
     RevisionConflictError,
+    TurnSourceKind,
+    TurnSubmissionRequest,
 )
 
 # The ephemeral-PostgreSQL provisioning (``control_plane_postgres_url``) and the
@@ -28,6 +33,94 @@ from moonmind.omnigent.control_plane import (
 # fault-injection replay binding in ``test_control_plane_faultlab.py``.
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
+
+
+@pytest.mark.asyncio
+async def test_postgres_continuations_share_canonical_session_and_chat_binding(
+    pg_store,
+) -> None:
+    """Every message is a turn; attempt completion never closes the session."""
+
+    service = OmnigentTurnService(pg_store)
+    dimensions = ImmutableSessionDimensions(
+        provider="codex", repository="MoonLadderStudios/MoonMind"
+    )
+    initial = TurnSubmissionRequest(
+        session_id="s1",
+        source_kind=TurnSourceKind.INITIAL,
+        caller_id="workflow-1",
+        idempotency_key="turn-initial",
+        instruction_digest="digest-initial",
+        requested_dimensions=dimensions,
+    )
+    established = await service.establish_session(
+        initial,
+        moonmind_workflow_id="wf-1",
+        provider="codex",
+        new_session_id="s1",
+        new_chat_binding_id="chat-1",
+        provider_session_ref="provider-session-1",
+    )
+    await service.record_turn_delivery(
+        established.turn_attempt.idempotency_key,
+        outcome=ControlPlaneOutcome.APPLIED,
+    )
+    await service.record_turn_terminal(
+        established.turn_attempt.idempotency_key,
+        terminal_state="completed",
+        terminal_evidence_ref="art://initial-terminal",
+    )
+
+    for source_kind, key in (
+        (TurnSourceKind.REPOSITORY_CONTINUATION, "turn-continuation"),
+        (TurnSourceKind.WORKFLOW_CHAT, "turn-chat"),
+    ):
+        outcome = await service.submit_reuse_turn(
+            TurnSubmissionRequest(
+                session_id="s1",
+                source_kind=source_kind,
+                caller_id="workflow-1",
+                idempotency_key=key,
+                instruction_digest=f"digest-{key}",
+                requested_dimensions=dimensions,
+            )
+        )
+        assert outcome.session.chat_binding_id == "chat-1"
+        await service.record_turn_delivery(
+            key, outcome=ControlPlaneOutcome.APPLIED
+        )
+        await service.record_turn_terminal(
+            key,
+            terminal_state="completed",
+            terminal_evidence_ref=f"art://{key}-terminal",
+        )
+
+    async with pg_store.transaction() as repos:
+        sessions = await repos.sessions.list_for_workflow("wf-1")
+        turns = await repos.turn_attempts.list_for_session("s1")
+        decisions = await repos.decisions.list_for_session("s1")
+    assert len(sessions) == 1
+    assert sessions[0].provider_session_ref == "provider-session-1"
+    assert sessions[0].chat_binding_id == "chat-1"
+    assert sessions[0].is_terminal is False
+    assert len(turns) == 3
+    assert all(turn.is_terminal for turn in turns)
+    assert {decision.decision_code for decision in decisions} == {
+        "turn_submission:initial",
+        "turn_submission:repository_continuation",
+        "turn_submission:workflow_chat",
+    }
+
+    await service.mark_session_terminal(
+        "s1",
+        terminal_state="completed",
+        terminal_evidence_ref="art://session-terminal",
+    )
+    capability = await service.resolve_chat_capability(
+        "chat-1", caller_authorized=True
+    )
+    assert capability.read_only is True
+    assert capability.historical_read_available is True
 
 
 @pytest.mark.asyncio

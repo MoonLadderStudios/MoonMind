@@ -195,6 +195,9 @@ class _FakeStore:
         self.appended: list[dict[str, Any]] = []
         self.lifecycle: list[dict[str, Any]] = []
         self.claimed: set[str] = set()
+        self.canonical_turns: list[dict[str, Any]] = []
+        self.canonical_deliveries: list[dict[str, Any]] = []
+        self.canonical_terminals: list[dict[str, Any]] = []
         self.event_query_keys: list[str] = []
 
     def _next_row(self):
@@ -215,6 +218,20 @@ class _FakeStore:
         if self._row and getattr(self._row, "omnigent_session_id", None) == session_id:
             return self._row
         return None
+
+    async def submit_chat_turn(self, **kwargs: Any):
+        self.canonical_turns.append(dict(kwargs))
+        return SimpleNamespace(created=len(self.canonical_turns) == 1)
+
+    async def record_canonical_turn_delivery(self, idempotency_key: str, **kwargs: Any):
+        self.canonical_deliveries.append(
+            {"idempotency_key": idempotency_key, **dict(kwargs)}
+        )
+
+    async def record_canonical_turn_terminal(self, idempotency_key: str, **kwargs: Any):
+        self.canonical_terminals.append(
+            {"idempotency_key": idempotency_key, **dict(kwargs)}
+        )
 
     async def list_event_page(self, bridge_session_id: str, *, after: int, limit: int):
         self.event_query_keys.append(bridge_session_id)
@@ -1213,7 +1230,7 @@ def test_session_without_provider_session_is_not_ready() -> None:
 
 
 def test_message_forwarded_to_bound_provider_session() -> None:
-    client, proxy, _store = _build()
+    client, proxy, store = _build()
 
     response = client.post(
         _path(f"v1/sessions/{_CHAT_BINDING_ID}/events"),
@@ -1228,6 +1245,8 @@ def test_message_forwarded_to_bound_provider_session() -> None:
     # Response is virtualized back to the chatBindingId.
     assert response.json()["session_id"] == _CHAT_BINDING_ID
     assert _PROVIDER_SESSION_ID not in response.text
+    assert store.canonical_turns[0]["source_kind"].value == "workflow_chat"
+    assert store.canonical_deliveries[0]["delivery_unknown"] is False
 
 
 def test_stop_control_uses_distinct_authority() -> None:

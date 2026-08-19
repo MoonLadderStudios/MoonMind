@@ -3596,6 +3596,34 @@ async def _claim_facade_message(
     distinct, redacted error rather than returning ``False``.
     """
 
+    from moonmind.omnigent.control_plane import (
+        ControlPlaneConflictError,
+        TurnContractError,
+        TurnSourceKind,
+    )
+
+    if event_type == "resolve_elicitation":
+        source_kind = TurnSourceKind.APPROVAL_RESPONSE
+    elif event_type in {"message", "user.message"}:
+        source_kind = TurnSourceKind.WORKFLOW_CHAT
+    else:
+        source_kind = TurnSourceKind.STEERING
+    try:
+        await store.submit_chat_turn(
+            bridge_session_id=str(getattr(row, "bridge_session_id", "") or ""),
+            idempotency_key=idempotency_key,
+            instruction_digest=payload_digest,
+            source_kind=source_kind,
+            caller_id=actor,
+        )
+    except (TurnContractError, ControlPlaneConflictError) as exc:
+        raise WorkflowChatFacadeError(
+            "The canonical session cannot accept this turn.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_SESSION_NOT_READY,
+        ) from exc
+
     event_identity = f"workflow-chat-message:{idempotency_key}"
     now = request_time or datetime.now(tz=UTC).isoformat()
     launch = dict(getattr(row, "effective_launch_snapshot_json", None) or {})
@@ -3794,6 +3822,31 @@ async def _record_facade_mutation_audit(
     if scan_evidence is not None:
         metadata.update(scan_evidence.audit_metadata())
     identity_suffix = idempotency_key or actor
+    if idempotency_key:
+        provider_receipt_id = None
+        if isinstance(upstream_result, dict):
+            provider_receipt_id = str(
+                upstream_result.get("request_id")
+                or upstream_result.get("requestId")
+                or upstream_result.get("id")
+                or ""
+            ).strip() or None
+        await store.record_canonical_turn_delivery(
+            idempotency_key,
+            delivery_unknown=outcome == "delivery_unknown",
+            provider_receipt_id=provider_receipt_id,
+            owner_class="workflow_chat",
+        )
+        if (
+            outcome in {"posted", "completed", "accepted"}
+            and control_type
+            not in {"message", "user.message", "resolve_elicitation"}
+        ):
+            await store.record_canonical_turn_terminal(
+                idempotency_key,
+                terminal_state="completed",
+                terminal_evidence_ref=metadata["durableAuditRef"],
+            )
     # A mutation is not complete without its durable receipt.  Propagate a
     # terminal-row/idempotency conflict to the caller so the durable owner can
     # retry or reconcile it; silently dropping the audit would turn a provider

@@ -2978,12 +2978,13 @@ async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness(
         checkpointDigest="sha256:" + "b" * 64,
     )
     runner = AsyncMock(return_value=AgentRunResult(summary="reattached"))
+    run_store = SimpleNamespace(submit_canonical_turn=AsyncMock())
     coordinator = OmnigentProfileBoundExecutionCoordinator(
         session_factory=lambda: None,
         lease_client=SimpleNamespace(),
         host_repository=SimpleNamespace(),
         host_runtime=SimpleNamespace(),
-        run_store=SimpleNamespace(),
+        run_store=run_store,
         execution_runner=runner,
         artifact_gateway=object(),
     )
@@ -3017,7 +3018,8 @@ async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness(
 
     assert result.summary == "reattached"
     bound = runner.await_args.args[0]
-    assert bound.idempotency_key == checkpoint.idempotency_key
+    assert bound.idempotency_key == request.idempotency_key
+    run_store.submit_canonical_turn.assert_awaited_once()
     assert bound.parameters["omnigent"]["agent"]["harnessOverride"] == "claude-native"
     assert bound.parameters["omnigent"]["session"] == {
         "hostType": "external",
@@ -3874,6 +3876,12 @@ async def _drive_authority_chain_coordinator(
             )
             return SimpleNamespace(bridge_session_id=bridge_session_id)
 
+        async def submit_canonical_turn(self, **kwargs):
+            self.bindings[kwargs["request"].idempotency_key] = kwargs[
+                "bridge_session_id"
+            ]
+            return SimpleNamespace(created=True)
+
         async def bind_egress_cleanup_authority(self, **_kwargs):
             ordered.append("egress_cleanup_authority_bound")
 
@@ -3884,6 +3892,18 @@ async def _drive_authority_chain_coordinator(
                 authority_metadata.append(metadata["authorityChain"])
 
         async def mark_terminal(self, *_args, **_kwargs):
+            return None
+
+        async def record_canonical_turn_terminal(self, *_args, **_kwargs):
+            return None
+
+        async def claim_canonical_cleanup(self, *_args, **_kwargs):
+            return SimpleNamespace(record=SimpleNamespace(generation=1))
+
+        async def complete_canonical_cleanup(self, *_args, **_kwargs):
+            return None
+
+        async def mark_canonical_session_terminal(self, *_args, **_kwargs):
             return None
 
     coordinator = OmnigentProfileBoundExecutionCoordinator(
@@ -4224,7 +4244,7 @@ async def test_coordinator_continues_same_session_until_terminal_answer() -> Non
     assert runner_calls[1][1]["defer_bridge_terminal"] is True
     assert "repository_continuation_1" in ordered
     checkpoint = metadata["omnigentCheckpointCapture"]
-    assert checkpoint["bridgeSessionId"] == "bridge-2"
+    assert checkpoint["bridgeSessionId"] == "bridge-1"
     assert checkpoint["idempotencyKey"].endswith(
         ":repository-continuation:1"
     )

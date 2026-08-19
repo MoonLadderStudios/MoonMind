@@ -1,11 +1,13 @@
 # Omnigent Control-Plane Aggregates
 
-Status: Proposed design
+Status: Implemented
 Document Class: System / Feature Design View
 Owners: MoonMind Platform
-Last updated: 2026-08-18
+Last updated: 2026-08-19
 
 **Issue:** [MoonLadderStudios/MoonMind#3703](https://github.com/MoonLadderStudios/MoonMind/issues/3703) ([Omnigent control plane 2/11]).
+
+**Lifecycle integration:** [MoonLadderStudios/MoonMind#3707](https://github.com/MoonLadderStudios/MoonMind/issues/3707) ([Omnigent control plane 6/11]).
 
 **Implementation tracking:** rollout notes and temporary handoffs belong under `docs/tmp/` or gitignored local-only artifacts, not in this canonical design document.
 
@@ -59,6 +61,43 @@ version fails closed (Compatibility Policy) rather than silently coercing.
   cannot be moved back to a nonterminal state by an ordinary update.
 - **Fail closed on conflicting immutable authority.** Conflicts are rejected at
   the repository boundary rather than selecting the newest row.
+
+## Lifecycle ownership
+
+Terminal evidence belongs to the lifecycle that produced it; matching provider
+IDs or timestamps never imply that another lifecycle ended.
+
+| Lifecycle | Owner | Terminal meaning |
+|-----------|-------|------------------|
+| Workflow Execution | `MoonMind.UserWorkflow` | Product workflow completed |
+| Step Execution | Step ledger | This logical Step execution completed |
+| AgentRun | `MoonMind.AgentRun` | One agent execution contract completed |
+| Omnigent session | `MoonMind.OmnigentSession` | Provider session is no longer active or resumable under policy |
+| Turn attempt | Session workflow | One submitted instruction reached a terminal outcome |
+| Remediation loop | Remediation controller | Candidate passed, policy exhausted, or intervention is required |
+| Checkpoint branch | Branch workflow/ledger | Branch head reached a durable outcome |
+| Chat binding | Canonical session authority | Caller can read or mutate the canonical session |
+| Host lease | Host manager | Host realization is no longer reserved |
+| Provider Profile lease | Profile manager | Credential consumer is gone and capacity is releasable |
+
+## Typed turn and recovery paths
+
+Every initial message, repository continuation, remediation, Workflow Chat
+message, steering command, approval response, checkpoint resume, and linked
+branch is represented by `TurnSubmissionRequest`. `OmnigentTurnService` validates
+canonical immutable authority, claims one fenced `submit_turn` command, records
+delivery ambiguity, observes the provider turn, and terminalizes only that turn
+attempt. Same-session work keeps the canonical session, provider attachment,
+chat binding, profile, policy, image, compatibility, and workspace authority;
+changed concrete dimensions return `branch_required`.
+
+Checkpoint recovery uses the same canonical session authority and produces one
+of `live_reattach`, `cold_restore`, `branch_required`, or `resume_unavailable`.
+Live reattach requires current profile lease, host, provider session, event
+cursor, first-message, and credential-generation evidence. Cold restore depends
+only on artifact-backed workspace and session evidence, never a stale host-local
+path. Cleanup is claimed only after the active accepted turn is terminal and is
+completed under the exact canonical cleanup generation.
 
 ## Repository boundaries
 

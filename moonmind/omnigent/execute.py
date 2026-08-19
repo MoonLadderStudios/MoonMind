@@ -1935,6 +1935,11 @@ async def run_omnigent_execution(
                     )
                 if run_store is not None:
                     await run_store.mark_posted(request.idempotency_key)
+                    record_delivery = getattr(
+                        run_store, "record_canonical_turn_delivery", None
+                    )
+                    if callable(record_delivery):
+                        await record_delivery(request.idempotency_key)
                 first_message_posted = True
                 external_state["retry"].update(
                     {
@@ -1962,7 +1967,21 @@ async def run_omnigent_execution(
                 # before dispatch; anything already queued remains pre-post
                 # replay, while events emitted during request handling are live.
                 message_posted_gate.set()
-                first_message_response = await client.post_event(session_id, first_message)
+                try:
+                    first_message_response = await client.post_event(
+                        session_id, first_message
+                    )
+                except Exception:
+                    if run_store is not None:
+                        record_delivery = getattr(
+                            run_store, "record_canonical_turn_delivery", None
+                        )
+                        if callable(record_delivery):
+                            await record_delivery(
+                                request.idempotency_key,
+                                delivery_unknown=True,
+                            )
+                    raise
                 first_message_posted = True
                 first_message_response_identifiers = _first_message_response_identifiers(
                     first_message_response
@@ -1972,6 +1991,17 @@ async def run_omnigent_execution(
                         request.idempotency_key,
                         response=first_message_response,
                     )
+                    record_delivery = getattr(
+                        run_store, "record_canonical_turn_delivery", None
+                    )
+                    if callable(record_delivery):
+                        await record_delivery(
+                            request.idempotency_key,
+                            provider_receipt_id=(
+                                first_message_response_identifiers.get("itemId")
+                                or first_message_response_identifiers.get("pendingId")
+                            ),
+                        )
                 _safe_heartbeat(
                     {
                         "omnigentSessionId": session_id,

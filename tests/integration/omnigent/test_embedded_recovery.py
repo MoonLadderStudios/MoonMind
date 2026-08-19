@@ -43,6 +43,7 @@ from moonmind.omnigent.bridge_store import (
     OmnigentDigestMismatchError,
     OmnigentIdempotencyError,
 )
+from moonmind.omnigent.control_plane import TurnSourceKind
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
@@ -508,7 +509,6 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
     runtime._prepare_skill_projection = prepare_skill_projection  # type: ignore[method-assign]
     runtime._align_workspace_ownership = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
     current_host_lease_ref: list[str] = []
-    captured_authorization: list[dict[str, object]] = []
     container_running = True
     server_container_id = hashlib.sha256(
         f"server:{workflow_id}".encode()
@@ -660,7 +660,6 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
             "_moonmindProfileAuthorization"
         ]
         current_host_lease_ref.append(authorization["hostLeaseRef"])
-        captured_authorization.append(dict(authorization))
         raise OmnigentSessionStillRunningError(
             "defer this exact host to the production janitor"
         )
@@ -682,23 +681,20 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
 
     assert current_host_lease_ref
     host_lease_ref = current_host_lease_ref[0]
-    authorization = captured_authorization[0]
     persisted_host_lease = await repository.get_host_lease(host_lease_ref)
     assert persisted_host_lease is not None
     continuation_key = f"{request.idempotency_key}:repository-continuation:1"
     continuation = request.model_copy(
         update={"idempotency_key": continuation_key}
     )
-    await store.bind_profile_authorization(
+    initial_bridge = await store.get_existing(request.idempotency_key)
+    assert initial_bridge is not None
+    await store.submit_canonical_turn(
         request=continuation,
-        endpoint_ref=str(authorization["endpointRef"]),
-        provider_profile_id=str(authorization["providerProfileId"]),
-        provider_lease_id=str(authorization["providerLeaseRef"]),
-        credential_generation=int(authorization["credentialGeneration"]),
-        host_binding_ref=str(authorization["hostBindingRef"]),
-        host_lease_ref=str(authorization["hostLeaseRef"]),
-        omnigent_host_id=str(authorization["omnigentHostId"]),
+        bridge_session_id=initial_bridge.bridge_session_id,
+        source_kind=TurnSourceKind.REPOSITORY_CONTINUATION,
         effective_launch_snapshot=persisted_host_lease.effective_launch_snapshot,
+        caller_id="repository_publication_controller",
     )
     await store.record_lifecycle_event(
         continuation_key,

@@ -431,6 +431,546 @@ class OmnigentBridgeSessionStore:
 
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
+        from moonmind.omnigent.control_plane import (
+            OmnigentControlPlaneStore,
+            OmnigentTurnService,
+        )
+
+        self._control_plane = OmnigentControlPlaneStore(session_factory)
+        self._turn_service = OmnigentTurnService(self._control_plane)
+
+    @staticmethod
+    def _canonical_dimensions(
+        request: AgentExecutionRequest,
+        *,
+        provider_profile_id: str | None = None,
+        effective_launch_snapshot: Mapping[str, Any] | None = None,
+    ):
+        """Compile immutable turn/session dimensions from trusted request state."""
+
+        from moonmind.omnigent.control_plane import (
+            ImmutableSessionDimensions,
+            compute_digest,
+        )
+
+        parameters = dict(request.parameters or {})
+        workspace = dict(request.workspace_spec or {})
+        launch = dict(effective_launch_snapshot or {})
+        repository = str(
+            parameters.get("repository") or workspace.get("repository") or ""
+        ).strip()
+        branch = str(
+            workspace.get("startingBranch")
+            or workspace.get("branch")
+            or parameters.get("startingBranch")
+            or ""
+        ).strip()
+        locator = workspace.get("workspaceLocator")
+        workspace_ref = (
+            "workspace-intent:sha256:" + compute_digest(locator)
+            if isinstance(locator, Mapping)
+            else None
+        )
+        policy_ref = str(launch.get("launchPolicyRef") or "").strip() or None
+        image_ref = str(
+            launch.get("hostImageRef") or launch.get("serverImageRef") or ""
+        ).strip() or None
+        compatibility_ref = str(
+            launch.get("compatibilityEvidenceRef") or ""
+        ).strip() or None
+        intent_digest = compute_digest(
+            {
+                "instructionRef": request.instruction_ref,
+                "runtimeCommand": (
+                    request.runtime_command.model_dump(
+                        mode="json", by_alias=True, exclude_none=True
+                    )
+                    if request.runtime_command is not None
+                    else None
+                ),
+                "resolvedSkillsetRef": request.resolved_skillset_ref,
+                "repository": repository or None,
+                "branch": branch or None,
+                "workspaceRef": workspace_ref,
+                "profile": provider_profile_id or request.execution_profile_ref,
+                "policyRef": policy_ref,
+                "imageRef": image_ref,
+            }
+        )
+        return ImmutableSessionDimensions(
+            provider=BRIDGE_PROVIDER,
+            model=str(parameters.get("model") or "").strip() or None,
+            compatibility_profile=BRIDGE_COMPATIBILITY_PROFILE,
+            provider_profile_id=(
+                str(provider_profile_id or request.execution_profile_ref or "").strip()
+                or None
+            ),
+            policy_ref=policy_ref,
+            image_manifest_ref=image_ref,
+            compatibility_ref=compatibility_ref,
+            repository=repository or None,
+            branch=branch or None,
+            workspace_ref=workspace_ref,
+            intent_digest=intent_digest,
+        )
+
+    @staticmethod
+    def _canonical_instruction_digest(
+        request: AgentExecutionRequest, *, instruction_digest: str | None = None
+    ) -> str:
+        from moonmind.omnigent.control_plane import compute_digest
+
+        return str(instruction_digest or "").strip() or compute_digest(
+            {
+                "instructionRef": request.instruction_ref,
+                "runtimeCommand": (
+                    request.runtime_command.model_dump(
+                        mode="json", by_alias=True, exclude_none=True
+                    )
+                    if request.runtime_command is not None
+                    else None
+                ),
+                "idempotencyKey": request.idempotency_key,
+            }
+        )
+
+    @staticmethod
+    def _canonical_source_kind(request: AgentExecutionRequest):
+        from moonmind.omnigent.control_plane import TurnSourceKind
+
+        parameters = dict(request.parameters or {})
+        restore = parameters.get("checkpointRestore")
+        if isinstance(restore, Mapping):
+            if restore.get("mode") == "branch":
+                return TurnSourceKind.LINKED_BRANCH
+            if restore.get("mode") == "cold_restore":
+                return TurnSourceKind.CHECKPOINT_RESUME
+        if request.remediation_workspace is not None:
+            return TurnSourceKind.REMEDIATION
+        return TurnSourceKind.INITIAL
+
+    @staticmethod
+    def _canonical_remediation_intent(
+        request: AgentExecutionRequest,
+        *,
+        dimensions: Any,
+        effective_launch_snapshot: Mapping[str, Any] | None,
+    ):
+        if request.remediation_workspace is None:
+            return None
+        from moonmind.omnigent.control_plane import RemediationTurnIntent
+
+        binding = dict(request.remediation_workspace)
+        parameters = dict(request.parameters or {})
+        gate_ref = str(parameters.get("gateResultRef") or "").strip()
+        remaining_ref = str(parameters.get("remainingWorkRef") or "").strip()
+        head_ref = str(
+            binding.get("headAuthorityRef")
+            or binding.get("baseCheckpointRef")
+            or ""
+        ).strip()
+        ordinal = int(binding.get("attemptOrdinal") or 1)
+        attempt_budget = int(
+            parameters.get("moonSpecRemediationMaxAttempts")
+            or parameters.get("attemptBudget")
+            or ordinal
+        )
+        return RemediationTurnIntent(
+            loop_id=str(binding.get("loopId") or ""),
+            remediation_attempt_ordinal=ordinal,
+            of_turn_attempt_id=str(
+                parameters.get("remediationOfTurnAttemptId")
+                or f"{binding.get('loopId')}:attempt:{max(ordinal - 1, 0)}"
+            ),
+            gate_result_ref=gate_ref,
+            remaining_work_ref=remaining_ref,
+            candidate_workspace_ref=head_ref,
+            candidate_checkpoint_ref=str(
+                binding.get("baseCheckpointRef") or ""
+            ).strip()
+            or None,
+            remediator_skill=str(
+                parameters.get("selectedSkill")
+                or request.skill.get("name")
+                or ""
+            ).strip()
+            or "remediation",
+            runtime_authority_ref=str(
+                dict(effective_launch_snapshot or {}).get("snapshotRef") or ""
+            ).strip()
+            or str(binding.get("headAuthorityRef") or ""),
+            production_boundary_evidence_ref=str(
+                binding.get("headAuthorityRef") or ""
+            ),
+            attempt_budget=attempt_budget,
+            branch_budget=int(parameters.get("branchBudget") or 1),
+            verification_requirements=tuple(
+                str(item)
+                for item in parameters.get("verificationRequirements", ())
+                if str(item).strip()
+            ),
+            allow_same_session_reuse=bool(
+                parameters.get("allowSameSessionReuse", True)
+            ),
+            grants_publication_authority=str(
+                parameters.get("publishMode") or "none"
+            ).lower()
+            not in {"", "none"},
+            granted_dimensions=dimensions,
+        )
+
+    async def establish_canonical_authority(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        bridge: OmnigentBridgeSession,
+        effective_launch_snapshot: Mapping[str, Any] | None = None,
+    ):
+        """Idempotently establish the canonical session and first turn."""
+
+        from moonmind.omnigent.control_plane import (
+            TurnSubmissionRequest,
+            compute_digest,
+        )
+
+        dimensions = self._canonical_dimensions(
+            request,
+            provider_profile_id=bridge.provider_profile_id,
+            effective_launch_snapshot=effective_launch_snapshot,
+        )
+        source_kind = self._canonical_source_kind(request)
+        restore_value = (request.parameters or {}).get("checkpointRestore")
+        restore = dict(restore_value) if isinstance(restore_value, Mapping) else {}
+        parent_session_id = (
+            str(restore.get("sourceBridgeSessionId") or "").strip()
+            if source_kind.value == "linked_branch"
+            else ""
+        ) or None
+        remediation = self._canonical_remediation_intent(
+            request,
+            dimensions=dimensions,
+            effective_launch_snapshot=effective_launch_snapshot,
+        )
+        submission = TurnSubmissionRequest(
+            session_id=bridge.bridge_session_id,
+            source_kind=source_kind,
+            caller_id=str(bridge.moonmind_agent_run_id or bridge.moonmind_workflow_id),
+            controller_id=(
+                str(request.remediation_workspace.get("loopId"))
+                if request.remediation_workspace is not None
+                else None
+            ),
+            idempotency_key=request.idempotency_key,
+            instruction_digest=self._canonical_instruction_digest(request),
+            requested_dimensions=dimensions,
+            remediation=remediation,
+            metadata={
+                "bridge_session_id": bridge.bridge_session_id,
+                "logical_step_id": _logical_step_id(request),
+                "grants_publication_authority": str(
+                    (request.parameters or {}).get("publishMode") or "none"
+                ).lower()
+                not in {"", "none"},
+                "remediation_gate_result_ref": (
+                    remediation.gate_result_ref if remediation is not None else None
+                ),
+                "remediation_remaining_work_ref": (
+                    remediation.remaining_work_ref if remediation is not None else None
+                ),
+                "request_digest": compute_digest(
+                    request.model_dump(mode="json", by_alias=True, exclude_none=True)
+                ),
+            },
+        )
+        outcome = await self._turn_service.establish_session(
+            submission,
+            moonmind_workflow_id=bridge.moonmind_workflow_id,
+            moonmind_run_id=bridge.moonmind_run_id,
+            step_execution_id=bridge.step_execution_id,
+            moonmind_agent_run_id=bridge.moonmind_agent_run_id,
+            provider=BRIDGE_PROVIDER,
+            new_session_id=bridge.bridge_session_id,
+            compatibility_profile=bridge.compatibility_profile,
+            provider_profile_id=bridge.provider_profile_id,
+            host_binding_ref=bridge.host_binding_ref,
+            host_lease_ref=bridge.host_lease_ref,
+            compatibility_ref=dimensions.compatibility_ref,
+            image_manifest_ref=dimensions.image_manifest_ref,
+            parent_session_id=parent_session_id,
+            owner_class="profile_bound_execution",
+            claim_token=f"profile-bound:{request.idempotency_key}",
+        )
+        await self._prepare_bridge_for_turn(
+            bridge_session_id=bridge.bridge_session_id,
+            idempotency_key=request.idempotency_key,
+            turn_attempt_id=outcome.turn_attempt.turn_attempt_id,
+        )
+        return outcome
+
+    async def submit_canonical_turn(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        bridge_session_id: str,
+        source_kind: Any,
+        instruction_digest: str | None = None,
+        effective_launch_snapshot: Mapping[str, Any] | None = None,
+        caller_id: str = "session_workflow",
+    ):
+        """Admit one reuse turn without allocating another bridge row."""
+
+        from moonmind.omnigent.control_plane import TurnSubmissionRequest
+
+        bridge = await self.get_bridge_session(bridge_session_id)
+        if bridge is None:
+            raise OmnigentIdempotencyError(
+                "canonical turn references an unknown bridge projection"
+            )
+        dimensions = self._canonical_dimensions(
+            request,
+            provider_profile_id=bridge.provider_profile_id,
+            effective_launch_snapshot=(
+                effective_launch_snapshot
+                or bridge.effective_launch_snapshot_json
+                or {}
+            ),
+        )
+        remediation = self._canonical_remediation_intent(
+            request,
+            dimensions=dimensions,
+            effective_launch_snapshot=(
+                effective_launch_snapshot
+                or bridge.effective_launch_snapshot_json
+                or {}
+            ),
+        )
+        submission = TurnSubmissionRequest(
+            session_id=bridge_session_id,
+            source_kind=source_kind,
+            caller_id=caller_id,
+            controller_id=(
+                remediation.loop_id if remediation is not None else None
+            ),
+            idempotency_key=request.idempotency_key,
+            instruction_digest=self._canonical_instruction_digest(
+                request, instruction_digest=instruction_digest
+            ),
+            requested_dimensions=dimensions,
+            remediation=remediation,
+            metadata={"bridge_session_id": bridge_session_id},
+        )
+        outcome = await self._turn_service.submit_reuse_turn(
+            submission,
+            owner_class="profile_bound_execution",
+            claim_token=f"profile-bound:{request.idempotency_key}",
+        )
+        await self._prepare_bridge_for_turn(
+            bridge_session_id=bridge_session_id,
+            idempotency_key=request.idempotency_key,
+            turn_attempt_id=outcome.turn_attempt.turn_attempt_id,
+        )
+        return outcome
+
+    async def submit_chat_turn(
+        self,
+        *,
+        bridge_session_id: str,
+        idempotency_key: str,
+        instruction_digest: str,
+        source_kind: Any,
+        caller_id: str,
+    ):
+        """Create and claim a chat/control turn from canonical binding authority."""
+
+        from moonmind.omnigent.control_plane import (
+            CallerAuthorityError,
+            ImmutableSessionDimensions,
+            TurnSubmissionRequest,
+        )
+
+        bridge = await self.get_bridge_session(bridge_session_id)
+        if bridge is None:
+            raise OmnigentIdempotencyError("chat binding has no bridge projection")
+        async with self._control_plane.transaction() as repos:
+            canonical = await repos.sessions.get(bridge_session_id)
+        if canonical is None:
+            raise CallerAuthorityError("chat binding has no canonical session")
+        request = TurnSubmissionRequest(
+            session_id=bridge_session_id,
+            source_kind=source_kind,
+            caller_id=caller_id,
+            idempotency_key=idempotency_key,
+            instruction_digest=instruction_digest,
+            requested_dimensions=ImmutableSessionDimensions.from_session(canonical),
+            metadata={"bridge_session_id": bridge_session_id},
+        )
+        outcome = await self._turn_service.submit_reuse_turn(
+            request,
+            owner_class="workflow_chat",
+            claim_token=f"workflow-chat:{idempotency_key}",
+        )
+        async with self._session_factory() as session:
+            row = await session.get(
+                OmnigentBridgeSession, bridge_session_id, with_for_update=True
+            )
+            if row is None:
+                raise OmnigentIdempotencyError("chat binding projection disappeared")
+            metadata = dict(row.metadata_ or {})
+            metadata["canonicalTurnIdempotencyKey"] = idempotency_key
+            metadata["canonicalTurnAttemptId"] = (
+                outcome.turn_attempt.turn_attempt_id
+            )
+            metadata["canonicalTurnSourceKind"] = source_kind.value
+            row.metadata_ = metadata
+            await session.commit()
+        return outcome
+
+    async def _prepare_bridge_for_turn(
+        self,
+        *,
+        bridge_session_id: str,
+        idempotency_key: str,
+        turn_attempt_id: str,
+    ) -> None:
+        """Reset only the legacy projection's attempt-local dispatch fields."""
+
+        async with self._session_factory() as session:
+            row = await session.get(
+                OmnigentBridgeSession, bridge_session_id, with_for_update=True
+            )
+            if row is None:
+                raise OmnigentIdempotencyError("missing bridge projection")
+            metadata = dict(row.metadata_ or {})
+            prior = list(metadata.get("canonicalTurnHistory") or [])
+            current_key = str(metadata.get("canonicalTurnIdempotencyKey") or "")
+            if current_key and current_key != idempotency_key:
+                prior.append(
+                    {
+                        "idempotencyKey": current_key,
+                        "turnAttemptId": metadata.get("canonicalTurnAttemptId"),
+                        "firstMessageDigest": row.first_message_digest,
+                        "firstMessageItemId": row.first_message_item_id,
+                        "firstMessagePendingId": row.first_message_pending_id,
+                        "terminalRefs": dict(row.terminal_refs or {}),
+                    }
+                )
+                metadata["canonicalTurnHistory"] = prior[-64:]
+                row.first_message_state = FIRST_MESSAGE_NOT_PREPARED
+                row.first_message_digest = None
+                row.first_message_post_attempted_at = None
+                row.first_message_posted_at = None
+                row.first_message_pending_id = None
+                row.first_message_item_id = None
+                row.status = STATUS_ACTIVE
+            metadata["canonicalTurnIdempotencyKey"] = idempotency_key
+            metadata["canonicalTurnAttemptId"] = turn_attempt_id
+            row.metadata_ = metadata
+            await session.commit()
+
+    async def record_canonical_turn_delivery(
+        self,
+        idempotency_key: str,
+        *,
+        delivery_unknown: bool = False,
+        provider_receipt_id: str | None = None,
+        owner_class: str = "profile_bound_execution",
+    ):
+        from moonmind.omnigent.control_plane import ControlPlaneOutcome
+
+        prefix = (
+            "workflow-chat" if owner_class == "workflow_chat" else "profile-bound"
+        )
+        return await self._turn_service.record_turn_delivery(
+            idempotency_key,
+            outcome=(
+                ControlPlaneOutcome.DELIVERY_UNKNOWN
+                if delivery_unknown
+                else ControlPlaneOutcome.APPLIED
+            ),
+            owner_class=owner_class,
+            claim_token=f"{prefix}:{idempotency_key}",
+            provider_receipt_id=provider_receipt_id,
+        )
+
+    async def record_canonical_turn_terminal(
+        self,
+        idempotency_key: str,
+        *,
+        terminal_state: str,
+        terminal_evidence_ref: str | None = None,
+    ):
+        return await self._turn_service.record_turn_terminal(
+            idempotency_key,
+            terminal_state=terminal_state,
+            attempt_outcome=terminal_state,
+            terminal_evidence_ref=terminal_evidence_ref,
+        )
+
+    async def mark_canonical_session_terminal(
+        self,
+        bridge_session_id: str,
+        *,
+        terminal_state: str,
+        terminal_evidence_ref: str | None = None,
+    ):
+        """Terminalize provider-session authority independently of an attempt."""
+
+        return await self._turn_service.mark_session_terminal(
+            bridge_session_id,
+            terminal_state=terminal_state,
+            terminal_evidence_ref=terminal_evidence_ref,
+        )
+
+    async def claim_canonical_cleanup(
+        self,
+        bridge_session_id: str,
+        *,
+        claim_token: str,
+    ):
+        """Fence cleanup against accepted canonical continuation activity."""
+
+        return await self._turn_service.claim_cleanup(
+            bridge_session_id,
+            owner_class="profile_bound_execution",
+            claim_token=claim_token,
+        )
+
+    async def complete_canonical_cleanup(
+        self,
+        bridge_session_id: str,
+        *,
+        generation: int,
+        claim_token: str,
+    ):
+        """Complete the exact canonical cleanup claim after lease cleanup."""
+
+        return await self._turn_service.complete_cleanup(
+            bridge_session_id,
+            generation=generation,
+            owner_class="profile_bound_execution",
+            claim_token=claim_token,
+        )
+
+    async def decide_canonical_recovery(
+        self,
+        bridge_session_id: str,
+        *,
+        intent_dimensions: Any,
+        live_authority: Any,
+    ):
+        """Apply the shared recovery decision to canonical session evidence."""
+
+        return await self._turn_service.decide_session_recovery(
+            bridge_session_id,
+            intent_dimensions=intent_dimensions,
+            live_authority=live_authority,
+        )
+
+    async def get_canonical_session(self, bridge_session_id: str):
+        """Return the canonical provider-session authority for integrations."""
+
+        async with self._control_plane.transaction() as repos:
+            return await repos.sessions.get(bridge_session_id)
 
     async def list_embedded_host_readiness(self) -> list[dict[str, Any]]:
         """Return bounded, non-secret readiness for active embedded host leases."""
@@ -1070,7 +1610,13 @@ class OmnigentBridgeSessionStore:
                 stored.omnigent_host_id = omnigent_host_id
             await session.commit()
             await session.refresh(stored)
-            return _detached(session, stored)
+            detached = _detached(session, stored)
+        await self.establish_canonical_authority(
+            request=request,
+            bridge=detached,
+            effective_launch_snapshot=effective_launch_snapshot,
+        )
+        return detached
 
     async def bind_egress_cleanup_authority(
         self,
@@ -1994,6 +2540,24 @@ class OmnigentBridgeSessionStore:
         key = (chat_binding_id or "").strip()
         if not key:
             return None
+        async with self._control_plane.transaction() as repos:
+            alias = await repos.chat_binding_aliases.resolve(key)
+            canonical = None
+            if alias is not None and alias.resolves and alias.session_id is not None:
+                canonical = await repos.sessions.get(alias.session_id)
+        if canonical is not None:
+            async with self._session_factory() as session:
+                row = await session.get(OmnigentBridgeSession, canonical.session_id)
+                if row is None:
+                    return None
+                # Canonical session terminality is the authority presented to
+                # both browser capability derivation and server-side mutation
+                # enforcement. A terminal turn alone never reaches this field.
+                if canonical.terminal_state:
+                    row.status = coalesce_bridge_status(canonical.terminal_state)
+                elif canonical.reconciled_state:
+                    row.status = coalesce_bridge_status(canonical.reconciled_state)
+                return _detached(session, row)
         async with self._session_factory() as session:
             result = await session.execute(
                 select(OmnigentBridgeSession)
@@ -2002,6 +2566,11 @@ class OmnigentBridgeSessionStore:
             )
             row = result.scalars().first()
             if row is None:
+                return None
+            if not _is_terminal_bridge_status(row.status):
+                # A pre-control-plane active row has no canonical mutation
+                # authority. It may be backfilled, but it cannot become an
+                # alternate live Workflow Chat path.
                 return None
             return _detached(session, row)
 
@@ -2150,6 +2719,63 @@ class OmnigentBridgeSessionStore:
         if not workflow:
             return self._unavailable_binding(workflow, None, "no_session")
         run = (run_id or "").strip() or None
+        async with self._control_plane.transaction() as repos:
+            canonical_sessions = await repos.sessions.list_for_workflow(
+                workflow, moonmind_run_id=run
+            )
+        if canonical_sessions:
+            projections: list[tuple[Any, OmnigentBridgeSession]] = []
+            async with self._session_factory() as session:
+                for canonical in canonical_sessions:
+                    row = await session.get(
+                        OmnigentBridgeSession, canonical.session_id
+                    )
+                    if row is not None:
+                        projections.append((canonical, _detached(session, row)))
+            supported = [
+                (canonical, row)
+                for canonical, row in projections
+                if _serves_native_chat(row)
+            ]
+            if not supported:
+                return self._unavailable_binding(
+                    workflow, run, "unsupported_runtime"
+                )
+            active = [
+                (canonical, row)
+                for canonical, row in supported
+                if not canonical.is_terminal
+                and canonical.cleanup_state not in {"complete", "released"}
+            ]
+            active_capable = [
+                (canonical, row)
+                for canonical, row in active
+                if canonical.provider_session_ref and canonical.chat_binding_id
+            ]
+            if len(active_capable) > 1:
+                raise BridgeChatBindingAmbiguousError(
+                    "Workflow has multiple active canonical Omnigent sessions"
+                )
+            if active_capable:
+                canonical, row = active_capable[0]
+                row.status = STATUS_ACTIVE
+                return await self._live_binding(
+                    row, workflow, run, terminal=False
+                )
+            if active:
+                return self._starting_binding(active[0][1], workflow, run)
+            canonical, row = supported[-1]
+            if not canonical.provider_session_ref:
+                return self._unavailable_binding(
+                    workflow, run, "session_cleaned_up"
+                )
+            row.status = coalesce_bridge_status(
+                canonical.terminal_state or "completed"
+            )
+            return await self._live_binding(row, workflow, run, terminal=True)
+
+        # Historical pre-control-plane rows remain readable until the additive
+        # backfill has materialized their canonical aliases.
         async with self._session_factory() as session:
             statement = select(OmnigentBridgeSession).where(
                 OmnigentBridgeSession.moonmind_workflow_id == workflow
@@ -2176,17 +2802,11 @@ class OmnigentBridgeSessionStore:
             row for row in supported if not _is_terminal_bridge_status(row.status)
         ]
         active_capable = [row for row in active if _is_provider_bound(row)]
-        if len(active_capable) > 1:
-            raise BridgeChatBindingAmbiguousError(
-                "Workflow has multiple active chat-capable Omnigent sessions"
-            )
         if active_capable:
-            return await self._live_binding(
-                active_capable[0], workflow, run, terminal=False
+            return self._unavailable_binding(
+                workflow, run, "canonical_session_authority_missing"
             )
         if active:
-            # A launch that has not yet attached a provider session is still
-            # starting; there is no durable binding to allocate yet.
             return self._starting_binding(active[0], workflow, run)
 
         # Identify the *authoritative* latest terminal session before selecting a
@@ -2309,7 +2929,14 @@ class OmnigentBridgeSessionStore:
                 row.status = STATUS_CREATING
             await session.commit()
             await session.refresh(row)
-            return _detached(session, row)
+            detached = _detached(session, row)
+        async with self._control_plane.transaction() as repos:
+            canonical = await repos.sessions.get(detached.bridge_session_id)
+            if canonical is not None:
+                await repos.sessions.attach_provider_session(
+                    canonical.session_id, session_id
+                )
+        return detached
 
     async def record_session_created(
         self,
@@ -2464,7 +3091,23 @@ class OmnigentBridgeSessionStore:
                 row.metadata_ = metadata
                 await session.commit()
                 await session.refresh(row)
-            return _detached(session, row)
+            detached = _detached(session, row)
+        async with self._control_plane.transaction() as repos:
+            canonical = await repos.sessions.get(detached.bridge_session_id)
+            if canonical is not None:
+                if canonical.provider_session_ref is None:
+                    canonical = await repos.sessions.attach_provider_session(
+                        canonical.session_id, session_id
+                    )
+                if detached.chat_binding_id:
+                    canonical = await repos.sessions.allocate_chat_binding(
+                        canonical.session_id, detached.chat_binding_id
+                    )
+                    await repos.chat_binding_aliases.register(
+                        chat_binding_id=detached.chat_binding_id,
+                        session_id=canonical.session_id,
+                    )
+        return detached
 
     async def record_resource_harvest_completed(self, session_id: str) -> None:
         """Persist authority that provider resources were harvested successfully."""
@@ -2712,13 +3355,16 @@ class OmnigentBridgeSessionStore:
         events: Sequence[dict[str, Any]] | None = None,
     ) -> OmnigentBridgeSession:
         async with self._session_factory() as session:
-            result = await session.execute(
-                select(OmnigentBridgeSession)
-                .where(OmnigentBridgeSession.idempotency_key == idempotency_key)
-                .with_for_update()
-                .limit(1)
+            resolved = await self._get(session, idempotency_key)
+            row = (
+                await session.get(
+                    OmnigentBridgeSession,
+                    resolved.bridge_session_id,
+                    with_for_update=True,
+                )
+                if resolved is not None
+                else None
             )
-            row = result.scalars().first()
             if row is None:
                 raise OmnigentIdempotencyError("missing Omnigent bridge session row")
             row.status = coalesce_bridge_status(status)
@@ -2845,6 +3491,8 @@ class OmnigentBridgeSessionStore:
             raise OmnigentIdempotencyError("missing Omnigent bridge session id")
         if not events:
             return []
+        canonical_terminal_key: str | None = None
+        canonical_terminal_state: str | None = None
         async with self._session_factory() as session:
             result = await session.execute(
                 select(OmnigentBridgeSession)
@@ -2933,6 +3581,17 @@ class OmnigentBridgeSessionStore:
                     "turn.completed",
                 }:
                     authority_state["activeTurnId"] = None
+                    if row_metadata.get("canonicalTurnSourceKind") in {
+                        "workflow_chat",
+                        "steering",
+                        "approval_response",
+                    }:
+                        canonical_terminal_key = _string_or_none(
+                            row_metadata.get("canonicalTurnIdempotencyKey")
+                        )
+                        canonical_terminal_state = (
+                            "failed" if event_type == "response.failed" else "completed"
+                        )
                 if (
                     event_type
                     in {"response.elicitation_request", "elicitation_request"}
@@ -2949,7 +3608,15 @@ class OmnigentBridgeSessionStore:
             for event_row in rows:
                 await session.refresh(event_row)
                 session.expunge(event_row)
-            return rows
+        if canonical_terminal_key and canonical_terminal_state:
+            await self.record_canonical_turn_terminal(
+                canonical_terminal_key,
+                terminal_state=canonical_terminal_state,
+                terminal_evidence_ref=(
+                    f"omnigent-bridge-event://{key}/{rows[-1].sequence}"
+                ),
+            )
+        return rows
 
     async def attach_active_journal_refs(
         self, bridge_session_id: str, *, raw_ref: str, normalized_ref: str
@@ -3002,7 +3669,26 @@ class OmnigentBridgeSessionStore:
                 OmnigentBridgeSession.idempotency_key == idempotency_key
             )
         )
-        return result.scalar_one_or_none()
+        row = result.scalar_one_or_none()
+        if row is not None:
+            return row
+
+        # Same-session continuations own idempotency on OmnigentTurnAttempt,
+        # not on another bridge row. Resolve their canonical session directly;
+        # the session id is the durable bridge projection id for newly created
+        # control-plane sessions.
+        from api_service.db.models import OmnigentTurnAttempt
+
+        turn = (
+            await session.execute(
+                select(OmnigentTurnAttempt).where(
+                    OmnigentTurnAttempt.idempotency_key == idempotency_key
+                )
+            )
+        ).scalar_one_or_none()
+        if turn is None:
+            return None
+        return await session.get(OmnigentBridgeSession, turn.session_id)
 
     async def _require(
         self, session: AsyncSession, idempotency_key: str
