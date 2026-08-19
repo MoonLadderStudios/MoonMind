@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from .harness import FaultPlan, ObservationFault
 from .scenario import (
+    LOGICAL_OPERATION_ORDER,
     CommandWindow,
     EmittedEvent,
     FaultScenario,
@@ -23,6 +24,20 @@ from .scenario import (
     SideEffect,
     SnapshotReturn,
 )
+
+
+class UnrepresentableScenarioStepError(ValueError):
+    """A declarative scenario step has no executable :class:`FaultPlan` form.
+
+    ``FaultPlan`` can only express the faults the generator produces: a scripted
+    submit response, per-command crash windows, and the canonical observation
+    faults in ``_FAULT_TO_STEP``. A declarative scenario can encode strictly more
+    (an ``ensure_session`` dropped response, a malformed/auth failure on an
+    arbitrary operation, a custom snapshot return, a duplicate/reordered event
+    frontier). Converting such a step by silently dropping it would replay the
+    scenario *as if the fault were absent*, weakening the fixture without warning,
+    so conversion fails fast instead.
+    """
 
 # Each observation fault has one canonical declarative encoding and its inverse.
 _FAULT_TO_STEP: dict[ObservationFault, ScenarioStep] = {
@@ -60,13 +75,33 @@ def _decode_observation_fault(step: ScenarioStep) -> ObservationFault | None:
     for fault, encoded in _FAULT_TO_STEP.items():
         if (
             step.on == encoded.on
+            and step.side_effect == encoded.side_effect
             and step.response == encoded.response
             and step.ret == encoded.ret
             and step.emit == encoded.emit
             and step.disconnect == encoded.disconnect
+            and step.duplicate == encoded.duplicate
+            and step.reorder == encoded.reorder
         ):
             return fault
     return None
+
+
+def _is_representable_submit(step: ScenarioStep) -> bool:
+    """Whether a ``submit_turn`` step is one ``FaultPlan`` can round-trip.
+
+    ``FaultPlan`` only carries the submit *response*; any other scripted behavior
+    on the submit step (an emitted frontier, a snapshot return, a disconnect, a
+    duplicate/reorder) has no executable representation and must not be dropped.
+    """
+
+    return (
+        step.emit == ()
+        and step.ret is None
+        and step.disconnect is False
+        and step.duplicate is False
+        and step.reorder is False
+    )
 
 
 def plan_to_scenario(
@@ -90,7 +125,7 @@ def plan_to_scenario(
     )
 
     # Crash windows, in a stable operation order.
-    for operation in LogicalOperation:
+    for operation in LOGICAL_OPERATION_ORDER:
         window = plan.command_crashes.get(operation)
         if window is not None:
             steps.append(ScenarioStep(on=operation, crash_at=window))
@@ -126,12 +161,22 @@ def scenario_to_plan(scenario: FaultScenario) -> FaultPlan:
         if step.crash_at is not None:
             command_crashes[step.on] = step.crash_at
             continue
-        if step.on == LogicalOperation.SUBMIT_TURN and step.crash_at is None:
+        if step.on == LogicalOperation.SUBMIT_TURN:
+            if not _is_representable_submit(step):
+                raise UnrepresentableScenarioStepError(
+                    "submit_turn step carries behavior a FaultPlan cannot "
+                    "represent (only the submit response round-trips)"
+                )
             submit_response = step.response
             continue
         decoded = _decode_observation_fault(step)
-        if decoded is not None:
-            observation_faults.append(decoded)
+        if decoded is None:
+            raise UnrepresentableScenarioStepError(
+                f"scenario step on {step.on.value!r} has no executable FaultPlan "
+                "representation; represent it in FaultPlan or reject the scenario "
+                "rather than replaying it as if the fault were absent"
+            )
+        observation_faults.append(decoded)
 
     return FaultPlan(
         seed=scenario.seed,
@@ -148,4 +193,8 @@ def scenario_to_plan(scenario: FaultScenario) -> FaultPlan:
     )
 
 
-__all__ = ["plan_to_scenario", "scenario_to_plan"]
+__all__ = [
+    "UnrepresentableScenarioStepError",
+    "plan_to_scenario",
+    "scenario_to_plan",
+]

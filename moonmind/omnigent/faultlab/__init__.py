@@ -31,7 +31,11 @@ from .ci_seeds import (
     rotating_enabled,
     rotating_seeds,
 )
-from .diagnostics import DiagnosticBundle, build_diagnostic_bundle
+from .diagnostics import (
+    DiagnosticBundle,
+    build_diagnostic_bundle,
+    write_diagnostic_bundle,
+)
 from .generator import generate_plan, is_deterministic
 from .harness import (
     ExecutionTrace,
@@ -107,6 +111,7 @@ __all__ = [
     "minimize_plan",
     "DiagnosticBundle",
     "build_diagnostic_bundle",
+    "write_diagnostic_bundle",
     # CI seed-range policy (fixed PR corpus vs rotating main/schedule window)
     "PR_CI_SEED_COUNT",
     "pr_ci_seeds",

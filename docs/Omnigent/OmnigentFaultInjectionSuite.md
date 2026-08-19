@@ -150,9 +150,12 @@ replay corpus.
   consume the same scenarios and provider ledger through the boundary-neutral
   projection in `moonmind/omnigent/faultlab/projection.py` (`project_run`), which
   turns an execution trace into an ordered, secret-safe logical command stream.
-  The framework is intentionally layer-neutral, so each binding is a thin adapter
-  that replays that projection at its real boundary and re-proves the invariants
-  there:
+  Each projected command carries its attempt disposition (attempt count, crash
+  windows, per-attempt transport responses, whether a receipt was delivered) so a
+  faulted authority handoff — for example an `after_side_effect_before_receipt`
+  crash — replays as the ambiguity it was, not as a clean transition. The
+  framework is intentionally layer-neutral, so each binding is a thin adapter that
+  replays that projection at its real boundary and re-proves the invariants there:
   - **PostgreSQL repository/concurrency** — `tests/integration/omnigent/`
     `test_control_plane_faultlab.py` replays the projected command stream against
     the real `moonmind.omnigent.control_plane` repositories, re-proving durable
@@ -176,10 +179,15 @@ replay corpus.
     `frontend/src/browser/omnigentFaultReplay.browser.test.ts` exercises the real
     Workflow Detail parse/dedup contract under `npm run ui:test:browser`.
   - **Exact-image** — `moonmind/omnigent/faultlab/image_smoke.py` runs a bounded
-    deterministic fault matrix; `tools/run_omnigent_fault_image_smoke.py` and the
-    `omnigent-fault-image-smoke` workflow run it *inside* the deployable API and
-    worker images so image authority drift (#3694) fails the smoke. The matrix
-    core is proven hermetically in `tests/unit/omnigent/faultlab/test_image_smoke.py`.
+    deterministic fault matrix. The `omnigent-fault-image-smoke` workflow runs it
+    *inside* the deployable API and worker images as the packaged module
+    `python -m moonmind.omnigent.faultlab.image_smoke` (which ships in the image's
+    own `moonmind` install; `tools/run_omnigent_fault_image_smoke.py` is only a
+    local wrapper) so image authority drift (#3694) fails the smoke. Each role leg
+    resolves that role's real startup module in the image and the report records
+    the image's own verified build id plus the pinned digest as provenance. The
+    matrix core is proven hermetically in
+    `tests/unit/omnigent/faultlab/test_image_smoke.py`.
 
 Every failure prints and can upload a reproduction-complete, secret-safe
 diagnostic bundle (seed, minimized scenario, decision journal, provider request

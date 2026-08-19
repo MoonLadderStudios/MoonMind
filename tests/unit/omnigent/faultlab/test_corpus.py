@@ -86,3 +86,15 @@ def test_ingest_incident_raises_on_non_reproducing_plan():
             source_ref="#0",
             invariant="eventual_convergence",
         )
+
+
+def test_ingest_incident_rejects_unknown_invariant_name():
+    """A misspelled/unknown invariant name is a hard error, not a silent no-op."""
+
+    with pytest.raises(ValueError, match="unknown invariant name"):
+        ingest_incident(
+            FaultPlan(),
+            scenario_id="x",
+            source_ref="#0",
+            invariant="not_a_real_invariant",
+        )

@@ -33,6 +33,7 @@ thresholds. They remain valuable for local-dev verification.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -185,6 +186,60 @@ def _silence_workflow_visibility(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+_CONTINUED_AS_NEW_FIELD = "workflow_execution_continued_as_new_event_attributes"
+_STARTED_FIELD = "workflow_execution_started_event_attributes"
+
+
+def _history_continued_as_new_run_id(history: Any) -> str | None:
+    """The run id a Continue-As-New event handed off to, or ``None``."""
+
+    for event in history.events:
+        if event.HasField(_CONTINUED_AS_NEW_FIELD):
+            run_id = getattr(event, _CONTINUED_AS_NEW_FIELD).new_execution_run_id
+            return run_id or None
+    return None
+
+
+async def _run_chain_histories(
+    client: Any, workflow_id: str, first_run_id: str
+) -> list[Any]:
+    """Walk the Continue-As-New run chain, returning each run's history in order."""
+
+    chain: list[Any] = []
+    run_id: str | None = first_run_id
+    seen: set[str] = set()
+    while run_id and run_id not in seen:
+        seen.add(run_id)
+        history = await client.get_workflow_handle(
+            workflow_id, run_id=run_id
+        ).fetch_history()
+        chain.append(history)
+        run_id = _history_continued_as_new_run_id(history)
+    return chain
+
+
+def _restored_session_epoch(history: Any) -> int | None:
+    """The session epoch a Continue-As-New successor run started from.
+
+    Returns ``None`` for a run that was not started by Continue-As-New (no
+    ``continued_execution_run_id``) so a caller can distinguish the original run
+    from a successor whose state was restored across the boundary.
+    """
+
+    for event in history.events:
+        if not event.HasField(_STARTED_FIELD):
+            continue
+        attrs = getattr(event, _STARTED_FIELD)
+        if not attrs.continued_execution_run_id:
+            return None
+        payloads = attrs.input.payloads
+        if not payloads:
+            return None
+        data = json.loads(payloads[0].data.decode("utf-8"))
+        return data.get("sessionEpoch") or data.get("session_epoch")
+    return None
+
+
 async def _wait_for_status(handle: Any, predicate: Any, *, timeout: float = 8.0) -> dict:
     deadline = asyncio.get_running_loop().time() + timeout
     while True:
@@ -322,21 +377,68 @@ async def test_temporal_worker_restart_and_continue_as_new_preserve_authority() 
             ):
                 result = await update_task
                 assert result["status"] == "completed"
+
+                first_run_id = handle.first_execution_run_id
+                assert first_run_id is not None
+
+                # Deterministically drive the workflow across the Continue-As-New
+                # event threshold instead of relying on incidental history growth:
+                # benign re-attach signals grow history without minting a new turn
+                # identity, so the workflow provably continues-as-new. Stop as soon
+                # as the first run records a Continue-As-New event.
+                continued_as_new = False
+                for _ in range(120):
+                    first_history = await env.client.get_workflow_handle(
+                        handle.id, run_id=first_run_id
+                    ).fetch_history()
+                    if _history_continued_as_new_run_id(first_history) is not None:
+                        continued_as_new = True
+                        break
+                    await handle.signal(
+                        "attach_runtime_handles",
+                        {"containerId": "ctr-2", "threadId": "thread-2"},
+                    )
+                assert continued_as_new, "workflow never continued-as-new"
+
                 status = await handle.query("get_status")
-                # Monotonic authority: the session epoch never regressed.
+                # Monotonic authority: the session epoch never regressed across the
+                # Continue-As-New boundary.
                 assert status["binding"]["sessionEpoch"] >= 1
+
                 await handle.execute_update(
                     "TerminateSession",
                     {"reason": "done", "requestId": "req-terminate-2"},
                 )
                 final = await handle.result()
+                # First run's history (ends in the Continue-As-New event).
                 history = await handle.fetch_history()
+                run_chain = await _run_chain_histories(
+                    env.client, handle.id, first_run_id
+                )
 
     assert final["status"] == "terminated"
     identity = next(iter(_FAULT.attempts_by_identity))
     # At-most-once held across the worker restart.
     assert _FAULT.ledger.accepted_side_effect_count(identity) == 1
     assert _FAULT.ledger.keys_with_multiple_side_effects() == []
+
+    # Prove Continue-As-New actually occurred: the run chain has a successor, at
+    # least one run ended with a Continue-As-New event, and the successor
+    # execution restored the preserved session epoch (monotonic authority carried
+    # across the restart) rather than starting a fresh session.
+    assert len(run_chain) >= 2, "expected a Continue-As-New successor run"
+    continued_runs = sum(
+        1
+        for run_history in run_chain
+        if _history_continued_as_new_run_id(run_history) is not None
+    )
+    assert continued_runs >= 1, "no Continue-As-New event in the run chain"
+    successor_epochs = [
+        _restored_session_epoch(run_history) for run_history in run_chain[1:]
+    ]
+    assert any(epoch == 1 for epoch in successor_epochs), (
+        f"successor did not restore the preserved session epoch: {successor_epochs}"
+    )
 
     replayer = Replayer(
         workflows=[MoonMindAgentSessionWorkflow],

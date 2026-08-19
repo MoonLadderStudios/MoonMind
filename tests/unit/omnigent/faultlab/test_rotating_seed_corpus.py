@@ -20,7 +20,6 @@ Two things are proven here:
 
 from __future__ import annotations
 
-import json
 import os
 import time
 from pathlib import Path
@@ -44,7 +43,10 @@ from moonmind.omnigent.faultlab.ci_seeds import (
     ROTATING_ENABLED_ENV,
     ROTATING_OFFSET_ENV,
 )
-from moonmind.omnigent.faultlab.diagnostics import build_diagnostic_bundle
+from moonmind.omnigent.faultlab.diagnostics import (
+    build_diagnostic_bundle,
+    write_diagnostic_bundle,
+)
 from moonmind.omnigent.faultlab.invariants import violations
 
 # ---------------------------------------------------------------------------
@@ -177,7 +179,6 @@ def test_rotating_seed_corpus_holds_all_invariants():
             failures.append(f"seed={seed} {' '.join(reasons)}")
 
             if bundles_written < _MAX_BUNDLES:
-                diagnostics_dir.mkdir(parents=True, exist_ok=True)
                 # Minimize the failing plan so the stored fixture is small; fall
                 # back to the raw trace when only reference/determinism failed
                 # (the invariant oracle has nothing to minimize against).
@@ -188,10 +189,7 @@ def test_rotating_seed_corpus_holds_all_invariants():
                 bundle = build_diagnostic_bundle(
                     minimized_trace, source_ref=f"rotating-seed-{seed}"
                 )
-                (diagnostics_dir / f"seed-{seed}.json").write_text(
-                    json.dumps(bundle.to_dict(), indent=2, sort_keys=True),
-                    encoding="utf-8",
-                )
+                write_diagnostic_bundle(bundle, diagnostics_dir)
                 bundles_written += 1
 
     print(

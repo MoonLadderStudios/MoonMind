@@ -5,9 +5,11 @@ name: Provider / Omnigent Fault Image Smoke
 # the deployable API and worker images so image authority drift (#3694) and
 # process/runtime-dependency differences fail the smoke rather than passing on a
 # developer checkout. The matrix core lives in
-# moonmind/omnigent/faultlab/image_smoke.py and is invoked by
-# tools/run_omnigent_fault_image_smoke.py; the same logic is proven hermetically
-# in tests/unit/omnigent/faultlab/test_image_smoke.py on every PR.
+# moonmind/omnigent/faultlab/image_smoke.py and is invoked as the packaged module
+# `python -m moonmind.omnigent.faultlab.image_smoke` (which ships in the image's
+# own moonmind install; tools/run_omnigent_fault_image_smoke.py is only a local
+# wrapper); the same logic is proven hermetically in
+# tests/unit/omnigent/faultlab/test_image_smoke.py on every PR.
 
 on:
   schedule:
@@ -58,18 +60,25 @@ jobs:
         shell: bash
         env:
           APP_IMAGE: ${{ steps.image.outputs.app_image }}
+          ROLE: ${{ matrix.role }}
         run: |
           mkdir -p artifacts/omnigent-fault-image-smoke
-          # Execute the driver from the image's own installed moonmind so a
-          # missing dependency, wrong interpreter, or stripped module in the
-          # shipped image fails the smoke (#3694).
+          # Execute the packaged module from the image's own installed moonmind
+          # (never a tools/ path the production image does not copy) so a missing
+          # dependency, wrong interpreter, or stripped module in the shipped image
+          # fails the smoke (#3694). ``--role`` resolves that role's real startup
+          # module inside the image so a role-specific stripped dependency fails
+          # too, and ``--image-ref`` records the exact pinned digest as provenance
+          # instead of an unrelated workflow-checkout commit; the driver also
+          # self-stamps the image's own build id read from inside the image.
           docker run --rm \
             --entrypoint python \
             -v "$PWD/artifacts/omnigent-fault-image-smoke:/out" \
             "$APP_IMAGE" \
-            /app/tools/run_omnigent_fault_image_smoke.py \
-            --output "/out/report-${{ matrix.role }}.json" \
-            --source-commit "${{ github.sha }}"
+            -m moonmind.omnigent.faultlab.image_smoke \
+            --output "/out/report-${ROLE}.json" \
+            --role "$ROLE" \
+            --image-ref "$APP_IMAGE"
       - name: Upload secret-safe smoke report
         if: always()
         uses: actions/upload-artifact@v4

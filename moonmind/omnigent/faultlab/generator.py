@@ -86,19 +86,73 @@ def generate_plan(seed: int) -> FaultPlan:
     )
 
 
-def _journal_signature(trace: ExecutionTrace) -> list[tuple]:
-    return [
-        (e.round_index, e.decision_kind.value, e.reason_code, e.command_id, e.fenced)
+def _run_signature(trace: ExecutionTrace) -> tuple:
+    """The complete bounded observable trace of a run, for determinism checking.
+
+    Deterministic replay (invariant 12) is a property of the *whole* observable
+    trace, not only the decision journal: two runs that reach the same decisions
+    can still diverge in the observations they surfaced, the crash windows and
+    faults they hit, the provider side effects and requests they performed, the
+    lifecycle phases they passed through, or the final durable state. Comparing
+    only the reduced journal tuple would report such a run deterministic in
+    violation of the replay contract, so the signature includes the full bounded
+    trace.
+    """
+
+    journal = tuple(
+        (
+            e.round_index,
+            e.decision_kind.value,
+            e.reason_code,
+            e.command_id,
+            e.fenced,
+            e.crash_window.value if e.crash_window is not None else None,
+            e.observation_fault.value,
+        )
         for e in trace.journal
-    ]
+    )
+    phases = tuple(phase.value for phase in trace.phases)
+    ledger = trace.ledger
+    requests = tuple(
+        (r.operation.value, r.idempotency_key, r.payload_digest, r.response.value)
+        for r in ledger.requests
+    )
+    side_effects = tuple(
+        (
+            r.operation.value,
+            r.idempotency_key,
+            r.payload_digest,
+            r.side_effect.value,
+        )
+        for r in ledger.side_effects
+    )
+    observations = tuple(
+        (o.operation.value, o.raw_status, o.delivered) for o in ledger.observations
+    )
+    return (
+        journal,
+        phases,
+        requests,
+        side_effects,
+        observations,
+        tuple(trace.cleanup_effects),
+        tuple(trace.crashes_fired),
+        tuple((cid, kind.value) for cid, kind in trace.distinct_commands),
+        trace.converged,
+        trace.settled_kind.value if trace.settled_kind is not None else None,
+        trace.reference_violation,
+        trace.reference.final_phase().value,
+        # The final durable state is the terminal fact a replay must reproduce.
+        tuple(sorted(trace.final.model_dump(mode="json").items())),
+    )
 
 
 def is_deterministic(plan: FaultPlan) -> bool:
-    """12. Running the same plan twice yields the identical decision journal."""
+    """12. Running the same plan twice yields the identical observable trace."""
 
     first = run_plan(plan)
     second = run_plan(plan)
-    return _journal_signature(first) == _journal_signature(second)
+    return _run_signature(first) == _run_signature(second)
 
 
 __all__ = ["generate_plan", "is_deterministic"]

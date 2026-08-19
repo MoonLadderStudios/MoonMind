@@ -94,6 +94,12 @@ class LogicalOperation(str, Enum):
     RELEASE_LEASES = "release_leases"
 
 
+#: Deterministic ordering of the logical operations, in declaration order. A
+#: materialized tuple (rather than iterating the enum class) gives conversions a
+#: stable, explicitly-iterable command order to project crash windows in.
+LOGICAL_OPERATION_ORDER: tuple[LogicalOperation, ...] = tuple(LogicalOperation)
+
+
 class ResponseBehavior(str, Enum):
     """How the provider transport behaves when returning a response.
 
@@ -293,6 +299,7 @@ __all__ = [
     "KNOWN_SCENARIO_SCHEMA_VERSIONS",
     "UnknownScenarioSchemaVersionError",
     "LogicalOperation",
+    "LOGICAL_OPERATION_ORDER",
     "ResponseBehavior",
     "SideEffect",
     "CommandWindow",

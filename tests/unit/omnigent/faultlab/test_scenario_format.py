@@ -124,3 +124,70 @@ def test_scenario_yaml_round_trip_is_stable():
     )
     reloaded = loads_scenario(dumps_scenario(scenario))
     assert reloaded == scenario
+
+
+def test_scenario_to_plan_rejects_unrepresentable_observation_step():
+    """A declarative fault a FaultPlan cannot encode fails conversion, not silently
+    replays fault-free."""
+
+    from moonmind.omnigent.faultlab.conversions import (
+        UnrepresentableScenarioStepError,
+        scenario_to_plan,
+    )
+
+    # A dropped ensure_session response has no FaultPlan representation.
+    scenario = FaultScenario(
+        seed=1,
+        steps=(
+            ScenarioStep(
+                on=LogicalOperation.ENSURE_SESSION,
+                response=ResponseBehavior.DROP,
+            ),
+        ),
+    )
+    with pytest.raises(UnrepresentableScenarioStepError):
+        scenario_to_plan(scenario)
+
+
+def test_scenario_to_plan_rejects_snapshot_fault_with_extra_transport_disorder():
+    """A canonical observation fault carrying extra duplicate/reorder disorder is
+    not silently decoded as the plain fault."""
+
+    from moonmind.omnigent.faultlab.conversions import (
+        UnrepresentableScenarioStepError,
+        scenario_to_plan,
+    )
+    from moonmind.omnigent.faultlab.scenario import SnapshotReturn
+
+    scenario = FaultScenario(
+        seed=1,
+        steps=(
+            ScenarioStep(
+                on=LogicalOperation.OBSERVE_SNAPSHOT,
+                ret=SnapshotReturn(session_state="running"),
+                duplicate=True,
+            ),
+        ),
+    )
+    with pytest.raises(UnrepresentableScenarioStepError):
+        scenario_to_plan(scenario)
+
+
+def test_scenario_to_plan_rejects_unrepresentable_submit_step():
+    from moonmind.omnigent.faultlab.conversions import (
+        UnrepresentableScenarioStepError,
+        scenario_to_plan,
+    )
+
+    scenario = FaultScenario(
+        seed=1,
+        steps=(
+            ScenarioStep(
+                on=LogicalOperation.SUBMIT_TURN,
+                response=ResponseBehavior.DROP,
+                disconnect=True,
+            ),
+        ),
+    )
+    with pytest.raises(UnrepresentableScenarioStepError):
+        scenario_to_plan(scenario)

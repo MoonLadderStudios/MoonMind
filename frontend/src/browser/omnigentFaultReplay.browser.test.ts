@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  mapEventsToTimelineRows,
+  mergeObservabilityTimelineRows,
   normalizeObservabilityEvent,
   parseObservabilityEventsResponse,
 } from '../entrypoints/workflow-detail';
@@ -46,30 +48,48 @@ function faultFrontierPage() {
   };
 }
 
-function monotonicDedupedSequences(events: { sequence: number }[]): number[] {
-  const seen = new Set<number>();
-  const ordered: number[] = [];
-  for (const event of [...events].sort((a, b) => a.sequence - b.sequence)) {
-    if (seen.has(event.sequence)) continue;
-    seen.add(event.sequence);
-    ordered.push(event.sequence);
-  }
-  return ordered;
-}
-
 describe('omnigent fault-replay Workflow Detail transport binding', () => {
+  it('preserves the raw transport frontier verbatim in the parse layer', () => {
+    // The parse contract is faithful, not repairing: it must NOT hide the fault
+    // by silently de-duplicating or reordering. The dedup/order the timeline
+    // relies on happens later, in the merge reducer asserted below. Asserting the
+    // raw frontier here is what keeps the test from passing when the client drops
+    // that reducer.
+    const parsed = parseObservabilityEventsResponse(faultFrontierPage());
+    expect(parsed.events.map((event) => event.sequence)).toEqual([1, 2, 2, 4, 3]);
+  });
+
   it('normalizes a fault frontier into a monotonic, de-duplicated timeline', () => {
     const parsed = parseObservabilityEventsResponse(faultFrontierPage());
-    // The real client applies the reconnect dedup/order the timeline relies on.
-    const sequences = monotonicDedupedSequences(parsed.events);
+    // Drive the *production* normalization (the exact reducer Workflow Detail
+    // folds the event index and every reconnect through) rather than re-deriving
+    // the expected order/dedup in the test. If the client rendered duplicate or
+    // regressing events this assertion would fail.
+    const merged = mergeObservabilityTimelineRows([], mapEventsToTimelineRows(parsed));
+    const sequences = merged.map((row) => row.sequence);
     expect(sequences).toEqual([1, 2, 3, 4]);
-    // Duplicate + reordered transport events collapse to one frontier.
-    expect(parsed.events.length).toBeGreaterThanOrEqual(4);
     expect(new Set(sequences).size).toBe(sequences.length);
+  });
+
+  it('collapses a duplicate/reordered reconnect delivery idempotently', () => {
+    // Model a reconnect: the same faulted frontier is delivered again. The
+    // production reducer must fold the re-delivery into the existing timeline
+    // without duplicating or regressing it.
+    const parsed = parseObservabilityEventsResponse(faultFrontierPage());
+    const rows = mapEventsToTimelineRows(parsed);
+    const afterFirst = mergeObservabilityTimelineRows([], rows);
+    const afterReconnect = mergeObservabilityTimelineRows(afterFirst, rows);
+    expect(afterReconnect.map((row) => row.sequence)).toEqual([1, 2, 3, 4]);
+    expect(afterReconnect.length).toBe(afterFirst.length);
   });
 
   it('replays the terminal envelope after a disconnect (historical-read safety)', () => {
     const parsed = parseObservabilityEventsResponse(faultFrontierPage());
+    // Narrow to the bridge-session page shape (the legacy response carries no
+    // terminal envelope) before asserting the replayed terminal.
+    if (!('terminalEnvelope' in parsed)) {
+      throw new Error('expected a bridge-session events page');
+    }
     expect(parsed.terminal).toBe(true);
     expect(parsed.terminalEnvelope).not.toBeNull();
     expect(parsed.terminalEnvelope?.status).toBe('completed');

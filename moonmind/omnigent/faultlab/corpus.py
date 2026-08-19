@@ -23,7 +23,7 @@ from pathlib import Path
 
 from .conversions import plan_to_scenario, scenario_to_plan
 from .harness import FaultPlan, ObservationFault, run_plan
-from .invariants import violations
+from .invariants import check_all, violations
 from .minimizer import minimize_plan
 from .scenario import (
     CommandWindow,
@@ -150,9 +150,33 @@ def ingest_incident(
     reproduces an escaped failure (violates ``invariant``), minimize it while
     preserving the failure and return the safe, bounded scenario to store under
     the reliability replay corpus.
+
+    The plan must actually violate the *named* ``invariant``. ``minimize_plan``'s
+    default oracle only guarantees it preserves *some* invariant failure the plan
+    already has, so a plan that fails only invariant A could otherwise be stored
+    and labelled as a regression fixture for invariant B — corrupting corpus
+    traceability and leaving the intended escape unreproduced. Validate the named
+    invariant up front and minimize against exactly that invariant so the stored
+    fixture provably reproduces the failure it claims.
     """
 
-    minimized = minimize_plan(plan)
+    if invariant not in check_all(run_plan(plan)):
+        raise ValueError(f"unknown invariant name: {invariant!r}")
+
+    def named_invariant_oracle(candidate: FaultPlan) -> frozenset:
+        return (
+            frozenset({invariant})
+            if check_all(run_plan(candidate))[invariant]
+            else frozenset()
+        )
+
+    if not named_invariant_oracle(plan):
+        raise ValueError(
+            f"plan does not violate the named invariant {invariant!r}; "
+            "refusing to store it as that invariant's regression fixture"
+        )
+
+    minimized = minimize_plan(plan, oracle=named_invariant_oracle)
     return plan_to_scenario(
         minimized,
         scenario_id=scenario_id,

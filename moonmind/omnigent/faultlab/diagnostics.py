@@ -12,8 +12,10 @@ payloads.
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from .conversions import plan_to_scenario
@@ -138,4 +140,26 @@ def build_diagnostic_bundle(
     return bundle
 
 
-__all__ = ["DiagnosticBundle", "SecretLeakError", "build_diagnostic_bundle"]
+def write_diagnostic_bundle(bundle: DiagnosticBundle, directory: Path | str) -> Path:
+    """Serialize a bundle to ``<directory>/seed-<seed>.json`` for CI upload.
+
+    The bundle is already secret-safe (``build_diagnostic_bundle`` fails closed on
+    any secret-shaped value), so a persisted bundle is a reproduction-complete,
+    reviewable artifact a failing job can upload. Returns the written path.
+    """
+
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"seed-{bundle.seed}.json"
+    target.write_text(
+        json.dumps(bundle.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return target
+
+
+__all__ = [
+    "DiagnosticBundle",
+    "SecretLeakError",
+    "build_diagnostic_bundle",
+    "write_diagnostic_bundle",
+]

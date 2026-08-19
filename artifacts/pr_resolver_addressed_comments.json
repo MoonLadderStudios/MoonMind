@@ -1,12 +1,18 @@
 [
-  {
-    "id": 3803594905,
-    "disposition": "addressed",
-    "rationale": "Updated PINNED_OMNIGENT_COMMIT to the PR submodule commit and refreshed the native compatibility fixture hashes anchored to that pinned source for contract verification."
-  },
-  {
-    "id": 4960451954,
-    "disposition": "not-applicable",
-    "rationale": "Informational bot review summary comment with no standalone code or test action required."
-  }
+  {"id": 3808959407, "disposition": "addressed", "rationale": "conversions.py CodeQL 'non-iterable for loop': iterate the materialized LOGICAL_OPERATION_ORDER tuple (added in scenario.py) instead of the enum class."},
+  {"id": 3808959417, "disposition": "addressed", "rationale": "Unused _TERMINAL_DECISIONS is now consumed by the strengthened compatibility_safety invariant."},
+  {"id": 3808971137, "disposition": "addressed", "rationale": "P1: image smoke now runs the packaged module 'python -m moonmind.omnigent.faultlab.image_smoke' (ships in the image's moonmind) instead of an uncopied tools/ driver; tools wrapper delegates."},
+  {"id": 3808971140, "disposition": "addressed", "rationale": "P2: compatibility_safety now inspects the journal's per-round effective observation fault and rejects any terminal-recording decision made during an UNKNOWN_VOCAB round; JournalEntry carries the effective fault; detection proven in test_invariant_predicates.py."},
+  {"id": 3808971144, "disposition": "addressed", "rationale": "P2: exported the production merge reducer (mergeObservabilityTimelineRows) and mapEventsToTimelineRows; the browser test now asserts the parse layer preserves the raw frontier and drives the real production dedup/order instead of repairing output with its own helper; added a reconnect-idempotency case. Verified via typecheck, lint, 198 component tests, and the pure merge logic under jsdom."},
+  {"id": 3808971146, "disposition": "addressed", "rationale": "P2: each image-smoke role leg now resolves its real startup module (api->api_service.main, worker->moonmind.workflows.temporal.worker_runtime) in the exact image via find_spec and records the role in the report, so a role-specific stripped dependency fails the smoke rather than running an identical command twice."},
+  {"id": 3808971149, "disposition": "addressed", "rationale": "P1: project_run now preserves the attempt journal and fault disposition (attempts, crash_windows, per-attempt responses, delivered, run-level crashes) so a faulted authority handoff replays as ambiguity; added test_projection.py and a boundary test_control_plane_faultlab.py case replaying a pre-receipt crash-and-resume proving at-most-once."},
+  {"id": 3808971152, "disposition": "addressed", "rationale": "P2: scenario_to_plan now raises UnrepresentableScenarioStepError for any step FaultPlan cannot represent (non-canonical observation steps, submit steps with extra transport disorder); _decode_observation_fault tightened to compare all fault-bearing fields. Covered by test_scenario_format.py."},
+  {"id": 3808971154, "disposition": "addressed", "rationale": "P2: ingest_incident validates the plan violates the *named* invariant and minimizes against an oracle targeting that invariant; unknown invariant names raise. Covered by test_corpus.py."},
+  {"id": 3808971158, "disposition": "addressed", "rationale": "P2: report provenance is now the image's own verified identity (imageRef pinned digest + imageBuildId read from /app/.moonmind-build-id inside the image) instead of the unrelated workflow-checkout github.sha; schema bumped to v2."},
+  {"id": 3808971161, "disposition": "addressed", "rationale": "P2: is_deterministic now compares the complete bounded observable trace (journal incl. crash window/fault, phases, provider requests/side-effects/observations, cleanup effects, crashes, distinct commands, reference final phase, and final durable state) rather than only the reduced decision journal."},
+  {"id": 3808971163, "disposition": "addressed", "rationale": "P2: lease_safety now correlates RELEASE_LEASES decisions with the observation fault active in their round and flags a release performed while a consumer was observed active, not only incomplete cleanup. Detection proven in test_invariant_predicates.py."},
+  {"id": 3808971166, "disposition": "addressed", "rationale": "P2: added explicit fencing-generation authority to the trace (cleanup_effects records the generation each cleanup side effect executed under); cleanup_safety asserts every cleanup effect targeted the authorized (final) generation, rejecting a stale-generation cleanup. Detection proven in test_invariant_predicates.py."},
+  {"id": 3808971170, "disposition": "addressed", "rationale": "P2: the Temporal test now deterministically drives the workflow across the Continue-As-New threshold and proves it via the run chain (>=1 WorkflowExecutionContinuedAsNew event, a successor run, and the successor restoring the preserved session epoch) instead of asserting sessionEpoch >= 1."},
+  {"id": 3808971171, "disposition": "addressed", "rationale": "P2: a failing generated seed now serializes a reproduction-complete secret-safe bundle via the new write_diagnostic_bundle helper into MOONMIND_FAULTLAB_DIAGNOSTICS_DIR (default artifacts/faultlab-generated), and the unit-fast CI job uploads it on failure. Rotating sweep refactored onto the shared helper."},
+  {"id": 4967120959, "disposition": "not-applicable", "rationale": "Informational Codex review summary body; no actionable request."}
 ]

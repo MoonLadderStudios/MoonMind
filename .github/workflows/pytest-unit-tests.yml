@@ -230,6 +230,11 @@ jobs:
       - name: Initialize MoonSpec test fixtures
         run: git submodule update --init --depth 1 -- moonspec omnigent
       - name: Run selected unit suite
+        env:
+          # A failing generated fault-lab seed serializes a reproduction-complete,
+          # secret-safe bundle here so the first regression leaves replayable
+          # evidence for the upload step below.
+          MOONMIND_FAULTLAB_DIAGNOSTICS_DIR: artifacts/faultlab-generated
         run: |
           set -euo pipefail
           python -m pytest tests/unit \
@@ -239,6 +244,13 @@ jobs:
             -m "unit_fast and not provider_verification and not requires_credentials" \
             -q -n auto --dist loadfile --durations=25 \
             --junitxml=artifacts/pytest-unit-fast.xml
+      - name: Upload generated fault-lab diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: faultlab-generated-diagnostics
+          path: artifacts/faultlab-generated
+          if-no-files-found: ignore
 
   moonspec-projection:
     runs-on: ubuntu-latest

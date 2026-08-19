@@ -59,12 +59,14 @@ from moonmind.omnigent.control_plane import (
     TerminalSessionOverwriteError,
 )
 from moonmind.omnigent.faultlab import (
+    FaultPlan,
     ProjectedRun,
     generate_plan,
     project_run,
     run_plan,
 )
 from moonmind.omnigent.faultlab.corpus import INITIAL_CORPUS
+from moonmind.omnigent.faultlab.scenario import CommandWindow, LogicalOperation
 
 pytestmark = [pytest.mark.integration]
 
@@ -352,6 +354,105 @@ async def test_sqlite_corpus_replays_hold_boundary_invariants(sqlite_store) -> N
             sqlite_store, run, namespace=f"{index:04d}-{scenario_id}"[:60]
         )
         _assert_binding_invariants(run, result)
+
+
+@pytest.mark.integration_ci
+@pytest.mark.reliability_journey
+@pytest.mark.asyncio
+async def test_sqlite_pre_receipt_crash_resumes_at_most_once(sqlite_store) -> None:
+    """A command that crashed after its side effect but before its receipt resumes
+    under the same authority and applies exactly once.
+
+    The projection preserves the crash window (invariant: fault attempts are not
+    discarded), so the boundary can replay this exact authority handoff. A
+    projection that carried only the final successful transition could not tell
+    this apart from a clean delivery, leaving at-most-once-under-crash untested.
+    """
+
+    plan = FaultPlan(
+        seed=7,
+        recovery_round=2,
+        command_crashes={
+            LogicalOperation.SUBMIT_TURN: (
+                CommandWindow.AFTER_SIDE_EFFECT_BEFORE_RECEIPT
+            )
+        },
+    )
+    run = project_run(run_plan(plan), scenario_id="pre-receipt-crash")
+    submit = run.submit_commands[0]
+    assert submit.faulted, "the crashed plan must project a faulted command"
+    assert (
+        CommandWindow.AFTER_SIDE_EFFECT_BEFORE_RECEIPT.value in submit.crash_windows
+    )
+
+    namespace = "pre-receipt-crash"
+    session_id = f"sess-{namespace}"
+    turn_id = f"turn-{namespace}"
+    await sqlite_store.establish_session(
+        session_id=session_id,
+        moonmind_workflow_id=f"wf-{namespace}",
+        provider="omnigent",
+        chat_binding_id=f"cb-{namespace}",
+        first_turn_attempt_id=turn_id,
+        first_turn_idempotency_key=f"idem-{namespace}",
+        provider_session_ref=f"psess-{namespace}",
+        instruction_digest="sha256:instruction",
+    )
+
+    durable_id = f"{namespace}:{submit.command_id}"
+    async with sqlite_store.transaction() as repos:
+        session = await repos.sessions.get(session_id)
+        await repos.commands.record(
+            command_id=durable_id,
+            session_id=session_id,
+            command_type=submit.command_type,
+            idempotency_key=durable_id,
+            payload_digest=submit.payload_digest,
+            fencing_generation=session.fencing_generation,
+        )
+
+    # Worker A claims and performs the side effect ...
+    async with sqlite_store.transaction() as repos:
+        first = await repos.commands.claim_command(
+            durable_id, owner_class="supervisor", claim_token=f"{durable_id}:worker-a"
+        )
+    assert first.outcome is ControlPlaneOutcome.APPLIED
+
+    # ... then the process crashes AFTER the side effect but BEFORE the receipt is
+    # recorded (the injected AFTER_SIDE_EFFECT_BEFORE_RECEIPT window): no delivery
+    # is written, so the command is not yet observable as applied.
+    async with sqlite_store.transaction() as repos:
+        mid = await repos.commands.get(durable_id)
+    assert mid is not None and mid.status != COMMAND_STATE_APPLIED
+
+    # A racing replacement worker with a different token must not seize execution
+    # authority, so the crash cannot cause a second side effect.
+    async with sqlite_store.transaction() as repos:
+        other = await repos.commands.claim_command(
+            durable_id, owner_class="supervisor", claim_token=f"{durable_id}:worker-b"
+        )
+    assert other.outcome is ControlPlaneOutcome.NOT_OWNER
+
+    # The resumed worker re-claims its own authority idempotently and records the
+    # delayed receipt exactly once.
+    async with sqlite_store.transaction() as repos:
+        resume = await repos.commands.claim_command(
+            durable_id, owner_class="supervisor", claim_token=f"{durable_id}:worker-a"
+        )
+    assert resume.outcome is ControlPlaneOutcome.APPLIED
+    async with sqlite_store.transaction() as repos:
+        await repos.commands.record_command_delivery(
+            durable_id,
+            owner_class="supervisor",
+            claim_token=f"{durable_id}:worker-a",
+            outcome=ControlPlaneOutcome.APPLIED,
+            provider_receipt_id=f"receipt-{durable_id}",
+        )
+        stored = await repos.commands.get(durable_id)
+    assert stored is not None and stored.status == COMMAND_STATE_APPLIED
+
+    # The independent provider ledger proves the crash retry never double-fired.
+    assert run.ledger_multiple_side_effect_keys == ()
 
 
 @pytest.mark.integration_ci

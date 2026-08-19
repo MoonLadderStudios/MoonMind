@@ -129,6 +129,12 @@ class JournalEntry:
     command_id: str | None
     fenced: bool = False
     crash_window: CommandWindow | None = None
+    #: The observation fault the world injected in this round. Retaining it on the
+    #: journal is what lets an invariant correlate a decision with the fault that
+    #: was active when the reducer made it (e.g. a terminal recorded while unknown
+    #: vocabulary was being injected, or a lease released while a consumer was
+    #: still observed active) rather than only inspecting the settled final state.
+    observation_fault: ObservationFault = ObservationFault.HONEST
 
 
 @dataclass
@@ -146,6 +152,12 @@ class ExecutionTrace:
     settled_kind: DecisionKind | None
     reference_violation: str | None
     crashes_fired: list[tuple[str, CommandWindow]]
+    #: Every performed cleanup (``begin_cleanup``) side effect paired with the
+    #: fencing generation it executed under. This is the explicit generation
+    #: authority a cleanup-safety check needs to prove that a cleanup effect
+    #: targeted only the currently authorized generation and not a superseded one
+    #: (a stale cleanup deleting a replacement continuation's resource).
+    cleanup_effects: list[tuple[str, int]] = field(default_factory=list)
 
     @property
     def ledger(self):
@@ -188,18 +200,30 @@ def _observe(
     durable: DurableSessionState,
     round_index: int,
     now: datetime,
-) -> ObservationSet:
-    """Build the authoritative observations for the current durable state."""
+) -> tuple[ObservationSet, ObservationFault]:
+    """Build the authoritative observations for the current durable state.
+
+    Returns the observation set and the fault that was *actually* injected this
+    round. The scheduled fault only takes effect in the lifecycle phase it models
+    (session-observation faults while awaiting the terminal; evidence/lease faults
+    once a terminal is recorded); in any other phase no fault is applied and the
+    effective fault is ``HONEST``. Callers that correlate a decision with the
+    fault active in its round must use this effective fault, not the schedule, so
+    e.g. a cancellation recorded at round 0 is never mistaken for acting on an
+    unknown-vocabulary snapshot that was never observed.
+    """
 
     fault = _fault_for_round(plan, round_index)
     truth_status = _TERMINAL_STATUS[plan.ground_truth_terminal]
     kwargs: dict = {}
+    effective_fault = ObservationFault.HONEST
 
     awaiting_terminal = (
         durable.terminal_outcome is None
         and durable.submission in (SubmissionState.ACCEPTED, SubmissionState.IN_FLIGHT)
     )
     if awaiting_terminal:
+        effective_fault = fault
         sid = durable.provider_session_id
         if fault == ObservationFault.DROP_SNAPSHOT:
             pass  # not observed
@@ -231,6 +255,8 @@ def _observe(
             )
 
     if durable.terminal_outcome is not None:
+        if fault in (ObservationFault.EVIDENCE_DELAY, ObservationFault.CONSUMER_ACTIVE):
+            effective_fault = fault
         if not durable.evidence_harvested or durable.terminal_evidence_ref is None:
             available = fault != ObservationFault.EVIDENCE_DELAY
             kwargs["evidence"] = EvidenceObservation(
@@ -253,7 +279,7 @@ def _observe(
             observed_at=now, registered=True, runner_ready=consumer
         )
 
-    return ObservationSet(**kwargs)
+    return ObservationSet(**kwargs), effective_fault
 
 
 def apply_decision(
@@ -381,6 +407,7 @@ def run_plan(plan: FaultPlan, *, max_rounds: int | None = None) -> ExecutionTrac
     applied_command_ids: set[str] = set()
     fired_crashes: set[tuple[str, CommandWindow]] = set()
     crashes_fired: list[tuple[str, CommandWindow]] = []
+    cleanup_effects: list[tuple[str, int]] = []
     reference_violation: str | None = None
 
     budget = max_rounds if max_rounds is not None else plan.recovery_round + 80
@@ -389,7 +416,7 @@ def run_plan(plan: FaultPlan, *, max_rounds: int | None = None) -> ExecutionTrac
 
     for round_index in range(budget):
         now = _EPOCH + timedelta(seconds=30 * round_index)
-        observations = _observe(plan, durable, round_index, now)
+        observations, round_fault = _observe(plan, durable, round_index, now)
         decision = reconcile(
             intent=intent, durable=durable, observations=observations, now=now
         )
@@ -423,8 +450,25 @@ def run_plan(plan: FaultPlan, *, max_rounds: int | None = None) -> ExecutionTrac
                 command_id=command_id,
                 fenced=fenced,
                 crash_window=crash_window,
+                observation_fault=round_fault,
             )
         )
+
+        # Record the fencing generation every performed cleanup side effect ran
+        # under. ``apply_decision`` performs the provider side effect whenever the
+        # command was not fenced and the crash window is not a pre-side-effect
+        # one, so mirror that condition here. Because the reducer scopes a
+        # command id by ``g<fencing_generation>``, a cleanup retried after a
+        # replacement continuation bumped authority carries a fresh id and lands
+        # under the new generation, while a stale generation's cleanup is
+        # recorded under the superseded number — which cleanup safety rejects.
+        if (
+            command_id is not None
+            and decision.kind == DecisionKind.BEGIN_CLEANUP
+            and not fenced
+            and crash_window not in _NO_TRANSITION_WINDOWS
+        ):
+            cleanup_effects.append((command_id, durable.fencing_generation))
 
         # Feed the reference model only when a durable transition actually
         # happens for a not-yet-seen logical command.
@@ -470,6 +514,7 @@ def run_plan(plan: FaultPlan, *, max_rounds: int | None = None) -> ExecutionTrac
         settled_kind=settled_kind,
         reference_violation=reference_violation,
         crashes_fired=crashes_fired,
+        cleanup_effects=cleanup_effects,
     )
 
 
