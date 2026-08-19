@@ -203,6 +203,26 @@ def test_live_conformance_evidence_stale_is_observe_only():
     assert conformance and conformance[0].action is ResponseAction.OBSERVE
 
 
+def test_missing_live_conformance_evidence_after_admission_is_observe_only():
+    signals = SessionSignals(
+        last_event_at=NOW,
+        last_snapshot_at=NOW,
+        admitted=True,
+        conformance_evidence_at=None,
+    )
+
+    findings = detect_stuck_state(
+        session=_session(), signals=signals, now=NOW, policy=POLICY
+    )
+
+    conformance = [
+        finding
+        for finding in findings
+        if finding.reason is StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE
+    ]
+    assert conformance and conformance[0].action is ResponseAction.OBSERVE
+
+
 def test_no_false_positive_just_before_deadline():
     just_fresh = NOW - POLICY.event_staleness + timedelta(seconds=1)
     signals = SessionSignals(last_event_at=just_fresh, last_snapshot_at=just_fresh)

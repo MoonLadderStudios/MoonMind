@@ -92,6 +92,8 @@ def _config(*, enabled=True):
 
 def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setattr(catalog, "get_bridge_config", lambda: _config(enabled=enabled))
+    monkeypatch.setattr(catalog, "_reconciler_generation_available", lambda: True)
+    monkeypatch.setattr(catalog, "_websocket_runtime_available", lambda: True)
     monkeypatch.setattr(catalog, "_secret_ref_results_for_rows", lambda rows: {r.profile_id: {} for r in rows})
 
     async def statuses(*_args, **_kwargs):
@@ -183,7 +185,8 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
         reason["code"] for reason in body["supportGateReasons"]
     }
     assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v2"
-    assert body["available"] is True
+    assert body["available"] is False
+    assert "protected_live_evidence" in body["admissionReadiness"]["blocking"]
     assert body["cutover"] == {
         "policyVersion": "moonmind.codex-omnigent-cutover/v1",
         "configuredPhase": "opt_in",
@@ -398,7 +401,7 @@ def test_catalog_projects_authoritative_deployment_gates(
         ("/evidence/matrix.json", ""),
     ],
 )
-def test_catalog_reports_missing_acceptance_evidence_without_blocking_launch(
+def test_catalog_fails_closed_when_protected_acceptance_evidence_is_missing(
     monkeypatch, manifest_path, source_commit
 ):
     app = _app(monkeypatch, session=_Session([_profile()]))
@@ -414,13 +417,35 @@ def test_catalog_reports_missing_acceptance_evidence_without_blocking_launch(
 
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
-    assert body["available"] is True
+    assert body["available"] is False
     assert "acceptance_evidence_unavailable" in {
         reason["code"] for reason in body["supportGateReasons"]
     }
-    assert "acceptance_evidence_unavailable" not in {
+    assert "protected_live_evidence" in body["admissionReadiness"]["blocking"]
+    assert "omnigent_admission_readiness_failed" in {
         reason["code"] for reason in body["gateReasons"]
     }
+
+
+@pytest.mark.parametrize(
+    ("capability", "helper"),
+    [
+        ("reconciler_generation", "_reconciler_generation_available"),
+        ("websocket", "_websocket_runtime_available"),
+    ],
+)
+def test_catalog_fails_closed_on_missing_loaded_runtime_capability(
+    monkeypatch, capability, helper
+):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+    monkeypatch.setattr(catalog, helper, lambda: False)
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is False
+    assert capability in body["admissionReadiness"]["blocking"]
+    assert body["admissionReadiness"]["allowHistoricalReads"] is True
+    assert body["admissionReadiness"]["allowCleanup"] is True
 
 
 def test_catalog_rejects_placeholder_image_digests(monkeypatch):

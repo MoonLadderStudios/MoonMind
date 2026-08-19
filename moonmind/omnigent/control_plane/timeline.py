@@ -364,7 +364,18 @@ def build_timeline(
         "observed_at",
     )
     event_obs = _latest(
-        [o for o in observations if o.observation_type in {"event", "event_frontier", "event_batch"}],
+        [
+            o
+            for o in observations
+            if o.observation_type
+            in {
+                "event",
+                "event_frontier",
+                "event_batch",
+                "provider_event",
+                "provider_event_batch",
+            }
+        ],
         "observed_at",
     )
 

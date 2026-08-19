@@ -11,7 +11,7 @@ import os
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -55,6 +55,11 @@ from moonmind.omnigent.conformance import (
 from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
 from moonmind.omnigent.cutover import effective_phase
 from moonmind.omnigent.remediation_matrix import load_remediation_release_status
+from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.control_plane.readiness import (
+    ReadinessInputs,
+    evaluate_admission_readiness,
+)
 from moonmind.utils.logging import redact_sensitive_payload
 
 from .omnigent_bridge import (
@@ -155,6 +160,7 @@ class OmnigentCodexCatalogReadiness(BaseModel):
     compatibility_diagnostics: dict[str, Any] = Field(alias="compatibilityDiagnostics")
     cutover: dict[str, Any]
     remediation_release: dict[str, Any] = Field(alias="remediationRelease")
+    admission_readiness: dict[str, Any] = Field(alias="admissionReadiness")
 
 
 _REASONS: dict[str, tuple[str, str]] = {
@@ -175,6 +181,10 @@ _REASONS: dict[str, tuple[str, str]] = {
     "immutable_image_unavailable": ("Retry stock Omnigent image acquisition or configure explicit server and host image digests.", "/settings#omnigent"),
     "network_policy_unavailable": ("Configure the required enforced egress policy.", "/settings#omnigent"),
     "acceptance_evidence_unavailable": ("Publish a current #3508 browser acceptance matrix for this source commit.", "/settings#omnigent"),
+    "omnigent_admission_readiness_failed": (
+        "Restore the blocked Omnigent runtime capability or refresh its protected evidence.",
+        "/settings#omnigent",
+    ),
     "workspace_resolver_unavailable": ("Restore the workflow workspace resolver.", "/settings#system"),
     "profile_reconnect_required": ("Reconnect this OAuth Provider Profile.", "/settings#provider-profiles"),
     "profile_validation_required": ("Validate this OAuth Provider Profile.", "/settings#provider-profiles"),
@@ -215,11 +225,13 @@ def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]
     return reasons
 
 
-def _support_reasons(*, acceptance_canary: bool = False) -> list[GateReason]:
-    """Return release-support evidence without withholding launch authority."""
+def _support_reasons(
+    *, acceptance_canary: bool = False
+) -> tuple[list[GateReason], timedelta | None]:
+    """Return release-support failures and bounded protected-evidence age."""
 
     if acceptance_canary:
-        return []
+        return [], timedelta(0)
     manifest_path = os.getenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "").strip()
     source_commit = os.getenv("MOONMIND_SOURCE_COMMIT", "").strip()
     try:
@@ -236,8 +248,42 @@ def _support_reasons(*, acceptance_canary: bool = False) -> list[GateReason]:
             evidence_root=manifest_file.parent,
         )
     except (OSError, json.JSONDecodeError, ConformanceContractError):
-        return [_reason("acceptance_evidence_unavailable")]
-    return []
+        return [_reason("acceptance_evidence_unavailable")], None
+    try:
+        generated_at = datetime.fromisoformat(
+            str(manifest["generatedAt"]).replace("Z", "+00:00")
+        )
+        evidence_age = datetime.now(UTC) - generated_at
+    except (KeyError, TypeError, ValueError):
+        # The validator owns this field in production. A non-authoritative test
+        # double may omit it; validated evidence is still known-current.
+        evidence_age = timedelta(0)
+    return [], evidence_age
+
+
+def _reconciler_generation_available() -> bool:
+    """Confirm the canonical durable session supervisor is in the worker fleet."""
+
+    from moonmind.workflows.temporal.workflow_registry import (
+        STATIC_WORKFLOW_REGISTRATIONS,
+    )
+
+    return any(
+        registration.class_name == "MoonMindOmnigentSessionWorkflow"
+        for registration in STATIC_WORKFLOW_REGISTRATIONS
+    )
+
+
+def _websocket_runtime_available() -> bool:
+    """Confirm the binding-scoped WebSocket route is registered in this build."""
+
+    from .omnigent_bridge import workflow_chat_router
+
+    return any(
+        getattr(route, "path", "")
+        == "/{chat_binding_id}/omnigent/{omnigent_path:path}"
+        for route in workflow_chat_router.routes
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -371,7 +417,9 @@ async def get_omnigent_codex_catalog_readiness(
         and secrets.compare_digest(configured_canary_token, supplied_canary_token)
     )
     deployment_reasons = _deployment_reasons(config, bridge)
-    support_reasons = _support_reasons(acceptance_canary=acceptance_canary)
+    support_reasons, protected_evidence_age = _support_reasons(
+        acceptance_canary=acceptance_canary
+    )
     live_readiness = await _live_deployment_readiness()
     if (
         config.enabled
@@ -664,8 +712,69 @@ async def get_omnigent_codex_catalog_readiness(
             gateReasons=profile_reasons,
         ))
 
-    available = any(item.available for item in profile_views)
-    top_reasons = [] if available else (profile_views[0].gate_reasons if profile_views else [_reason("execution_profile_unavailable")])
+    available_before_admission = any(item.available for item in profile_views)
+    bridge_ready = bridge.get("conformanceState") == "ready"
+    admission = evaluate_admission_readiness(
+        ReadinessInputs(
+            reconciler_generation_ready=_reconciler_generation_available(),
+            schema_compatible=True,
+            provider_snapshot_ready=bridge_ready,
+            event_transport_ready=bridge_ready,
+            server_build_ready=bool(available_modes),
+            ui_build_ready=bridge_ready,
+            host_build_ready=bool(available_modes),
+            websocket_available=_websocket_runtime_available(),
+            worker_backend_ready=live_readiness.backend_ready,
+            container_backend_ready=backend_ready,
+            observation_age=(
+                timedelta(0)
+                if live_readiness.endpoint_ready or bridge_ready
+                else None
+            ),
+            janitor_healthy=live_readiness.backend_ready,
+            exact_image_conformant=bool(available_modes),
+            protected_live_evidence_age=protected_evidence_age,
+        )
+    )
+    for capability in admission.capabilities:
+        try:
+            control_plane_metrics.increment(
+                control_plane_metrics.RUNTIME_CAPABILITY_READINESS,
+                capability=capability.capability.value,
+                readiness=capability.state.value,
+            )
+        except Exception:
+            # Readiness authority is the evaluated document, never telemetry.
+            pass
+    if protected_evidence_age is not None:
+        try:
+            control_plane_metrics.observe(
+                control_plane_metrics.PROTECTED_LIVE_EVIDENCE_AGE,
+                max(0.0, protected_evidence_age.total_seconds()),
+            )
+        except Exception:
+            pass
+    if not admission.admit_new:
+        gate = _reason("omnigent_admission_readiness_failed")
+        profile_views = [
+            item.model_copy(
+                update={
+                    "available": False,
+                    "gate_reasons": [*item.gate_reasons, gate],
+                }
+            )
+            for item in profile_views
+        ]
+    available = available_before_admission and admission.admit_new
+    top_reasons = (
+        []
+        if available
+        else (
+            profile_views[0].gate_reasons
+            if profile_views
+            else [_reason("execution_profile_unavailable")]
+        )
+    )
     # The catalog readiness projection does not depend on the immutable policy
     # authority (that lives on the bridge /readiness surface), so it is not
     # resolved here: doing so would add a fail-closed dependency that returns
@@ -695,4 +804,5 @@ async def get_omnigent_codex_catalog_readiness(
         compatibilityDiagnostics=diagnostics,
         cutover=cutover_status.as_dict(),
         remediationRelease=remediation_release.as_dict(),
+        admissionReadiness=admission.to_dict(),
     )

@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import asyncio
 import json
+import time
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any, AsyncIterator, Protocol
@@ -37,6 +38,8 @@ from moonmind.omnigent.bridge_store import (
     RESOURCE_HARVEST_COMPLETED_KEY,
     OmnigentBridgeSessionStore,
 )
+from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.control_plane import spans as control_plane_spans
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
     OmnigentAgentSelection,
@@ -65,6 +68,20 @@ _TERMINAL_SESSION_STATUSES = {
     "stopped",
     "timed_out",
 }
+
+
+def _metric_increment(name: str, **labels: str) -> None:
+    try:
+        control_plane_metrics.increment(name, **labels)
+    except Exception:
+        pass
+
+
+def _metric_observe(name: str, value: float) -> None:
+    try:
+        control_plane_metrics.observe(name, max(0.0, value))
+    except Exception:
+        pass
 
 
 class OmnigentBridgeError(RuntimeError):
@@ -472,14 +489,25 @@ class OmnigentBridgeSessionProxy:
         """Return an Omnigent-shaped session snapshot (OB-§8.2 / §4.1)."""
 
         self._require_proxy_mode()
-        try:
-            snapshot = await self._client.get_session(session_id)
-        except OmnigentClientError as exc:
-            raise OmnigentBridgeError(
-                str(exc),
-                failure_class=exc.failure_class,
-                status_code=exc.status_code,
-            ) from exc
+        started = time.monotonic()
+        with control_plane_spans.omnigent_span(
+            control_plane_spans.PROVIDER_OBSERVE_SNAPSHOT,
+            observation_source="upstream_proxy",
+        ):
+            try:
+                snapshot = await self._client.get_session(session_id)
+            except OmnigentClientError as exc:
+                _metric_increment(control_plane_metrics.SNAPSHOT_ERRORS)
+                raise OmnigentBridgeError(
+                    str(exc),
+                    failure_class=exc.failure_class,
+                    status_code=exc.status_code,
+                ) from exc
+            finally:
+                _metric_observe(
+                    control_plane_metrics.SNAPSHOT_LATENCY,
+                    time.monotonic() - started,
+                )
         if not isinstance(snapshot, dict):
             snapshot = {}
         snapshot.setdefault("id", session_id)
@@ -608,16 +636,58 @@ class OmnigentBridgeSessionProxy:
             )
         for attempt in range(_MAX_STREAM_RECONNECTS + 1):
             try:
-                async for event in self._client.stream_events(session_id):
+                event_stream = self._client.stream_events(session_id).__aiter__()
+                connected = False
+                while True:
+                    try:
+                        with control_plane_spans.omnigent_span(
+                            control_plane_spans.PROVIDER_READ_EVENT_BATCH,
+                            observation_source="upstream_sse",
+                            retry_outcome="initial" if attempt == 0 else "retry",
+                        ):
+                            event = await anext(event_stream)
+                    except StopAsyncIteration:
+                        break
+                    if not connected:
+                        connected = True
+                        _metric_increment(
+                            control_plane_metrics.TRANSPORT_READINESS,
+                            transport="sse",
+                            readiness="ready",
+                        )
                     yield event
             except OmnigentClientError as exc:
+                _metric_increment(
+                    control_plane_metrics.TRANSPORT_EVENTS,
+                    transport="sse",
+                    transport_outcome="disconnect",
+                )
                 if attempt >= _MAX_STREAM_RECONNECTS:
+                    _metric_increment(
+                        control_plane_metrics.TRANSPORT_EVENTS,
+                        transport="sse",
+                        transport_outcome="failure",
+                    )
                     raise _bridge_client_error(exc) from exc
+            else:
+                # A clean EOF still disconnects the event transport. The
+                # authoritative snapshot below decides whether that is normal
+                # terminal closure or requires a bounded reconnect.
+                _metric_increment(
+                    control_plane_metrics.TRANSPORT_EVENTS,
+                    transport="sse",
+                    transport_outcome="disconnect",
+                )
             snapshot = await self.get_session(session_id)
             status = str(snapshot.get("status") or "").strip().lower()
             if status in _TERMINAL_SESSION_STATUSES:
                 return
             if attempt < _MAX_STREAM_RECONNECTS:
+                _metric_increment(
+                    control_plane_metrics.TRANSPORT_EVENTS,
+                    transport="sse",
+                    transport_outcome="reconnect",
+                )
                 await asyncio.sleep(min(2**attempt, 4))
         raise OmnigentBridgeError(
             "Omnigent event stream disconnected while the session remained active",

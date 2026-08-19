@@ -5736,6 +5736,49 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
     }
 
 
+async def test_agent_runtime_reconcile_runs_omnigent_stuck_state_sweep() -> None:
+    """The durable operational activity owns the automated #3708 sweep."""
+
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            return []
+
+        async def reap_orphan_session_containers(self) -> ManagedSessionReapResult:
+            return ManagedSessionReapResult()
+
+    class _SweepResult:
+        def to_dict(self) -> dict[str, int]:
+            return {
+                "scanned": 2,
+                "findingsRecorded": 1,
+                "reconcileRequests": 1,
+                "deliveryUnknown": 0,
+                "quarantined": 0,
+                "observationOnly": 0,
+                "conflicts": 0,
+                "failures": 0,
+            }
+
+    class _StuckStateService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def sweep(self) -> _SweepResult:
+            self.calls += 1
+            return _SweepResult()
+
+    stuck_state = _StuckStateService()
+    activities = TemporalAgentRuntimeActivities(
+        session_controller=_Controller(),
+        omnigent_stuck_state_service=stuck_state,
+    )
+
+    result = await activities.agent_runtime_reconcile_managed_sessions({})
+
+    assert stuck_state.calls == 1
+    assert result["omnigentStuckState"] == _SweepResult().to_dict()
+
+
 async def test_agent_runtime_reconcile_orphan_reap_failure_is_best_effort() -> None:
     class _Controller:
         async def reconcile(self) -> list[dict[str, Any]]:

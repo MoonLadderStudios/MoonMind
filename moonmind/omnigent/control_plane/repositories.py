@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, AsyncIterator, Callable, Optional, Sequence
 
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,7 +31,7 @@ from api_service.db.models import (
     OmnigentTurnAttempt,
 )
 
-from . import telemetry
+from . import metrics, spans, telemetry
 from .records import (
     ALIAS_STATE_ACTIVE,
     ALIAS_STATE_QUARANTINED,
@@ -375,6 +375,33 @@ class SessionRepository(_RepositoryBase):
     async def get(self, session_id: str) -> Optional[SessionRecord]:
         row = await self._load(session_id)
         return _session_record(row) if row is not None else None
+
+    async def list_reconciliation_candidates(
+        self, *, limit: int = 100
+    ) -> list[SessionRecord]:
+        """Return a bounded batch whose lifecycle may still require convergence.
+
+        Quarantined sessions remain readable but interactive mutation is disabled,
+        so the operational stuck-state sweep must not repeatedly act on them.
+        Terminal sessions stay eligible until cleanup is durably complete.
+        """
+
+        bounded_limit = max(1, min(int(limit), 500))
+        stmt = (
+            select(OmnigentSession)
+            .where(
+                OmnigentSession.historical_read_state != "quarantined",
+                or_(
+                    OmnigentSession.terminal_state.is_(None),
+                    OmnigentSession.cleanup_state.is_(None),
+                    OmnigentSession.cleanup_state.notin_(("complete", "closed")),
+                ),
+            )
+            .order_by(OmnigentSession.updated_at, OmnigentSession.session_id)
+            .limit(bounded_limit)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_session_record(row) for row in rows]
 
     async def load_for_update(self, session_id: str) -> Optional[SessionRecord]:
         """Load a session under a row lock for a read-decide-write sequence.
@@ -1081,6 +1108,51 @@ class ObservationRepository(_RepositoryBase):
         payload_ref: Optional[str] = None,
         bounded_index: Optional[dict[str, Any]] = None,
     ) -> ObservationRecord:
+        span_name = (
+            spans.PROVIDER_OBSERVE_SNAPSHOT
+            if observation_type in {"snapshot", "provider_snapshot"}
+            else spans.PROVIDER_READ_EVENT_BATCH
+            if observation_type in {
+                "event",
+                "event_frontier",
+                "event_batch",
+                "provider_event",
+                "provider_event_batch",
+            }
+            else spans.OBSERVATION_LOAD
+        )
+        with spans.omnigent_span(
+            span_name,
+            observation_source=source,
+            observation_schema_version=1,
+        ):
+            return await self._append(
+                observation_id=observation_id,
+                session_id=session_id,
+                observation_type=observation_type,
+                source=source,
+                observed_at=observed_at,
+                deduplication_key=deduplication_key,
+                source_sequence=source_sequence,
+                source_digest=source_digest,
+                payload_ref=payload_ref,
+                bounded_index=bounded_index,
+            )
+
+    async def _append(
+        self,
+        *,
+        observation_id: str,
+        session_id: str,
+        observation_type: str,
+        source: str,
+        observed_at: datetime,
+        deduplication_key: str,
+        source_sequence: Optional[int] = None,
+        source_digest: Optional[str] = None,
+        payload_ref: Optional[str] = None,
+        bounded_index: Optional[dict[str, Any]] = None,
+    ) -> ObservationRecord:
         """Append an observation. Idempotent on ``(session_id, dedup_key)``."""
 
         existing = await self._by_dedup(session_id, deduplication_key)
@@ -1174,6 +1246,39 @@ class CommandRepository(_RepositoryBase):
     """Durable command / idempotency journal repository."""
 
     async def record(
+        self,
+        *,
+        command_id: str,
+        session_id: str,
+        command_type: str,
+        idempotency_key: str,
+        payload_digest: str,
+        turn_attempt_id: Optional[str] = None,
+        expected_session_revision: Optional[int] = None,
+        fencing_generation: int = 0,
+        owner_class: Optional[str] = None,
+        retry_policy: Optional[dict[str, Any]] = None,
+    ) -> CommandRecord:
+        with spans.omnigent_span(
+            spans.COMMAND_EXECUTE,
+            command_class=command_type,
+            expected_revision=expected_session_revision,
+            fencing_generation_ordinal=fencing_generation,
+        ):
+            return await self._record(
+                command_id=command_id,
+                session_id=session_id,
+                command_type=command_type,
+                idempotency_key=idempotency_key,
+                payload_digest=payload_digest,
+                turn_attempt_id=turn_attempt_id,
+                expected_session_revision=expected_session_revision,
+                fencing_generation=fencing_generation,
+                owner_class=owner_class,
+                retry_policy=retry_policy,
+            )
+
+    async def _record(
         self,
         *,
         command_id: str,
@@ -1404,6 +1509,40 @@ class CommandRepository(_RepositoryBase):
         provider_receipt_id: Optional[str] = None,
         result_ref: Optional[str] = None,
     ) -> CasResult:
+        existing = await self.get(command_id)
+        with spans.omnigent_span(
+            spans.COMMAND_EXECUTE,
+            command_class=existing.command_type if existing is not None else "unknown",
+            fencing_generation_ordinal=(
+                existing.fencing_generation if existing is not None else None
+            ),
+            delivery_unknown_outcome=(
+                "created"
+                if outcome is ControlPlaneOutcome.DELIVERY_UNKNOWN
+                else "reconciled"
+                if existing is not None and existing.delivery_ambiguous
+                else "none"
+            ),
+        ):
+            return await self._record_command_delivery(
+                command_id,
+                owner_class=owner_class,
+                claim_token=claim_token,
+                outcome=outcome,
+                provider_receipt_id=provider_receipt_id,
+                result_ref=result_ref,
+            )
+
+    async def _record_command_delivery(
+        self,
+        command_id: str,
+        *,
+        owner_class: str,
+        claim_token: str,
+        outcome: ControlPlaneOutcome,
+        provider_receipt_id: Optional[str] = None,
+        result_ref: Optional[str] = None,
+    ) -> CasResult:
         """Record the delivery result of a claimed command's side effect.
 
         ``outcome`` is the caller's interpretation of the side effect:
@@ -1493,6 +1632,10 @@ class CommandRepository(_RepositoryBase):
 class DecisionRepository(_RepositoryBase):
     """Append-only reconciliation decision repository."""
 
+    async def get(self, decision_id: str) -> Optional[DecisionRecord]:
+        row = await self._session.get(OmnigentReconciliationDecision, decision_id)
+        return _decision_record(row) if row is not None else None
+
     async def append(
         self,
         *,
@@ -1510,6 +1653,100 @@ class DecisionRepository(_RepositoryBase):
         trace_ref: Optional[str] = None,
         diagnostics_ref: Optional[str] = None,
     ) -> DecisionRecord:
+        reason_class = (
+            "ambiguous"
+            if "quarantine" in decision_code or "ambiguous" in str(reason_code or "")
+            else "cleanup"
+            if "cleanup" in decision_code or "release" in decision_code
+            else "terminal"
+            if "terminal" in decision_code
+            else "failed"
+            if "fail" in decision_code
+            else "compatibility"
+            if "compatibility" in decision_code
+            else "provisioning"
+            if decision_code.startswith("ensure_")
+            else "awaiting"
+        )
+        metric_decision_class = (
+            decision_code
+            if decision_code
+            in metrics.BOUNDED_LABEL_VALUES["decision_class"]
+            else "await_observation"
+        )
+        with spans.omnigent_span(
+            spans.SESSION_RECONCILE,
+            decision_class=decision_code,
+            reason_code=reason_code,
+            expected_revision=expected_revision,
+            fencing_generation_ordinal=fencing_generation,
+        ):
+            record = await self._append(
+                decision_id=decision_id,
+                session_id=session_id,
+                decision_code=decision_code,
+                input_state_digest=input_state_digest,
+                observation_frontier_digest=observation_frontier_digest,
+                expected_revision=expected_revision,
+                fencing_generation=fencing_generation,
+                reason_code=reason_code,
+                resulting_command_id=resulting_command_id,
+                next_deadline=next_deadline,
+                product_visible_transition=product_visible_transition,
+                trace_ref=trace_ref,
+                diagnostics_ref=diagnostics_ref,
+            )
+        try:
+            metrics.increment(
+                metrics.RECONCILIATION_DECISIONS,
+                decision_class=metric_decision_class,
+                reason_class=reason_class,
+            )
+        except Exception:
+            # Metrics are auxiliary; a recorder/exporter outage must not change
+            # the durable reconciliation decision.
+            pass
+        return record
+
+    async def _append(
+        self,
+        *,
+        decision_id: str,
+        session_id: str,
+        decision_code: str,
+        input_state_digest: Optional[str] = None,
+        observation_frontier_digest: Optional[str] = None,
+        expected_revision: Optional[int] = None,
+        fencing_generation: int = 0,
+        reason_code: Optional[str] = None,
+        resulting_command_id: Optional[str] = None,
+        next_deadline: Optional[datetime] = None,
+        product_visible_transition: Optional[str] = None,
+        trace_ref: Optional[str] = None,
+        diagnostics_ref: Optional[str] = None,
+    ) -> DecisionRecord:
+        existing = await self.get(decision_id)
+        if existing is not None:
+            incoming_identity = (
+                session_id,
+                decision_code,
+                expected_revision,
+                fencing_generation,
+                reason_code,
+            )
+            stored_identity = (
+                existing.session_id,
+                existing.decision_code,
+                existing.expected_revision,
+                existing.fencing_generation,
+                existing.reason_code,
+            )
+            if incoming_identity != stored_identity:
+                raise ConflictingSessionAuthorityError(
+                    f"Decision {decision_id!r} already records different "
+                    "reconciliation authority"
+                )
+            return existing
         row = OmnigentReconciliationDecision(
             decision_id=decision_id,
             session_id=session_id,
@@ -1529,6 +1766,24 @@ class DecisionRepository(_RepositoryBase):
         await self._session.flush()
         await self._session.refresh(row)
         return _decision_record(row)
+
+    async def recent_for_session(
+        self, session_id: str, *, limit: int = 10
+    ) -> list[DecisionRecord]:
+        """Return newest decisions first with a strict operational bound."""
+
+        bounded_limit = max(1, min(int(limit), 100))
+        stmt = (
+            select(OmnigentReconciliationDecision)
+            .where(OmnigentReconciliationDecision.session_id == session_id)
+            .order_by(
+                OmnigentReconciliationDecision.created_at.desc(),
+                OmnigentReconciliationDecision.decision_id.desc(),
+            )
+            .limit(bounded_limit)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [_decision_record(row) for row in rows]
 
     async def list_for_session(self, session_id: str) -> list[DecisionRecord]:
         stmt = (

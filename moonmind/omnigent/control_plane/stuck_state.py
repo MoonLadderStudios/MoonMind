@@ -25,7 +25,7 @@ Two issue invariants are structural here:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from typing import Optional
 
@@ -157,7 +157,17 @@ class AutomatedResponse:
 def _stale(reference: Optional[datetime], now: datetime, budget: timedelta) -> bool:
     """True when ``reference`` is present and older than ``budget`` before now."""
 
-    return reference is not None and (now - reference) >= budget
+    if reference is None:
+        return False
+    # SQLite drops timezone metadata for persisted datetimes while PostgreSQL
+    # returns aware values.  Canonical control-plane timestamps are UTC, so
+    # normalize both representations at this shared detector boundary instead
+    # of allowing a storage-backend detail to crash reconciliation.
+    normalized_reference = (
+        reference.replace(tzinfo=UTC) if reference.tzinfo is None else reference
+    )
+    normalized_now = now.replace(tzinfo=UTC) if now.tzinfo is None else now
+    return (normalized_now - normalized_reference) >= budget
 
 
 def detect_stuck_state(
@@ -321,14 +331,17 @@ def detect_stuck_state(
             )
 
     # 11. Live-conformance evidence expired or runner unavailable.
+    conformance_missing = signals.admitted and signals.conformance_evidence_at is None
     conformance_stale = _stale(signals.conformance_evidence_at, now, policy.conformance_max_age)
     runner_down = signals.conformance_runner_available is False
-    if conformance_stale or runner_down:
+    if conformance_missing or conformance_stale or runner_down:
         findings.append(
             StuckStateFinding(
                 reason=StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE,
                 action=ResponseAction.OBSERVE,
-                detail="live-conformance evidence is expired or its runner is unavailable",
+                detail=(
+                    "live-conformance evidence is absent, expired, or its runner is unavailable"
+                ),
                 remediation="refresh protected-live conformance evidence or restore the verification runner",
             )
         )

@@ -19,7 +19,11 @@ from httpx import ASGITransport, AsyncClient
 import api_service.api.routers.omnigent_session_timeline as timeline_api
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
-from moonmind.omnigent.control_plane.records import SessionRecord, TurnAttemptRecord
+from moonmind.omnigent.control_plane.records import (
+    ObservationRecord,
+    SessionRecord,
+    TurnAttemptRecord,
+)
 
 NOW = datetime(2026, 8, 18, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -82,6 +86,12 @@ class _FakeDecisions:
 
     async def latest_for_session(self, _session_id):
         return self._latest
+
+    async def get(self, _decision_id):
+        return self._latest
+
+    async def recent_for_session(self, _session_id, *, limit=10):
+        return [self._latest] if self._latest is not None else []
 
     async def count_for_session_reason(self, _session_id, reason_code):
         return self._reason_counts.get(reason_code, 0)
@@ -251,3 +261,46 @@ async def test_stuck_state_endpoint_escalates_with_durable_detection_count(monke
     body = resp.json()
     assert body["response"]["quarantine"] is True
     assert body["response"]["reconcile"] is False
+
+
+@pytest.mark.asyncio
+async def test_stuck_state_endpoint_projects_provider_and_lease_divergence(monkeypatch):
+    active = SessionRecord(
+        session_id="sess-1",
+        moonmind_workflow_id="wf-1",
+        provider="codex",
+        provider_session_ref="opaque-provider-session",
+        observed_state="running",
+        compatibility_ref="compat-v1",
+        revision=7,
+        fencing_generation=3,
+    )
+    snapshot = ObservationRecord(
+        observation_id="snapshot-1",
+        session_id="sess-1",
+        observation_type="provider_snapshot",
+        source="provider_authoritative_snapshot",
+        observed_at=_LONG_AGO,
+        deduplication_key="snapshot-1",
+        bounded_index={
+            "providerSession": {"rawStatus": "completed"},
+            "hostLease": {"held": True, "consumerActive": False},
+            "profileLease": {"held": True, "consumerActive": False},
+        },
+    )
+    repos = _FakeRepos(active, latest_snapshot=snapshot)
+    monkeypatch.setattr(
+        timeline_api.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: repos)
+    )
+    app = _build_app(active, _FakeUser())
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        body = (
+            await client.get("/api/omnigent/sessions/sess-1/stuck-state")
+        ).json()
+
+    reasons = {finding["reason"] for finding in body["findings"]}
+    assert "provider_terminal_moonmind_nonterminal" in reasons
+    assert "host_lease_without_session_authority" in reasons
+    assert "profile_lease_without_consumer" in reasons

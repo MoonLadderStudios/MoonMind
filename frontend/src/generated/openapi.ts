@@ -9926,6 +9926,10 @@ export interface components {
             remediationRelease: {
                 [key: string]: unknown;
             };
+            /** Admissionreadiness */
+            admissionReadiness: {
+                [key: string]: unknown;
+            };
         };
         /** OmnigentHostResponse */
         OmnigentHostResponse: {

@@ -6562,6 +6562,7 @@ class TemporalAgentRuntimeActivities:
         workflow_docker_mode: str = "profiles",
         raw_docker_cli_enabled: bool = False,
         client_adapter: Any = None,
+        omnigent_stuck_state_service: Any = None,
         workspace_root: str | Path | None = None,
     ) -> None:
         self._artifact_service = artifact_service
@@ -6583,6 +6584,7 @@ class TemporalAgentRuntimeActivities:
 
             client_adapter = temporal_client_module.TemporalClientAdapter()
         self._client_adapter = client_adapter
+        self._omnigent_stuck_state_service = omnigent_stuck_state_service
         self._supervision_tasks: set[asyncio.Task] = set()
         from moonmind.workflows.temporal.runtime.checkpoint_restore import (
             ManagedCheckpointRestoreService,
@@ -11689,6 +11691,50 @@ class TemporalAgentRuntimeActivities:
             "orphanVolumeReapSkippedActive": orphan_volume_reap_skipped_active,
             "orphanVolumeReapSkippedRecent": orphan_volume_reap_skipped_recent,
         }
+        # The existing durable operational schedule is the single bounded
+        # sweeper owner for both managed-runtime reattachment and canonical
+        # Omnigent stuck-state inspection.  Reusing it adds no idle container or
+        # second scheduling authority (MoonLadderStudios/MoonMind#3708).
+        stuck_state_service = self._omnigent_stuck_state_service
+        if stuck_state_service is None and self._artifact_service is not None:
+            from api_service.db.base import async_session_maker
+            from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
+                StuckStateReconciliationService,
+            )
+            from moonmind.workflows.temporal.activities.omnigent_stuck_state import (
+                TemporalOmnigentReconcileDispatcher,
+                TemporalStuckStateDiagnosticPublisher,
+            )
+
+            stuck_state_service = StuckStateReconciliationService(
+                session_factory=async_session_maker,
+                dispatcher=TemporalOmnigentReconcileDispatcher(
+                    self._client_adapter
+                ),
+                diagnostic_publisher=TemporalStuckStateDiagnosticPublisher(
+                    self._artifact_service
+                ),
+            )
+        if stuck_state_service is not None:
+            try:
+                stuck_result = await _await_with_activity_heartbeats(
+                    stuck_state_service.sweep(),
+                    heartbeat_payload={
+                        "activityType": "agent_runtime.reconcile_managed_sessions",
+                        "phase": "omnigent_stuck_state_sweep",
+                    },
+                )
+            except Exception:
+                # Managed-session reattachment is the activity's primary result;
+                # an auxiliary sweep outage is observable and retried by the next
+                # durable schedule tick rather than rewriting primary success.
+                logger.warning(
+                    "Omnigent stuck-state sweep failed during managed-session reconcile",
+                    exc_info=True,
+                )
+                summary["omnigentStuckStateSweepFailed"] = 1
+            else:
+                summary["omnigentStuckState"] = stuck_result.to_dict()
         return summary
 
     async def agent_runtime_cleanup_managed_runtime_files(

@@ -1,9 +1,9 @@
 # Omnigent Semantic Telemetry, Operator Session Timeline, and Stuck-State Reconciliation
 
-Status: Proposed design
+Status: Implemented
 Document Class: System / Feature Design View
 Owners: MoonMind Platform
-Last updated: 2026-08-18
+Last updated: 2026-08-19
 
 **Issue:** [MoonLadderStudios/MoonMind#3708](https://github.com/MoonLadderStudios/MoonMind/issues/3708) ([Omnigent control plane 7/11]).
 
@@ -136,6 +136,18 @@ Automated response policy (`plan_response`):
 5. Product reads and evidence stay available even when interactive mutation is
    disabled.
 
+The existing durable `MoonMind.ManagedSessionReconcile` schedule is the single
+operational sweep owner. Its activity loads a bounded batch of canonical
+sessions, records each finding as an observation and reconciliation decision,
+journals one revision- and generation-fenced `request_reconcile` command, and
+signals the canonical session supervisor. An ambiguous signal delivery is
+parked as `delivery_unknown` and is never blindly resent. When the bounded
+persistent-ambiguity threshold is reached, the activity first publishes a
+restricted, redacted, long-retention diagnostic artifact and then quarantines
+the session with a fenced compare-and-swap. The read-only
+`GET /api/omnigent/sessions/{session_id}/stuck-state` endpoint projects the same
+pure inspection and response plan without becoming mutation authority.
+
 ## New-admission readiness
 
 `moonmind/omnigent/control_plane/readiness.py` computes a bounded
@@ -146,7 +158,11 @@ manifests, WebSocket availability, worker/container backend, observation
 freshness, janitor health, and the last exact-image and protected-live evidence.
 Admission **fails closed**: a capability is ready only when explicitly observed
 ready; unknown or negative signals block new admission. Historical reads and
-cleanup for existing sessions stay available regardless.
+cleanup for existing sessions stay available regardless. Workflow Create's
+`GET /api/omnigent/codex-catalog-readiness` projection carries this document as
+`admissionReadiness` and derives loaded supervisor and WebSocket capability from
+the deployed worker/route registries instead of treating configured intent as
+evidence.
 
 ## Non-goals
 
