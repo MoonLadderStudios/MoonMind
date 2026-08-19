@@ -24,6 +24,14 @@ OMNIGENT_SESSION_WORKFLOW_SCHEMA_VERSION = "omnigent-session-workflow/v1"
 OMNIGENT_SESSION_COMPATIBILITY_VERSION = "v1"
 OMNIGENT_SESSION_FEATURE_GENERATION = "omnigent-session-v1"
 
+OmnigentSessionFailureStatus = Literal[
+    "integration_unavailable",
+    "execution_failed",
+    "delivery_unknown",
+    "reconciliation_quarantined",
+    "cleanup_incomplete",
+]
+
 _ARTIFACT_REF_PATTERN = re.compile(
     r"^(?:art(?:ifact)?[_:]|artifact://)[A-Za-z0-9_.:/-]+$"
 )
@@ -172,6 +180,79 @@ class OmnigentResolveIntentRequest(_OmnigentSessionModel):
     )
 
 
+class OmnigentSessionAdmissionRequest(_OmnigentSessionModel):
+    """Compact identities evaluated before a new session child is launched."""
+
+    workflow_id: str = Field(alias="workflowId", min_length=1, max_length=255)
+    step_execution_id: str = Field(
+        alias="stepExecutionId", min_length=1, max_length=255
+    )
+    agent_run_id: str = Field(alias="agentRunId", min_length=1, max_length=255)
+    execution_profile_ref: str = Field(
+        alias="executionProfileRef", min_length=1, max_length=255
+    )
+
+    @field_validator(
+        "workflow_id", "step_execution_id", "agent_run_id", "execution_profile_ref"
+    )
+    @classmethod
+    def _validate_admission_identifier(cls, value: str, info: Any) -> str:
+        return _require_compact_identifier(value, field_name=info.field_name)
+
+
+class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
+    """Frozen replay authority for one new-session admission decision."""
+
+    admitted: bool
+    reason_code: Literal[
+        "enabled",
+        "canary_selected",
+        "new_selection_disabled",
+        "canary_owner_not_allowlisted",
+        "execution_profile_not_allowlisted",
+        "feature_generation_mismatch",
+    ] = Field(alias="reasonCode")
+    admission_mode: Literal["disabled", "canary", "enabled"] = Field(
+        alias="admissionMode"
+    )
+    admitted_feature_generation: Literal[OMNIGENT_SESSION_FEATURE_GENERATION] = (
+        Field(
+            OMNIGENT_SESSION_FEATURE_GENERATION,
+            alias="admittedFeatureGeneration",
+        )
+    )
+
+
+class OmnigentFailureAuthorityRequest(_OmnigentSessionModel):
+    """Immutable child authority used to recover the current session fence."""
+
+    session_id: str = Field(alias="sessionId", min_length=1, max_length=255)
+    compiled_execution_intent_ref: str = Field(
+        alias="compiledExecutionIntentRef", min_length=1, max_length=1024
+    )
+    compiled_execution_intent_digest: str = Field(
+        alias="compiledExecutionIntentDigest", min_length=1, max_length=128
+    )
+    workflow_id: str = Field(alias="workflowId", min_length=1, max_length=255)
+    step_execution_id: str = Field(
+        alias="stepExecutionId", min_length=1, max_length=255
+    )
+    agent_run_id: str = Field(alias="agentRunId", min_length=1, max_length=255)
+
+    @field_validator("compiled_execution_intent_ref")
+    @classmethod
+    def _validate_failure_intent_ref(cls, value: str) -> str:
+        return _require_artifact_ref(value, field_name="compiledExecutionIntentRef")
+
+    @field_validator("compiled_execution_intent_digest")
+    @classmethod
+    def _validate_failure_intent_digest(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if not _DIGEST_PATTERN.match(normalized):
+            raise ValueError("compiledExecutionIntentDigest must be a sha256 digest")
+        return normalized
+
+
 class OmnigentSessionActivityRequest(_OmnigentSessionModel):
     """Reference-only request shared by bounded supervisor Activities."""
 
@@ -211,6 +292,14 @@ class OmnigentPersistSignalsRequest(OmnigentSessionActivityRequest):
     signals: tuple[dict[str, Any], ...] = ()
 
 
+class OmnigentPersistFailureRequest(OmnigentSessionActivityRequest):
+    """Bounded failure evidence; exception prose never enters history."""
+
+    status: OmnigentSessionFailureStatus
+    failed_activity: str = Field(alias="failedActivity", min_length=1, max_length=128)
+    reason_code: str = Field(alias="reasonCode", min_length=1, max_length=128)
+
+
 class OmnigentSessionTerminalResult(_OmnigentSessionModel):
     """Compact durable result returned to AgentRun after cleanup/release."""
 
@@ -238,6 +327,11 @@ class OmnigentSessionTerminalResult(_OmnigentSessionModel):
             "publicationEvidenceRef",
             "omnigentSessionStatus",
             "reasonCode",
+            "cleanupEvidenceRef",
+            "workflowFailureEvidenceRef",
+            "cleanupOwner",
+            "janitorRequired",
+            "primaryOmnigentSessionStatus",
         }
         unknown_metadata = sorted(set(value.metadata) - allowed_metadata)
         if unknown_metadata:
@@ -279,12 +373,17 @@ __all__ = [
     "OMNIGENT_SESSION_WORKFLOW_SCHEMA_VERSION",
     "OMNIGENT_SESSION_COMPATIBILITY_VERSION",
     "OMNIGENT_SESSION_FEATURE_GENERATION",
+    "OmnigentSessionFailureStatus",
     "OmnigentSessionContinueAsNewState",
     "OmnigentSessionWorkflowInput",
     "OmnigentSessionSignal",
     "OmnigentResolveIntentRequest",
+    "OmnigentSessionAdmissionRequest",
+    "OmnigentSessionAdmissionDecision",
+    "OmnigentFailureAuthorityRequest",
     "OmnigentSessionActivityRequest",
     "OmnigentPersistDecisionRequest",
     "OmnigentPersistSignalsRequest",
+    "OmnigentPersistFailureRequest",
     "OmnigentSessionTerminalResult",
 ]

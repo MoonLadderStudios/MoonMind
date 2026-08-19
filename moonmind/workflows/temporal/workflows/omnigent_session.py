@@ -32,7 +32,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.agent_runtime_models import AgentRunResult
     from moonmind.schemas.omnigent_session_models import (
         OmnigentPersistDecisionRequest,
+        OmnigentPersistFailureRequest,
         OmnigentPersistSignalsRequest,
+        OmnigentFailureAuthorityRequest,
         OmnigentSessionActivityRequest,
         OmnigentSessionContinueAsNewState,
         OmnigentSessionSignal,
@@ -85,6 +87,26 @@ _TERMINAL_FAILURE_DECISIONS = frozenset(
     {
         DecisionKind.FAIL_NONRETRYABLE,
         DecisionKind.QUARANTINE_AMBIGUOUS_STATE,
+    }
+)
+_CLEANUP_ACTIVITIES = frozenset(
+    {
+        "omnigent.stop_provider_session",
+        "omnigent.stop_host",
+        "omnigent.release_leases",
+    }
+)
+_PROVIDER_INTEGRATION_ACTIVITIES = frozenset(
+    {
+        "omnigent.ensure_provider_profile_lease",
+        "omnigent.ensure_host",
+        "omnigent.ensure_provider_session",
+        "omnigent.load_reconciliation_inputs",
+        "omnigent.read_event_batch",
+        "omnigent.observe_snapshot",
+        "omnigent.harvest_evidence",
+        "omnigent.publish_workspace",
+        "omnigent.record_terminal",
     }
 )
 
@@ -162,6 +184,11 @@ class MoonMindOmnigentSessionWorkflow:
         self._last_snapshot_frontier: str | None = None
         self._terminal_status: str | None = None
         self._terminal_result_ref: str | None = None
+        self._cleanup_evidence_ref: str | None = None
+        self._active_activity: str | None = None
+        self._last_failed_activity: str | None = None
+        self._active_decision_id: str | None = None
+        self._active_command_id: str | None = None
         self._timeout_snapshot_observed = False
         self._timeout_snapshot_attempt_count = 0
         self._decision_count = 0
@@ -220,11 +247,21 @@ class MoonMindOmnigentSessionWorkflow:
             kwargs["heartbeat_timeout"] = timedelta(
                 seconds=route.timeouts.heartbeat_timeout_seconds
             )
-        return await workflow.execute_activity(
-            activity_name,
-            dict(payload),
-            **kwargs,
-        )
+        self._active_activity = activity_name
+        try:
+            result = await workflow.execute_activity(
+                activity_name,
+                dict(payload),
+                **kwargs,
+            )
+            self._last_failed_activity = None
+            return result
+        except BaseException as exc:
+            if not _is_cancellation_failure(exc):
+                self._last_failed_activity = activity_name
+            raise
+        finally:
+            self._active_activity = None
 
     def _require_input(self) -> OmnigentSessionWorkflowInput:
         if self._input is None:
@@ -352,6 +389,83 @@ class MoonMindOmnigentSessionWorkflow:
         del self._pending_signal_intents[: len(pending)]
         return True
 
+    @staticmethod
+    def _activity_failure_status(activity_name: str) -> str:
+        if activity_name in _CLEANUP_ACTIVITIES:
+            return "cleanup_incomplete"
+        if activity_name == "omnigent.submit_turn":
+            return "delivery_unknown"
+        if activity_name in _PROVIDER_INTEGRATION_ACTIVITIES:
+            return "integration_unavailable"
+        return "execution_failed"
+
+    async def _persist_failure(
+        self,
+        *,
+        durable: DurableSessionState,
+        status: str,
+        failed_activity: str,
+        reason_code: str,
+    ) -> OmnigentSessionTerminalResult | None:
+        request = self._base_activity_request(durable)
+        failure_payload = request.model_dump(mode="python", by_alias=True)
+        failure_payload.update(
+            {
+                "decisionId": self._active_decision_id,
+                "commandId": self._active_command_id,
+                "status": status,
+                "failedActivity": failed_activity,
+                "reasonCode": reason_code,
+            }
+        )
+        payload = OmnigentPersistFailureRequest.model_validate(
+            failure_payload
+        ).model_dump(mode="json", by_alias=True, exclude_none=True)
+        persisted = await self._execute_activity(
+            "omnigent.persist_failure", payload
+        )
+        if isinstance(persisted, Mapping) and persisted.get("reconcileRequired"):
+            return None
+        terminal = self._coerce_terminal_result(
+            persisted,
+            fallback_status=status,
+            fallback_summary="Omnigent failure evidence could not be decoded",
+        )
+        self._terminal_status = terminal.status
+        self._terminal_result_ref = terminal.result_ref
+        if terminal.status == "cleanup_incomplete":
+            self._cleanup_evidence_ref = terminal.result_ref
+        self._phase = terminal.status
+        self._update_visibility()
+        return terminal
+
+    async def _load_failure_authority(
+        self, session_input: OmnigentSessionWorkflowInput
+    ) -> DurableSessionState:
+        loaded = await self._execute_activity(
+            "omnigent.load_failure_authority",
+            OmnigentFailureAuthorityRequest(
+                sessionId=session_input.session_id,
+                compiledExecutionIntentRef=(
+                    session_input.compiled_execution_intent_ref
+                ),
+                compiledExecutionIntentDigest=(
+                    session_input.compiled_execution_intent_digest
+                ),
+                workflowId=session_input.workflow_id,
+                stepExecutionId=session_input.step_execution_id,
+                agentRunId=session_input.agent_run_id,
+            ).model_dump(mode="json", by_alias=True),
+        )
+        if not isinstance(loaded, Mapping):
+            raise ValueError("omnigent.load_failure_authority returned no mapping")
+        return DurableSessionState(
+            sessionId=session_input.session_id,
+            revision=int(loaded.get("revision") or 0),
+            ownerToken=f"omnigent-session:{session_input.session_id}",
+            fencingGeneration=int(loaded.get("fencingGeneration") or 0),
+        )
+
     async def _observe_after_wait(self, durable: DurableSessionState) -> bool:
         request = self._base_activity_request(durable).model_dump(
             mode="json", by_alias=True, exclude_none=True
@@ -453,18 +567,66 @@ class MoonMindOmnigentSessionWorkflow:
         self._segment_started_at = workflow.now()
         self._update_visibility()
 
-        try:
-            return await self._run_until_terminal(session_input)
-        except (CancelledError, asyncio.CancelledError):
-            return await self._resume_cancelled_session(session_input)
-        except Exception as exc:
-            if not _is_cancellation_failure(exc):
-                raise
-            return await self._resume_cancelled_session(session_input)
+        while True:
+            try:
+                return await self._run_until_terminal(session_input)
+            except (CancelledError, asyncio.CancelledError):
+                await self._resume_cancelled_session(session_input)
+                continue
+            except Exception as exc:
+                if _is_cancellation_failure(exc):
+                    await self._resume_cancelled_session(session_input)
+                    continue
+                failed_activity = self._last_failed_activity
+                if failed_activity is None:
+                    raise
+                if failed_activity in {
+                    "omnigent.load_failure_authority",
+                    "omnigent.persist_failure",
+                }:
+                    raise
+                # Always refresh the canonical fence. The failed phase may
+                # have advanced session revision before its last retry, and a
+                # previously loaded workflow-side value must not authorize the
+                # failure writer.
+                durable = await self._load_failure_authority(session_input)
+                try:
+                    status = self._activity_failure_status(failed_activity)
+                    if self._terminal_status in {
+                        "integration_unavailable",
+                        "execution_failed",
+                        "delivery_unknown",
+                        "reconciliation_quarantined",
+                    }:
+                        # The primary outcome is already durable. If a later
+                        # bounded phase cannot make cleanup progress, hand the
+                        # remaining resources to the janitor instead of
+                        # repeatedly rewriting the primary failure forever.
+                        status = "cleanup_incomplete"
+                    terminal = await self._persist_failure(
+                        durable=durable,
+                        status=status,
+                        failed_activity=failed_activity,
+                        reason_code="bounded_activity_exhausted",
+                    )
+                except Exception as persist_exc:
+                    if _is_revision_conflict(persist_exc):
+                        self._last_failed_activity = None
+                        continue
+                    raise
+                if terminal is None:
+                    self._last_failed_activity = None
+                    continue
+                if terminal.status == "cleanup_incomplete":
+                    return terminal.result
+                # The failure Activity attached compact terminal evidence. Run
+                # the normal reconciler again so cleanup and release remain
+                # distinct durable commands rather than exception unwinding.
+                self._last_failed_activity = None
 
     async def _resume_cancelled_session(
         self, session_input: OmnigentSessionWorkflowInput
-    ) -> AgentRunResult:
+    ) -> None:
         """Convert child cancellation into durable intent and ordered cleanup."""
 
         current_task = asyncio.current_task()
@@ -486,13 +648,14 @@ class MoonMindOmnigentSessionWorkflow:
                 }
             )
         self._wake()
-        return await self._run_until_terminal(session_input)
 
     async def _run_until_terminal(
         self, session_input: OmnigentSessionWorkflowInput
     ) -> AgentRunResult:
 
         while True:
+            self._active_decision_id = None
+            self._active_command_id = None
             loaded = await self._execute_activity(
                 "omnigent.load_reconciliation_inputs",
                 {
@@ -600,6 +763,8 @@ class MoonMindOmnigentSessionWorkflow:
             self._update_visibility()
 
             base = self._base_activity_request(durable, decision)
+            self._active_decision_id = base.decision_id
+            self._active_command_id = base.command_id
             try:
                 await self._execute_activity(
                     "omnigent.persist_decision",
@@ -648,30 +813,21 @@ class MoonMindOmnigentSessionWorkflow:
                     if decision.kind is DecisionKind.QUARANTINE_AMBIGUOUS_STATE
                     else "execution_failed"
                 )
-                terminal = OmnigentSessionTerminalResult(
-                    status=status,
-                    result=AgentRunResult(
-                        summary=(
-                            "Omnigent session reconciliation stopped: "
-                            f"{decision.reason_code.value}"
-                        ),
-                        failureClass=(
-                            "integration_error"
-                            if status == "reconciliation_quarantined"
-                            else "execution_error"
-                        ),
-                        metadata={
-                            "omnigentSessionStatus": status,
-                            "reasonCode": decision.reason_code.value,
-                            "canonicalSessionId": session_input.session_id,
-                        },
-                    ),
-                )
-                self._terminal_status = terminal.status
-                self._terminal_result_ref = terminal.result_ref
-                self._phase = terminal.status
-                self._update_visibility()
-                return terminal.result
+                try:
+                    await self._persist_failure(
+                        durable=durable,
+                        status=status,
+                        failed_activity="omnigent.reconcile",
+                        reason_code=decision.reason_code.value,
+                    )
+                except Exception as exc:
+                    if _is_revision_conflict(exc):
+                        self._last_failed_activity = None
+                        continue
+                    raise
+                # Re-load the newly terminal canonical state and continue into
+                # the same ordered cleanup/release chain as provider terminals.
+                continue
 
             if decision.kind is DecisionKind.NO_OP:
                 terminal = self._coerce_terminal_result(
@@ -784,6 +940,7 @@ class MoonMindOmnigentSessionWorkflow:
             "pendingIntentCount": len(self._pending_signal_intents),
             "terminalStatus": self._terminal_status,
             "terminalResultRef": self._terminal_result_ref,
+            "cleanupEvidenceRef": self._cleanup_evidence_ref,
         }
 
 

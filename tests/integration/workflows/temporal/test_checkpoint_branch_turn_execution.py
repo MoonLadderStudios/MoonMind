@@ -213,6 +213,16 @@ async def _resolve_omnigent_session_intent(payload: dict) -> dict:
     ).model_dump(mode="json", by_alias=True)
 
 
+@activity.defn(name="omnigent.evaluate_session_admission")
+async def _admit_omnigent_session(_payload: dict) -> dict:
+    return {
+        "admitted": True,
+        "reasonCode": "enabled",
+        "admissionMode": "enabled",
+        "admittedFeatureGeneration": "omnigent-session-v1",
+    }
+
+
 @activity.defn(name="test.omnigent.session_execute")
 async def _execute_fake_omnigent_session(payload: dict) -> AgentRunResult:
     request = REAL_AGENT_REQUESTS[str(payload["sessionId"])]
@@ -563,6 +573,7 @@ async def _run(
                             env.client,
                             task_queue=AGENT_RUNTIME_TASK_QUEUE,
                             activities=[
+                                _admit_omnigent_session,
                                 _resolve_omnigent_session_intent,
                                 _execute_fake_omnigent_session,
                                 omnigent_profile_bound_execute_activity,
@@ -1239,6 +1250,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
                     env.client,
                     task_queue=AGENT_RUNTIME_TASK_QUEUE,
                     activities=[
+                        _admit_omnigent_session,
                         _resolve_omnigent_session_intent,
                         _execute_fake_omnigent_session,
                         omnigent_profile_bound_execute_activity,

@@ -1642,6 +1642,74 @@ class CommandRepository(_RepositoryBase):
         await self._session.refresh(row)
         return CasResult(result_outcome, _command_record(row))
 
+    async def record_command_failure(
+        self,
+        command_id: str,
+        *,
+        owner_class: str,
+        claim_token: str,
+        result_ref: str,
+    ) -> CasResult:
+        """Park an exhausted command with durable, reference-only evidence.
+
+        A delivery-unknown command remains delivery-unknown so terminalization
+        cannot manufacture proof that the provider side effect did not occur.
+        Pending commands may be failed by the session supervisor because they
+        never crossed the claim boundary; claimed commands still require the
+        exact deterministic claimant token used by the bounded Activity.
+        """
+
+        row = await self._load_command_for_update(command_id)
+        if row.status == COMMAND_STATE_APPLIED:
+            return CasResult(
+                ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row)
+            )
+        if row.status == COMMAND_STATE_FAILED:
+            if row.result_ref not in {None, result_ref}:
+                return CasResult(
+                    ControlPlaneOutcome.IMMUTABLE_AUTHORITY_CONFLICT,
+                    _command_record(row),
+                )
+            if row.result_ref is None:
+                row.result_ref = result_ref
+                row.revision = row.revision + 1
+                await self._session.flush()
+                await self._session.refresh(row)
+            return CasResult(
+                ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row)
+            )
+        if row.status == COMMAND_STATE_DELIVERY_UNKNOWN:
+            if row.result_ref is None:
+                row.result_ref = result_ref
+                row.revision = row.revision + 1
+                await self._session.flush()
+                await self._session.refresh(row)
+            return CasResult(
+                ControlPlaneOutcome.DELIVERY_UNKNOWN, _command_record(row)
+            )
+        if row.status == COMMAND_STATE_CLAIMED and (
+            row.owner_class != owner_class or row.claim_token != claim_token
+        ):
+            raise NotCommandOwnerError(
+                f"Command {command_id!r} is not claimed by this claimant"
+            )
+        if row.status == COMMAND_STATE_PENDING:
+            session_row = await self._session.get(OmnigentSession, row.session_id)
+            if (
+                session_row is not None
+                and row.fencing_generation != session_row.fencing_generation
+            ):
+                return CasResult(
+                    ControlPlaneOutcome.FENCING_CONFLICT, _command_record(row)
+                )
+        row.status = COMMAND_STATE_FAILED
+        row.delivery_ambiguous = False
+        row.result_ref = result_ref
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return CasResult(ControlPlaneOutcome.APPLIED, _command_record(row))
+
 
 # --- DecisionRepository ------------------------------------------------------
 
@@ -1918,6 +1986,31 @@ class CleanupAuthorityRepository(_RepositoryBase):
         await self._session.flush()
         await self._session.refresh(row)
         return CasResult(ControlPlaneOutcome.APPLIED, _cleanup_record(row))
+
+    async def record_janitor_handoff(
+        self,
+        session_id: str,
+        *,
+        owner_class: str,
+    ) -> CleanupAuthorityRecord:
+        """Make exhausted cleanup discoverable without claiming janitor fences.
+
+        The evidence reference lives on the canonical session metadata. This
+        aggregate records the durable owner intent while remaining unclaimed,
+        so a real janitor can subsequently win the normal fenced claim.
+        """
+
+        row = await self._load_for_update(session_id)
+        if row.state != CLEANUP_STATE_UNCLAIMED:
+            return _cleanup_record(row)
+        if row.owner_class == owner_class and row.claim_token is None:
+            return _cleanup_record(row)
+        row.owner_class = owner_class
+        row.claim_token = None
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _cleanup_record(row)
 
     async def complete_cleanup(
         self,

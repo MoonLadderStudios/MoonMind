@@ -22,6 +22,11 @@ from moonmind.omnigent.reconciler import (
 )
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.schemas.omnigent_session_models import (
+    OMNIGENT_SESSION_FEATURE_GENERATION,
+    OmnigentPersistFailureRequest,
+    OmnigentFailureAuthorityRequest,
+    OmnigentSessionAdmissionDecision,
+    OmnigentSessionAdmissionRequest,
     OmnigentSessionContinueAsNewState,
     OmnigentSessionSignal,
     OmnigentSessionTerminalResult,
@@ -85,6 +90,68 @@ def test_workflow_input_is_compact_closed_and_reference_only() -> None:
         _workflow_input(compiledExecutionIntentRef="/tmp/intent.json")
     with pytest.raises(ValidationError):
         _workflow_input(admittedFeatureGeneration="omnigent-session-v2")
+
+
+def test_admission_contract_is_frozen_compact_and_fail_closed() -> None:
+    request = OmnigentSessionAdmissionRequest(
+        workflowId="workflow-1",
+        stepExecutionId="step-1",
+        agentRunId="agent-run-1",
+        executionProfileRef="omnigent-codex",
+    )
+    admitted = OmnigentSessionAdmissionDecision(
+        admitted=True,
+        reasonCode="enabled",
+        admissionMode="enabled",
+        admittedFeatureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+    )
+
+    assert request.model_dump(mode="json", by_alias=True) == {
+        "workflowId": "workflow-1",
+        "stepExecutionId": "step-1",
+        "agentRunId": "agent-run-1",
+        "executionProfileRef": "omnigent-codex",
+    }
+    assert admitted.admitted_feature_generation == "omnigent-session-v1"
+    with pytest.raises(ValidationError):
+        OmnigentSessionAdmissionDecision(
+            admitted=True,
+            reasonCode="enabled",
+            admissionMode="enabled",
+            admittedFeatureGeneration="omnigent-session-v2",
+        )
+
+
+def test_failure_contract_carries_only_typed_bounded_evidence() -> None:
+    authority = OmnigentFailureAuthorityRequest(
+        sessionId="oms_123",
+        compiledExecutionIntentRef="art_intent_123",
+        compiledExecutionIntentDigest="sha256:" + "a" * 64,
+        workflowId="workflow-1",
+        stepExecutionId="step-1",
+        agentRunId="agent-run-1",
+    )
+    request = OmnigentPersistFailureRequest(
+        sessionId="oms_123",
+        compiledExecutionIntentRef="art_intent_123",
+        compiledExecutionIntentDigest="sha256:" + "a" * 64,
+        expectedRevision=5,
+        fencingGeneration=2,
+        decisionId="decision-5",
+        commandId="command-5",
+        status="cleanup_incomplete",
+        failedActivity="omnigent.stop_host",
+        reasonCode="bounded_activity_exhausted",
+    )
+
+    assert authority.workflow_id == "workflow-1"
+    assert request.status == "cleanup_incomplete"
+    assert request.failed_activity == "omnigent.stop_host"
+    with pytest.raises(ValidationError):
+        OmnigentPersistFailureRequest(
+            **request.model_dump(mode="python", by_alias=True),
+            error="provider token and unbounded exception prose",
+        )
 
 
 def test_signal_contract_carries_only_safe_ids_and_refs() -> None:
@@ -359,8 +426,10 @@ def test_production_registry_and_catalog_include_supervisor_boundary() -> None:
 
     catalog = build_default_activity_catalog()
     required = {
+        "omnigent.evaluate_session_admission",
         "omnigent.resolve_intent",
         "omnigent.load_reconciliation_inputs",
+        "omnigent.load_failure_authority",
         "omnigent.ensure_provider_profile_lease",
         "omnigent.ensure_host",
         "omnigent.ensure_provider_session",
@@ -375,6 +444,7 @@ def test_production_registry_and_catalog_include_supervisor_boundary() -> None:
         "omnigent.persist_decision",
         "omnigent.persist_signal_intents",
         "omnigent.record_terminal",
+        "omnigent.persist_failure",
     }
     for activity_name in required:
         route = catalog.resolve_activity(activity_name)
@@ -586,6 +656,8 @@ def test_agent_run_patch_preserves_legacy_replay_and_selects_new_supervisor() ->
     source = inspect.getsource(MoonMindAgentRun.run)
 
     assert "OMNIGENT_SESSION_SUPERVISOR_PATCH_ID" in source
+    assert "OMNIGENT_SESSION_ADMISSION_PATCH_ID" in source
+    assert '"omnigent.evaluate_session_admission"' in source
     assert '"MoonMind.OmnigentSession"' in source
     assert "omnigent_session_workflow_id" in source
     assert "ChildWorkflowCancellationType.ABANDON" in source

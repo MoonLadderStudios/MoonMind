@@ -1034,10 +1034,18 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     "integration.omnigent.execute": ("integrations", "integration_omnigent_execute"),
     "integration.omnigent.profile_bound_execute": ("agent_runtime", "integration_omnigent_profile_bound_execute"),
     "integration.omnigent.oauth_host_janitor": ("agent_runtime", "integration_omnigent_oauth_host_janitor"),
+    "omnigent.evaluate_session_admission": (
+        "agent_runtime",
+        "omnigent_evaluate_session_admission",
+    ),
     "omnigent.resolve_intent": ("agent_runtime", "omnigent_resolve_intent"),
     "omnigent.load_reconciliation_inputs": (
         "agent_runtime",
         "omnigent_load_reconciliation_inputs",
+    ),
+    "omnigent.load_failure_authority": (
+        "agent_runtime",
+        "omnigent_load_failure_authority",
     ),
     "omnigent.ensure_provider_profile_lease": (
         "agent_runtime",
@@ -1065,6 +1073,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "omnigent_persist_signal_intents",
     ),
     "omnigent.record_terminal": ("agent_runtime", "omnigent_record_terminal"),
+    "omnigent.persist_failure": ("agent_runtime", "omnigent_persist_failure"),
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_artifacts",
@@ -7451,12 +7460,32 @@ class TemporalAgentRuntimeActivities:
             **kwargs,
         )
 
+    async def omnigent_evaluate_session_admission(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_evaluate_session_admission_activity",
+            "omnigent.evaluate_session_admission",
+            request,
+            **kwargs,
+        )
+
     async def omnigent_load_reconciliation_inputs(
         self, request: Any = None, /, **kwargs: Any
     ) -> dict[str, Any]:
         return await self._run_omnigent_session_activity(
             "omnigent_load_reconciliation_inputs_activity",
             "omnigent.load_reconciliation_inputs",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_load_failure_authority(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_load_failure_authority_activity",
+            "omnigent.load_failure_authority",
             request,
             **kwargs,
         )
@@ -7597,6 +7626,16 @@ class TemporalAgentRuntimeActivities:
         return await self._run_omnigent_session_activity(
             "omnigent_record_terminal_activity",
             "omnigent.record_terminal",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_persist_failure(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_persist_failure_activity",
+            "omnigent.persist_failure",
             request,
             **kwargs,
         )

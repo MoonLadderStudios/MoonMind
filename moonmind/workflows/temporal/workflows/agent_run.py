@@ -36,6 +36,8 @@ with workflow.unsafe.imports_passed_through():
     )
     from moonmind.schemas.omnigent_session_models import (
         OMNIGENT_SESSION_FEATURE_GENERATION,
+        OmnigentSessionAdmissionDecision,
+        OmnigentSessionAdmissionRequest,
         OmnigentSessionSignal,
         OmnigentSessionWorkflowInput,
     )
@@ -224,6 +226,9 @@ OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID = (
 )
 OMNIGENT_SESSION_SUPERVISOR_PATCH_ID = (
     "agent-run-omnigent-session-supervisor-v1"
+)
+OMNIGENT_SESSION_ADMISSION_PATCH_ID = (
+    "agent-run-omnigent-session-admission-v1"
 )
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID = (
@@ -4260,6 +4265,9 @@ class MoonMindAgentRun:
         use_omnigent_session_supervisor = workflow.patched(
             OMNIGENT_SESSION_SUPERVISOR_PATCH_ID
         )
+        use_omnigent_session_admission = workflow.patched(
+            OMNIGENT_SESSION_ADMISSION_PATCH_ID
+        )
         requested_execution_profile_ref = request.execution_profile_ref
         resiliency_policy: Mapping[str, Any] = {}
         if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
@@ -5023,10 +5031,51 @@ class MoonMindAgentRun:
                     self._external_agent_id = validated_id
 
                     if execution_style == "streaming_gateway":
+                        session_admitted = use_omnigent_session_supervisor
+                        admitted_feature_generation = (
+                            OMNIGENT_SESSION_FEATURE_GENERATION
+                        )
                         if (
                             validated_id == "omnigent"
                             and request.execution_profile_ref
                             and use_omnigent_session_supervisor
+                            and use_omnigent_session_admission
+                        ):
+                            owner_workflow_id, step_execution_id = (
+                                self._omnigent_owner_identities(request)
+                            )
+                            admission_payload = await self._execute_routed_activity(
+                                "omnigent.evaluate_session_admission",
+                                OmnigentSessionAdmissionRequest(
+                                    workflowId=owner_workflow_id,
+                                    stepExecutionId=step_execution_id,
+                                    agentRunId=workflow.info().workflow_id,
+                                    executionProfileRef=(
+                                        request.execution_profile_ref
+                                    ),
+                                ).model_dump(mode="json", by_alias=True),
+                                cancellation_type=(
+                                    ActivityCancellationType.TRY_CANCEL
+                                ),
+                            )
+                            admission = (
+                                admission_payload
+                                if isinstance(
+                                    admission_payload,
+                                    OmnigentSessionAdmissionDecision,
+                                )
+                                else OmnigentSessionAdmissionDecision.model_validate(
+                                    admission_payload
+                                )
+                            )
+                            session_admitted = admission.admitted
+                            admitted_feature_generation = (
+                                admission.admitted_feature_generation
+                            )
+                        if (
+                            validated_id == "omnigent"
+                            and request.execution_profile_ref
+                            and session_admitted
                         ):
                             owner_workflow_id, step_execution_id = (
                                 self._omnigent_owner_identities(request)
@@ -5043,7 +5092,7 @@ class MoonMindAgentRun:
                                     "stepExecutionId": step_execution_id,
                                     "agentRunId": workflow.info().workflow_id,
                                     "admittedFeatureGeneration": (
-                                        OMNIGENT_SESSION_FEATURE_GENERATION
+                                        admitted_feature_generation
                                     ),
                                 },
                                 cancellation_type=(

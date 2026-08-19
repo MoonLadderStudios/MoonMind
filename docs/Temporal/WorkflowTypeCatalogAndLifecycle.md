@@ -597,6 +597,15 @@ the workflow ID while carrying only compact immutable authority and frontier
 summaries; provider payloads, credentials, transcripts, and mutable host paths
 remain outside workflow history.
 
+A separately patched, bounded admission decision freezes the feature
+generation for each new session and supports enabled, exact-owner canary, and
+disabled-new-selection modes without changing ownership of admitted histories.
+Exhausted phases persist typed terminal evidence and continue through the
+reconciler's ordered cleanup. Exhausted cleanup preserves the primary result,
+publishes `cleanup_incomplete` evidence, and leaves an unclaimed durable cleanup
+authority record for the designated janitor instead of releasing profile
+capacity or hiding unfinished work.
+
 ## 11.5 `MoonMind.AgentSession` lifecycle
 
 ```mermaid

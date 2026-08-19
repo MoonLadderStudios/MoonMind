@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -50,6 +51,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     AGENT_RUNTIME_TASK_QUEUE,
     ARTIFACTS_TASK_QUEUE,
     LLM_TASK_QUEUE,
+    build_default_activity_catalog,
     get_workflow_task_queue,
 )
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
@@ -88,15 +90,21 @@ def _reset_state() -> None:
         profile=False,
         host=False,
         provider_session=False,
+        observed_provider_session_id="provider-session-1",
         submitted=False,
         provider_status=None,
         event_read_count=0,
         snapshot_count=0,
         load_count=0,
         terminal=False,
+        terminal_outcome="success",
         evidence=False,
         cleanup=False,
         cancel=False,
+        admission=True,
+        fail_activity=None,
+        load_failures_remaining=0,
+        reconciler_failed=False,
     )
     PRODUCT_INPUTS.clear()
 
@@ -281,12 +289,34 @@ async def _resolve_intent(payload: dict[str, Any]) -> dict[str, Any]:
     ).model_dump(mode="json", by_alias=True)
 
 
+@activity.defn(name="omnigent.evaluate_session_admission")
+async def _evaluate_session_admission(_payload: dict[str, Any]) -> dict[str, Any]:
+    CALLS.append("evaluate_session_admission")
+    return {
+        "admitted": bool(STATE["admission"]),
+        "reasonCode": (
+            "enabled" if STATE["admission"] else "new_selection_disabled"
+        ),
+        "admissionMode": "enabled" if STATE["admission"] else "disabled",
+        "admittedFeatureGeneration": "omnigent-session-v1",
+    }
+
+
 @activity.defn(name="omnigent.load_reconciliation_inputs")
 async def _load_reconciliation_inputs(
     payload: dict[str, Any],
 ) -> dict[str, Any]:
     CALLS.append("load")
     STATE["load_count"] = int(STATE["load_count"]) + 1
+    if int(STATE["load_failures_remaining"]) > 0:
+        STATE["load_failures_remaining"] = (
+            int(STATE["load_failures_remaining"]) - 1
+        )
+        raise ApplicationError(
+            "injected exhausted reconciliation input load",
+            type="InjectedBoundedActivityFailure",
+            non_retryable=True,
+        )
     if STATE["load_count"] > 50:
         raise ApplicationError(
             f"supervisor did not converge: state={STATE}, calls={CALLS[-20:]}",
@@ -323,7 +353,11 @@ async def _load_reconciliation_inputs(
             (
                 TerminalOutcome.CANCELLED
                 if STATE["cancel"]
-                else TerminalOutcome.SUCCESS
+                else (
+                    TerminalOutcome.FAILURE
+                    if STATE["terminal_outcome"] == "failure"
+                    else TerminalOutcome.SUCCESS
+                )
             )
             if STATE["terminal"]
             else None
@@ -334,13 +368,14 @@ async def _load_reconciliation_inputs(
         evidenceHarvested=bool(STATE["evidence"]),
         cleanupStarted=bool(STATE["cleanup"]),
         cleanupComplete=bool(STATE["cleanup"]),
+        failed=bool(STATE["reconciler_failed"]) and not bool(STATE["terminal"]),
     )
     observations = ObservationSet(
         providerSession=(
             ProviderSessionObservation(
                 observedAt=_NOW,
                 present=True,
-                providerSessionId="provider-session-1",
+                providerSessionId=str(STATE["observed_provider_session_id"]),
                 rawStatus=str(STATE["provider_status"]),
                 snapshotDigest=f"snapshot-{STATE['snapshot_count']}",
             )
@@ -408,20 +443,65 @@ async def _load_reconciliation_inputs(
     }
     if STATE["evidence"] and not STATE["profile"] and not STATE["host"]:
         canceled = bool(STATE["cancel"])
+        failure_status = str(STATE.get("failure_status") or "").strip()
+        failed = bool(failure_status) or STATE["terminal_outcome"] == "failure"
+        integration_failure = failure_status in {
+            "integration_unavailable",
+            "delivery_unknown",
+        }
         response["terminalResult"] = {
-            "status": "canceled" if canceled else "completed",
+            "status": (
+                "canceled"
+                if canceled
+                else failure_status or "execution_failed"
+                if failed
+                else "completed"
+            ),
             "resultRef": "art_terminal_result",
             "result": {
                 "summary": (
                     "Omnigent session canceled through supervisor"
                     if canceled
+                    else "Omnigent session failed through supervisor"
+                    if failed
                     else "Omnigent session completed through supervisor"
                 ),
-                "failureClass": "canceled" if canceled else None,
-                "metadata": {"canonicalSessionId": session_id},
+                "failureClass": (
+                    "canceled"
+                    if canceled
+                    else (
+                        "integration_error"
+                        if integration_failure
+                        else "execution_error"
+                    )
+                    if failed
+                    else None
+                ),
+                "metadata": {
+                    "canonicalSessionId": session_id,
+                    **(
+                        {
+                            "omnigentSessionStatus": (
+                                failure_status or "execution_failed"
+                            )
+                        }
+                        if failed
+                        else {}
+                    ),
+                },
             },
         }
     return response
+
+
+@activity.defn(name="omnigent.load_failure_authority")
+async def _load_failure_authority(payload: dict[str, Any]) -> dict[str, Any]:
+    CALLS.append("load_failure_authority")
+    return {
+        "sessionId": str(payload["sessionId"]),
+        "revision": int(STATE["revision"]),
+        "fencingGeneration": 1,
+    }
 
 
 @activity.defn(name="omnigent.persist_decision")
@@ -448,6 +528,84 @@ async def _persist_signals(payload: dict[str, Any]) -> dict[str, Any]:
     return {"appliedIntentCount": len(payload.get("signals") or [])}
 
 
+@activity.defn(name="omnigent.persist_failure")
+async def _persist_failure(payload: dict[str, Any]) -> dict[str, Any]:
+    status = str(payload["status"])
+    CALLS.append(f"persist_failure:{status}:{payload['failedActivity']}")
+    session_id = str(payload["sessionId"])
+    if status == "cleanup_incomplete":
+        STATE["cleanup_incomplete"] = True
+        primary_status = str(
+            STATE.get("failure_status")
+            or (
+                "execution_failed"
+                if STATE["terminal_outcome"] == "failure"
+                else "completed"
+            )
+        )
+        primary_failure_class = (
+            "integration_error"
+            if primary_status
+            in {
+                "integration_unavailable",
+                "delivery_unknown",
+                "reconciliation_quarantined",
+            }
+            else "execution_error"
+            if primary_status == "execution_failed"
+            else None
+        )
+        result = AgentRunResult(
+            summary=(
+                "Omnigent session completed through supervisor"
+                if primary_status == "completed"
+                else f"Omnigent session {primary_status}"
+            ),
+            failureClass=primary_failure_class,
+            metadata={
+                "canonicalSessionId": session_id,
+                "omnigentSessionStatus": "cleanup_incomplete",
+                "primaryOmnigentSessionStatus": primary_status,
+                "cleanupEvidenceRef": "art_cleanup_incomplete",
+                "cleanupOwner": "integration.omnigent.oauth_host_janitor",
+                "janitorRequired": True,
+            },
+            outputRefs=["art_terminal_result", "art_cleanup_incomplete"],
+        )
+        result_ref = "art_cleanup_incomplete"
+    else:
+        already_terminal = bool(STATE["terminal"])
+        STATE["terminal"] = True
+        if not already_terminal:
+            STATE["terminal_outcome"] = "failure"
+        STATE["failure_status"] = status
+        STATE["evidence"] = True
+        STATE["revision"] = int(STATE["revision"]) + 1
+        result = AgentRunResult(
+            summary=f"Omnigent session {status}",
+            failureClass=(
+                "integration_error"
+                if status != "execution_failed"
+                else "execution_error"
+            ),
+            metadata={
+                "canonicalSessionId": session_id,
+                "omnigentSessionStatus": status,
+                "reasonCode": str(payload["reasonCode"]),
+            },
+            outputRefs=["art_failure_result"],
+        )
+        result_ref = "art_failure_result"
+    return {
+        "terminalResultRef": result_ref,
+        "terminalResult": {
+            "status": status,
+            "resultRef": result_ref,
+            "result": result.model_dump(mode="json", by_alias=True),
+        },
+    }
+
+
 def _phase_activity(name: str, mutation: str | None = None):
     async def handler(_payload: dict[str, Any]) -> dict[str, Any]:
         CALLS.append(name)
@@ -458,6 +616,12 @@ def _phase_activity(name: str, mutation: str | None = None):
         ):
             PHASE_STARTED.set()
             await PHASE_RELEASE.wait()
+        if STATE.get("fail_activity") == name:
+            raise ApplicationError(
+                f"injected exhausted {name}",
+                type="InjectedBoundedActivityFailure",
+                non_retryable=True,
+            )
         if mutation is not None:
             STATE[mutation] = True
             STATE["revision"] = int(STATE["revision"]) + 1
@@ -512,9 +676,17 @@ async def _observe_snapshot(_payload: dict[str, Any]) -> dict[str, Any]:
             "readStatus": "unavailable",
             "snapshotFrontier": None,
         }
-    STATE["provider_status"] = (
-        "new_provider_status" if STATE["snapshot_count"] == 2 else "completed"
-    )
+    if STATE["snapshot_count"] == 2:
+        STATE["provider_status"] = "new_provider_status"
+    elif STATE["snapshot_count"] == 3:
+        # A provider restart may briefly surface a snapshot from another
+        # provider-session epoch. It must wake reconciliation but cannot
+        # terminalize or re-submit this canonical session.
+        STATE["provider_status"] = "running"
+        STATE["observed_provider_session_id"] = "provider-session-after-restart"
+    else:
+        STATE["provider_status"] = "completed"
+        STATE["observed_provider_session_id"] = "provider-session-1"
     return {
         "observationCount": 1,
         "snapshotFrontier": f"snapshot-{STATE['snapshot_count']}",
@@ -554,6 +726,42 @@ async def _register_search_attributes(env: WorkflowEnvironment) -> None:
             },
         )
     )
+
+
+def _direct_session_input(session_id: str) -> OmnigentSessionWorkflowInput:
+    return OmnigentSessionWorkflowInput(
+        sessionId=session_id,
+        compiledExecutionIntentRef=f"art_intent_{session_id}",
+        compiledExecutionIntentDigest="sha256:" + "c" * 64,
+        workflowId=f"workflow-{session_id}",
+        stepExecutionId=f"step-{session_id}",
+        agentRunId=f"agent-run-{session_id}",
+        initialTurnAttemptId=canonical_omnigent_turn_attempt_id(session_id),
+        admittedFeatureGeneration="omnigent-session-v1",
+        compatibilityVersion="v1",
+    )
+
+
+def _direct_session_activities() -> list[Any]:
+    return [
+        _load_reconciliation_inputs,
+        _load_failure_authority,
+        _persist_decision,
+        _persist_signals,
+        _persist_failure,
+        _ensure_profile,
+        _ensure_host,
+        _ensure_session,
+        _submit_turn,
+        _record_terminal,
+        _harvest_evidence,
+        _publish_workspace,
+        _stop_provider,
+        _stop_host,
+        _release_leases,
+        _read_event_batch,
+        _observe_snapshot,
+    ]
 
 
 async def test_product_compiled_agent_run_converges_after_lost_terminal_event() -> None:
@@ -626,10 +834,12 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
                 env.client,
                 task_queue=AGENT_RUNTIME_TASK_QUEUE,
                 activities=[
+                    _evaluate_session_admission,
                     _resolve_intent,
                     _load_reconciliation_inputs,
                     _persist_decision,
                     _persist_signals,
+                    _persist_failure,
                     _ensure_profile,
                     _ensure_host,
                     _ensure_session,
@@ -839,6 +1049,394 @@ async def test_continue_as_new_preserves_active_provider_session(
     assert CALLS.count("submit_turn") == 1
 
 
+async def test_reconciliation_failure_persists_then_runs_ordered_cleanup() -> None:
+    """Quarantine/fail decisions do not return before durable cleanup."""
+
+    _reset_state()
+    STATE.update(
+        profile=True,
+        host=True,
+        provider_session=True,
+        submitted=True,
+        reconciler_failed=True,
+    )
+    workflow_queue = get_workflow_task_queue()
+    session_id = "oms_reconciler_failure_3705"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await _register_search_attributes(env)
+        async with (
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindOmnigentSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=_direct_session_activities(),
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOmnigentSessionWorkflow.run,
+                _direct_session_input(session_id),
+                id=omnigent_session_workflow_id(session_id),
+                task_queue=workflow_queue,
+            )
+            result = AgentRunResult.model_validate(
+                await asyncio.wait_for(handle.result(), timeout=20)
+            )
+            query_state = await handle.query("omnigent_session.state")
+
+    assert result.failure_class == "execution_error"
+    assert query_state["terminalStatus"] == "execution_failed"
+    assert "persist_failure:execution_failed:omnigent.reconcile" in CALLS
+    assert CALLS.index("stop_provider_session") < CALLS.index("stop_host")
+    assert CALLS.index("stop_host") < CALLS.index("release_leases")
+
+
+async def test_initial_input_failure_loads_minimal_authority_and_persists() -> None:
+    """Failure before the first snapshot still uses the canonical DB fence."""
+
+    _reset_state()
+    STATE["load_failures_remaining"] = 1
+    workflow_queue = get_workflow_task_queue()
+    session_id = "oms_initial_load_failure_3705"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await _register_search_attributes(env)
+        async with (
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindOmnigentSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=_direct_session_activities(),
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOmnigentSessionWorkflow.run,
+                _direct_session_input(session_id),
+                id=omnigent_session_workflow_id(session_id),
+                task_queue=workflow_queue,
+            )
+            result = AgentRunResult.model_validate(
+                await asyncio.wait_for(handle.result(), timeout=20)
+            )
+
+    assert result.failure_class == "integration_error"
+    assert CALLS[:3] == [
+        "load",
+        "load_failure_authority",
+        "persist_failure:integration_unavailable:omnigent.load_reconciliation_inputs",
+    ]
+
+
+async def test_persistent_input_failure_escalates_to_claimable_cleanup() -> None:
+    """A terminalized loader outage cannot trap the child in a retry loop."""
+
+    _reset_state()
+    STATE["load_failures_remaining"] = 10
+    workflow_queue = get_workflow_task_queue()
+    session_id = "oms_persistent_input_failure_3705"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await _register_search_attributes(env)
+        async with (
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindOmnigentSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=_direct_session_activities(),
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOmnigentSessionWorkflow.run,
+                _direct_session_input(session_id),
+                id=omnigent_session_workflow_id(session_id),
+                task_queue=workflow_queue,
+            )
+            result = AgentRunResult.model_validate(
+                await asyncio.wait_for(handle.result(), timeout=20)
+            )
+            query_state = await handle.query("omnigent_session.state")
+
+    assert result.failure_class == "integration_error"
+    assert result.metadata["omnigentSessionStatus"] == "cleanup_incomplete"
+    assert result.metadata["primaryOmnigentSessionStatus"] == (
+        "integration_unavailable"
+    )
+    assert result.metadata["janitorRequired"] is True
+    assert query_state["terminalStatus"] == "cleanup_incomplete"
+    assert CALLS.count("load_failure_authority") == 2
+    assert (
+        CALLS.count(
+            "persist_failure:integration_unavailable:"
+            "omnigent.load_reconciliation_inputs"
+        )
+        == 1
+    )
+    assert (
+        CALLS.count(
+            "persist_failure:cleanup_incomplete:"
+            "omnigent.load_reconciliation_inputs"
+        )
+        == 1
+    )
+    assert "release_leases" not in CALLS
+
+
+async def test_exhausted_turn_submission_records_delivery_unknown_then_cleans_up() -> None:
+    """A lost submit response is never rewritten as a definite execution failure."""
+
+    _reset_state()
+    STATE["fail_activity"] = "submit_turn"
+    workflow_queue = get_workflow_task_queue()
+    session_id = "oms_delivery_unknown_3705"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await _register_search_attributes(env)
+        async with (
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindOmnigentSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=_direct_session_activities(),
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOmnigentSessionWorkflow.run,
+                _direct_session_input(session_id),
+                id=omnigent_session_workflow_id(session_id),
+                task_queue=workflow_queue,
+            )
+            result = AgentRunResult.model_validate(
+                await asyncio.wait_for(handle.result(), timeout=20)
+            )
+
+    assert result.failure_class == "integration_error"
+    assert result.metadata["omnigentSessionStatus"] == "delivery_unknown"
+    assert "persist_failure:delivery_unknown:omnigent.submit_turn" in CALLS
+    assert CALLS.index("stop_provider_session") < CALLS.index("stop_host")
+    assert CALLS.index("stop_host") < CALLS.index("release_leases")
+
+
+async def test_exhausted_cleanup_is_visible_and_janitor_owned() -> None:
+    """Cleanup exhaustion preserves primary success and never releases early."""
+
+    _reset_state()
+    STATE["fail_activity"] = "stop_host"
+    workflow_queue = get_workflow_task_queue()
+    session_id = "oms_cleanup_incomplete_3705"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await _register_search_attributes(env)
+        async with (
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindOmnigentSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=_direct_session_activities(),
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOmnigentSessionWorkflow.run,
+                _direct_session_input(session_id),
+                id=omnigent_session_workflow_id(session_id),
+                task_queue=workflow_queue,
+            )
+            result = AgentRunResult.model_validate(
+                await asyncio.wait_for(handle.result(), timeout=20)
+            )
+            query_state = await handle.query("omnigent_session.state")
+
+    assert result.failure_class is None
+    assert result.metadata["omnigentSessionStatus"] == "cleanup_incomplete"
+    assert result.metadata["janitorRequired"] is True
+    assert query_state["terminalStatus"] == "cleanup_incomplete"
+    assert query_state["cleanupEvidenceRef"] == "art_cleanup_incomplete"
+    assert "persist_failure:cleanup_incomplete:omnigent.stop_host" in CALLS
+    assert "release_leases" not in CALLS
+
+
+async def test_post_terminal_publication_failure_still_runs_cleanup() -> None:
+    """Harvest success cannot hide a later exhausted publication phase."""
+
+    _reset_state()
+    STATE["fail_activity"] = "publish_workspace"
+    workflow_queue = get_workflow_task_queue()
+    session_id = "oms_publication_failure_3705"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await _register_search_attributes(env)
+        async with (
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindOmnigentSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=_direct_session_activities(),
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOmnigentSessionWorkflow.run,
+                _direct_session_input(session_id),
+                id=omnigent_session_workflow_id(session_id),
+                task_queue=workflow_queue,
+            )
+            result = AgentRunResult.model_validate(
+                await asyncio.wait_for(handle.result(), timeout=20)
+            )
+
+    assert result.failure_class == "integration_error"
+    assert (
+        "persist_failure:integration_unavailable:omnigent.publish_workspace"
+        in CALLS
+    )
+    assert CALLS.index("stop_provider_session") < CALLS.index("stop_host")
+    assert CALLS.index("stop_host") < CALLS.index("release_leases")
+
+
+async def test_legacy_heartbeat_crash_window_converges_after_disconnect_and_restart() -> None:
+    """The #3698 edge is now a bounded wake plus authoritative snapshot."""
+
+    replay_root = (
+        Path(__file__).parents[2]
+        / "reliability"
+        / "replays"
+        / "omnigent-profile-bound-heartbeat-timeout"
+    )
+    manifest = json.loads((replay_root / "manifest.json").read_text())
+    assert manifest["activityType"] == "integration.omnigent.profile_bound_execute"
+    assert manifest["heartbeatTimeoutSeconds"] == 120
+    route = build_default_activity_catalog().resolve_activity(
+        "omnigent.read_event_batch"
+    )
+    assert route.timeouts.heartbeat_timeout_seconds is None
+
+    _reset_state()
+    workflow_queue = get_workflow_task_queue()
+    session_id = "oms_heartbeat_window_3705"
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await _register_search_attributes(env)
+        async with (
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindOmnigentSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=_direct_session_activities(),
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOmnigentSessionWorkflow.run,
+                _direct_session_input(session_id),
+                id=omnigent_session_workflow_id(session_id),
+                task_queue=workflow_queue,
+            )
+            result = AgentRunResult.model_validate(
+                await asyncio.wait_for(handle.result(), timeout=20)
+            )
+
+    assert result.failure_class is None
+    assert int(STATE["event_read_count"]) >= 2
+    assert int(STATE["snapshot_count"]) >= 4
+    assert "decision:await_observation:unknown_provider_status" in CALLS
+    assert (
+        "decision:await_observation:awaiting_correlated_terminal_evidence"
+        in CALLS
+    )
+    assert "decision:synthesize_terminal_from_snapshot:terminal_snapshot_synthesis" in CALLS
+    assert CALLS.count("submit_turn") == 1
+
+
+async def test_inflight_workflow_worker_restart_does_not_duplicate_provider_effects() -> None:
+    """A worker restart while submit is in flight resumes the same command."""
+
+    global PAUSE_PHASE, PHASE_STARTED, PHASE_RELEASE
+    _reset_state()
+    PAUSE_PHASE = "submit_turn"
+    PHASE_STARTED = asyncio.Event()
+    PHASE_RELEASE = asyncio.Event()
+    workflow_queue = get_workflow_task_queue()
+    session_id = "oms_worker_restart_3705"
+    try:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_search_attributes(env)
+            activity_worker = Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=_direct_session_activities(),
+            )
+            first_workflow_worker = Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindOmnigentSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+                max_cached_workflows=0,
+                sticky_queue_schedule_to_start_timeout=timedelta(seconds=1),
+            )
+            await activity_worker.__aenter__()
+            await first_workflow_worker.__aenter__()
+            try:
+                handle = await env.client.start_workflow(
+                    MoonMindOmnigentSessionWorkflow.run,
+                    _direct_session_input(session_id),
+                    id=omnigent_session_workflow_id(session_id),
+                    task_queue=workflow_queue,
+                )
+                await asyncio.wait_for(PHASE_STARTED.wait(), timeout=20)
+                await first_workflow_worker.__aexit__(None, None, None)
+                PHASE_RELEASE.set()
+                async with Worker(
+                    env.client,
+                    task_queue=workflow_queue,
+                        workflows=[MoonMindOmnigentSessionWorkflow],
+                        workflow_runner=UnsandboxedWorkflowRunner(),
+                        max_cached_workflows=0,
+                    ):
+                    await env.sleep(2)
+                    result = AgentRunResult.model_validate(
+                        await asyncio.wait_for(handle.result(), timeout=20)
+                    )
+            finally:
+                if PHASE_RELEASE is not None:
+                    PHASE_RELEASE.set()
+                await activity_worker.__aexit__(None, None, None)
+
+        assert result.failure_class is None
+        assert CALLS.count("ensure_provider_session") == 1
+        assert CALLS.count("submit_turn") == 1
+    finally:
+        if PHASE_RELEASE is not None:
+            PHASE_RELEASE.set()
+        PAUSE_PHASE = None
+        PHASE_STARTED = None
+        PHASE_RELEASE = None
+
+
 async def test_pre_supervisor_agent_run_history_replays_on_legacy_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -912,6 +1510,107 @@ async def test_pre_supervisor_agent_run_history_replays_on_legacy_owner(
     ).replay_workflow(history)
 
 
+async def test_disabling_new_admission_preserves_admitted_cleanup_and_history() -> None:
+    """Policy changes route only new AgentRuns; the admitted child stays owned."""
+
+    global PAUSE_PHASE, PHASE_STARTED, PHASE_RELEASE
+    _reset_state()
+    PAUSE_PHASE = "stop_host"
+    PHASE_STARTED = asyncio.Event()
+    PHASE_RELEASE = asyncio.Event()
+    workflow_queue = get_workflow_task_queue()
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="omnigent-codex",
+        correlationId="admission-history-3705",
+        idempotencyKey="admission-history-3705:step",
+        instructionRef="art_admission_history_instruction",
+    )
+    admitted_history = None
+    try:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_search_attributes(env)
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=workflow_queue,
+                    workflows=[MoonMindAgentRun, MoonMindOmnigentSessionWorkflow],
+                    activities=[_resolve_adapter_metadata],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                    activities=[
+                        _evaluate_session_admission,
+                        _resolve_intent,
+                        *_direct_session_activities(),
+                        _legacy_profile_bound_execute,
+                        _publish_artifacts,
+                    ],
+                ),
+            ):
+                agent_run_id = f"agent-run-admitted-history-{uuid4()}"
+                admitted_handle = await env.client.start_workflow(
+                    MoonMindAgentRun.run,
+                    request,
+                    id=agent_run_id,
+                    task_queue=workflow_queue,
+                )
+                await asyncio.wait_for(PHASE_STARTED.wait(), timeout=20)
+                # This represents an operator disabling only new selections.
+                # The child has already frozen its generation in history.
+                STATE["admission"] = False
+                PHASE_RELEASE.set()
+                admitted_result = AgentRunResult.model_validate(
+                    await asyncio.wait_for(admitted_handle.result(), timeout=20)
+                )
+                session_id = canonical_omnigent_session_id(
+                    workflow_id=request.correlation_id,
+                    step_execution_id=request.idempotency_key,
+                    agent_run_id=agent_run_id,
+                )
+                session_handle = env.client.get_workflow_handle(
+                    omnigent_session_workflow_id(session_id)
+                )
+                historical_state = await session_handle.query(
+                    "omnigent_session.state"
+                )
+                admitted_history = await admitted_handle.fetch_history()
+
+                legacy_handle = await env.client.start_workflow(
+                    MoonMindAgentRun.run,
+                    request.model_copy(
+                        update={"idempotency_key": "disabled-new-selection:step"}
+                    ),
+                    id=f"agent-run-disabled-selection-{uuid4()}",
+                    task_queue=workflow_queue,
+                )
+                legacy_result = AgentRunResult.model_validate(
+                    await legacy_handle.result()
+                )
+
+        assert admitted_result.failure_class is None
+        assert historical_state["terminalStatus"] == "completed"
+        assert historical_state["featureGeneration"] == "omnigent-session-v1"
+        assert CALLS.index("stop_host") < CALLS.index("release_leases")
+        assert legacy_result.summary == "Legacy profile-bound execution completed"
+        assert CALLS.count("resolve_intent") == 1
+        assert CALLS.count("legacy_profile_bound_execute") == 1
+        assert admitted_history is not None
+        await Replayer(
+            workflows=[MoonMindAgentRun],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ).replay_workflow(admitted_history)
+    finally:
+        if PHASE_RELEASE is not None:
+            PHASE_RELEASE.set()
+        PAUSE_PHASE = None
+        PHASE_STARTED = None
+        PHASE_RELEASE = None
+
+
 @pytest.mark.parametrize(
     ("pause_phase", "expected_terminal_status"),
     [
@@ -961,10 +1660,12 @@ async def test_agent_run_cancellation_preserves_session_cleanup_owner(
                     env.client,
                     task_queue=AGENT_RUNTIME_TASK_QUEUE,
                     activities=[
+                        _evaluate_session_admission,
                         _resolve_intent,
                         _load_reconciliation_inputs,
                         _persist_decision,
                         _persist_signals,
+                        _persist_failure,
                         _ensure_profile,
                         _ensure_host,
                         _ensure_session,

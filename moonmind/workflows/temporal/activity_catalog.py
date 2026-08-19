@@ -989,6 +989,15 @@ def build_default_activity_catalog(
         # other phase is bounded to five minutes or less and carries no unique
         # correctness state in a heartbeat.
         TemporalActivityDefinition(
+            activity_type="omnigent.evaluate_session_admission",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
+        ),
+        TemporalActivityDefinition(
             activity_type="omnigent.resolve_intent",
             family="integration",
             capability_class="agent_runtime",
@@ -999,6 +1008,15 @@ def build_default_activity_catalog(
         ),
         TemporalActivityDefinition(
             activity_type="omnigent.load_reconciliation_inputs",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
+        ),
+        TemporalActivityDefinition(
+            activity_type="omnigent.load_failure_authority",
             family="integration",
             capability_class="agent_runtime",
             task_queue=cfg.activity_agent_runtime_task_queue,
@@ -1039,6 +1057,7 @@ def build_default_activity_catalog(
                 ("omnigent.persist_decision", 30, 60),
                 ("omnigent.persist_signal_intents", 30, 60),
                 ("omnigent.record_terminal", 30, 60),
+                ("omnigent.persist_failure", 30, 60),
             )
         ),
         TemporalActivityDefinition(

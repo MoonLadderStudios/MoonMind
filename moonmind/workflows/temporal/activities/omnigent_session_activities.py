@@ -17,9 +17,14 @@ from uuid import NAMESPACE_URL, uuid5
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.schemas.omnigent_session_models import (
+    OMNIGENT_SESSION_FEATURE_GENERATION,
+    OmnigentFailureAuthorityRequest,
     OmnigentPersistDecisionRequest,
+    OmnigentPersistFailureRequest,
     OmnigentPersistSignalsRequest,
     OmnigentResolveIntentRequest,
+    OmnigentSessionAdmissionDecision,
+    OmnigentSessionAdmissionRequest,
     OmnigentSessionActivityRequest,
     OmnigentSessionTerminalResult,
     OmnigentSessionWorkflowInput,
@@ -55,6 +60,7 @@ _RECONCILER_OBSERVATION_KEYS = frozenset(
         "compatibility",
     }
 )
+_JANITOR_OWNER = "integration.omnigent.oauth_host_janitor"
 
 
 def _digest_bytes(payload: bytes) -> str:
@@ -117,6 +123,81 @@ async def _read_json_artifact(ref: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError("Omnigent session artifact must contain a JSON object")
     return value
+
+
+def _bind_terminal_evidence_ref(
+    terminal: OmnigentSessionTerminalResult,
+    evidence_ref: str,
+    *,
+    metadata_key: str | None = None,
+) -> OmnigentSessionTerminalResult:
+    """Project an externally owned evidence ref into the compact result."""
+
+    metadata = dict(terminal.result.metadata)
+    if metadata_key:
+        metadata[metadata_key] = evidence_ref
+    result = terminal.result.model_copy(
+        update={
+            "output_refs": list(
+                dict.fromkeys([*terminal.result.output_refs, evidence_ref])
+            ),
+            "metadata": metadata,
+        }
+    )
+    return terminal.model_copy(
+        update={"result_ref": evidence_ref, "result": result}
+    )
+
+
+async def omnigent_evaluate_session_admission_activity(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Freeze the bounded rollout decision before a new child is launched."""
+
+    from moonmind.config.settings import settings
+
+    request = OmnigentSessionAdmissionRequest.model_validate(payload)
+    flags = settings.feature_flags
+    mode = flags.omnigent_session_supervisor_admission_mode
+    generation = str(flags.omnigent_session_supervisor_generation or "").strip()
+    canary_owners = {
+        item.strip()
+        for item in flags.omnigent_session_supervisor_canary_owner_ids.split(",")
+        if item.strip()
+    }
+    allowed_profiles = {
+        item.strip()
+        for item in (
+            flags.omnigent_session_supervisor_allowed_execution_profile_refs.split(",")
+        )
+        if item.strip()
+    }
+
+    admitted = True
+    reason = "enabled"
+    if generation != OMNIGENT_SESSION_FEATURE_GENERATION:
+        admitted = False
+        reason = "feature_generation_mismatch"
+    elif mode == "disabled":
+        admitted = False
+        reason = "new_selection_disabled"
+    elif mode == "canary" and (
+        not canary_owners or request.agent_run_id not in canary_owners
+    ):
+        admitted = False
+        reason = "canary_owner_not_allowlisted"
+    elif allowed_profiles and request.execution_profile_ref not in allowed_profiles:
+        admitted = False
+        reason = "execution_profile_not_allowlisted"
+    elif mode == "canary":
+        reason = "canary_selected"
+
+    return OmnigentSessionAdmissionDecision(
+        admitted=admitted,
+        reasonCode=reason,
+        admissionMode=mode,
+        admittedFeatureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+    ).model_dump(mode="json", by_alias=True)
 
 
 async def _load_intent_request(
@@ -470,12 +551,31 @@ async def omnigent_load_reconciliation_inputs_activity(
         response["timeoutAt"] = (
             session.created_at + timedelta(seconds=max(1, timeout_seconds))
         ).isoformat()
-    if session.terminal_evidence_ref:
-        evidence = await _read_json_artifact(session.terminal_evidence_ref)
-        terminal = evidence.get("terminalResult")
-        if not isinstance(terminal, Mapping):
+    result_evidence_ref = str(
+        session.metadata.get("workflowFailureEvidenceRef")
+        or session.terminal_evidence_ref
+        or ""
+    ).strip()
+    if result_evidence_ref:
+        evidence = await _read_json_artifact(result_evidence_ref)
+        raw_terminal = evidence.get("terminalResult")
+        if not isinstance(raw_terminal, Mapping):
             raise ValueError("terminal evidence is missing its compact result")
-        response["terminalResult"] = dict(terminal)
+        terminal = OmnigentSessionTerminalResult.model_validate(raw_terminal)
+        metadata_key = (
+            "workflowFailureEvidenceRef"
+            if result_evidence_ref
+            == str(session.metadata.get("workflowFailureEvidenceRef") or "").strip()
+            else None
+        )
+        terminal = _bind_terminal_evidence_ref(
+            terminal,
+            result_evidence_ref,
+            metadata_key=metadata_key,
+        )
+        response["terminalResult"] = terminal.model_dump(
+            mode="json", by_alias=True
+        )
     return response
 
 
@@ -649,6 +749,51 @@ async def _settle_command(
         "commandId": request.command_id,
         "outcome": settled.outcome.value,
         "resultRef": result_ref,
+    }
+
+
+async def omnigent_load_failure_authority_activity(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Resolve only the current fence after reconciliation-input loading fails.
+
+    This boundary deliberately does not read provider state or the compiled
+    intent artifact. It compares the child's immutable identities and intent
+    authority with the canonical session row, then returns the current
+    revision/fence for the typed failure writer. A concurrent authority change
+    is still rejected by that writer.
+    """
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+
+    request = OmnigentFailureAuthorityRequest.model_validate(payload)
+    store = OmnigentControlPlaneStore(async_session_maker)
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(request.session_id)
+    if session is None:
+        raise KeyError(request.session_id)
+
+    expected_authority = {
+        "workflowId": request.workflow_id,
+        "stepExecutionId": request.step_execution_id,
+        "agentRunId": request.agent_run_id,
+        "compiledExecutionIntentRef": request.compiled_execution_intent_ref,
+        "compiledExecutionIntentDigest": request.compiled_execution_intent_digest,
+    }
+    actual_authority = {
+        "workflowId": session.moonmind_workflow_id,
+        "stepExecutionId": session.step_execution_id,
+        "agentRunId": session.moonmind_agent_run_id,
+        "compiledExecutionIntentRef": session.intent_ref,
+        "compiledExecutionIntentDigest": session.intent_digest,
+    }
+    if actual_authority != expected_authority:
+        raise ValueError("Omnigent failure authority conflicts with canonical session")
+    return {
+        "sessionId": session.session_id,
+        "revision": session.revision,
+        "fencingGeneration": session.fencing_generation,
     }
 
 
@@ -1854,6 +1999,303 @@ async def omnigent_record_terminal_activity(
     return settled
 
 
+async def omnigent_persist_failure_activity(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Persist exhausted-work evidence and a janitor-safe cleanup handoff.
+
+    The Activity records only typed reason codes and refs. It never copies an
+    exception message into durable state. A pre-terminal failure becomes the
+    canonical compact terminal evidence. A cleanup failure preserves the
+    primary terminal result and records an independently discoverable handoff.
+    """
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.control_plane import (
+        ControlPlaneOutcome,
+        FencingConflictError,
+        OmnigentControlPlaneStore,
+        RevisionConflictError,
+    )
+
+    request = OmnigentPersistFailureRequest.model_validate(payload)
+    store = OmnigentControlPlaneStore(async_session_maker)
+    evidence_metadata_key = (
+        "cleanupEvidenceRef"
+        if request.status == "cleanup_incomplete"
+        else "workflowFailureEvidenceRef"
+    )
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(request.session_id)
+        if session is None:
+            raise KeyError(request.session_id)
+        command = (
+            await repos.commands.get(request.command_id)
+            if request.command_id
+            else None
+        )
+    if session.fencing_generation != request.fencing_generation:
+        raise FencingConflictError(
+            "Omnigent failure recorder supervisor fence changed"
+        )
+    if (
+        session.intent_ref != request.compiled_execution_intent_ref
+        or session.intent_digest != request.compiled_execution_intent_digest
+    ):
+        raise ValueError("Omnigent failure recorder intent authority changed")
+    if command is not None:
+        if command.session_id != request.session_id:
+            raise ValueError("Omnigent failure command belongs to another session")
+        if command.fencing_generation != request.fencing_generation:
+            raise FencingConflictError(
+                "Omnigent failure command supervisor fence changed"
+            )
+        if command.status == "applied":
+            # The side effect and its command receipt are authoritative. A lost
+            # Activity response must cause reconciliation, never manufacture a
+            # contradictory terminal failure.
+            return {
+                "failurePersisted": False,
+                "reconcileRequired": True,
+                "commandOutcome": "already_applied",
+            }
+    status = request.status
+    if command is not None and command.delivery_ambiguous:
+        status = "delivery_unknown"
+
+    existing_ref = str(session.metadata.get(evidence_metadata_key) or "").strip()
+    if existing_ref:
+        existing = await _read_json_artifact(existing_ref)
+        raw_terminal = existing.get("terminalResult")
+        if not isinstance(raw_terminal, Mapping):
+            raise ValueError("persisted Omnigent failure evidence is incomplete")
+        terminal = OmnigentSessionTerminalResult.model_validate(raw_terminal)
+        terminal = _bind_terminal_evidence_ref(
+            terminal,
+            existing_ref,
+            metadata_key=evidence_metadata_key,
+        )
+        return {
+            "terminalResultRef": existing_ref,
+            "terminalResult": terminal.model_dump(mode="json", by_alias=True),
+            "cleanupOwner": (
+                _JANITOR_OWNER if status == "cleanup_incomplete" else None
+            ),
+        }
+    if session.revision != request.expected_revision:
+        raise RevisionConflictError(
+            "Omnigent failure recorder expected revision changed"
+        )
+
+    primary_terminal: OmnigentSessionTerminalResult | None = None
+    primary_ref = str(
+        (
+            session.metadata.get("workflowFailureEvidenceRef")
+            if status == "cleanup_incomplete"
+            else None
+        )
+        or session.terminal_evidence_ref
+        or ""
+    ).strip()
+    if primary_ref:
+        primary_evidence = await _read_json_artifact(primary_ref)
+        raw_primary = primary_evidence.get("terminalResult")
+        if isinstance(raw_primary, Mapping):
+            primary_terminal = _bind_terminal_evidence_ref(
+                OmnigentSessionTerminalResult.model_validate(raw_primary),
+                primary_ref,
+            )
+
+    failure_class = (
+        "integration_error"
+        if status
+        in {
+            "integration_unavailable",
+            "delivery_unknown",
+            "reconciliation_quarantined",
+            "cleanup_incomplete",
+        }
+        else "execution_error"
+    )
+    if primary_terminal is not None and status == "cleanup_incomplete":
+        primary_result = primary_terminal.result
+        metadata = dict(primary_result.metadata)
+        metadata.update(
+            {
+                "omnigentSessionStatus": status,
+                "primaryOmnigentSessionStatus": primary_terminal.status,
+                "reasonCode": request.reason_code,
+            }
+        )
+        metadata.update(
+            {
+                "cleanupOwner": _JANITOR_OWNER,
+                "janitorRequired": True,
+            }
+        )
+        result = primary_result.model_copy(update={"metadata": metadata})
+    elif primary_terminal is not None:
+        primary_result = primary_terminal.result
+        metadata = dict(primary_result.metadata)
+        metadata.update(
+            {
+                "omnigentSessionStatus": status,
+                "primaryOmnigentSessionStatus": primary_terminal.status,
+                "reasonCode": request.reason_code,
+            }
+        )
+        result = primary_result.model_copy(
+            update={
+                "summary": (
+                    "Omnigent session stopped with durable "
+                    f"{status.replace('_', ' ')} evidence"
+                ),
+                "failure_class": failure_class,
+                "metadata": metadata,
+            }
+        )
+    else:
+        result = AgentRunResult(
+            summary=(
+                "Omnigent session stopped with durable "
+                f"{status.replace('_', ' ')} evidence"
+            ),
+            failureClass=failure_class,
+            metadata={
+                "canonicalSessionId": request.session_id,
+                "omnigentSessionStatus": status,
+                "reasonCode": request.reason_code,
+                **(
+                    {
+                        "cleanupOwner": _JANITOR_OWNER,
+                        "janitorRequired": True,
+                    }
+                    if status == "cleanup_incomplete"
+                    else {}
+                ),
+            },
+        )
+    terminal = OmnigentSessionTerminalResult(status=status, result=result)
+    failure_ref = await _write_json_artifact(
+        name=(
+            "omnigent.session.cleanup-incomplete.json"
+            if status == "cleanup_incomplete"
+            else "omnigent.session.failure.json"
+        ),
+        artifact_type=(
+            "omnigent.session_cleanup_handoff"
+            if status == "cleanup_incomplete"
+            else "omnigent.session_failure"
+        ),
+        payload={
+            "schemaVersion": "omnigent-session-failure-evidence/v1",
+            "sessionId": request.session_id,
+            "failedActivity": request.failed_activity,
+            "reasonCode": request.reason_code,
+            "decisionId": request.decision_id,
+            "commandId": request.command_id,
+            "primaryTerminalState": session.terminal_state,
+            "cleanupOwner": (
+                _JANITOR_OWNER if status == "cleanup_incomplete" else None
+            ),
+            "janitorRequired": status == "cleanup_incomplete",
+            "terminalResult": terminal.model_dump(mode="json", by_alias=True),
+        },
+    )
+
+    async with store.transaction() as repos:
+        current = await repos.sessions.get(request.session_id)
+        if current is None:
+            raise KeyError(request.session_id)
+        if current.fencing_generation != request.fencing_generation:
+            raise FencingConflictError(
+                "Omnigent failure recorder supervisor fence changed"
+            )
+        if current.revision != request.expected_revision:
+            raise RevisionConflictError(
+                "Omnigent failure recorder expected revision changed"
+            )
+        if command is not None:
+            command_result = await repos.commands.record_command_failure(
+                command.command_id,
+                owner_class="omnigent_session_activity",
+                claim_token=(
+                    f"omnigent-session:{request.session_id}:{command.command_id}"
+                ),
+                result_ref=failure_ref,
+            )
+            if command_result.outcome is ControlPlaneOutcome.DELIVERY_UNKNOWN:
+                status = "delivery_unknown"
+        if status == "cleanup_incomplete":
+            current = await repos.sessions.bind_runtime_authority(
+                request.session_id,
+                expected_revision=current.revision,
+                expected_fencing_generation=current.fencing_generation,
+                metadata_patch={
+                    evidence_metadata_key: failure_ref,
+                    "cleanupOwner": _JANITOR_OWNER,
+                    "janitorRequired": True,
+                    "cleanupFailedActivity": request.failed_activity,
+                },
+            )
+            current = await repos.sessions.update_lifecycle(
+                request.session_id,
+                expected_revision=current.revision,
+                expected_fencing_generation=current.fencing_generation,
+                cleanup_state="cleanup_incomplete",
+                historical_read_state="artifact",
+            )
+            await repos.cleanup.record_janitor_handoff(
+                request.session_id,
+                owner_class=_JANITOR_OWNER,
+            )
+        else:
+            if current.terminal_state is None:
+                current = await repos.sessions.mark_terminal(
+                    request.session_id,
+                    status,
+                    expected_revision=current.revision,
+                    expected_fencing_generation=current.fencing_generation,
+                    terminal_evidence_ref=failure_ref,
+                )
+            elif current.terminal_evidence_ref is None:
+                current = await repos.sessions.attach_terminal_evidence(
+                    request.session_id,
+                    terminal_evidence_ref=failure_ref,
+                    expected_revision=current.revision,
+                    expected_fencing_generation=current.fencing_generation,
+                )
+            current = await repos.sessions.bind_runtime_authority(
+                request.session_id,
+                expected_revision=current.revision,
+                expected_fencing_generation=current.fencing_generation,
+                metadata_patch={evidence_metadata_key: failure_ref},
+            )
+
+    terminal = _bind_terminal_evidence_ref(
+        terminal,
+        failure_ref,
+        metadata_key=evidence_metadata_key,
+    )
+    result_metadata = dict(terminal.result.metadata)
+    preserved_refs = [*terminal.result.output_refs]
+    if primary_terminal is not None and session.terminal_evidence_ref:
+        preserved_refs.append(session.terminal_evidence_ref)
+    preserved_refs.append(failure_ref)
+    result = terminal.result.model_copy(
+        update={
+            "output_refs": list(dict.fromkeys(preserved_refs)),
+            "metadata": result_metadata,
+        }
+    )
+    terminal = terminal.model_copy(update={"status": status, "result": result})
+    return {
+        "terminalResultRef": failure_ref,
+        "terminalResult": terminal.model_dump(mode="json", by_alias=True),
+        "cleanupOwner": _JANITOR_OWNER if status == "cleanup_incomplete" else None,
+    }
+
+
 async def omnigent_harvest_evidence_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -2235,8 +2677,10 @@ async def omnigent_release_leases_activity(
 
 
 __all__ = [
+    "omnigent_evaluate_session_admission_activity",
     "omnigent_resolve_intent_activity",
     "omnigent_load_reconciliation_inputs_activity",
+    "omnigent_load_failure_authority_activity",
     "omnigent_persist_decision_activity",
     "omnigent_persist_signal_intents_activity",
     "omnigent_ensure_provider_profile_lease_activity",
@@ -2246,6 +2690,7 @@ __all__ = [
     "omnigent_read_event_batch_activity",
     "omnigent_observe_snapshot_activity",
     "omnigent_record_terminal_activity",
+    "omnigent_persist_failure_activity",
     "omnigent_harvest_evidence_activity",
     "omnigent_publish_workspace_activity",
     "omnigent_stop_provider_session_activity",

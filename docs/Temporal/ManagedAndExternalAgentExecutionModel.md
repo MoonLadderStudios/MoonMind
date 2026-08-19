@@ -259,6 +259,16 @@ and digest, the initial turn-attempt identity, and frozen feature/compatibility
 versions; provider content, credentials, and mutable host paths stay outside
 workflow history.
 
+New-session admission is a distinct bounded Activity behind its own replay
+patch. The decision freezes the admitted feature generation and evaluates an
+operator mode of `enabled`, `canary`, or `disabled`; canary selection uses an
+exact AgentRun owner allowlist, and an optional execution-profile allowlist can
+narrow either enabled mode. A configured generation mismatch fails closed.
+The admission Activity is not re-evaluated by an already admitted child, so
+disabling new selection routes only later AgentRuns to the legacy owner and
+cannot disable replay, query, cancellation, cleanup, or historical reads for
+an admitted session.
+
 ### 7.2 Why the identity stays external
 
 The top-level identity describes the session and interaction provider, not only who issued `docker run`. Keeping `external/omnigent`:
@@ -317,6 +327,18 @@ failure, delivery ambiguity, reconciliation quarantine, incomplete cleanup,
 timeout, cancellation, and completion. A workflow deadline first performs a
 fresh bounded event read and authoritative snapshot; timeout intent cannot
 overwrite provider completion that this reconciliation proves.
+
+An exhausted bounded phase is converted to typed, reference-only durable
+failure evidence after a minimal authority read verifies the immutable child
+identities and returns the current revision and supervisor fence. No exception
+prose is placed in workflow history or canonical state. Failure and quarantine
+decisions persist the terminal reason and re-enter the reconciler so evidence
+harvest, provider stop, host stop, and lease release retain their normal
+ordering. If cleanup itself exhausts, the primary execution result remains
+authoritative, the session becomes `cleanup_incomplete`, and a cleanup evidence
+ref plus the durable janitor owner is recorded in unclaimed cleanup authority.
+That handoff remains fence-claimable for retry; Provider Profile capacity is
+not released early.
 
 ### 7.4 Launch modes
 
