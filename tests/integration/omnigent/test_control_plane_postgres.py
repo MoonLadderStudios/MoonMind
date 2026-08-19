@@ -13,158 +13,21 @@ integration test).
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
-import socket
-import subprocess
-import tempfile
-from pathlib import Path
 
 import pytest
-import pytest_asyncio
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
-
-from api_service.db.models import (
-    OmnigentChatBindingAlias,
-    OmnigentCleanupAuthority,
-    OmnigentCommand,
-    OmnigentObservation,
-    OmnigentReconciliationDecision,
-    OmnigentSession,
-    OmnigentTurnAttempt,
-)
 from moonmind.omnigent.control_plane import (
     ConflictingSessionAuthorityError,
     ControlPlaneOutcome,
     FencingConflictError,
     FencingScope,
-    OmnigentControlPlaneStore,
     RevisionConflictError,
 )
 
+# The ephemeral-PostgreSQL provisioning (``control_plane_postgres_url``) and the
+# ``pg_store`` binding live in ``conftest.py`` so they are shared with the
+# fault-injection replay binding in ``test_control_plane_faultlab.py``.
+
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
-
-_CONTROL_PLANE_TABLES = [
-    OmnigentSession.__table__,
-    OmnigentTurnAttempt.__table__,
-    OmnigentObservation.__table__,
-    OmnigentCommand.__table__,
-    OmnigentReconciliationDecision.__table__,
-    OmnigentChatBindingAlias.__table__,
-    OmnigentCleanupAuthority.__table__,
-]
-
-
-@pytest.fixture
-def control_plane_postgres_url():
-    """Provide isolated PostgreSQL without a manually managed test service."""
-
-    configured = os.getenv("MOONMIND_TEST_POSTGRES_URL", "").strip()
-    if configured:
-        if configured.startswith("postgresql://"):
-            configured = configured.replace("postgresql://", "postgresql+asyncpg://", 1)
-        if not configured.startswith("postgresql+asyncpg://"):
-            pytest.fail("MOONMIND_TEST_POSTGRES_URL must use PostgreSQL")
-        yield configured
-        return
-
-    initdb_path = shutil.which("initdb")
-    if initdb_path is None:
-        candidates = sorted(Path("/usr/lib/postgresql").glob("*/bin/initdb"))
-        initdb_path = str(candidates[-1]) if candidates else None
-    if initdb_path is None:
-        pytest.fail("PostgreSQL test binaries are unavailable in the Python test image")
-    initdb = str(Path(initdb_path))
-    pg_ctl = str(Path(initdb).with_name("pg_ctl"))
-    data_root = Path(tempfile.mkdtemp(prefix="moonmind-control-plane-postgres-"))
-    data_dir = data_root / "data"
-    log_path = data_root / "postgres.log"
-    command_prefix: list[str] = []
-    if os.geteuid() == 0:
-        shutil.chown(data_root, user="postgres", group="postgres")
-        command_prefix = ["runuser", "--user", "postgres", "--"]
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
-        listener.bind(("127.0.0.1", 0))
-        port = listener.getsockname()[1]
-    subprocess.run(
-        [
-            *command_prefix,
-            initdb,
-            "--pgdata",
-            str(data_dir),
-            "--username",
-            "postgres",
-            "--auth",
-            "trust",
-            "--encoding",
-            "UTF8",
-            "--no-locale",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    subprocess.run(
-        [
-            *command_prefix,
-            pg_ctl,
-            "--pgdata",
-            str(data_dir),
-            "--log",
-            str(log_path),
-            "--options",
-            f"-F -p {port} -h 127.0.0.1 -k {data_dir}",
-            "--wait",
-            "start",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    try:
-        yield f"postgresql+asyncpg://postgres@127.0.0.1:{port}/postgres"
-    finally:
-        subprocess.run(
-            [
-                *command_prefix,
-                pg_ctl,
-                "--pgdata",
-                str(data_dir),
-                "--mode",
-                "immediate",
-                "--wait",
-                "stop",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        shutil.rmtree(data_root, ignore_errors=True)
-
-
-@pytest_asyncio.fixture()
-async def pg_store(control_plane_postgres_url):
-    engine = create_async_engine(control_plane_postgres_url)
-    async with engine.begin() as conn:
-        await conn.run_sync(_create_tables)
-    maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    try:
-        yield OmnigentControlPlaneStore(maker)
-    finally:
-        async with engine.begin() as conn:
-            await conn.run_sync(_drop_tables)
-        await engine.dispose()
-
-
-def _create_tables(sync_conn) -> None:
-    for table in _CONTROL_PLANE_TABLES:
-        table.create(sync_conn, checkfirst=True)
-
-
-def _drop_tables(sync_conn) -> None:
-    for table in reversed(_CONTROL_PLANE_TABLES):
-        table.drop(sync_conn, checkfirst=True)
 
 
 @pytest.mark.asyncio

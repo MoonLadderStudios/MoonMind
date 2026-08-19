@@ -3275,7 +3275,7 @@ function usePageVisibility() {
 type ObservabilityEvent = z.infer<typeof ObservabilityEventSchema>;
 type SessionSnapshot = z.infer<typeof SessionSnapshotSchema>;
 type TimelineStream = 'stdout' | 'stderr' | 'system' | 'session' | 'unknown';
-type TimelineRow = {
+export type TimelineRow = {
   id: string;
   text: string;
   stream: TimelineStream;
@@ -3441,11 +3441,32 @@ function eventToTimelineRows(event: ObservabilityEvent): TimelineRow[] {
   }));
 }
 
-function mapEventsToTimelineRows(
+export function mapEventsToTimelineRows(
   payload: z.infer<typeof ObservabilityEventsResponseSchema> | null | undefined,
 ): TimelineRow[] {
   if (!payload) return [];
   return payload.events.flatMap((event) => eventToTimelineRows(event));
+}
+
+// The event index and every live reconnect fold into the visible timeline
+// through this reducer: rows are keyed by their deterministic `id`
+// (`<sequence>-<line>-<kind>`) so a re-delivered (duplicate) frontier collapses
+// to one row, and the result is sorted by sequence so an out-of-order (reordered)
+// delivery still renders monotonically. This is the production dedup/order the
+// Workflow Detail client relies on to absorb the transport faults the fault lab
+// injects; it is exported so tests can assert the real normalization result
+// rather than re-deriving it.
+export function mergeObservabilityTimelineRows(
+  previous: TimelineRow[],
+  incoming: TimelineRow[],
+): TimelineRow[] {
+  const rowsById = new Map(previous.map((row) => [row.id, row]));
+  for (const row of incoming) {
+    rowsById.set(row.id, row);
+  }
+  return Array.from(rowsById.values()).sort(
+    (a, b) => (a.sequence ?? 0) - (b.sequence ?? 0),
+  );
 }
 
 function timelineRowsToObservabilityRows(rows: TimelineRow[]): RunObservabilityEventRow[] {
@@ -6465,13 +6486,7 @@ function BridgeSessionLogsPanel({
     const sequences = eventsQuery.data?.events
       .map((event) => event.sequence)
       .filter((sequence) => Number.isFinite(sequence));
-    setLogContent((prev) => {
-      const rowsById = new Map(prev.map((row) => [row.id, row]));
-      for (const row of historyRows) {
-        rowsById.set(row.id, row);
-      }
-      return Array.from(rowsById.values()).sort((a, b) => (a.sequence ?? 0) - (b.sequence ?? 0));
-    });
+    setLogContent((prev) => mergeObservabilityTimelineRows(prev, historyRows));
     if (sequences && sequences.length > 0) {
       lastSeqRef.current = Math.max(lastSeqRef.current ?? 0, ...sequences);
     }

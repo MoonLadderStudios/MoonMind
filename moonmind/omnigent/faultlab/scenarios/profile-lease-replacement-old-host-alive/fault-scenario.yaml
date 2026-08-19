@@ -1,0 +1,27 @@
+desiredCancel: false
+groundTruthTerminal: failure
+invariant: lease_safety
+maxTurnAttempts: 3
+recoveryRound: 4
+requiresCleanup: true
+requiresHost: true
+requiresProfileLease: true
+scenarioId: profile-lease-replacement-old-host-alive
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 1003
+sourceRef: MM-omnigent-lease-replacement
+steps:
+- disconnect: false
+  duplicate: false
+  emit: []
+  'on': submit_turn
+  reorder: false
+  response: success
+  sideEffect: accepted
+- disconnect: false
+  duplicate: false
+  emit: []
+  'on': release_leases
+  reorder: false
+  response: latency
+  sideEffect: none
