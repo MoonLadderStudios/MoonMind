@@ -18,12 +18,14 @@ from api_service.db.models import (
     Base,
     OmnigentAgentProfile,
     OmnigentAgentProfileVersion,
+    OmnigentOAuthHostBindingRecord,
     RecurringWorkflowDefinition,
     RecurringWorkflowRun,
     RecurringWorkflowRunOutcome,
 )
 from api_service.services.recurring_workflows_service import (
     RecurringScheduleRuntimeSummary,
+    RecurringWorkflowConflictError,
     RecurringWorkflowsService,
     RecurringWorkflowValidationError,
 )
@@ -845,10 +847,36 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
                 profile_id="omnigent-bootstrap-default",
                 version=3,
                 digest=new_digest,
-                document={},
+                document={
+                    "execution": {
+                        "allowedLaunchPolicyRefs": ["codex-on-demand@4"],
+                    }
+                },
                 validation_result={"ready": True},
             )
         )
+        binding = OmnigentOAuthHostBindingRecord(
+            binding_ref="codex-openai-oauth-host",
+            provider_profile_id="codex_openai_oauth",
+            endpoint_ref="default",
+            harness="codex-native",
+            credential_mount_template_json={
+                "authVolumeRef": {
+                    "providerProfileId": "codex_openai_oauth",
+                    "runtimeId": "codex_cli",
+                    "providerId": "openai",
+                    "volumeRef": "codex_auth_volume",
+                    "credentialGeneration": 1,
+                    "ownerUserId": "user-1",
+                },
+                "targetPath": "/home/app/.codex",
+                "accessMode": "read_write",
+                "runtimeUid": 1000,
+                "runtimeGid": 1000,
+            },
+            launch_policy_ref="codex-on-demand@3",
+        )
+        session.add(binding)
         await session.commit()
 
         old_workflow_type, old_workflow_input = (
@@ -866,6 +894,13 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
                 )
             )
         )
+
+        assert await service.refresh_managed_bootstrap_schedules() == 0
+        mock_temporal_adapter.update_schedule.assert_not_called()
+        assert refresh_calls == []
+
+        binding.launch_policy_ref = "codex-on-demand@4"
+        await session.commit()
 
         assert await service.refresh_managed_bootstrap_schedules() == 1
 
@@ -887,6 +922,103 @@ async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
         assert update["workflow_input"]["initial_parameters"]["omnigent"][
             "launchPolicyRef"
         ] == "codex-on-demand@4"
+
+
+async def test_managed_bootstrap_refresh_contains_individual_failures(
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+        )
+        definitions = []
+        for name in ("Broken", "Healthy"):
+            definitions.append(
+                await service.create_definition(
+                    name=name,
+                    description=None,
+                    enabled=True,
+                    schedule_type="cron",
+                    cron="0 13 * * *",
+                    timezone="UTC",
+                    scope_type="personal",
+                    scope_ref=None,
+                    owner_user_id=uuid4(),
+                    target={
+                        "workflowType": "MoonMind.UserWorkflow",
+                        "initialParameters": {"task": {"instructions": name}},
+                    },
+                    policy={},
+                )
+            )
+        definition_ids = [definition.id for definition in definitions]
+
+        visited: list[object] = []
+
+        async def refresh_target(definition):
+            visited.append(definition.id)
+            if definition.id == definition_ids[0]:
+                raise RecurringWorkflowValidationError("missing usage row")
+            return True
+
+        monkeypatch.setattr(service, "_refresh_managed_bootstrap_target", refresh_target)
+        monkeypatch.setattr(
+            service,
+            "_ensure_schedule_action_current",
+            AsyncMock(),
+        )
+
+        assert await service.refresh_managed_bootstrap_schedules() == 1
+        assert set(visited) == set(definition_ids)
+
+
+async def test_update_definition_rejects_stale_target_version(
+    tmp_path: Path,
+    mock_temporal_adapter,
+) -> None:
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+        )
+        original_target = {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {"omnigent": {"launchPolicyRef": "policy@1"}},
+        }
+        current_target = {
+            "workflowType": "MoonMind.UserWorkflow",
+            "initialParameters": {"omnigent": {"launchPolicyRef": "policy@2"}},
+        }
+        definition = await service.create_definition(
+            name="Daily Resolver",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 13 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=uuid4(),
+            target=original_target,
+            policy={},
+        )
+        definition.target = current_target
+        definition.version = 2
+        await session.commit()
+        mock_temporal_adapter.update_schedule.reset_mock()
+
+        with pytest.raises(RecurringWorkflowConflictError, match="refresh and retry"):
+            await service.update_definition(
+                definition,
+                target=original_target,
+                expected_version=1,
+            )
+
+        assert definition.target == current_target
+        mock_temporal_adapter.update_schedule.assert_not_called()
 
 
 async def test_reconcile_skips_update_when_metadata_and_action_match(

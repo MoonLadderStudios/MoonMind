@@ -16,6 +16,7 @@ from sqlalchemy.orm import selectinload
 from api_service.db.models import (
     OmnigentAgentProfile,
     OmnigentAgentProfileVersion,
+    OmnigentOAuthHostBindingRecord,
     RecurringWorkflowDefinition,
     RecurringWorkflowRun,
     RecurringWorkflowRunOutcome,
@@ -58,6 +59,9 @@ _SUPPORTED_RECURRING_WORKFLOW_TYPES = (
 
 class RecurringWorkflowValidationError(ValueError):
     """Raised when recurring workflow inputs are invalid."""
+
+class RecurringWorkflowConflictError(RuntimeError):
+    """Raised when a recurring definition changed before an authored update."""
 
 class RecurringWorkflowNotFoundError(RuntimeError):
     """Raised when a recurring definition does not exist."""
@@ -402,6 +406,22 @@ class RecurringWorkflowsService:
         self._session = session
         self._adapter = temporal_client_adapter or TemporalClientAdapter()
 
+    async def _lock_definition_for_update(
+        self,
+        definition_id: UUID,
+    ) -> RecurringWorkflowDefinition:
+        definition = await self._session.scalar(
+            select(RecurringWorkflowDefinition)
+            .where(RecurringWorkflowDefinition.id == definition_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if definition is None:
+            raise RecurringWorkflowNotFoundError(
+                f"Recurring workflow {definition_id} not found"
+            )
+        return definition
+
     async def list_definitions(
         self,
         *,
@@ -659,6 +679,34 @@ class RecurringWorkflowsService:
             raise RecurringWorkflowValidationError(
                 "managed bootstrap Agent Profile active version is unavailable"
             )
+        execution = (
+            active.document.get("execution")
+            if isinstance(active.document, Mapping)
+            else None
+        )
+        allowed_policy_refs = (
+            execution.get("allowedLaunchPolicyRefs")
+            if isinstance(execution, Mapping)
+            else None
+        )
+        selected_policy_ref = (
+            str(allowed_policy_refs[0]).strip()
+            if isinstance(allowed_policy_refs, list) and allowed_policy_refs
+            else ""
+        )
+        provider_profile_ref = str(previous.get("providerProfileRef") or "").strip()
+        if selected_policy_ref and provider_profile_ref:
+            host_binding = await self._session.scalar(
+                select(OmnigentOAuthHostBindingRecord).where(
+                    OmnigentOAuthHostBindingRecord.provider_profile_id
+                    == provider_profile_ref
+                )
+            )
+            if (
+                host_binding is not None
+                and host_binding.launch_policy_ref != selected_policy_ref
+            ):
+                return False
         if (
             previous.get("version") == active.version
             and previous.get("digest") == active.digest
@@ -718,15 +766,9 @@ class RecurringWorkflowsService:
                 break
 
         refreshed = 0
-        failures: list[str] = []
         for definition_id in definition_ids:
             try:
-                definition = await self._session.get(
-                    RecurringWorkflowDefinition,
-                    definition_id,
-                )
-                if definition is None:
-                    continue
+                definition = await self._lock_definition_for_update(definition_id)
                 if not await self._refresh_managed_bootstrap_target(definition):
                     continue
                 # Update Temporal before committing the corresponding DB
@@ -737,17 +779,11 @@ class RecurringWorkflowsService:
                 refreshed += 1
             except Exception as exc:
                 await self._session.rollback()
-                failures.append(str(definition_id))
                 logger.warning(
                     "Failed to refresh managed bootstrap schedule %s: %s",
                     definition_id,
                     exc,
                 )
-        if failures:
-            raise RecurringWorkflowValidationError(
-                "managed bootstrap schedule refresh failed for: "
-                + ", ".join(failures)
-            )
         return refreshed
 
     async def create_definition(
@@ -889,7 +925,15 @@ class RecurringWorkflowsService:
         target: Mapping[str, Any] | None = None,
         policy: Mapping[str, Any] | None = None,
         scope_ref: str | None = None,
+        expected_version: int | None = None,
     ) -> RecurringWorkflowDefinition:
+        definition = await self._lock_definition_for_update(definition.id)
+        if expected_version is not None and int(definition.version or 0) != int(
+            expected_version
+        ):
+            raise RecurringWorkflowConflictError(
+                "recurring workflow changed since it was loaded; refresh and retry"
+            )
         changed_schedule = False
         now = datetime.now(UTC)
 
@@ -1357,6 +1401,7 @@ class RecurringWorkflowsService:
 __all__ = [
     "RecurringScheduleRuntimeSummary",
     "RecurringWorkflowAuthorizationError",
+    "RecurringWorkflowConflictError",
     "RecurringWorkflowNotFoundError",
     "RecurringWorkflowValidationError",
     "RecurringWorkflowsService",

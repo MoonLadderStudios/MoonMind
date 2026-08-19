@@ -95,6 +95,7 @@ const ScheduleSchema = z.object({
   target: z.record(z.string(), z.unknown()).optional(),
   policy: z.record(z.string(), z.unknown()).optional(),
   temporalScheduleId: z.string().nullable().optional(),
+  version: z.number().int().positive(),
   updatedAt: z.string().optional(),
 }).passthrough();
 
@@ -874,6 +875,9 @@ function buildSchedulePatchPayload(schedule: Schedule, form: ScheduleEditForm): 
   if (stableJson(target) !== stableJson(schedule.target || {})) {
     payload.target = target;
   }
+  if (Object.keys(payload).length > 0) {
+    payload.version = schedule.version;
+  }
   return payload;
 }
 
@@ -1133,12 +1137,12 @@ function ScheduleDetailPage({
   });
 
   const pauseResumeMutation = useMutation({
-    mutationFn: async (enabled: boolean) => {
+    mutationFn: async ({ enabled, version }: { enabled: boolean; version: number }) => {
       const response = await fetch(updateEndpoint, {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled, version }),
       });
       if (!response.ok) {
         throw new Error(`Failed to ${enabled ? 'resume' : 'pause'} schedule: ${response.statusText}`);
@@ -1304,7 +1308,10 @@ function ScheduleDetailPage({
           <button
             type="button"
             className="secondary"
-            onClick={() => pauseResumeMutation.mutate(!schedule.enabled)}
+            onClick={() => pauseResumeMutation.mutate({
+              enabled: !schedule.enabled,
+              version: schedule.version,
+            })}
             disabled={pauseResumeMutation.isPending || isEditing || updateMutation.isPending || !actions?.canEdit}
             title={!actions?.canEdit ? actions?.editReason : undefined}
           >
@@ -1833,7 +1840,7 @@ function ScheduleRowActions({
         method: 'PATCH',
         credentials: 'include',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ enabled }),
+        body: JSON.stringify({ enabled, version: schedule.version }),
       });
       if (!response.ok) {
         throw new Error(
