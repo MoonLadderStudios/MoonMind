@@ -46,7 +46,7 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
-from moonmind.omnigent.failure_classification import (
+from moonmind.omnigent.domain.failures import (
     OmnigentFailureReason,
     classify_omnigent_failure,
     failure_class_for_terminal_status,

@@ -17,7 +17,7 @@ from typing import Any, Literal
 from urllib.parse import urlparse
 
 from moonmind.omnigent.bridge_security import enforce_id_only_labels
-from moonmind.omnigent.failure_classification import (
+from moonmind.omnigent.domain.failures import (
     OmnigentFailureReason,
     classify_omnigent_failure,
 )

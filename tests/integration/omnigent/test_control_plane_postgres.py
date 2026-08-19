@@ -42,6 +42,10 @@ from moonmind.omnigent.control_plane import (
     OmnigentControlPlaneStore,
     RevisionConflictError,
 )
+from tests.helpers.omnigent_port_contracts import (
+    run_decision_repository_contract,
+    run_observation_repository_contract,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci]
 
@@ -487,3 +491,35 @@ async def test_postgres_null_provider_session_scopes_are_distinct(pg_store) -> N
         )
         listed = await repos.turn_attempts.list_for_session("s1")
     assert listed == []
+
+
+@pytest.mark.asyncio
+async def test_postgres_observation_port_contract(pg_store) -> None:
+    # The production PostgreSQL adapter satisfies the same shared port contract
+    # as the in-memory reference adapter (MoonLadderStudios/MoonMind#3711).
+    async with pg_store.transaction() as repos:
+        for session_id in ("sa", "sb"):
+            await repos.sessions.create(
+                session_id=session_id,
+                moonmind_workflow_id=f"wf-{session_id}",
+                provider="codex",
+                provider_session_ref=f"psess-{session_id}",
+            )
+        await run_observation_repository_contract(
+            repos.observations, session_a="sa", session_b="sb"
+        )
+
+
+@pytest.mark.asyncio
+async def test_postgres_decision_port_contract(pg_store) -> None:
+    async with pg_store.transaction() as repos:
+        for session_id in ("sa", "sb"):
+            await repos.sessions.create(
+                session_id=session_id,
+                moonmind_workflow_id=f"wf-{session_id}",
+                provider="codex",
+                provider_session_ref=f"psess-{session_id}",
+            )
+        await run_decision_repository_contract(
+            repos.decisions, session_a="sa", session_b="sb"
+        )

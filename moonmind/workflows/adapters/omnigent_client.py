@@ -10,7 +10,7 @@ from urllib.parse import quote
 import httpx
 
 from moonmind.omnigent.bridge_security import sanitize_proxy_headers
-from moonmind.omnigent.failure_classification import classify_omnigent_http_status
+from moonmind.omnigent.domain.failures import classify_omnigent_http_status
 from moonmind.utils.logging import (
     SecretRedactor,
     redact_sensitive_payload,

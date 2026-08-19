@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.omnigent.failure_classification import (
+from moonmind.omnigent.domain.failures import (
     OMNIGENT_FAILURE_CLASS_TABLE,
     OmnigentFailureReason,
     classify_omnigent_failure,

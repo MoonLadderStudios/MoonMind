@@ -17,7 +17,7 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from moonmind.omnigent.bridge_security import redact_raw_events
-from moonmind.omnigent.failure_classification import (
+from moonmind.omnigent.domain.failures import (
     OmnigentFailureReason,
     classify_omnigent_failure,
     failure_class_for_terminal_status,

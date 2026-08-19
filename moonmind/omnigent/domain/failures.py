@@ -1,12 +1,19 @@
 """Unified Omnigent bridge failure classification (OB-§17 / DESIGN-REQ-010).
 
-Single reusable source of truth for the ``docs/Omnigent/OmnigentBridge.md`` §17
-error-classification table. Every bridge component (session execution, transport
-client, request adapter) maps a §17 failure to a canonical MoonMind failure
-class through this one classifier instead of maintaining status-driven or
-component-local mappings.
+Pure Omnigent domain vocabulary: single reusable source of truth for the
+``docs/Omnigent/OmnigentBridge.md`` §17 error-classification table. Every bridge
+component (session execution, transport client, request adapter) maps a §17
+failure to a canonical MoonMind failure class through this one classifier
+instead of maintaining status-driven or component-local mappings.
 
-Source issue traceability: MM-1140 -> MM-1153.
+This module lives in the pure ``moonmind.omnigent.domain`` layer: it depends on
+Python standard library and pure schema types only, and must never import
+FastAPI, SQLAlchemy, Temporal, HTTP clients, Docker, artifact services,
+OpenTelemetry exporters, or application settings. The dependency direction and
+layer roles are documented in ``docs/Omnigent/Architecture.md``.
+
+Source issue traceability: MM-1140 -> MM-1153; relocated into the domain layer
+by MoonLadderStudios/MoonMind#3711 ([Omnigent control plane 10/11]).
 """
 
 from __future__ import annotations
