@@ -44,6 +44,59 @@ class OmnigentOAuthHostJanitor:
             seconds=max(30, heartbeat_timeout_seconds)
         )
 
+    async def _claim_canonical_cleanup(self, lease: Any) -> tuple[Any, ...]:
+        """Claim the canonical session fence before any cleanup side effect."""
+
+        if self._run_store is None or not hasattr(
+            self._run_store, "claim_canonical_cleanup"
+        ):
+            return (None, None, None)
+        session_id = str(getattr(lease, "bridge_session_id", None) or "").strip()
+        if not session_id and hasattr(
+            self._run_store, "get_canonical_session_for_host_lease"
+        ):
+            canonical = await self._run_store.get_canonical_session_for_host_lease(
+                lease.lease_id
+            )
+            session_id = str(getattr(canonical, "session_id", None) or "").strip()
+        if not session_id:
+            raise ValueError(
+                "host cleanup has no canonical Omnigent session authority"
+            )
+        claim_token = f"oauth-host-janitor:{lease.lease_id}"
+        claim = await self._run_store.claim_canonical_cleanup(
+            session_id,
+            claim_token=claim_token,
+            owner_class="oauth_host_janitor",
+        )
+        return (session_id, claim_token, claim)
+
+    async def _release_canonical_cleanup_claim(
+        self, authority: tuple[Any, ...]
+    ) -> None:
+        session_id, claim_token, claim = authority
+        if session_id is None or claim is None:
+            return
+        await self._run_store.release_canonical_cleanup_claim(
+            session_id,
+            generation=claim.record.generation,
+            claim_token=claim_token,
+            owner_class="oauth_host_janitor",
+        )
+
+    async def _complete_canonical_cleanup(
+        self, authority: tuple[Any, ...]
+    ) -> None:
+        session_id, claim_token, claim = authority
+        if session_id is None or claim is None:
+            return
+        await self._run_store.complete_canonical_cleanup(
+            session_id,
+            generation=claim.record.generation,
+            claim_token=claim_token,
+            owner_class="oauth_host_janitor",
+        )
+
     async def _claim_cleanup(self, lease: Any) -> Any | None:
         """Claim the observed lease generation before cleanup side effects."""
 
@@ -225,14 +278,17 @@ class OmnigentOAuthHostJanitor:
             or lease.last_heartbeat_at <= now - self._heartbeat_timeout
         )
         cleanup_evidence: dict[str, Any] = {}
+        canonical_cleanup: tuple[Any, ...] = (None, None, None)
 
         if action_kind == "host.drain":
             if before_state in {"draining", "stopped", "failed"}:
                 return self._action_result(
                     action_kind, request_id, profile_id, lease, before_state
                 )
+            canonical_cleanup = await self._claim_canonical_cleanup(lease)
             claimed = await self._claim_cleanup(lease)
             if claimed is None:
+                await self._release_canonical_cleanup_claim(canonical_cleanup)
                 raise OmnigentOAuthHostError(
                     "host lease changed concurrently before cleanup claim"
                 )
@@ -261,8 +317,11 @@ class OmnigentOAuthHostJanitor:
                 raise OmnigentOAuthHostError(
                     "host lease cleanup is already owned by another worker"
                 )
+            if canonical_cleanup[0] is None:
+                canonical_cleanup = await self._claim_canonical_cleanup(lease)
             claimed = await self._claim_cleanup(lease)
             if claimed is None:
+                await self._release_canonical_cleanup_claim(canonical_cleanup)
                 raise OmnigentOAuthHostError(
                     "host lease changed concurrently before cleanup claim"
                 )
@@ -279,6 +338,7 @@ class OmnigentOAuthHostJanitor:
                 )
                 if stopped_lease is not None:
                     lease = stopped_lease
+                await self._complete_canonical_cleanup(canonical_cleanup)
                 provider_released = await self._release_provider_lease(
                     binding=binding, lease=lease
                 )
@@ -426,12 +486,14 @@ class OmnigentOAuthHostJanitor:
                 and not stale
             ):
                 continue
+            canonical_cleanup = await self._claim_canonical_cleanup(lease)
             if lease.status in CLEANUP_CLAIMABLE_HOST_STATES:
                 claimed = await self._claim_cleanup(lease)
                 if claimed is None:
                     # The coordinator advanced state or heartbeat authority
                     # after this janitor pass observed it. Reconcile from the
                     # next durable scan; never clean from the stale snapshot.
+                    await self._release_canonical_cleanup_claim(canonical_cleanup)
                     continue
                 lease = claimed
             binding = await self._repository.validate_binding(lease.binding_ref)
@@ -459,6 +521,7 @@ class OmnigentOAuthHostJanitor:
                 )
                 if stopped_lease is not None:
                     lease = stopped_lease
+                await self._complete_canonical_cleanup(canonical_cleanup)
                 provider_released = await self._release_provider_lease(
                     binding=binding, lease=lease
                 )

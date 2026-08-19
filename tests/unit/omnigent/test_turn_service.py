@@ -273,6 +273,26 @@ async def test_cleanup_is_fenced_until_accepted_turn_is_terminal(store, service)
 
 
 @pytest.mark.asyncio
+async def test_released_unused_cleanup_claim_allows_new_turn(store, service):
+    await _establish(store)
+    await _mark_seed_turn_terminal(store)
+    claim = await service.claim_cleanup(
+        "sess-1", owner_class="oauth_host_janitor", claim_token="janitor:sess-1"
+    )
+    await service.release_cleanup_claim(
+        "sess-1",
+        generation=claim.record.generation,
+        owner_class="oauth_host_janitor",
+        claim_token="janitor:sess-1",
+    )
+
+    outcome = await service.submit_reuse_turn(
+        _reuse_request(kind=TurnSourceKind.WORKFLOW_CHAT)
+    )
+    assert outcome.created is True
+
+
+@pytest.mark.asyncio
 async def test_cleanup_is_fenced_by_every_unsettled_turn_not_only_latest(
     store, service
 ):
@@ -459,6 +479,7 @@ def _remediation_intent(**kwargs) -> RemediationTurnIntent:
 @pytest.mark.asyncio
 async def test_remediation_admits_typed_turn_linked_to_prior_attempt(store, service):
     await _establish(store)
+    await _mark_seed_turn_terminal(store)
     request = _reuse_request(
         kind=TurnSourceKind.REMEDIATION,
         instruction_digest="digest-remediate",
@@ -483,6 +504,7 @@ async def test_remediation_requires_intent(store, service):
 @pytest.mark.asyncio
 async def test_remediation_requires_matching_controller_authority(store, service):
     await _establish(store)
+    await _mark_seed_turn_terminal(store)
     request = _reuse_request(
         kind=TurnSourceKind.REMEDIATION,
         instruction_digest="digest-remediate",
@@ -494,8 +516,21 @@ async def test_remediation_requires_matching_controller_authority(store, service
 
 
 @pytest.mark.asyncio
+async def test_remediation_requires_authoritative_predecessor(store, service):
+    await _establish(store)
+    request = _reuse_request(
+        kind=TurnSourceKind.REMEDIATION,
+        instruction_digest="digest-remediate",
+        remediation=_remediation_intent(of_turn_attempt_id="turn-missing"),
+    )
+    with pytest.raises(CallerAuthorityError, match="unknown canonical predecessor"):
+        await service.submit_reuse_turn(request)
+
+
+@pytest.mark.asyncio
 async def test_remediation_redelivery_rejects_changed_evidence(store, service):
     await _establish(store)
+    await _mark_seed_turn_terminal(store)
     first = _reuse_request(
         kind=TurnSourceKind.REMEDIATION,
         instruction_digest="digest-remediate",
@@ -520,6 +555,7 @@ async def test_remediation_redelivery_rejects_changed_evidence(store, service):
 @pytest.mark.asyncio
 async def test_remediator_cannot_broaden_workspace_authority(store, service):
     await _establish(store, metadata={"workspace_ref": "ws-1"})
+    await _mark_seed_turn_terminal(store)
     request = _reuse_request(
         kind=TurnSourceKind.REMEDIATION,
         instruction_digest="digest-remediate",
@@ -546,6 +582,7 @@ async def test_remediation_policy_can_require_a_branch(store, service):
 @pytest.mark.asyncio
 async def test_remediator_cannot_grant_publication_authority(store, service):
     await _establish(store)  # base grants_publication_authority defaults to False
+    await _mark_seed_turn_terminal(store)
     request = _reuse_request(
         kind=TurnSourceKind.REMEDIATION,
         instruction_digest="digest-remediate",
@@ -589,7 +626,10 @@ async def test_chat_final_session_terminality_is_read_only(store, service):
 
 
 @pytest.mark.asyncio
-async def test_chat_history_readable_after_cleanup(store, service):
+@pytest.mark.parametrize("cleanup_state", ["complete", "released"])
+async def test_chat_history_readable_after_cleanup(
+    store, service, cleanup_state
+):
     await _establish(store)
     await service.mark_session_terminal("sess-1", terminal_state="completed")
     async with store.transaction() as repos:
@@ -599,7 +639,7 @@ async def test_chat_history_readable_after_cleanup(store, service):
             "sess-1",
             expected_revision=session.revision,
             expected_fencing_generation=session.fencing_generation,
-            cleanup_state="released",
+            cleanup_state=cleanup_state,
             historical_read_state="archived",
         )
     decision = await service.resolve_chat_capability("chat-1", caller_authorized=True)
@@ -615,6 +655,7 @@ async def test_recovery_live_reattach_with_complete_authority(store, service):
     await _establish(store, metadata={"repository": "repoA"})
     decision = await service.decide_session_recovery(
         "sess-1",
+        recovery_idempotency_key="recovery-live",
         intent_dimensions=ImmutableSessionDimensions(repository="repoA"),
         live_authority=RecoveryEvidence(
             intent_dimensions=ImmutableSessionDimensions(),
@@ -635,6 +676,7 @@ async def test_recovery_cold_restore_after_source_removal(store, service):
     await _establish(store, metadata={"repository": "repoA"})
     decision = await service.decide_session_recovery(
         "sess-1",
+        recovery_idempotency_key="recovery-cold",
         intent_dimensions=ImmutableSessionDimensions(repository="repoA"),
         live_authority=RecoveryEvidence(
             intent_dimensions=ImmutableSessionDimensions(),
@@ -652,6 +694,7 @@ async def test_recovery_branch_required_on_immutable_input_change(store, service
     await _establish(store, metadata={"repository": "repoA"})
     decision = await service.decide_session_recovery(
         "sess-1",
+        recovery_idempotency_key="recovery-branch",
         intent_dimensions=ImmutableSessionDimensions(repository="repoB"),
         live_authority=RecoveryEvidence(
             intent_dimensions=ImmutableSessionDimensions(),
@@ -671,6 +714,7 @@ async def test_recovery_branch_required_on_immutable_input_change(store, service
 async def test_recovery_repeated_requests_are_idempotent(store, service):
     await _establish(store, metadata={"repository": "repoA"})
     kwargs = dict(
+        recovery_idempotency_key="recovery-repeat",
         intent_dimensions=ImmutableSessionDimensions(repository="repoA"),
         live_authority=RecoveryEvidence(
             intent_dimensions=ImmutableSessionDimensions(),
@@ -685,10 +729,36 @@ async def test_recovery_repeated_requests_are_idempotent(store, service):
 
 
 @pytest.mark.asyncio
+async def test_recovery_idempotency_key_rejects_changed_evidence(store, service):
+    await _establish(store, metadata={"repository": "repoA"})
+    evidence = RecoveryEvidence(
+        intent_dimensions=ImmutableSessionDimensions(),
+        session_dimensions=ImmutableSessionDimensions(),
+        workspace_artifact_valid=True,
+        session_evidence_valid=True,
+    )
+    await service.decide_session_recovery(
+        "sess-1",
+        recovery_idempotency_key="recovery-conflict",
+        intent_dimensions=ImmutableSessionDimensions(repository="repoA"),
+        live_authority=evidence,
+    )
+
+    with pytest.raises(TurnIdempotencyConflictError):
+        await service.decide_session_recovery(
+            "sess-1",
+            recovery_idempotency_key="recovery-conflict",
+            intent_dimensions=ImmutableSessionDimensions(repository="repoB"),
+            live_authority=evidence,
+        )
+
+
+@pytest.mark.asyncio
 async def test_recovery_unknown_session_fails_closed(store, service):
     with pytest.raises(CallerAuthorityError):
         await service.decide_session_recovery(
             "sess-missing",
+            recovery_idempotency_key="recovery-missing",
             intent_dimensions=ImmutableSessionDimensions(),
             live_authority=RecoveryEvidence(
                 intent_dimensions=ImmutableSessionDimensions(),

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from moonmind.omnigent.control_plane import CleanupFenceError
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
 
@@ -139,10 +140,125 @@ def _lease(*, heartbeat_age: int = 0):
         binding_ref="binding-1",
         container_name="host-1",
         omnigent_session_id="session-1",
+        bridge_session_id="bridge-1",
         last_heartbeat_at=now - timedelta(seconds=heartbeat_age),
         expires_at=now + timedelta(hours=1),
         status="ready",
     )
+
+
+@pytest.mark.asyncio
+async def test_janitor_claims_and_completes_canonical_cleanup_before_release() -> None:
+    repository = _Repository(_lease(heartbeat_age=121))
+    runtime = _Runtime(repository.order)
+    lease_client = _LeaseClient(repository.order)
+
+    class RunStore:
+        async def cleanup_required_host_lease_refs(self):
+            return set()
+
+        async def embedded_reconciliation_host_lease_refs(self, **_kwargs):
+            return {}
+
+        async def claim_canonical_cleanup(self, session_id, **_kwargs):
+            assert session_id == "bridge-1"
+            repository.order.append("canonical_cleanup_claimed")
+            return SimpleNamespace(record=SimpleNamespace(generation=3))
+
+        async def complete_canonical_cleanup(self, session_id, **kwargs):
+            assert session_id == "bridge-1"
+            assert kwargs["generation"] == 3
+            repository.order.append("canonical_cleanup_completed")
+
+    await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        run_store=RunStore(),
+        lease_client=lease_client,
+        heartbeat_timeout_seconds=90,
+    ).run()
+
+    assert repository.order == [
+        "canonical_cleanup_claimed",
+        "cleanup_claimed",
+        "host_stopped",
+        "lease_released",
+        "canonical_cleanup_completed",
+        "provider_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_janitor_new_turn_race_is_fenced_before_host_claim() -> None:
+    repository = _Repository(_lease(heartbeat_age=121))
+    runtime = _Runtime(repository.order)
+
+    class RunStore:
+        async def cleanup_required_host_lease_refs(self):
+            return set()
+
+        async def embedded_reconciliation_host_lease_refs(self, **_kwargs):
+            return {}
+
+        async def claim_canonical_cleanup(self, *_args, **_kwargs):
+            raise CleanupFenceError("accepted remediation turn is active")
+
+    with pytest.raises(CleanupFenceError, match="remediation turn"):
+        await OmnigentOAuthHostJanitor(
+            repository=repository,
+            runtime=runtime,
+            client=_Client(),
+            run_store=RunStore(),
+            heartbeat_timeout_seconds=90,
+        ).run()
+
+    assert repository.cleanup_claims == []
+    assert runtime.stopped == 0
+
+
+@pytest.mark.asyncio
+async def test_janitor_releases_canonical_claim_when_host_claim_loses() -> None:
+    repository = _Repository(_lease(heartbeat_age=121))
+    runtime = _Runtime(repository.order)
+
+    async def lose_host_claim(*_args, **_kwargs):
+        repository.order.append("host_claim_lost")
+        return None
+
+    repository.claim_host_lease_cleanup = lose_host_claim
+
+    class RunStore:
+        async def cleanup_required_host_lease_refs(self):
+            return set()
+
+        async def embedded_reconciliation_host_lease_refs(self, **_kwargs):
+            return {}
+
+        async def claim_canonical_cleanup(self, *_args, **_kwargs):
+            repository.order.append("canonical_cleanup_claimed")
+            return SimpleNamespace(record=SimpleNamespace(generation=5))
+
+        async def release_canonical_cleanup_claim(self, session_id, **kwargs):
+            assert session_id == "bridge-1"
+            assert kwargs["generation"] == 5
+            repository.order.append("canonical_cleanup_released")
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        run_store=RunStore(),
+        heartbeat_timeout_seconds=90,
+    ).run()
+
+    assert result["count"] == 0
+    assert repository.order == [
+        "canonical_cleanup_claimed",
+        "host_claim_lost",
+        "canonical_cleanup_released",
+    ]
+    assert runtime.stopped == 0
 
 
 @pytest.mark.asyncio

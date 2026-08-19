@@ -1570,6 +1570,36 @@ async def run_omnigent_execution(
                         ),
                     ),
                 )
+                # The canonical session and initial turn own first-message
+                # delivery for every Omnigent path, including executions that
+                # do not use a Provider Profile.  Establish that authority
+                # before session creation or message dispatch; profile-bound
+                # continuations already have it and therefore take the
+                # idempotent read-only branch here.
+                canonical_delivery = getattr(
+                    run_store, "record_canonical_turn_delivery", None
+                )
+                if callable(canonical_delivery):
+                    get_canonical = getattr(
+                        run_store, "get_canonical_session", None
+                    )
+                    establish_canonical = getattr(
+                        run_store, "establish_canonical_authority", None
+                    )
+                    canonical = (
+                        await get_canonical(bridge_session_id)
+                        if callable(get_canonical)
+                        else None
+                    )
+                    if canonical is None:
+                        if not callable(establish_canonical):
+                            raise OmnigentContractError(
+                                "Omnigent initial delivery requires canonical "
+                                "session/turn persistence"
+                            )
+                        await establish_canonical(
+                            request=request, bridge=durable_row
+                        )
 
             retry_state = _heartbeat_state()
             heartbeat_pre_dispatch_item_ids = (

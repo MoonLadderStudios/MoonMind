@@ -60,7 +60,7 @@ def _session(
     return SessionRecord(
         session_id=session_id,
         moonmind_workflow_id="wf-1",
-        provider="codex",
+        provider=kwargs.pop("provider", "codex"),
         chat_binding_id="chat-1",
         terminal_state=terminal_state,
         cleanup_state=cleanup_state,
@@ -164,6 +164,57 @@ def test_changed_immutable_dimension_requires_branch():
     assert "repository" in excinfo.value.changed_dimensions
 
 
+@pytest.mark.parametrize(
+    "dimension",
+    [
+        "provider",
+        "runtime_id",
+        "model",
+        "effort",
+        "compatibility_profile",
+        "provider_profile_id",
+        "policy_ref",
+        "image_manifest_ref",
+        "compatibility_ref",
+        "repository",
+        "branch",
+        "workspace_ref",
+        "publication_mode",
+        "skill_ref",
+        "runtime_authority_ref",
+        "instruction_digest",
+        "intent_digest",
+    ],
+)
+def test_every_concrete_immutable_dimension_requires_a_branch(dimension):
+    column_dimensions = {
+        "provider",
+        "compatibility_profile",
+        "provider_profile_id",
+        "image_manifest_ref",
+        "compatibility_ref",
+        "intent_digest",
+    }
+    session = _session(
+        **(
+            {dimension: "authority-a"}
+            if dimension in column_dimensions
+            else {"metadata": {dimension: "authority-a"}}
+        )
+    )
+    request = _request(
+        TurnSourceKind.REPOSITORY_CONTINUATION,
+        requested_dimensions=ImmutableSessionDimensions(
+            **{dimension: "authority-b"}
+        ),
+    )
+
+    with pytest.raises(BranchRequiredError) as excinfo:
+        plan_turn_submission(request, session)
+
+    assert excinfo.value.changed_dimensions == (dimension,)
+
+
 def test_unknown_dimension_does_not_force_branch():
     session = _session(metadata={"repository": "repoA"})
     # A request that leaves repository unknown (None) must not spuriously branch.
@@ -257,6 +308,17 @@ def test_remediation_rejects_nonpositive_budget():
         )
 
 
+def test_remediation_rejects_exhausted_attempt_budget():
+    with pytest.raises(RemediationAuthorityError, match="exceeds attempt budget"):
+        validate_remediation_authority(
+            base_dimensions=ImmutableSessionDimensions(),
+            intent=_remediation_intent(
+                remediation_attempt_ordinal=4,
+                attempt_budget=3,
+            ),
+        )
+
+
 def test_remediation_rejects_missing_evidence():
     with pytest.raises(RemediationAuthorityError):
         validate_remediation_authority(
@@ -272,6 +334,38 @@ def test_remediation_cannot_broaden_profile_or_workspace():
             intent=_remediation_intent(
                 granted_dimensions=ImmutableSessionDimensions(
                     provider_profile_id="prof-2"
+                )
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "dimension",
+    [
+        "provider_profile_id",
+        "workspace_ref",
+        "repository",
+        "branch",
+        "publication_mode",
+        "runtime_id",
+        "model",
+        "effort",
+        "policy_ref",
+        "image_manifest_ref",
+        "compatibility_ref",
+        "skill_ref",
+        "runtime_authority_ref",
+    ],
+)
+def test_remediation_fails_closed_when_required_base_authority_is_absent(
+    dimension,
+):
+    with pytest.raises(RemediationAuthorityError, match="missing base authority"):
+        validate_remediation_authority(
+            base_dimensions=ImmutableSessionDimensions(),
+            intent=_remediation_intent(
+                granted_dimensions=ImmutableSessionDimensions(
+                    **{dimension: "new-authority"}
                 )
             ),
         )
@@ -316,6 +410,24 @@ def test_recovery_cold_restore_when_live_authority_incomplete():
     assert decide_recovery(evidence).mode is RecoveryMode.COLD_RESTORE
 
 
+@pytest.mark.parametrize(
+    "missing_live_evidence",
+    [
+        "provider_profile_lease_current",
+        "host_available",
+        "provider_session_reachable",
+        "cursor_present",
+        "first_message_consistent",
+        "credential_generation_current",
+    ],
+)
+def test_recovery_rejects_live_reattach_when_authority_is_stale_or_missing(
+    missing_live_evidence,
+):
+    evidence = _full_live_evidence(**{missing_live_evidence: False})
+    assert decide_recovery(evidence).mode is RecoveryMode.COLD_RESTORE
+
+
 def test_recovery_branch_required_on_immutable_change_takes_precedence():
     # Even with full live authority, a changed immutable input forces a branch.
     evidence = _full_live_evidence(
@@ -325,6 +437,20 @@ def test_recovery_branch_required_on_immutable_change_takes_precedence():
     decision = decide_recovery(evidence)
     assert decision.mode is RecoveryMode.BRANCH_REQUIRED
     assert "repository" in decision.changed_dimensions
+
+
+def test_recovery_is_unavailable_when_canonical_immutable_authority_is_missing():
+    decision = decide_recovery(
+        _full_live_evidence(
+            intent_dimensions=ImmutableSessionDimensions(
+                runtime_id="omnigent", repository="repoA"
+            ),
+            session_dimensions=ImmutableSessionDimensions(repository="repoA"),
+        )
+    )
+    assert decision.mode is RecoveryMode.RESUME_UNAVAILABLE
+    assert decision.reason == "immutable_session_authority_missing"
+    assert decision.changed_dimensions == ("runtime_id",)
 
 
 def test_recovery_resume_unavailable_without_evidence():

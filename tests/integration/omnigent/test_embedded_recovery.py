@@ -43,7 +43,13 @@ from moonmind.omnigent.bridge_store import (
     OmnigentDigestMismatchError,
     OmnigentIdempotencyError,
 )
-from moonmind.omnigent.control_plane import TurnSourceKind
+from moonmind.omnigent.control_plane import (
+    ControlPlaneOutcome,
+    OmnigentControlPlaneStore,
+    OmnigentTurnService,
+    TurnSourceKind,
+    TurnSubmissionRequest,
+)
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
@@ -53,6 +59,7 @@ from moonmind.omnigent.oauth_hosts import (
 )
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
+    _compile_persisted_effective_launch,
 )
 from moonmind.omnigent.remediation_workspace import (
     RemediationLiveWorkspace,
@@ -676,8 +683,77 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         workspace_owner=workspace_owner,
     )
 
+    # C0: seed the real canonical predecessor that authorized this exact
+    # candidate/profile/runtime/Skill/publication/branch envelope. The
+    # remediation controller must reference this terminal turn; it may not
+    # fabricate lineage from its own request.
+    policy_snapshot = await coordinator._resolve_policy_snapshot("codex-static@1")
+    effective_launch = _compile_persisted_effective_launch(
+        policy_snapshot,
+        provider_profile_id="codex",
+        follow_up_retrieval={"enabled": False},
+    )
+    prior_dimensions = store._canonical_dimensions(
+        request,
+        provider_profile_id="codex",
+        effective_launch_snapshot=effective_launch,
+    )
+    turn_service = OmnigentTurnService(
+        OmnigentControlPlaneStore(session_factory)
+    )
+    prior = await turn_service.establish_session(
+        TurnSubmissionRequest(
+            session_id="canonical-c0",
+            source_kind=TurnSourceKind.INITIAL,
+            caller_id="verification-controller",
+            idempotency_key="canonical-c0-turn",
+            instruction_digest="sha256:canonical-c0",
+            requested_dimensions=prior_dimensions,
+            metadata={"grants_publication_authority": False},
+        ),
+        moonmind_workflow_id=prior_workflow_id,
+        provider="omnigent",
+        new_session_id="canonical-c0",
+        compatibility_profile=prior_dimensions.compatibility_profile,
+        provider_profile_id="codex",
+        compatibility_ref=prior_dimensions.compatibility_ref,
+        image_manifest_ref=prior_dimensions.image_manifest_ref,
+    )
+    await turn_service.record_turn_delivery(
+        prior.turn_attempt.idempotency_key,
+        outcome=ControlPlaneOutcome.APPLIED,
+    )
+    await turn_service.record_turn_terminal(
+        prior.turn_attempt.idempotency_key,
+        terminal_state="completed",
+        terminal_evidence_ref="artifact://canonical-c0-terminal",
+    )
+    request = request.model_copy(
+        update={
+            "parameters": {
+                **dict(request.parameters),
+                "gateResultRef": "artifact://gate-c0",
+                "remainingWorkRef": "artifact://remaining-c0",
+                "remediationOfTurnAttemptId": prior.turn_attempt.turn_attempt_id,
+                "allowSameSessionReuse": False,
+                "attemptBudget": 2,
+                "branchBudget": 1,
+                "verificationRequirements": ["production-boundary"],
+            }
+        }
+    )
+
     with pytest.raises(OmnigentSessionStillRunningError):
         await coordinator.execute(request)
+
+    # The harness models provider-session retention separately from turn
+    # terminality. Settle C1 while leaving its canonical session resumable.
+    await store.record_canonical_turn_delivery(request.idempotency_key)
+    await store.record_canonical_turn_terminal(
+        request.idempotency_key,
+        terminal_state="completed",
+        terminal_evidence_ref="artifact://canonical-c1-terminal",
+    )
 
     assert current_host_lease_ref
     host_lease_ref = current_host_lease_ref[0]
@@ -695,6 +771,12 @@ async def test_remediation_continuation_janitor_uses_real_authority_chain(
         source_kind=TurnSourceKind.REPOSITORY_CONTINUATION,
         effective_launch_snapshot=persisted_host_lease.effective_launch_snapshot,
         caller_id="repository_publication_controller",
+    )
+    await store.record_canonical_turn_delivery(continuation_key)
+    await store.record_canonical_turn_terminal(
+        continuation_key,
+        terminal_state="failed",
+        terminal_evidence_ref="artifact://canonical-c2-terminal",
     )
     await store.record_lifecycle_event(
         continuation_key,

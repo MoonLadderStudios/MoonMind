@@ -9,14 +9,17 @@ from temporalio.testing import ActivityEnvironment
 
 from moonmind.omnigent import execute as omnigent_execute_module
 from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
-from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.bridge_store import (
+    OmnigentBridgeSessionStore,
+    _canonical_first_message_frontier,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.temporal.activities import (
     omnigent_activities as omnigent_activities_module,
 )
 from moonmind.workflows.temporal.activities.omnigent_activities import (
     _checkpoint_branch_from_request,
-    _checkpoint_recovery_decision,
+    _checkpoint_recovery_dimensions,
     _checkpoint_recovery_from_request,
     _resolve_live_recovery_authority,
     omnigent_execute_activity,
@@ -24,134 +27,43 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
 
 
 @pytest.mark.parametrize(
-    ("dimension", "changed"),
+    ("dimension", "attribute", "value"),
     [
-        ("instructionDigest", "sha256:changed-instructions"),
-        ("runtimeId", "codex"),
-        ("model", "gpt-5.6"),
-        ("effort", "high"),
-        ("providerProfileId", "profile-2"),
-        ("launchPolicyRef", "artifact://policy/2"),
-        ("repositoryBranch", "feature/changed"),
-        ("publishMode", "pull_request"),
+        ("instructionDigest", "instruction_digest", "sha256:instructions"),
+        ("runtimeId", "runtime_id", "omnigent"),
+        ("model", "model", "gpt-5.6"),
+        ("effort", "effort", "high"),
+        ("providerProfileId", "provider_profile_id", "profile-2"),
+        ("launchPolicyRef", "policy_ref", "artifact://policy/2"),
+        ("repositoryBranch", "branch", "feature/changed"),
+        ("publishMode", "publication_mode", "pull_request"),
     ],
 )
-def test_checkpoint_recovery_decision_requires_branch_for_immutable_change(
-    dimension, changed
+def test_checkpoint_recovery_compiles_every_requested_immutable_dimension(
+    dimension, attribute, value
 ) -> None:
-    immutable_source = {
+    requested = {
         "instructionDigest": "sha256:instructions",
         "runtimeId": "omnigent",
-        "model": "default",
-        "effort": "medium",
-        "providerProfileId": "profile-1",
-        "launchPolicyRef": "artifact://policy/1",
-        "repositoryBranch": "main",
+        "model": "gpt-5.6",
+        "effort": "high",
+        "providerProfileId": "profile-2",
+        "launchPolicyRef": "artifact://policy/2",
+        "repositoryBranch": "feature/changed",
         "publishMode": "none",
     }
-    requested = {**immutable_source, dimension: changed}
-
-    decision = _checkpoint_recovery_decision(
-        {
-            "immutableSource": immutable_source,
-            "immutableRequested": requested,
-            "liveReattachAvailable": True,
-            "coldRestoreAvailable": True,
-        }
+    requested[dimension] = value
+    dimensions = _checkpoint_recovery_dimensions(
+        {"immutableRequested": requested}
     )
-
-    assert decision == {
-        "recoveryAction": "branch_required",
-        "reasonCodes": [f"immutable_{dimension}_changed"],
-    }
+    assert getattr(dimensions, attribute) == value
 
 
-def test_checkpoint_recovery_decision_fails_closed_without_authoritative_snapshot() -> None:
-    decision = _checkpoint_recovery_decision(
-        {"liveReattachAvailable": True, "coldRestoreAvailable": True}
-    )
-
-    assert decision == {
-        "recoveryAction": "resume_unavailable",
-        "reasonCodes": ["immutable_authority_missing"],
-    }
-
-
-def test_checkpoint_recovery_decision_selects_live_or_cold_with_bounded_rationale() -> None:
-    immutable = {
-        "instructionDigest": "sha256:instructions",
-        "runtimeId": "omnigent",
-        "model": "default",
-        "effort": "medium",
-        "providerProfileId": "profile-1",
-        "launchPolicyRef": "artifact://policy/1",
-        "repositoryBranch": "main",
-        "publishMode": "none",
-    }
-
-    assert _checkpoint_recovery_decision(
-        {
-            "immutableSource": immutable,
-            "immutableRequested": immutable,
-            "liveReattachAvailable": False,
-            "coldRestoreAvailable": False,
-        },
-        live_authority={
-            "provider_lease": {"active": True},
-            "host_registered": True,
-            "session_valid": True,
-            "first_message_consistent": True,
-            "current_credential_generation": 4,
-            "checkpoint_credential_generation": 4,
-        },
-        cold_restore_authorized=True,
-        live_reattach_authorized=True,
-    ) == {"recoveryAction": "live_reattach", "reasonCodes": ["all_authority_valid"]}
-    assert _checkpoint_recovery_decision(
-        {
-            "immutableSource": immutable,
-            "immutableRequested": immutable,
-            "liveReattachAvailable": True,
-            "coldRestoreAvailable": False,
-        },
-        live_authority={
-            "provider_lease": None,
-            "host_registered": False,
-            "session_valid": False,
-            "first_message_consistent": False,
-            "current_credential_generation": 4,
-            "checkpoint_credential_generation": 4,
-        },
-        cold_restore_authorized=True,
-    ) == {
-        "recoveryAction": "cold_restore",
-        "reasonCodes": ["live_authority_unavailable"],
-    }
-
-
-def test_checkpoint_recovery_decision_ignores_caller_availability_assertions() -> None:
-    immutable = {
-        "instructionDigest": "sha256:instructions",
-        "runtimeId": "omnigent",
-        "model": "default",
-        "effort": "medium",
-        "providerProfileId": "profile-1",
-        "launchPolicyRef": "artifact://policy/1",
-        "repositoryBranch": "main",
-        "publishMode": "none",
-    }
-
-    assert _checkpoint_recovery_decision(
-        {
-            "immutableSource": immutable,
-            "immutableRequested": immutable,
-            "liveReattachAvailable": True,
-            "coldRestoreAvailable": True,
-        }
-    ) == {
-        "recoveryAction": "resume_unavailable",
-        "reasonCodes": ["checkpoint_authority_unavailable"],
-    }
+def test_checkpoint_recovery_dimensions_fail_closed_when_incomplete() -> None:
+    with pytest.raises(ValueError, match="immutable authority is incomplete"):
+        _checkpoint_recovery_dimensions(
+            {"immutableRequested": {"runtimeId": "omnigent"}}
+        )
 
 
 @pytest.mark.asyncio
@@ -285,7 +197,7 @@ def test_checkpoint_branch_request_requires_explicit_action_and_new_boundary() -
     assert candidate.checkpoint_ref == checkpoint.workspace_checkpoint_ref
 
 
-def test_checkpoint_branch_request_is_derived_from_immutable_input_change() -> None:
+def test_checkpoint_branch_request_waits_for_canonical_typed_decision() -> None:
     from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
 
     checkpoint = _checkpoint()
@@ -319,11 +231,8 @@ def test_checkpoint_branch_request_is_derived_from_immutable_input_change() -> N
         },
     )
 
-    assert _checkpoint_branch_from_request(request) is not None
-    assert request.checkpoint_recovery["recoveryDecision"] == {
-        "recoveryAction": "branch_required",
-        "reasonCodes": ["immutable_instructionDigest_changed"],
-    }
+    assert _checkpoint_branch_from_request(request) is None
+    assert "recoveryDecision" not in request.checkpoint_recovery
 
 
 def test_checkpoint_branch_request_rejects_source_idempotency_boundary() -> None:
@@ -349,7 +258,31 @@ def test_checkpoint_branch_request_rejects_source_idempotency_boundary() -> None
 
 
 @pytest.mark.asyncio
-async def test_live_recovery_authority_requires_matching_current_records() -> None:
+@pytest.mark.parametrize(
+    (
+        "canonical_cursor",
+        "frontier_matches",
+        "current_generation_offset",
+        "expected_cursor",
+        "expected_first_message",
+        "expected_generation",
+    ),
+    [
+        ("7", True, 0, True, True, True),
+        (None, True, 0, False, True, True),
+        ("3", True, 0, False, True, True),
+        ("7", False, 0, True, False, True),
+        ("7", True, 1, True, True, False),
+    ],
+)
+async def test_live_recovery_authority_requires_matching_current_records(
+    canonical_cursor,
+    frontier_matches,
+    current_generation_offset,
+    expected_cursor,
+    expected_first_message,
+    expected_generation,
+) -> None:
     from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
 
     checkpoint = _checkpoint().model_copy(
@@ -363,7 +296,11 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
             "first_message_digest": "sha256:" + "a" * 64,
         }
     )
-    provider = SimpleNamespace(credential_generation=checkpoint.credential_generation)
+    provider = SimpleNamespace(
+        credential_generation=(
+            checkpoint.credential_generation + current_generation_offset
+        )
+    )
     provider_lease = SimpleNamespace(
         lease_id="provider-lease",
         owner_id="owner-1",
@@ -399,7 +336,7 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
 
         async def execute(self, _query):
             self.calls += 1
-            return Result(provider_lease if self.calls == 1 else 7)
+            return Result(provider_lease)
 
     host = SimpleNamespace(
         omnigent_host_id="host-1",
@@ -413,14 +350,21 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
             "credentialGeneration": checkpoint.credential_generation,
         },
     )
-    bridge = SimpleNamespace(
-        omnigent_host_id="host-1",
-        omnigent_session_id="session-1",
-        status="active",
-        first_message_digest=checkpoint.first_message_digest,
-        first_message_item_id="message-1",
-        first_message_pending_id=None,
-        first_message_state="posted",
+    canonical = SimpleNamespace(
+        host_binding_ref=checkpoint.host_binding_ref,
+        host_lease_ref=checkpoint.host_lease_ref,
+        provider_profile_id=checkpoint.provider_profile_id,
+        provider_session_ref="session-1",
+        provider_event_cursor=canonical_cursor,
+        snapshot_frontier=(
+            _canonical_first_message_frontier(
+                "message-1", checkpoint.first_message_digest
+            )
+            if frontier_matches
+            else "sha256:conflicting-first-message"
+        ),
+        is_terminal=False,
+        cleanup_state="pending",
     )
     authority = await _resolve_live_recovery_authority(
         checkpoint=checkpoint,
@@ -429,18 +373,19 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
             get_host_lease=lambda _lease_id: _async_value(host)
         ),
         run_store=SimpleNamespace(
-            get_bridge_session=lambda _bridge_id: _async_value(bridge)
+            get_canonical_session=lambda _bridge_id: _async_value(canonical)
         ),
     )
 
     assert authority["provider_lease"]["active"] is True
     assert authority["host_registered"] is True
-    assert authority["session_valid"] is True
-    assert authority["first_message_consistent"] is True
+    assert authority["session_valid"] is expected_cursor
+    assert authority["cursor_present"] is expected_cursor
+    assert authority["first_message_consistent"] is expected_first_message
     assert (
         authority["current_credential_generation"]
         == checkpoint.credential_generation
-    )
+    ) is expected_generation
 
 
 @pytest.mark.asyncio
@@ -516,13 +461,15 @@ async def test_live_recovery_authority_fails_closed_for_ambiguous_or_mismatched_
 
         async def execute(self, _query):
             self.calls += 1
-            return Result(lease_rows if self.calls == 1 else 7)
+            return Result(lease_rows)
 
     authority = await _resolve_live_recovery_authority(
         checkpoint=checkpoint,
         session_factory=Session,
         host_repository=SimpleNamespace(get_host_lease=lambda _ref: _async_value(None)),
-        run_store=SimpleNamespace(get_bridge_session=lambda _ref: _async_value(None)),
+        run_store=SimpleNamespace(
+            get_canonical_session=lambda _ref: _async_value(None)
+        ),
     )
 
     assert authority["provider_lease"] is None or not authority["provider_lease"][

@@ -17,13 +17,16 @@ import asyncio
 
 import pytest
 from moonmind.omnigent.control_plane import (
+    CleanupFenceError,
     ConflictingSessionAuthorityError,
     ControlPlaneOutcome,
     FencingConflictError,
     FencingScope,
     ImmutableSessionDimensions,
     OmnigentTurnService,
+    RecoveryEvidence,
     RevisionConflictError,
+    TurnIdempotencyConflictError,
     TurnSourceKind,
     TurnSubmissionRequest,
 )
@@ -293,6 +296,120 @@ async def test_postgres_two_janitors_cannot_both_claim_cleanup(pg_store) -> None
     # live claim and is refused.
     assert outcomes.count(ControlPlaneOutcome.APPLIED) == 1
     assert outcomes.count(ControlPlaneOutcome.NOT_OWNER) == 1
+
+
+@pytest.mark.asyncio
+async def test_postgres_cleanup_loses_to_accepted_chat_turn(pg_store) -> None:
+    """The production cleanup repository cannot race an admitted new turn."""
+
+    service = OmnigentTurnService(pg_store)
+    await service.establish_session(
+        TurnSubmissionRequest(
+            session_id="s1",
+            source_kind=TurnSourceKind.INITIAL,
+            caller_id="workflow-1",
+            idempotency_key="initial",
+            instruction_digest="digest-initial",
+        ),
+        moonmind_workflow_id="wf-1",
+        provider="codex",
+        new_session_id="s1",
+        new_chat_binding_id="chat-1",
+    )
+    await service.record_turn_terminal("initial", terminal_state="completed")
+    chat = await service.submit_reuse_turn(
+        TurnSubmissionRequest(
+            session_id="s1",
+            source_kind=TurnSourceKind.WORKFLOW_CHAT,
+            caller_id="workflow-chat",
+            idempotency_key="chat-turn",
+            instruction_digest="digest-chat",
+        )
+    )
+
+    with pytest.raises(CleanupFenceError, match="active_turn"):
+        await service.claim_cleanup(
+            "s1", owner_class="oauth_host_janitor", claim_token="janitor:s1"
+        )
+
+    await service.record_turn_terminal(
+        chat.turn_attempt.idempotency_key, terminal_state="completed"
+    )
+    claimed = await service.claim_cleanup(
+        "s1", owner_class="oauth_host_janitor", claim_token="janitor:s1"
+    )
+    assert claimed.outcome is ControlPlaneOutcome.APPLIED
+
+
+@pytest.mark.asyncio
+async def test_postgres_recovery_decision_is_durably_idempotent(pg_store) -> None:
+    service = OmnigentTurnService(pg_store)
+    dimensions = ImmutableSessionDimensions(
+        provider="omnigent",
+        runtime_id="omnigent",
+        model="gpt-5.6",
+        effort="high",
+        provider_profile_id="profile-1",
+        policy_ref="policy-1",
+        branch="main",
+        publication_mode="none",
+        instruction_digest="sha256:instructions",
+    )
+    await service.establish_session(
+        TurnSubmissionRequest(
+            session_id="s1",
+            source_kind=TurnSourceKind.INITIAL,
+            caller_id="workflow-1",
+            idempotency_key="initial",
+            instruction_digest="turn-digest",
+            requested_dimensions=dimensions,
+        ),
+        moonmind_workflow_id="wf-1",
+        provider="omnigent",
+        new_session_id="s1",
+        provider_profile_id="profile-1",
+    )
+    evidence = RecoveryEvidence(
+        intent_dimensions=dimensions,
+        session_dimensions=dimensions,
+        workspace_artifact_valid=True,
+        session_evidence_valid=True,
+    )
+    first, second = await asyncio.gather(
+        service.decide_session_recovery(
+            "s1",
+            recovery_idempotency_key="recovery-1",
+            intent_dimensions=dimensions,
+            live_authority=evidence,
+        ),
+        service.decide_session_recovery(
+            "s1",
+            recovery_idempotency_key="recovery-1",
+            intent_dimensions=dimensions,
+            live_authority=evidence,
+        ),
+    )
+    assert first == second
+    async with pg_store.transaction() as repos:
+        decisions = await repos.decisions.list_for_session("s1")
+    assert [
+        decision.decision_code
+        for decision in decisions
+        if decision.decision_code.startswith("checkpoint_recovery:")
+    ] == ["checkpoint_recovery:cold_restore"]
+
+    with pytest.raises(TurnIdempotencyConflictError):
+        await service.decide_session_recovery(
+            "s1",
+            recovery_idempotency_key="recovery-1",
+            intent_dimensions=ImmutableSessionDimensions(
+                **{
+                    **dimensions.__dict__,
+                    "branch": "changed-branch",
+                }
+            ),
+            live_authority=evidence,
+        )
 
 
 @pytest.mark.asyncio

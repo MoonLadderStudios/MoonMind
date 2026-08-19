@@ -306,7 +306,9 @@ class ImmutableSessionDimensions:
     """
 
     provider: Optional[str] = None
+    runtime_id: Optional[str] = None
     model: Optional[str] = None
+    effort: Optional[str] = None
     compatibility_profile: Optional[str] = None
     provider_profile_id: Optional[str] = None
     policy_ref: Optional[str] = None
@@ -315,6 +317,10 @@ class ImmutableSessionDimensions:
     repository: Optional[str] = None
     branch: Optional[str] = None
     workspace_ref: Optional[str] = None
+    publication_mode: Optional[str] = None
+    skill_ref: Optional[str] = None
+    runtime_authority_ref: Optional[str] = None
+    instruction_digest: Optional[str] = None
     intent_digest: Optional[str] = None
 
     def changed_from(self, other: "ImmutableSessionDimensions") -> tuple[str, ...]:
@@ -335,7 +341,9 @@ class ImmutableSessionDimensions:
         meta = session.metadata or {}
         return cls(
             provider=session.provider,
+            runtime_id=meta.get("runtime_id"),
             model=meta.get("model"),
+            effort=meta.get("effort"),
             compatibility_profile=session.compatibility_profile,
             provider_profile_id=session.provider_profile_id,
             policy_ref=meta.get("policy_ref"),
@@ -344,6 +352,10 @@ class ImmutableSessionDimensions:
             repository=meta.get("repository"),
             branch=meta.get("branch"),
             workspace_ref=meta.get("workspace_ref"),
+            publication_mode=meta.get("publication_mode"),
+            skill_ref=meta.get("skill_ref"),
+            runtime_authority_ref=meta.get("runtime_authority_ref"),
+            instruction_digest=meta.get("instruction_digest"),
             intent_digest=session.intent_digest,
         )
 
@@ -351,7 +363,19 @@ class ImmutableSessionDimensions:
         """Dimensions that live in session metadata (not first-class columns)."""
 
         out: dict[str, Any] = {}
-        for name in ("model", "policy_ref", "repository", "branch", "workspace_ref"):
+        for name in (
+            "runtime_id",
+            "model",
+            "effort",
+            "policy_ref",
+            "repository",
+            "branch",
+            "workspace_ref",
+            "publication_mode",
+            "skill_ref",
+            "runtime_authority_ref",
+            "instruction_digest",
+        ):
             value = getattr(self, name)
             if value is not None:
                 out[name] = value
@@ -430,14 +454,34 @@ def validate_remediation_authority(
         )
 
     granted = intent.granted_dimensions
-    for authority_field in ("provider_profile_id", "workspace_ref"):
+    # These dimensions identify execution, workspace, publication, runtime,
+    # Skill, and branch authority.  Unlike ordinary continuation comparison,
+    # remediation must not treat a missing base value as permission to add an
+    # authority: an absent predecessor grant is a fail-closed condition.
+    authority_fields = (
+        "provider_profile_id",
+        "workspace_ref",
+        "repository",
+        "branch",
+        "publication_mode",
+        "runtime_id",
+        "model",
+        "effort",
+        "policy_ref",
+        "image_manifest_ref",
+        "compatibility_ref",
+        "skill_ref",
+        "runtime_authority_ref",
+    )
+    for authority_field in authority_fields:
         base_value = getattr(base_dimensions, authority_field)
         granted_value = getattr(granted, authority_field)
-        if (
-            granted_value is not None
-            and base_value is not None
-            and granted_value != base_value
-        ):
+        if granted_value is not None and base_value is None:
+            raise RemediationAuthorityError(
+                f"Remediation loop {intent.loop_id!r} cannot establish missing "
+                f"base authority {authority_field}: granted={granted_value!r}"
+            )
+        if granted_value is not None and granted_value != base_value:
             raise RemediationAuthorityError(
                 f"Remediation loop {intent.loop_id!r} may not broaden "
                 f"{authority_field}: base={base_value!r} granted={granted_value!r}"
@@ -659,11 +703,24 @@ class RecoveryDecision:
 def decide_recovery(evidence: RecoveryEvidence) -> RecoveryDecision:
     """Pick exactly one recovery mode from evidence, fail-closed.
 
-    Ordering: an immutable-input change forces ``branch_required`` first; then
-    complete live authority yields ``live_reattach``; then artifact-backed
-    workspace + session evidence yields ``cold_restore``; otherwise resume is
-    unavailable.
+    Ordering: missing canonical immutable authority fails closed; a concrete
+    immutable-input change then forces ``branch_required``; complete live
+    authority yields ``live_reattach``; artifact-backed workspace + session
+    evidence yields ``cold_restore``; otherwise resume is unavailable.
     """
+
+    missing_session_authority = tuple(
+        field.name
+        for field in fields(evidence.intent_dimensions)
+        if getattr(evidence.intent_dimensions, field.name) is not None
+        and getattr(evidence.session_dimensions, field.name) is None
+    )
+    if missing_session_authority:
+        return RecoveryDecision(
+            RecoveryMode.RESUME_UNAVAILABLE,
+            "immutable_session_authority_missing",
+            missing_session_authority,
+        )
 
     changed = evidence.intent_dimensions.changed_from(evidence.session_dimensions)
     if changed:

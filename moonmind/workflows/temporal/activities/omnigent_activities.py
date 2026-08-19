@@ -12,18 +12,6 @@ from temporalio import activity
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 
-_IMMUTABLE_RECOVERY_DIMENSIONS = (
-    "instructionDigest",
-    "runtimeId",
-    "model",
-    "effort",
-    "providerProfileId",
-    "launchPolicyRef",
-    "repositoryBranch",
-    "publishMode",
-)
-
-
 class _OnDemandTemporalArtifactService:
     """Open one DB session per artifact operation at an Activity boundary."""
 
@@ -60,83 +48,39 @@ class _OnDemandTemporalArtifactService:
         )
 
 
-def _checkpoint_recovery_decision(
-    recovery: dict[str, Any],
-    *,
-    live_authority: dict[str, Any] | None = None,
-    cold_restore_authorized: bool | None = None,
-    live_reattach_authorized: bool | None = None,
-) -> dict[str, Any]:
-    """Classify recovery from bounded, caller-independent authority evidence.
+def _checkpoint_recovery_dimensions(recovery: dict[str, Any]):
+    """Compile the requested immutable recovery intent for the canonical gate."""
 
-    The decision is intentionally compact so the request/history can retain the
-    exact terminal rationale without persisting mutable host details. Immutable
-    input changes always win over live/cold availability.
-    """
+    from moonmind.omnigent.control_plane import ImmutableSessionDimensions
 
-    source = recovery.get("immutableSource")
     requested = recovery.get("immutableRequested")
-    if not isinstance(source, dict) or not isinstance(requested, dict):
-        return {
-            "recoveryAction": "resume_unavailable",
-            "reasonCodes": ["immutable_authority_missing"],
-        }
+    if not isinstance(requested, dict):
+        raise ValueError("checkpoint recovery immutableRequested is required")
+    mapping = {
+        "instructionDigest": "instruction_digest",
+        "runtimeId": "runtime_id",
+        "model": "model",
+        "effort": "effort",
+        "providerProfileId": "provider_profile_id",
+        "launchPolicyRef": "policy_ref",
+        "repositoryBranch": "branch",
+        "publishMode": "publication_mode",
+    }
     missing = [
-        dimension
-        for dimension in _IMMUTABLE_RECOVERY_DIMENSIONS
-        if dimension not in source or dimension not in requested
+        source
+        for source in mapping
+        if not str(requested.get(source) or "").strip()
     ]
     if missing:
-        return {
-            "recoveryAction": "resume_unavailable",
-            "reasonCodes": [
-                f"immutable_{dimension}_missing" for dimension in missing[:20]
-            ],
-        }
-    changed = [
-        dimension
-        for dimension in _IMMUTABLE_RECOVERY_DIMENSIONS
-        if source[dimension] != requested[dimension]
-    ]
-    if changed:
-        return {
-            "recoveryAction": "branch_required",
-            "reasonCodes": [
-                f"immutable_{dimension}_changed" for dimension in changed[:20]
-            ],
-        }
-    # Availability is authority-sensitive and must be supplied by the trusted
-    # Activity after it has re-resolved current profile, lease, host, session,
-    # cursor, and first-message state.  Payload booleans are deliberately
-    # ignored: callers may request recovery, but cannot attest authority.
-    live_valid = bool(
-        live_reattach_authorized is True
-        and live_authority
-        and live_authority.get("provider_lease")
-        and live_authority["provider_lease"].get("active") is True
-        and live_authority.get("host_registered") is True
-        and live_authority.get("session_valid") is True
-        and live_authority.get("first_message_consistent") is True
-        and live_authority.get("current_credential_generation")
-        == live_authority.get("checkpoint_credential_generation")
-    )
-    if live_valid:
-        return {
-            "recoveryAction": "live_reattach",
-            "reasonCodes": ["all_authority_valid"],
-        }
-    if cold_restore_authorized is True:
-        return {
-            "recoveryAction": "cold_restore",
-            "reasonCodes": ["live_authority_unavailable"],
-        }
-    reasons = recovery.get("unavailableReasonCodes")
-    bounded_reasons = (
-        [str(reason)[:120] for reason in reasons[:20]]
-        if isinstance(reasons, list) and reasons
-        else ["checkpoint_authority_unavailable"]
-    )
-    return {"recoveryAction": "resume_unavailable", "reasonCodes": bounded_reasons}
+        raise ValueError(
+            "checkpoint recovery immutable authority is incomplete: "
+            + ", ".join(missing)
+        )
+    values = {
+        target: str(requested[source]).strip()
+        for source, target in mapping.items()
+    }
+    return ImmutableSessionDimensions(provider="omnigent", **values)
 
 
 def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
@@ -177,10 +121,6 @@ def _checkpoint_branch_from_request(request: AgentExecutionRequest):
     recovery = request.checkpoint_recovery
     if not isinstance(recovery, dict):
         return None
-    if "immutableSource" in recovery or "immutableRequested" in recovery:
-        decision = _checkpoint_recovery_decision(recovery)
-        recovery["recoveryDecision"] = decision
-        recovery["recoveryAction"] = decision["recoveryAction"]
     if recovery.get("recoveryAction") != "branch_required":
         return None
     parsed = _checkpoint_recovery_from_request(request)
@@ -203,11 +143,10 @@ async def _resolve_live_recovery_authority(
     copied from checkpoint evidence.
     """
 
-    from sqlalchemy import func, select
+    from sqlalchemy import select
 
     from api_service.db.models import (
         ManagedAgentProviderProfile,
-        OmnigentBridgeSessionEvent,
         ProviderProfileSlotLease,
     )
 
@@ -237,18 +176,6 @@ async def _resolve_live_recovery_authority(
             # rows otherwise look current.  Fail closed instead of allowing a
             # live session to keep consuming the OAuth profile.
             provider_row = provider_rows[0] if len(provider_rows) == 1 else None
-        latest_sequence = int(
-            (
-                await session.execute(
-                    select(func.max(OmnigentBridgeSessionEvent.sequence)).where(
-                        OmnigentBridgeSessionEvent.bridge_session_id
-                        == checkpoint.bridge_session_id
-                    )
-                )
-            ).scalar()
-            or 0
-        )
-
     provider_lease = None
     if provider_row is not None:
         expires_at = provider_row.expires_at
@@ -274,7 +201,7 @@ async def _resolve_live_recovery_authority(
         if host is not None
         else None
     )
-    bridge = await run_store.get_bridge_session(checkpoint.bridge_session_id)
+    canonical = await run_store.get_canonical_session(checkpoint.bridge_session_id)
     host_expires_at = host.expires_at if host is not None else None
     if host_expires_at is not None and host_expires_at.tzinfo is None:
         host_expires_at = host_expires_at.replace(tzinfo=UTC)
@@ -283,36 +210,47 @@ async def _resolve_live_recovery_authority(
         and host.omnigent_host_id == checkpoint.omnigent_host_id
         and host.omnigent_session_id == checkpoint.omnigent_session_id
         and host.bridge_session_id == checkpoint.bridge_session_id
+        and canonical is not None
+        and canonical.host_binding_ref == checkpoint.host_binding_ref
+        and canonical.host_lease_ref == checkpoint.host_lease_ref
+        and canonical.provider_profile_id == checkpoint.provider_profile_id
         and host.status in {"ready", "assigned"}
         and host_expires_at
         and host_expires_at > now
     )
-    session_valid = bool(
-        bridge
-        and bridge.omnigent_host_id == checkpoint.omnigent_host_id
-        and bridge.omnigent_session_id == checkpoint.omnigent_session_id
-        and bridge.status == "active"
-        and (
-            checkpoint.last_bridge_event_cursor is None
-            or (
-                checkpoint.last_bridge_event_cursor.isdecimal()
-                and latest_sequence >= int(checkpoint.last_bridge_event_cursor)
-            )
-        )
+    cursor_present = bool(
+        canonical
+        and checkpoint.last_bridge_event_cursor
+        and canonical.provider_event_cursor
+        and str(checkpoint.last_bridge_event_cursor).isdecimal()
+        and str(canonical.provider_event_cursor).isdecimal()
+        and int(canonical.provider_event_cursor)
+        >= int(checkpoint.last_bridge_event_cursor)
     )
+    session_valid = bool(
+        canonical
+        and canonical.provider_session_ref == checkpoint.omnigent_session_id
+        and not canonical.is_terminal
+        and canonical.cleanup_state not in {"complete", "released"}
+        and cursor_present
+    )
+    from moonmind.omnigent.bridge_store import _canonical_first_message_frontier
+
     first_message_consistent = bool(
-        bridge
+        canonical
         and checkpoint.first_message_digest
-        and bridge.first_message_digest == checkpoint.first_message_digest
         and checkpoint.first_message_id
-        in {bridge.first_message_item_id, bridge.first_message_pending_id}
-        and bridge.first_message_state in {"posted", "terminal"}
+        and canonical.snapshot_frontier
+        == _canonical_first_message_frontier(
+            checkpoint.first_message_id, checkpoint.first_message_digest
+        )
     )
     return {
         "provider_lease": provider_lease,
         "host_lease": host_lease,
         "host_registered": host_registered,
         "session_valid": session_valid,
+        "cursor_present": cursor_present,
         "first_message_consistent": first_message_consistent,
         "current_credential_generation": current_generation,
         "checkpoint_credential_generation": checkpoint.credential_generation,
@@ -412,24 +350,7 @@ async def _omnigent_execute_activity(
             ),
         )
         recovery_inputs = _checkpoint_recovery_from_request(request)
-        branch_inputs = _checkpoint_branch_from_request(request)
         recovery_payload = request.checkpoint_recovery
-        if branch_inputs is not None:
-            checkpoint, candidate_workspace = branch_inputs
-            authority = await _resolve_live_recovery_authority(
-                checkpoint=checkpoint,
-                session_factory=async_session_maker,
-                host_repository=host_repository,
-                run_store=run_store,
-            )
-            return await coordinator.branch_from_checkpoint(
-                request=request,
-                checkpoint=checkpoint,
-                current_credential_generation=authority[
-                    "current_credential_generation"
-                ],
-                candidate_workspace=candidate_workspace,
-            )
         if recovery_inputs is not None:
             checkpoint, candidate_workspace = recovery_inputs
             authority = await _resolve_live_recovery_authority(
@@ -440,93 +361,72 @@ async def _omnigent_execute_activity(
             )
             if not isinstance(recovery_payload, dict):
                 raise ValueError("checkpoint recovery payload is invalid")
-            immutable_decision = _checkpoint_recovery_decision(
-                recovery_payload,
-                live_authority=authority,
-                live_reattach_authorized=bool(
-                    checkpoint.validation.valid
-                    and checkpoint.validation.live_reattach_available
-                ),
-                cold_restore_authorized=bool(
-                    checkpoint.validation.valid
-                    and checkpoint.validation.workspace_cold_restore_available
-                    and authority["current_credential_generation"]
-                    == checkpoint.credential_generation
-                    and request.execution_profile_ref
-                    == checkpoint.provider_profile_id
+            from moonmind.omnigent.control_plane import RecoveryEvidence
+
+            intent_dimensions = _checkpoint_recovery_dimensions(recovery_payload)
+            credential_generation_current = bool(
+                authority.get("current_credential_generation")
+                == checkpoint.credential_generation
+                and request.execution_profile_ref == checkpoint.provider_profile_id
+            )
+            typed_decision = await run_store.decide_canonical_recovery(
+                checkpoint.bridge_session_id,
+                recovery_idempotency_key=request.idempotency_key,
+                intent_dimensions=intent_dimensions,
+                live_authority=RecoveryEvidence(
+                    intent_dimensions=intent_dimensions,
+                    session_dimensions=intent_dimensions,
+                    provider_profile_lease_current=bool(
+                        checkpoint.validation.valid
+                        and checkpoint.validation.live_reattach_available
+                        and authority.get("provider_lease")
+                        and authority["provider_lease"].get("active") is True
+                    ),
+                    host_available=authority.get("host_registered") is True,
+                    provider_session_reachable=authority.get("session_valid") is True,
+                    cursor_present=authority.get("cursor_present") is True,
+                    first_message_consistent=(
+                        authority.get("first_message_consistent") is True
+                    ),
+                    credential_generation_current=credential_generation_current,
+                    workspace_artifact_valid=bool(
+                        credential_generation_current
+                        and checkpoint.validation.valid
+                        and checkpoint.validation.workspace_cold_restore_available
+                        and checkpoint.workspace_checkpoint_ref
+                        and checkpoint.head_ref
+                    ),
+                    session_evidence_valid=bool(
+                        checkpoint.validation.valid
+                        and checkpoint.external_state_ref
+                        and (
+                            checkpoint.capture_manifest_ref
+                            or checkpoint.terminal_ref
+                            or checkpoint.diagnostics_ref
+                        )
+                    ),
                 ),
             )
-            if immutable_decision["recoveryAction"] == "branch_required":
-                decision = immutable_decision
-            else:
-                from moonmind.omnigent.control_plane import (
-                    ImmutableSessionDimensions,
-                    RecoveryEvidence,
-                )
-
-                canonical = await run_store.get_canonical_session(
-                    checkpoint.bridge_session_id
-                )
-                if canonical is None:
-                    decision = {
-                        "recoveryAction": "resume_unavailable",
-                        "reasonCodes": ["canonical_session_authority_missing"],
-                    }
-                else:
-                    canonical_dimensions = ImmutableSessionDimensions.from_session(
-                        canonical
-                    )
-                    typed_decision = await run_store.decide_canonical_recovery(
-                        checkpoint.bridge_session_id,
-                        intent_dimensions=canonical_dimensions,
-                        live_authority=RecoveryEvidence(
-                            intent_dimensions=canonical_dimensions,
-                            session_dimensions=canonical_dimensions,
-                            provider_profile_lease_current=bool(
-                                authority.get("provider_lease")
-                                and authority["provider_lease"].get("active") is True
-                            ),
-                            host_available=authority.get("host_registered") is True,
-                            provider_session_reachable=(
-                                authority.get("session_valid") is True
-                            ),
-                            cursor_present=bool(
-                                checkpoint.last_bridge_event_cursor
-                                and str(checkpoint.last_bridge_event_cursor).isdecimal()
-                            ),
-                            first_message_consistent=(
-                                authority.get("first_message_consistent") is True
-                            ),
-                            credential_generation_current=(
-                                authority.get("current_credential_generation")
-                                == checkpoint.credential_generation
-                            ),
-                            workspace_artifact_valid=bool(
-                                checkpoint.validation.valid
-                                and checkpoint.validation.workspace_cold_restore_available
-                                and checkpoint.workspace_checkpoint_ref
-                                and checkpoint.head_ref
-                            ),
-                            session_evidence_valid=bool(
-                                checkpoint.validation.valid
-                                and checkpoint.external_state_ref
-                                and (
-                                    checkpoint.capture_manifest_ref
-                                    or checkpoint.terminal_ref
-                                    or checkpoint.diagnostics_ref
-                                )
-                            ),
-                        ),
-                    )
-                    decision = {
-                        "recoveryAction": typed_decision.mode.value,
-                        "reasonCodes": [typed_decision.reason],
-                        "changedDimensions": list(
-                            typed_decision.changed_dimensions
-                        ),
-                    }
+            decision = {
+                "recoveryAction": typed_decision.mode.value,
+                "reasonCodes": [typed_decision.reason],
+                "changedDimensions": list(typed_decision.changed_dimensions),
+            }
             recovery_payload["recoveryDecision"] = decision
             recovery_payload["recoveryAction"] = decision["recoveryAction"]
+            if decision["recoveryAction"] == "branch_required":
+                if request.idempotency_key == checkpoint.idempotency_key:
+                    raise ValueError(
+                        "checkpoint branch requires a new idempotency key"
+                    )
+                return await coordinator.branch_from_checkpoint(
+                    request=request,
+                    checkpoint=checkpoint,
+                    current_credential_generation=authority[
+                        "current_credential_generation"
+                    ],
+                    candidate_workspace=candidate_workspace,
+                )
             if decision["recoveryAction"] == "resume_unavailable":
                 reasons = decision.get("reasonCodes") or [
                     "checkpoint_authority_unavailable"
@@ -539,7 +439,17 @@ async def _omnigent_execute_activity(
                 request=request,
                 checkpoint=checkpoint,
                 candidate_workspace=candidate_workspace,
-                **authority,
+                recovery_mode=decision["recoveryAction"],
+                provider_lease=authority.get("provider_lease"),
+                host_lease=authority.get("host_lease"),
+                host_registered=authority.get("host_registered") is True,
+                session_valid=authority.get("session_valid") is True,
+                first_message_consistent=(
+                    authority.get("first_message_consistent") is True
+                ),
+                current_credential_generation=int(
+                    authority.get("current_credential_generation") or 0
+                ),
             )
         return await coordinator.execute(request)
 

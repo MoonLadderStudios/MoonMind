@@ -885,6 +885,46 @@ async def test_attach_and_first_message_transitions(store):
 
 
 @pytest.mark.asyncio
+async def test_initial_message_projects_canonical_delivery_and_terminal_evidence(
+    store,
+):
+    request = _request("canonical-initial")
+    bridge = await store.get_or_create(
+        request=request,
+        endpoint_ref="default",
+        agent_id="agent-1",
+        agent_name="codex",
+        target_metadata={},
+    )
+    outcome = await store.establish_canonical_authority(
+        request=request, bridge=bridge
+    )
+    await store.attach_session("canonical-initial", "provider-session-1")
+    await store.mark_prepared(
+        "canonical-initial", digest="sha256:abc", marker="marker"
+    )
+    await store.mark_posting("canonical-initial")
+    await store.mark_posted(
+        "canonical-initial",
+        response={"pending_id": "pending-1", "item_id": "item-1"},
+    )
+    await store.record_canonical_turn_delivery("canonical-initial")
+    await store.mark_terminal("canonical-initial", status="completed")
+
+    canonical = await store.get_canonical_session(bridge.bridge_session_id)
+    assert canonical is not None
+    assert canonical.provider_session_ref == "provider-session-1"
+    assert canonical.snapshot_frontier
+    assert canonical.terminal_state is None
+    async with store._control_plane.transaction() as repos:  # noqa: SLF001
+        terminal_turn = await repos.turn_attempts.get(
+            outcome.turn_attempt.turn_attempt_id
+        )
+    assert terminal_turn is not None
+    assert terminal_turn.terminal_state == "completed"
+
+
+@pytest.mark.asyncio
 async def test_first_message_item_frontier_is_durable_and_immutable(store):
     await store.get_or_create(
         request=_request(),

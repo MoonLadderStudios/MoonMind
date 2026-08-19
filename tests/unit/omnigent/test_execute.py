@@ -1383,6 +1383,76 @@ async def test_run_omnigent_execution_waits_for_terminal_result(
 
     assert result.summary == "done"
     assert result.output_refs
+
+
+@pytest.mark.asyncio
+async def test_run_omnigent_execution_rejects_canonical_delivery_without_authority(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    provider_mutations: list[str] = []
+
+    class Row:
+        bridge_session_id = "bridge-1"
+        moonmind_workflow_id = "corr-canonical"
+        moonmind_agent_run_id = None
+        omnigent_session_id = None
+        status = "declared"
+        first_message_posted_at = None
+
+    class Store:
+        async def get_binding(self, *_args, **_kwargs):
+            return None
+
+        async def get_or_create(self, **_kwargs):
+            return Row()
+
+        async def get_canonical_session(self, _session_id):
+            return None
+
+        async def record_canonical_turn_delivery(self, *_args, **_kwargs):
+            raise AssertionError("delivery cannot precede canonical authority")
+
+    class FakeClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def list_agents(self):
+            return {"items": [{"id": "agent-1", "name": "codex-native-ui"}]}
+
+        async def create_session(self, _payload):
+            provider_mutations.append("create_session")
+            return {"id": "session-1"}
+
+        async def post_event(self, _session_id, _payload):
+            provider_mutations.append("post_event")
+            return {}
+
+    monkeypatch.setenv("OMNIGENT_ENABLED", "true")
+    monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.test")
+    monkeypatch.setattr("moonmind.omnigent.execute.OmnigentHttpClient", FakeClient)
+
+    result = await run_omnigent_execution(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="corr-canonical",
+            idempotencyKey="idem-canonical",
+            parameters={
+                "omnigent": {
+                    "agent": {"agentName": "codex-native-ui"},
+                    "session": {"allowEmptyWorkspace": True},
+                    "prompt": {"text": "canonical turn first"},
+                }
+            },
+        ),
+        artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
+        run_store=Store(),
+    )
+
+    assert result.provider_error_code == "omnigent_contract_error"
+    assert "canonical session/turn persistence" in result.summary
+    assert provider_mutations == []
     assert all(ref.startswith("artifact://omnigent/") for ref in result.output_refs)
     assert result.diagnostics_ref.startswith("artifact://omnigent/")
     assert result.metadata["externalStateRef"].startswith("artifact://omnigent/")

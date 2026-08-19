@@ -416,6 +416,21 @@ class SessionRepository(_RepositoryBase):
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         return _session_record(row) if row is not None else None
 
+    async def get_by_host_lease_ref(
+        self, host_lease_ref: str
+    ) -> Optional[SessionRecord]:
+        """Resolve a host lease to exactly one canonical session authority."""
+
+        stmt = select(OmnigentSession).where(
+            OmnigentSession.host_lease_ref == host_lease_ref
+        )
+        rows = list((await self._session.execute(stmt)).scalars().all())
+        if len(rows) > 1:
+            raise ConflictingSessionAuthorityError(
+                "host lease maps to multiple canonical session authorities"
+            )
+        return _session_record(rows[0]) if rows else None
+
     async def list_for_workflow(
         self, moonmind_workflow_id: str, *, moonmind_run_id: Optional[str] = None
     ) -> list[SessionRecord]:
@@ -1511,6 +1526,10 @@ class CommandRepository(_RepositoryBase):
 class DecisionRepository(_RepositoryBase):
     """Append-only reconciliation decision repository."""
 
+    async def get(self, decision_id: str) -> Optional[DecisionRecord]:
+        row = await self._session.get(OmnigentReconciliationDecision, decision_id)
+        return _decision_record(row) if row is not None else None
+
     async def append(
         self,
         *,
@@ -1862,6 +1881,41 @@ class CleanupAuthorityRepository(_RepositoryBase):
                     ControlPlaneOutcome.FENCING_CONFLICT, _cleanup_record(row)
                 )
         row.state = CLEANUP_STATE_COMPLETE
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return CasResult(ControlPlaneOutcome.APPLIED, _cleanup_record(row))
+
+    async def release_cleanup_claim(
+        self,
+        session_id: str,
+        *,
+        generation: int,
+        owner_class: str,
+        claim_token: str,
+    ) -> CasResult:
+        """Release an unused canonical claim after a downstream CAS loses.
+
+        No cleanup side effect may have occurred before this call.  Exact owner
+        and generation matching prevents a losing janitor from releasing the
+        winner's claim.
+        """
+
+        row = await self._load_for_update(session_id)
+        if (
+            row.state != CLEANUP_STATE_CLAIMED
+            or row.generation != generation
+            or row.owner_class != owner_class
+            or row.claim_token != claim_token
+        ):
+            telemetry.record_cleanup_claim_conflict()
+            return CasResult(ControlPlaneOutcome.NOT_OWNER, _cleanup_record(row))
+        row.state = CLEANUP_STATE_UNCLAIMED
+        row.owner_class = None
+        row.claim_token = None
+        row.fenced_host_generation = None
+        row.fenced_profile_generation = None
+        row.fenced_provider_epoch = None
         row.revision = row.revision + 1
         await self._session.flush()
         await self._session.refresh(row)

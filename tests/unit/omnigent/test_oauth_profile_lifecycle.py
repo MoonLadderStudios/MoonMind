@@ -3014,6 +3014,7 @@ async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness(
         first_message_consistent=True,
         current_credential_generation=4,
         candidate_workspace=candidate,
+        recovery_mode="live_reattach",
     )
 
     assert result.summary == "reattached"
@@ -3125,6 +3126,7 @@ async def test_cold_recovery_routes_pinned_workspace_material_through_workspace_
         first_message_consistent=False,
         current_credential_generation=3,
         candidate_workspace=candidate,
+        recovery_mode="cold_restore",
     )
 
     restored_request = coordinator.execute.await_args.args[0]

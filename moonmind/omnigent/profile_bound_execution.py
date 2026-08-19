@@ -31,7 +31,6 @@ from moonmind.omnigent.checkpoints import (
     OmnigentRecoveryMode,
     OmnigentRestoreMaterial,
     materialize_cold_restore_inputs,
-    recovery_mode,
     validate_cold_restore_target,
 )
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
@@ -787,6 +786,15 @@ class OmnigentProfileBoundExecutionCoordinator:
             return budget_rejection
         profile_id = str(request.execution_profile_ref or "").strip()
         workflow_id, step_execution_id = _request_identity(request)
+        remediation_lineage_validator = getattr(
+            self._run_store, "validate_remediation_lineage", None
+        )
+        if request.remediation_workspace is not None and callable(
+            remediation_lineage_validator
+        ):
+            await remediation_lineage_validator(
+                request, require_new_session=True
+            )
         await self._run_store.get_or_create(
             request=request,
             endpoint_ref="pending",
@@ -1078,6 +1086,15 @@ class OmnigentProfileBoundExecutionCoordinator:
                     raise OmnigentOAuthHostError(
                         "remediation workspace launch snapshot does not match effective launch",
                         code="REMEDIATION_WORKSPACE_LAUNCH_MISMATCH",
+                    )
+                remediation_authority_validator = getattr(
+                    self._run_store, "validate_remediation_authority", None
+                )
+                if callable(remediation_authority_validator):
+                    await remediation_authority_validator(
+                        request,
+                        provider_profile_id=profile_id,
+                        effective_launch_snapshot=effective_launch,
                     )
                 current_stage = "remediation_workspace_admission"
                 await emit(current_stage, "started")
@@ -1790,6 +1807,14 @@ class OmnigentProfileBoundExecutionCoordinator:
             # evidence is deliberately added later by the workspace capture
             # activity; neither boundary is allowed to infer the other plane.
             result_metadata = dict(result.metadata or {})
+            canonical_turn_attempt_id = None
+            canonical_turn_lookup = getattr(
+                self._run_store, "get_canonical_turn_attempt_id", None
+            )
+            if callable(canonical_turn_lookup):
+                canonical_turn_attempt_id = await canonical_turn_lookup(
+                    authority_idempotency_key
+                )
             result_metadata["omnigentCheckpointCapture"] = {
                 "providerProfileId": profile_id,
                 "credentialRef": (
@@ -1830,6 +1855,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "diagnosticsRef": result.diagnostics_ref,
                 "omnigentSessionId": result_metadata.get("omnigentSessionId"),
                 "idempotencyKey": authority_idempotency_key,
+                "canonicalTurnAttemptId": canonical_turn_attempt_id,
                 "sourceBranch": self._starting_branch(request) or "detached",
                 "outputBranch": self._target_branch(request),
                 "publicationState": str(
@@ -2453,17 +2479,16 @@ class OmnigentProfileBoundExecutionCoordinator:
         first_message_consistent: bool,
         current_credential_generation: int,
         candidate_workspace: CandidateWorkspaceAuthority,
+        recovery_mode: str,
     ) -> AgentRunResult:
-        """Live-reattach when safe; otherwise cold-restore on a new lease/session."""
+        """Execute the Activity's already-persisted canonical recovery decision."""
 
-        mode = recovery_mode(
-            checkpoint,
-            provider_lease=provider_lease,
-            host_lease=host_lease,
-            host_registered=host_registered,
-            session_valid=session_valid,
-            first_message_consistent=first_message_consistent,
-        )
+        try:
+            mode = OmnigentRecoveryMode(recovery_mode)
+        except ValueError as exc:
+            raise ValueError(
+                f"unsupported canonical checkpoint recovery mode: {recovery_mode}"
+            ) from exc
         if mode == OmnigentRecoveryMode.LIVE_REATTACH:
             if request.execution_profile_ref != checkpoint.provider_profile_id:
                 raise ValueError("live reattach Provider Profile mismatch")

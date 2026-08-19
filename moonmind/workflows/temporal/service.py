@@ -4574,7 +4574,10 @@ class TemporalExecutionService:
                 task_payload = _workflow_payload(params)
                 runtime_payload = _mapping_payload(task_payload.get("runtime"))
                 instruction_identity = hashlib.sha256(
-                    source_snapshot_ref.encode("utf-8")
+                    json.dumps(
+                        sorted(validated_omnigent.instruction_refs),
+                        separators=(",", ":"),
+                    ).encode("utf-8")
                 ).hexdigest()
                 immutable_snapshot = {
                     "instructionDigest": f"sha256:{instruction_identity}",

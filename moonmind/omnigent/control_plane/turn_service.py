@@ -155,7 +155,7 @@ class OmnigentTurnService:
             admit_continuation(session=session, activity=activity)
 
             if request.source_kind is TurnSourceKind.REMEDIATION:
-                self._authorize_remediation(session, request)
+                await self._authorize_remediation(repos, session, request)
 
             cleanup = await repos.cleanup.get(session.session_id)
             if cleanup is not None and cleanup.state in {
@@ -176,9 +176,12 @@ class OmnigentTurnService:
                 claim_token=claim_token,
             )
 
-    def _authorize_remediation(
-        self, session: SessionRecord, request: TurnSubmissionRequest
-    ) -> None:
+    async def _authorize_remediation(
+        self,
+        repos: ControlPlaneRepositories,
+        session: SessionRecord,
+        request: TurnSubmissionRequest,
+    ) -> TurnAttemptRecord:
         intent = request.remediation
         if intent is None:
             raise CallerAuthorityError(
@@ -192,6 +195,20 @@ class OmnigentTurnService:
             raise BranchRequiredError(
                 session.session_id, ("remediation_same_session_reuse",)
             )
+        predecessor = await repos.turn_attempts.get(intent.of_turn_attempt_id)
+        if predecessor is None:
+            raise CallerAuthorityError(
+                "remediation references an unknown canonical predecessor turn"
+            )
+        if predecessor.session_id != session.session_id:
+            raise CallerAuthorityError(
+                "remediation predecessor does not belong to the requested "
+                "canonical session"
+            )
+        if not predecessor.is_terminal:
+            raise CallerAuthorityError(
+                "remediation predecessor lacks authoritative terminal evidence"
+            )
         base_dimensions = ImmutableSessionDimensions.from_session(session)
         base_publication = bool(
             (session.metadata or {}).get("grants_publication_authority", False)
@@ -201,6 +218,7 @@ class OmnigentTurnService:
             intent=intent,
             base_grants_publication_authority=base_publication,
         )
+        return predecessor
 
     async def _apply_plan(
         self,
@@ -364,26 +382,55 @@ class OmnigentTurnService:
         if parent_session_id is not None:
             metadata["branched_from_session_id"] = parent_session_id
 
-        if request.source_kind is TurnSourceKind.REMEDIATION:
-            intent = request.remediation
-            if intent is None:
-                raise CallerAuthorityError(
-                    "A remediation turn requires a typed RemediationTurnIntent"
-                )
-            if request.controller_id != intent.loop_id:
-                raise CallerAuthorityError(
-                    "remediation controller authority must match the typed loop "
-                    "identity"
-                )
-            validate_remediation_authority(
-                base_dimensions=request.requested_dimensions,
-                intent=intent,
-                base_grants_publication_authority=bool(
-                    request.metadata.get("grants_publication_authority", False)
-                ),
-            )
-
         async with self._store.transaction() as repos:
+            if request.source_kind is TurnSourceKind.REMEDIATION:
+                intent = request.remediation
+                if intent is None:
+                    raise CallerAuthorityError(
+                        "A remediation turn requires a typed RemediationTurnIntent"
+                    )
+                if request.controller_id != intent.loop_id:
+                    raise CallerAuthorityError(
+                        "remediation controller authority must match the typed loop "
+                        "identity"
+                    )
+                predecessor = await repos.turn_attempts.get(
+                    intent.of_turn_attempt_id
+                )
+                if predecessor is None:
+                    raise CallerAuthorityError(
+                        "remediation references an unknown canonical predecessor turn"
+                    )
+                if not predecessor.is_terminal:
+                    raise CallerAuthorityError(
+                        "remediation predecessor lacks authoritative terminal evidence"
+                    )
+                base_session = await repos.sessions.get(predecessor.session_id)
+                if base_session is None:
+                    raise CallerAuthorityError(
+                        "remediation predecessor session authority is missing"
+                    )
+                if intent.allow_same_session_reuse:
+                    raise CallerAuthorityError(
+                        "same-session remediation must submit against the prior "
+                        "canonical session instead of allocating a new session"
+                    )
+                if parent_session_id != base_session.session_id:
+                    raise CallerAuthorityError(
+                        "remediation branch must identify its authoritative prior "
+                        "canonical session"
+                    )
+                validate_remediation_authority(
+                    base_dimensions=ImmutableSessionDimensions.from_session(
+                        base_session
+                    ),
+                    intent=intent,
+                    base_grants_publication_authority=bool(
+                        (base_session.metadata or {}).get(
+                            "grants_publication_authority", False
+                        )
+                    ),
+                )
             existing_turn = await repos.turn_attempts.get_by_idempotency_key(
                 request.idempotency_key
             )
@@ -834,6 +881,38 @@ class OmnigentTurnService:
                     )
             return result
 
+    async def release_cleanup_claim(
+        self,
+        session_id: str,
+        *,
+        generation: int,
+        owner_class: str,
+        claim_token: str,
+    ) -> CasResult:
+        """Release a canonical claim when the host cleanup CAS did not win."""
+
+        async with self._store.transaction() as repos:
+            result = await repos.cleanup.release_cleanup_claim(
+                session_id,
+                generation=generation,
+                owner_class=owner_class,
+                claim_token=claim_token,
+            )
+            if not result.applied:
+                raise CleanupFenceError(
+                    f"cleanup claim release for {session_id!r} was fenced "
+                    f"({result.outcome.value})"
+                )
+            session = await repos.sessions.get(session_id)
+            if session is not None and session.cleanup_state == "in_progress":
+                await repos.sessions.update_lifecycle(
+                    session_id,
+                    expected_revision=session.revision,
+                    expected_fencing_generation=session.fencing_generation,
+                    cleanup_state="pending",
+                )
+            return result
+
     # -- chat capability ----------------------------------------------------
 
     async def resolve_chat_capability(
@@ -874,6 +953,7 @@ class OmnigentTurnService:
         self,
         session_id: str,
         *,
+        recovery_idempotency_key: str,
         intent_dimensions: ImmutableSessionDimensions,
         live_authority: RecoveryEvidence,
     ) -> RecoveryDecision:
@@ -888,25 +968,88 @@ class OmnigentTurnService:
         evidence flags on ``live_authority``.
         """
 
-        async with self._store.transaction() as repos:
-            session = await repos.sessions.get(session_id)
-        if session is None:
+        if not recovery_idempotency_key.strip():
             raise CallerAuthorityError(
-                f"Cannot recover unknown canonical session {session_id!r}"
+                "checkpoint recovery requires a durable idempotency key"
             )
-        evidence = RecoveryEvidence(
-            intent_dimensions=intent_dimensions,
-            session_dimensions=ImmutableSessionDimensions.from_session(session),
-            provider_profile_lease_current=live_authority.provider_profile_lease_current,
-            host_available=live_authority.host_available,
-            provider_session_reachable=live_authority.provider_session_reachable,
-            cursor_present=live_authority.cursor_present,
-            first_message_consistent=live_authority.first_message_consistent,
-            credential_generation_current=live_authority.credential_generation_current,
-            workspace_artifact_valid=live_authority.workspace_artifact_valid,
-            session_evidence_valid=live_authority.session_evidence_valid,
-        )
-        return decide_recovery(evidence)
+        async with self._store.transaction() as repos:
+            # Serialize recovery commands for the canonical session. This makes
+            # a concurrent redelivery observe the winner's durable decision
+            # instead of racing a second INSERT for the same idempotency key.
+            session = await repos.sessions.get_for_update(session_id)
+            if session is None:
+                raise CallerAuthorityError(
+                    f"Cannot recover unknown canonical session {session_id!r}"
+                )
+            evidence = RecoveryEvidence(
+                intent_dimensions=intent_dimensions,
+                session_dimensions=ImmutableSessionDimensions.from_session(session),
+                provider_profile_lease_current=live_authority.provider_profile_lease_current,
+                host_available=live_authority.host_available,
+                provider_session_reachable=live_authority.provider_session_reachable,
+                cursor_present=live_authority.cursor_present,
+                first_message_consistent=live_authority.first_message_consistent,
+                credential_generation_current=live_authority.credential_generation_current,
+                workspace_artifact_valid=live_authority.workspace_artifact_valid,
+                session_evidence_valid=live_authority.session_evidence_valid,
+            )
+            evidence_digest = compute_digest(
+                {
+                    "sessionId": session_id,
+                    "idempotencyKey": recovery_idempotency_key,
+                    "intentDimensions": intent_dimensions.__dict__,
+                    "sessionDimensions": evidence.session_dimensions.__dict__,
+                    "providerProfileLeaseCurrent": (
+                        evidence.provider_profile_lease_current
+                    ),
+                    "hostAvailable": evidence.host_available,
+                    "providerSessionReachable": evidence.provider_session_reachable,
+                    "cursorPresent": evidence.cursor_present,
+                    "firstMessageConsistent": evidence.first_message_consistent,
+                    "credentialGenerationCurrent": (
+                        evidence.credential_generation_current
+                    ),
+                    "workspaceArtifactValid": evidence.workspace_artifact_valid,
+                    "sessionEvidenceValid": evidence.session_evidence_valid,
+                }
+            )
+            decision = decide_recovery(evidence)
+            # The command identity is stable for the caller-selected retry key,
+            # while the input digest fences changed recovery evidence. Deriving
+            # the row identity from the evidence itself would admit two
+            # different decisions under one idempotency key instead of exposing
+            # the conflict.
+            command_scope_digest = compute_digest(
+                {
+                    "sessionId": session_id,
+                    "idempotencyKey": recovery_idempotency_key,
+                }
+            )
+            decision_id = _derive_id("recovery", command_scope_digest)
+            existing = await repos.decisions.get(decision_id)
+            if existing is not None:
+                if (
+                    existing.session_id != session_id
+                    or existing.input_state_digest != evidence_digest
+                    or existing.reason_code != decision.reason
+                    or existing.product_visible_transition != decision.mode.value
+                ):
+                    raise TurnIdempotencyConflictError(
+                        "checkpoint recovery idempotency key conflicts with its "
+                        "durable canonical decision"
+                    )
+                return decision
+            await repos.decisions.append(
+                decision_id=decision_id,
+                session_id=session_id,
+                decision_code=f"checkpoint_recovery:{decision.mode.value}",
+                input_state_digest=evidence_digest,
+                expected_revision=session.revision,
+                fencing_generation=session.fencing_generation,
+                reason_code=decision.reason,
+                product_visible_transition=decision.mode.value,
+            )
+            return decision
 
 
 def _derive_id(prefix: str, scope: str) -> str:
