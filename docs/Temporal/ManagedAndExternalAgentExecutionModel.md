@@ -238,16 +238,26 @@ The live session belongs to Omnigent, but MoonMind owns profile authorization an
 
 ```text
 MoonMind.AgentRun
-  -> integration.omnigent.profile_bound_execute on the agent-runtime queue
-      -> shared Provider Profile lease
-      -> durable Omnigent host binding and host lease
-      -> static Compose or deterministic on-demand host
-      -> exact stock host registration and codex-native readiness
-      -> bridge-authorized Omnigent session
-      -> artifact/evidence harvest
-      -> host cleanup
-      -> Provider Profile release last
+  -> MoonMind.OmnigentSession (deterministic canonical session identity)
+      -> bounded, revision-fenced activities on the agent-runtime queue
+          -> shared Provider Profile lease
+          -> durable Omnigent host binding and host lease
+          -> static Compose or deterministic on-demand host
+          -> exact stock host registration and codex-native readiness
+          -> bridge-authorized Omnigent session
+          -> bounded event batches plus periodic authoritative snapshots
+          -> artifact/evidence harvest and publication
+          -> host cleanup
+          -> Provider Profile release last
 ```
+
+Newly admitted profile-bound sessions use this durable supervisor. Existing
+AgentRun histories retain the legacy profile-bound activity behind a Temporal
+patch boundary so replay does not transfer ownership in flight. The supervisor
+input contains only immutable owner identities, a compiled-intent artifact ref
+and digest, the initial turn-attempt identity, and frozen feature/compatibility
+versions; provider content, credentials, and mutable host paths stay outside
+workflow history.
 
 ### 7.2 Why the identity stays external
 
@@ -259,9 +269,10 @@ The top-level identity describes the session and interaction provider, not only 
 - lets host materialization evolve without changing workflow identity;
 - distinguishes the Omnigent lane from direct Codex managed sessions.
 
-### 7.3 Profile-bound coordinator responsibilities
+### 7.3 Durable session supervisor responsibilities
 
-The coordinator:
+The session supervisor drives the pure reconciliation contract and delegates
+each side effect to a short, idempotent activity. It:
 
 1. reserves or loads the durable bridge attempt envelope;
 2. requires and validates `executionProfileRef`;
@@ -276,11 +287,36 @@ The coordinator:
 11. updates bridge authorization with the host identity;
 12. creates or reattaches the session on that host;
 13. persists session and first-message evidence before posting;
-14. streams events and harvests terminal resources;
-15. stops or drains the session and host;
-16. releases Provider Profile capacity only after cleanup.
+14. consumes provider events only in bounded batches and keeps a periodic
+    authoritative snapshot deadline active while terminality is unresolved;
+15. persists each decision and fenced logical command before execution;
+16. harvests and publishes terminal evidence;
+17. stops or drains the session and host in independently retryable phases;
+18. releases Provider Profile capacity only after cleanup.
 
 A caller cannot supply an arbitrary profile-bound host id, Docker volume, or credential. The coordinator injects the exact host and safe authorization envelope immediately before session creation.
+
+The supervisor accepts reference-only signals for provider observations,
+authorized continuation, cancellation/interruption, approval/intervention,
+cleanup, operator reconciliation, callbacks, and host exit. Its compact query
+projection reports owner identities, frozen feature and compatibility versions,
+phase, revision and fencing generation, observation frontiers, decision and turn
+counts, pending control intent, terminal status, and terminal evidence ref. It
+never returns the compiled intent body, provider payloads, credentials, or host
+paths.
+
+Continue-As-New retains the same canonical workflow identity and carries only
+immutable intent authority plus bounded revision/frontier/count summaries. A
+rollover is requested before decision, observation, history-length,
+history-segment-age, or turn-attempt thresholds can make the current history
+unbounded. Provider and
+command state remain in their durable stores and are reloaded after rollover.
+
+Terminal projection distinguishes integration unavailability, execution
+failure, delivery ambiguity, reconciliation quarantine, incomplete cleanup,
+timeout, cancellation, and completion. A workflow deadline first performs a
+fresh bounded event read and authoritative snapshot; timeout intent cannot
+overwrite provider completion that this reconciliation proves.
 
 ### 7.4 Launch modes
 

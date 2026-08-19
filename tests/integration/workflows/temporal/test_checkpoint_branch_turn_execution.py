@@ -23,6 +23,7 @@ from temporalio.client import WorkflowFailureError
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
+from temporalio.workflow import ActivityCancellationType
 
 from api_service.api.routers.executions import _get_service, router
 from api_service.auth_providers import get_current_user
@@ -55,6 +56,7 @@ from api_service.services.checkpoint_branch_turn_execution import (
     CheckpointBranchTurnLaunchError,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.omnigent_session_models import OmnigentSessionWorkflowInput
 from moonmind.schemas.temporal_models import StepExecutionCheckpointModel
 from moonmind.workflows import get_temporal_artifact_repository
 from moonmind.workflows.temporal.activities import omnigent_activities
@@ -97,6 +99,7 @@ WORKFLOW_BOUNDARY_RELEASE: asyncio.Event | None = None
 WORKFLOW_FAILURE_BOUNDARY: tuple[str, str] | None = None
 DURABLE_CHECKPOINT_REF: str | None = None
 CHECKPOINT_PAYLOADS: list[dict] = []
+REAL_AGENT_REQUESTS: dict[str, AgentExecutionRequest] = {}
 
 
 async def _pause_workflow_boundary(stage: str, position: str) -> None:
@@ -179,6 +182,66 @@ async def _publish_real_agent_result(
 ) -> AgentRunResult | None:
     CALLS.append(("publish_artifacts", bool(result)))
     return result
+
+
+@activity.defn(name="omnigent.resolve_intent")
+async def _resolve_omnigent_session_intent(payload: dict) -> dict:
+    """Test the compact AgentRun-to-session handoff while reusing its ledger."""
+
+    request = AgentExecutionRequest.model_validate(payload["request"])
+    authority = ":".join(
+        (
+            str(payload["workflowId"]),
+            str(payload["stepExecutionId"]),
+            str(payload["agentRunId"]),
+        )
+    )
+    digest = hashlib.sha256(authority.encode()).hexdigest()
+    session_id = f"oms_{digest[:40]}"
+    REAL_AGENT_REQUESTS[session_id] = request
+    CALLS.append(("resolve_intent", session_id))
+    return OmnigentSessionWorkflowInput(
+        sessionId=session_id,
+        compiledExecutionIntentRef=f"art_intent_{digest[:24]}",
+        compiledExecutionIntentDigest="sha256:" + digest,
+        workflowId=str(payload["workflowId"]),
+        stepExecutionId=str(payload["stepExecutionId"]),
+        agentRunId=str(payload["agentRunId"]),
+        initialTurnAttemptId=f"ota_{digest[:40]}",
+        admittedFeatureGeneration=str(payload["admittedFeatureGeneration"]),
+        compatibilityVersion="v1",
+    ).model_dump(mode="json", by_alias=True)
+
+
+@activity.defn(name="test.omnigent.session_execute")
+async def _execute_fake_omnigent_session(payload: dict) -> AgentRunResult:
+    request = REAL_AGENT_REQUESTS[str(payload["sessionId"])]
+    return await omnigent_activities._omnigent_execute_activity(request)
+
+
+@workflow.defn(name="MoonMind.OmnigentSession")
+class _FakeOmnigentSession:
+    def __init__(self) -> None:
+        self._activity_handle = None
+
+    @workflow.run
+    async def run(
+        self, session_input: OmnigentSessionWorkflowInput
+    ) -> AgentRunResult:
+        self._activity_handle = workflow.start_activity(
+            "test.omnigent.session_execute",
+            session_input.model_dump(mode="json", by_alias=True),
+            task_queue=AGENT_RUNTIME_TASK_QUEUE,
+            start_to_close_timeout=timedelta(hours=1),
+            heartbeat_timeout=timedelta(seconds=120),
+            cancellation_type=ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+        )
+        return await self._activity_handle
+
+    @workflow.signal(name="cancel_or_interrupt_requested")
+    def cancel(self, _payload: dict) -> None:
+        if self._activity_handle is not None:
+            self._activity_handle.cancel()
 
 
 @activity.defn(name="checkpoint_branch.turn.mark_running")
@@ -452,6 +515,7 @@ async def _run(
     TRANSIENT_FAILURES.update(transient_failures or {})
     EFFECT_IDENTITIES.clear()
     CHECKPOINT_PAYLOADS.clear()
+    REAL_AGENT_REQUESTS.clear()
     queue = f"checkpoint-branch-turn-{uuid4()}"
     try:
         async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -489,7 +553,9 @@ async def _run(
                         Worker(
                             env.client,
                             task_queue=get_workflow_task_queue(),
+                            workflows=[_FakeOmnigentSession],
                             activities=[_resolve_real_agent_adapter],
+                            workflow_runner=UnsandboxedWorkflowRunner(),
                         )
                     )
                     await stack.enter_async_context(
@@ -497,6 +563,8 @@ async def _run(
                             env.client,
                             task_queue=AGENT_RUNTIME_TASK_QUEUE,
                             activities=[
+                                _resolve_omnigent_session_intent,
+                                _execute_fake_omnigent_session,
                                 omnigent_profile_bound_execute_activity,
                                 _publish_real_agent_result,
                             ],
@@ -568,12 +636,13 @@ async def _run(
         return result, history
     finally:
         TRANSIENT_FAILURES.clear()
+        REAL_AGENT_REQUESTS.clear()
 
 
-async def test_checkpoint_branch_turn_uses_real_agent_run_profile_bound_path(
+async def test_checkpoint_branch_turn_uses_real_agent_run_supervisor_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Exercise the production AgentRun, Activity, and coordinator contracts."""
+    """Exercise AgentRun's compact supervisor handoff and execution contract."""
 
     CALLS.clear()
     ledger = CheckpointBranchRuntimeLedger()
@@ -593,6 +662,7 @@ async def test_checkpoint_branch_turn_uses_real_agent_run_profile_bound_path(
     assert [name for name, _value in CALLS] == [
         "mark_running",
         "resolve_adapter",
+        "resolve_intent",
         "profile_bound_execute",
         "publish_artifacts",
         "capture",
@@ -1159,7 +1229,9 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
                 Worker(
                     env.client,
                     task_queue=get_workflow_task_queue(),
+                    workflows=[_FakeOmnigentSession],
                     activities=[_resolve_real_agent_adapter],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
                 )
             )
             await stack.enter_async_context(
@@ -1167,6 +1239,8 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
                     env.client,
                     task_queue=AGENT_RUNTIME_TASK_QUEUE,
                     activities=[
+                        _resolve_omnigent_session_intent,
+                        _execute_fake_omnigent_session,
                         omnigent_profile_bound_execute_activity,
                         _publish_real_agent_result,
                     ],

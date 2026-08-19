@@ -770,7 +770,12 @@ For Omnigent-backed target work, remediation consumes MoonMind artifacts harvest
 
 Omnigent session ids, file ids, resource ids, runner ids, and provider URLs are runtime binding or diagnostics metadata. They are not MoonMind evidence authority and should not replace artifact refs.
 
-Omnigent v1 uses a streaming-gateway activity that returns terminal results. Therefore remediation should not send hidden follow-up messages into a parent Omnigent session in v1. Corrective execution should create a fresh Checkpoint Branch turn with a new Omnigent session. Same-session continuation should wait for typed v2 activities such as `integration.omnigent.send_message` and `integration.omnigent.harvest_session`.
+The durable `MoonMind.OmnigentSession` supervisor accepts an authorized,
+reference-only continuation signal, but remediation must not send hidden
+follow-up messages into a parent session. Corrective execution creates a fresh
+Checkpoint Branch turn with new canonical Omnigent session authority; an
+explicit same-session continuation remains owned and audited by the existing
+session supervisor.
 
 ---
 

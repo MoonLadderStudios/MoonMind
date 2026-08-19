@@ -1,0 +1,1038 @@
+"""Hermetic production boundary for MoonLadderStudios/MoonMind#3705."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from temporalio import activity
+from temporalio.api.enums.v1 import IndexedValueType
+from temporalio.api.operatorservice.v1 import AddSearchAttributesRequest
+from temporalio.common import (
+    SearchAttributeKey,
+    SearchAttributePair,
+    TypedSearchAttributes,
+)
+from temporalio.exceptions import ApplicationError
+from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
+
+from api_service.api.routers.executions import (
+    _get_service,
+    get_temporal_client,
+    router,
+)
+from moonmind.omnigent.reconciler import (
+    CompiledSessionIntent,
+    DesiredLifecycle,
+    DurableSessionState,
+    EventFrontierObservation,
+    EvidenceObservation,
+    HostObservation,
+    LeaseObservation,
+    LeaseState,
+    ObservationSet,
+    ProviderSessionObservation,
+    SubmissionState,
+    TerminalOutcome,
+)
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.omnigent_session_models import OmnigentSessionWorkflowInput
+from moonmind.schemas.resilience_policy_models import compile_resilience_policy
+from moonmind.workflows.temporal.activity_catalog import (
+    AGENT_RUNTIME_TASK_QUEUE,
+    ARTIFACTS_TASK_QUEUE,
+    LLM_TASK_QUEUE,
+    get_workflow_task_queue,
+)
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
+from moonmind.workflows.temporal.workflows.omnigent_session import (
+    MoonMindOmnigentSessionWorkflow,
+    canonical_omnigent_session_id,
+    canonical_omnigent_turn_attempt_id,
+    omnigent_session_workflow_id,
+)
+from moonmind.workflows.temporal.workflows.run import MoonMindUserWorkflow
+from tests.unit.api.routers.test_executions import (
+    _build_execution_record,
+    _override_user_dependencies,
+)
+
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.integration,
+    pytest.mark.temporal_boundary,
+]
+
+_NOW = datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
+CALLS: list[str] = []
+STATE: dict[str, Any] = {}
+PRODUCT_INPUTS: dict[str, Any] = {}
+PAUSE_PHASE: str | None = None
+PHASE_STARTED: asyncio.Event | None = None
+PHASE_RELEASE: asyncio.Event | None = None
+
+
+def _reset_state() -> None:
+    CALLS.clear()
+    STATE.clear()
+    STATE.update(
+        revision=1,
+        profile=False,
+        host=False,
+        provider_session=False,
+        submitted=False,
+        provider_status=None,
+        event_read_count=0,
+        snapshot_count=0,
+        load_count=0,
+        terminal=False,
+        evidence=False,
+        cleanup=False,
+        cancel=False,
+    )
+    PRODUCT_INPUTS.clear()
+
+
+def _trusted_search_attributes() -> TypedSearchAttributes:
+    return TypedSearchAttributes(
+        [
+            SearchAttributePair(
+                SearchAttributeKey.for_keyword("mm_owner_id"),
+                "trusted-owner-3705",
+            ),
+            SearchAttributePair(
+                SearchAttributeKey.for_keyword("mm_owner_type"),
+                "user",
+            ),
+        ]
+    )
+
+
+@activity.defn(name="plan.generate")
+async def _generate_product_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    CALLS.append("plan_generate")
+    PRODUCT_INPUTS.update(dict(payload.get("parameters") or {}))
+    return {"plan_ref": "artifact://plan/omnigent-session-3705"}
+
+
+@activity.defn(name="artifact.read")
+async def _read_product_plan(payload: dict[str, Any]) -> bytes:
+    CALLS.append("plan_read")
+    artifact_ref = str(
+        payload.get("artifact_ref") or payload.get("artifactRef") or ""
+    )
+    if artifact_ref == "artifact://registry/omnigent-session-3705":
+        return json.dumps({"skills": []}).encode("utf-8")
+    runtime = dict(PRODUCT_INPUTS.get("workflow", {}).get("runtime") or {})
+    workflow_input = dict(PRODUCT_INPUTS.get("workflow") or {})
+    plan = {
+        "plan_version": "1.0",
+        "metadata": {
+            "title": "Omnigent session product path",
+            "created_at": "2026-08-18T00:00:00Z",
+            "registry_snapshot": {
+                "digest": "reg:sha256:" + ("a" * 64),
+                "artifact_ref": "artifact://registry/omnigent-session-3705",
+            },
+        },
+        "policy": {"failure_mode": "FAIL_FAST"},
+        "nodes": [
+            {
+                "id": "omnigent-session-step",
+                "tool": {"type": "agent_runtime", "name": "omnigent"},
+                "inputs": {
+                    "targetRuntime": PRODUCT_INPUTS.get(
+                        "targetRuntime", "omnigent"
+                    ),
+                    "instructions": workflow_input.get(
+                        "instructions", "Apply the requested repository change."
+                    ),
+                    "runtime": runtime,
+                    "repository": PRODUCT_INPUTS.get("repository"),
+                },
+            }
+        ],
+    }
+    return json.dumps(plan).encode("utf-8")
+
+
+@activity.defn(name="artifact.create")
+async def _create_product_artifact(payload: dict[str, Any]) -> dict[str, Any]:
+    artifact_id = str(payload.get("artifact_id") or "omnigent-session-3705")
+    return {"artifact_id": artifact_id, "artifact_ref": f"artifact://{artifact_id}"}
+
+
+@activity.defn(name="artifact.write_complete")
+async def _complete_product_artifact(_payload: dict[str, Any]) -> dict[str, Any]:
+    return {"status": "complete"}
+
+
+@activity.defn(name="provider_profile.list")
+async def _list_product_profiles(_payload: dict[str, Any]) -> dict[str, Any]:
+    return {"profiles": []}
+
+
+@activity.defn(name="resilience.compile_policy")
+async def _compile_product_policy(payload: dict[str, Any]) -> dict[str, Any]:
+    return compile_resilience_policy(
+        compiled_at=datetime.fromisoformat(payload["compiledAt"]),
+        workflow_id=payload.get("workflowId"),
+        run_id=payload.get("runId"),
+        policy_version=int(payload.get("policyVersion") or 1),
+        attempts={
+            "stepMaxAttempts": 3,
+            "stepNoProgressLimit": 2,
+            "jobSelfHealMaxResets": 1,
+        },
+        timeouts={
+            "stepTimeoutSeconds": 900,
+            "stepIdleTimeoutSeconds": 300,
+        },
+        provider_cooldown={
+            "cooldownAfter429Seconds": payload.get(
+                "cooldownAfter429Seconds", 900
+            ),
+            "providerProfileId": payload.get("providerProfileId"),
+            "rateLimitPolicy": payload.get("rateLimitPolicy") or {},
+        },
+        checkpoints={
+            "checkpointRequired": True,
+            "requiredBoundaries": [
+                "after_prepare",
+                "before_execution",
+                "after_execution",
+            ],
+        },
+        idempotency={
+            "sideEffectIdempotencyRequired": True,
+            "keyStrategy": "step_execution_operation",
+        },
+        outbound_scanning={
+            "highSecurityMode": False,
+            "blockOnFinding": False,
+        },
+        observability={
+            "liveLogsTimelineEnabled": False,
+            "structuredHistoryEnabled": True,
+        },
+        cost_attribution={"runtimeId": payload.get("runtimeId")},
+    ).model_dump(by_alias=True, mode="json")
+
+
+@activity.defn(name="execution.record_terminal_state")
+async def _record_product_terminal_state(
+    _payload: dict[str, Any],
+) -> dict[str, bool]:
+    return {"recorded": True}
+
+
+@activity.defn(name="integration.resolve_adapter_metadata")
+async def _resolve_adapter_metadata(agent_id: str) -> dict[str, Any]:
+    CALLS.append("resolve_adapter")
+    return {
+        "agent_id": agent_id,
+        "execution_style": "streaming_gateway",
+        "supports_callbacks": False,
+    }
+
+
+@activity.defn(name="integration.omnigent.profile_bound_execute")
+async def _legacy_profile_bound_execute(
+    _request: AgentExecutionRequest,
+) -> AgentRunResult:
+    CALLS.append("legacy_profile_bound_execute")
+    return AgentRunResult(summary="Legacy profile-bound execution completed")
+
+
+@activity.defn(name="agent_skill.resolve")
+async def _resolve_empty_skillset(*_args: Any) -> dict[str, Any]:
+    return {"manifestRef": "art_skillset_omnigent_3705", "skills": []}
+
+
+@activity.defn(name="omnigent.resolve_intent")
+async def _resolve_intent(payload: dict[str, Any]) -> dict[str, Any]:
+    CALLS.append("resolve_intent")
+    STATE["workflow_id"] = str(payload["workflowId"])
+    STATE["step_execution_id"] = str(payload["stepExecutionId"])
+    STATE["agent_run_id"] = str(payload["agentRunId"])
+    session_id = canonical_omnigent_session_id(
+        workflow_id=str(payload["workflowId"]),
+        step_execution_id=str(payload["stepExecutionId"]),
+        agent_run_id=str(payload["agentRunId"]),
+    )
+    return OmnigentSessionWorkflowInput(
+        sessionId=session_id,
+        compiledExecutionIntentRef="art_intent_product_path",
+        compiledExecutionIntentDigest="sha256:" + "a" * 64,
+        workflowId=str(payload["workflowId"]),
+        stepExecutionId=str(payload["stepExecutionId"]),
+        agentRunId=str(payload["agentRunId"]),
+        initialTurnAttemptId=canonical_omnigent_turn_attempt_id(session_id),
+        admittedFeatureGeneration="omnigent-session-v1",
+        compatibilityVersion="v1",
+    ).model_dump(mode="json", by_alias=True)
+
+
+@activity.defn(name="omnigent.load_reconciliation_inputs")
+async def _load_reconciliation_inputs(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    CALLS.append("load")
+    STATE["load_count"] = int(STATE["load_count"]) + 1
+    if STATE["load_count"] > 50:
+        raise ApplicationError(
+            f"supervisor did not converge: state={STATE}, calls={CALLS[-20:]}",
+            non_retryable=True,
+        )
+    session_id = str(payload["sessionId"])
+    leases_held = bool(STATE["profile"])
+    durable = DurableSessionState(
+        sessionId=session_id,
+        revision=int(STATE["revision"]),
+        ownerToken=f"omnigent-session:{session_id}",
+        fencingGeneration=1,
+        desired=(
+            DesiredLifecycle.CANCEL
+            if STATE["cancel"]
+            else DesiredLifecycle.RUN
+        ),
+        providerSessionAttached=bool(STATE["provider_session"]),
+        providerSessionId=(
+            "provider-session-1" if STATE["provider_session"] else None
+        ),
+        attemptId=canonical_omnigent_turn_attempt_id(session_id),
+        submission=(
+            SubmissionState.ACCEPTED
+            if STATE["submitted"]
+            else SubmissionState.NOT_SUBMITTED
+        ),
+        turnAttempts=0,
+        profileLease=LeaseState.HELD if leases_held else LeaseState.NONE,
+        hostLease=(
+            LeaseState.HELD if STATE["host"] else LeaseState.NONE
+        ),
+        terminalOutcome=(
+            (
+                TerminalOutcome.CANCELLED
+                if STATE["cancel"]
+                else TerminalOutcome.SUCCESS
+            )
+            if STATE["terminal"]
+            else None
+        ),
+        terminalEvidenceRef=(
+            "art_terminal_result" if STATE["evidence"] else None
+        ),
+        evidenceHarvested=bool(STATE["evidence"]),
+        cleanupStarted=bool(STATE["cleanup"]),
+        cleanupComplete=bool(STATE["cleanup"]),
+    )
+    observations = ObservationSet(
+        providerSession=(
+            ProviderSessionObservation(
+                observedAt=_NOW,
+                present=True,
+                providerSessionId="provider-session-1",
+                rawStatus=str(STATE["provider_status"]),
+                snapshotDigest=f"snapshot-{STATE['snapshot_count']}",
+            )
+            if STATE["provider_status"] is not None
+            else None
+        ),
+        eventFrontier=(
+            EventFrontierObservation(
+                observedAt=_NOW,
+                terminalEventSeen=False,
+            )
+            if STATE["provider_status"] == "completed"
+            else None
+        ),
+        evidence=(
+            EvidenceObservation(
+                observedAt=_NOW,
+                terminalEvidenceAvailable=True,
+                artifactsAvailable=bool(STATE["evidence"]),
+            )
+            if STATE["terminal"]
+            else None
+        ),
+        host=(
+            HostObservation(
+                observedAt=_NOW,
+                registered=not bool(STATE["cleanup"]),
+                runnerReady=not bool(STATE["cleanup"]),
+            )
+            if STATE["host"]
+            else None
+        ),
+        profileLease=(
+            LeaseObservation(
+                observedAt=_NOW,
+                held=leases_held,
+                consumerActive=not bool(STATE["cleanup"]),
+            )
+            if leases_held
+            else None
+        ),
+        hostLease=(
+            LeaseObservation(
+                observedAt=_NOW,
+                held=bool(STATE["host"]),
+                consumerActive=not bool(STATE["cleanup"]),
+            )
+            if STATE["host"]
+            else None
+        ),
+    )
+    response: dict[str, Any] = {
+        "intent": CompiledSessionIntent(
+            sessionId=session_id,
+            provider="omnigent",
+            maxTurnAttempts=1,
+            reconcileIntervalSeconds=1,
+            turnPromptDigest="sha256:prompt",
+        ).model_dump(mode="json", by_alias=True),
+        "durable": durable.model_dump(mode="json", by_alias=True),
+        "observations": observations.model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        ),
+        "phase": "reconciling",
+    }
+    if STATE["evidence"] and not STATE["profile"] and not STATE["host"]:
+        canceled = bool(STATE["cancel"])
+        response["terminalResult"] = {
+            "status": "canceled" if canceled else "completed",
+            "resultRef": "art_terminal_result",
+            "result": {
+                "summary": (
+                    "Omnigent session canceled through supervisor"
+                    if canceled
+                    else "Omnigent session completed through supervisor"
+                ),
+                "failureClass": "canceled" if canceled else None,
+                "metadata": {"canonicalSessionId": session_id},
+            },
+        }
+    return response
+
+
+@activity.defn(name="omnigent.persist_decision")
+async def _persist_decision(payload: dict[str, Any]) -> dict[str, Any]:
+    decision = dict(payload["decision"])
+    CALLS.append(
+        f"decision:{decision['kind']}:{decision['reasonCode']}"
+    )
+    return {"decisionId": payload["decisionId"]}
+
+
+@activity.defn(name="omnigent.persist_signal_intents")
+async def _persist_signals(payload: dict[str, Any]) -> dict[str, Any]:
+    CALLS.append("persist_signals")
+    if not STATE["terminal"]:
+        for item in payload.get("signals") or []:
+            if item.get("kind") in {
+                "cancel_or_interrupt_requested",
+                "cleanup_requested",
+                "timeout_requested",
+            }:
+                STATE["cancel"] = True
+                STATE["revision"] = int(STATE["revision"]) + 1
+    return {"appliedIntentCount": len(payload.get("signals") or [])}
+
+
+def _phase_activity(name: str, mutation: str | None = None):
+    async def handler(_payload: dict[str, Any]) -> dict[str, Any]:
+        CALLS.append(name)
+        if (
+            PAUSE_PHASE == name
+            and PHASE_STARTED is not None
+            and PHASE_RELEASE is not None
+        ):
+            PHASE_STARTED.set()
+            await PHASE_RELEASE.wait()
+        if mutation is not None:
+            STATE[mutation] = True
+            STATE["revision"] = int(STATE["revision"]) + 1
+        return {
+            "outcome": "applied",
+            **(
+                {"terminalResultRef": "art_terminal_result"}
+                if name == "harvest_evidence"
+                else {}
+            ),
+        }
+
+    return activity.defn(name=f"omnigent.{name}")(handler)
+
+
+_ensure_profile = _phase_activity("ensure_provider_profile_lease", "profile")
+_ensure_host = _phase_activity("ensure_host", "host")
+_ensure_session = _phase_activity("ensure_provider_session", "provider_session")
+_submit_turn = _phase_activity("submit_turn", "submitted")
+_record_terminal = _phase_activity("record_terminal", "terminal")
+_harvest_evidence = _phase_activity("harvest_evidence", "evidence")
+_publish_workspace = _phase_activity("publish_workspace")
+_stop_provider = _phase_activity("stop_provider_session")
+_stop_host = _phase_activity("stop_host", "cleanup")
+
+
+@activity.defn(name="omnigent.release_leases")
+async def _release_leases(_payload: dict[str, Any]) -> dict[str, Any]:
+    CALLS.append("release_leases")
+    STATE["profile"] = False
+    STATE["host"] = False
+    STATE["revision"] = int(STATE["revision"]) + 1
+    return {"outcome": "applied"}
+
+
+@activity.defn(name="omnigent.read_event_batch")
+async def _read_event_batch(_payload: dict[str, Any]) -> dict[str, Any]:
+    CALLS.append("read_event_batch")
+    STATE["event_read_count"] = int(STATE["event_read_count"]) + 1
+    if STATE["event_read_count"] == 1:
+        return {"observationCount": 0, "readStatus": "unavailable"}
+    return {"observationCount": 0}
+
+
+@activity.defn(name="omnigent.observe_snapshot")
+async def _observe_snapshot(_payload: dict[str, Any]) -> dict[str, Any]:
+    CALLS.append("observe_snapshot")
+    STATE["snapshot_count"] = int(STATE["snapshot_count"]) + 1
+    if STATE["snapshot_count"] == 1:
+        return {
+            "observationCount": 0,
+            "readStatus": "unavailable",
+            "snapshotFrontier": None,
+        }
+    STATE["provider_status"] = (
+        "new_provider_status" if STATE["snapshot_count"] == 2 else "completed"
+    )
+    return {
+        "observationCount": 1,
+        "snapshotFrontier": f"snapshot-{STATE['snapshot_count']}",
+    }
+
+
+@activity.defn(name="agent_runtime.publish_artifacts")
+async def _publish_artifacts(result: AgentRunResult) -> AgentRunResult:
+    CALLS.append("publish_artifacts")
+    return result
+
+
+async def _register_search_attributes(env: WorkflowEnvironment) -> None:
+    await env.client.operator_service.add_search_attributes(
+        AddSearchAttributesRequest(
+            namespace=env.client.namespace,
+            search_attributes={
+                "mm_owner_id": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_owner_type": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_state": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_entry": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_updated_at": IndexedValueType.INDEXED_VALUE_TYPE_DATETIME,
+                "mm_started_at": IndexedValueType.INDEXED_VALUE_TYPE_DATETIME,
+                "mm_scheduled_for": IndexedValueType.INDEXED_VALUE_TYPE_DATETIME,
+                "mm_has_dependencies": IndexedValueType.INDEXED_VALUE_TYPE_BOOL,
+                "mm_dependency_count": IndexedValueType.INDEXED_VALUE_TYPE_INT,
+                "mm_current_step_order": IndexedValueType.INDEXED_VALUE_TYPE_INT,
+                "mm_repo": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_integration": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "mm_target_runtime": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
+                "mm_target_skill": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
+                "mm_title": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST,
+                "AgentRunId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "SessionId": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "SessionStatus": IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
+                "IsDegraded": IndexedValueType.INDEXED_VALUE_TYPE_BOOL,
+            },
+        )
+    )
+
+
+async def test_product_compiled_agent_run_converges_after_lost_terminal_event() -> None:
+    """The product compiler reaches the supervisor and snapshot recovery path."""
+
+    _reset_state()
+    app = FastAPI()
+    app.include_router(router)
+    execution_service = AsyncMock()
+    execution_service.create_execution.return_value = _build_execution_record()
+    app.dependency_overrides[_get_service] = lambda: execution_service
+    app.dependency_overrides[get_temporal_client] = AsyncMock
+    _override_user_dependencies(app, is_superuser=False)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "omnigent",
+                    "workflow": {
+                        "instructions": "Apply the requested repository change.",
+                        "runtime": {
+                            "mode": "omnigent",
+                            "executionProfileRef": "omnigent-codex",
+                        },
+                    },
+                },
+            },
+        )
+    assert response.status_code == 201
+    authored = execution_service.create_execution.await_args.kwargs[
+        "initial_parameters"
+    ]
+
+    workflow_queue = get_workflow_task_queue()
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await _register_search_attributes(env)
+        async with (
+            Worker(
+                env.client,
+                task_queue=LLM_TASK_QUEUE,
+                activities=[_generate_product_plan],
+            ),
+            Worker(
+                env.client,
+                task_queue=ARTIFACTS_TASK_QUEUE,
+                activities=[
+                    _read_product_plan,
+                    _create_product_artifact,
+                    _complete_product_artifact,
+                    _list_product_profiles,
+                    _compile_product_policy,
+                    _record_product_terminal_state,
+                ],
+            ),
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[
+                    MoonMindUserWorkflow,
+                    MoonMindAgentRun,
+                    MoonMindOmnigentSessionWorkflow,
+                ],
+                activities=[_resolve_adapter_metadata],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=[
+                    _resolve_intent,
+                    _load_reconciliation_inputs,
+                    _persist_decision,
+                    _persist_signals,
+                    _ensure_profile,
+                    _ensure_host,
+                    _ensure_session,
+                    _submit_turn,
+                    _record_terminal,
+                    _harvest_evidence,
+                    _publish_workspace,
+                    _stop_provider,
+                    _stop_host,
+                    _release_leases,
+                    _read_event_batch,
+                    _observe_snapshot,
+                    _publish_artifacts,
+                    _resolve_empty_skillset,
+                ],
+            ),
+        ):
+            product_workflow_id = f"product-workflow-3705-{uuid4()}"
+            handle = await env.client.start_workflow(
+                MoonMindUserWorkflow.run,
+                {
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "title": "Omnigent session product path",
+                    "initialParameters": authored,
+                },
+                id=product_workflow_id,
+                task_queue=workflow_queue,
+                search_attributes=_trusted_search_attributes(),
+            )
+            async def wait_for_agent_dispatch() -> None:
+                while "agent_run_id" not in STATE:
+                    await asyncio.sleep(0.05)
+
+            dispatch_task = asyncio.create_task(wait_for_agent_dispatch())
+            parent_result_task = asyncio.create_task(handle.result())
+            done, _pending = await asyncio.wait(
+                {dispatch_task, parent_result_task},
+                timeout=20,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if dispatch_task not in done:
+                if parent_result_task in done:
+                    try:
+                        parent_result = parent_result_task.result()
+                    except Exception as exc:
+                        workflow_cause = getattr(exc, "cause", None)
+                        raise AssertionError(
+                            "product workflow failed before AgentRun dispatch; "
+                            f"calls={CALLS}, cause={workflow_cause!r}, "
+                            "nestedCause="
+                            f"{getattr(workflow_cause, 'cause', None)!r}"
+                        ) from exc
+                    raise AssertionError(
+                        "product workflow completed before AgentRun dispatch; "
+                        f"result={parent_result!r}, calls={CALLS}"
+                    )
+                raise AssertionError(
+                    f"AgentRun dispatch timed out; calls={CALLS}"
+                )
+            parent_result_task.cancel()
+            agent_run_workflow_id = str(STATE["agent_run_id"])
+            agent_handle = env.client.get_workflow_handle(agent_run_workflow_id)
+            session_id = canonical_omnigent_session_id(
+                workflow_id=str(STATE["workflow_id"]),
+                step_execution_id=str(STATE["step_execution_id"]),
+                agent_run_id=agent_run_workflow_id,
+            )
+            session_handle = env.client.get_workflow_handle(
+                omnigent_session_workflow_id(session_id)
+            )
+            try:
+                await env.sleep(5)
+            except Exception as exc:
+                raise AssertionError(
+                    "time-skipping stalled while the supervisor was active; "
+                    f"state={STATE}, calls={CALLS[-40:]}"
+                ) from exc
+            try:
+                result = AgentRunResult.model_validate(
+                    await asyncio.wait_for(
+                        agent_handle.result(), timeout=20
+                    )
+                )
+            except TimeoutError as exc:
+                await session_handle.terminate("supervisor test timeout")
+                await agent_handle.terminate("supervisor test timeout")
+                await handle.terminate("supervisor test timeout")
+                raise AssertionError(
+                    "AgentRun did not reach terminal state; "
+                    f"state={STATE}, calls={CALLS}"
+                ) from exc
+            agent_history = await agent_handle.fetch_history()
+            query_state = await session_handle.query("omnigent_session.state")
+            session_history = await session_handle.fetch_history()
+            # The changed AgentRun/session boundary is already terminal and
+            # replayable. Stop the broader parent before unrelated post-run
+            # publication/checkpoint gates in this intentionally minimal harness.
+            await handle.terminate("supervisor boundary verified")
+
+    await Replayer(
+        workflows=[MoonMindAgentRun],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(agent_history)
+    await Replayer(
+        workflows=[MoonMindOmnigentSessionWorkflow],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(session_history)
+
+    assert result.summary == "Omnigent session completed through supervisor"
+    assert query_state["terminalStatus"] == "completed"
+    assert query_state["sessionId"] == session_id
+    assert "compiledExecutionIntentRef" not in query_state
+    assert "plan_generate" in CALLS
+    assert "plan_read" in CALLS
+    assert "resolve_intent" in CALLS
+    assert "read_event_batch" in CALLS
+    assert "observe_snapshot" in CALLS
+    assert (
+        "decision:await_observation:unknown_provider_status" in CALLS
+    )
+    assert (
+        "decision:synthesize_terminal_from_snapshot:terminal_snapshot_synthesis"
+        in CALLS
+    )
+    assert CALLS.index("harvest_evidence") < CALLS.index("stop_provider_session")
+    assert CALLS.index("stop_host") < CALLS.index("release_leases")
+    assert CALLS[-1] == "publish_artifacts"
+
+
+async def test_continue_as_new_preserves_active_provider_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """History rollover reloads one active provider session without redispatch."""
+
+    import moonmind.workflows.temporal.workflows.omnigent_session as session_module
+
+    _reset_state()
+    # Four launch decisions establish an active provider turn. Roll over on the
+    # first await-observation decision, then converge from durable fake state.
+    monkeypatch.setattr(
+        session_module,
+        "CONTINUE_AS_NEW_DECISION_THRESHOLD",
+        5,
+    )
+    workflow_queue = get_workflow_task_queue()
+    session_id = "oms_continue_as_new_3705"
+    session_input = OmnigentSessionWorkflowInput(
+        sessionId=session_id,
+        compiledExecutionIntentRef="art_intent_continue_as_new",
+        compiledExecutionIntentDigest="sha256:" + "b" * 64,
+        workflowId="workflow-continue-as-new",
+        stepExecutionId="step-continue-as-new",
+        agentRunId="agent-run-continue-as-new",
+        initialTurnAttemptId=canonical_omnigent_turn_attempt_id(session_id),
+        admittedFeatureGeneration="omnigent-session-v1",
+        compatibilityVersion="v1",
+    )
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        await _register_search_attributes(env)
+        async with (
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindOmnigentSessionWorkflow],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=[
+                    _load_reconciliation_inputs,
+                    _persist_decision,
+                    _persist_signals,
+                    _ensure_profile,
+                    _ensure_host,
+                    _ensure_session,
+                    _submit_turn,
+                    _record_terminal,
+                    _harvest_evidence,
+                    _publish_workspace,
+                    _stop_provider,
+                    _stop_host,
+                    _release_leases,
+                    _read_event_batch,
+                    _observe_snapshot,
+                ],
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindOmnigentSessionWorkflow.run,
+                session_input,
+                id=omnigent_session_workflow_id(session_id),
+                task_queue=workflow_queue,
+            )
+            result = AgentRunResult.model_validate(
+                await asyncio.wait_for(handle.result(), timeout=20)
+            )
+            query_state = await handle.query("omnigent_session.state")
+
+    assert result.summary == "Omnigent session completed through supervisor"
+    assert query_state["sessionId"] == session_id
+    assert query_state["continueAsNewCount"] == 1
+    assert CALLS.count("ensure_provider_profile_lease") == 1
+    assert CALLS.count("ensure_host") == 1
+    assert CALLS.count("ensure_provider_session") == 1
+    assert CALLS.count("submit_turn") == 1
+
+
+async def test_pre_supervisor_agent_run_history_replays_on_legacy_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An AgentRun history without the admission patch never starts a child."""
+
+    import moonmind.workflows.temporal.workflows.agent_run as agent_run_module
+
+    _reset_state()
+    original_patched = agent_run_module.workflow.patched
+
+    def patched_without_session_supervisor(patch_id: str) -> bool:
+        if patch_id == agent_run_module.OMNIGENT_SESSION_SUPERVISOR_PATCH_ID:
+            return False
+        return original_patched(patch_id)
+
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        patched_without_session_supervisor,
+    )
+    workflow_queue = get_workflow_task_queue()
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="omnigent-codex",
+        correlationId="legacy-workflow-3705",
+        idempotencyKey="legacy-step-3705",
+        instructionRef="art_legacy_instruction_3705",
+    )
+    history = None
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with (
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindAgentRun],
+                activities=[_resolve_adapter_metadata],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=[
+                    _legacy_profile_bound_execute,
+                    _publish_artifacts,
+                ],
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                request,
+                id=f"agent-run-legacy-3705-{uuid4()}",
+                task_queue=workflow_queue,
+            )
+            result = AgentRunResult.model_validate(await handle.result())
+            history = await handle.fetch_history()
+
+    assert result.summary == "Legacy profile-bound execution completed"
+    assert "legacy_profile_bound_execute" in CALLS
+    assert "resolve_intent" not in CALLS
+
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        original_patched,
+    )
+    assert history is not None
+    await Replayer(
+        workflows=[MoonMindAgentRun],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
+
+
+@pytest.mark.parametrize(
+    ("pause_phase", "expected_terminal_status"),
+    [
+        ("ensure_host", "canceled"),
+        ("submit_turn", "canceled"),
+        ("harvest_evidence", "completed"),
+        ("stop_host", "completed"),
+    ],
+)
+async def test_agent_run_cancellation_preserves_session_cleanup_owner(
+    pause_phase: str,
+    expected_terminal_status: str,
+) -> None:
+    """Cancellation never tears down the child before its ordered cleanup."""
+
+    global PAUSE_PHASE, PHASE_STARTED, PHASE_RELEASE
+    _reset_state()
+    PAUSE_PHASE = pause_phase
+    PHASE_STARTED = asyncio.Event()
+    PHASE_RELEASE = asyncio.Event()
+    workflow_queue = get_workflow_task_queue()
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="omnigent-codex",
+        correlationId=f"cancel-{pause_phase}",
+        idempotencyKey=f"cancel-{pause_phase}:step",
+        instructionRef="art_cancel_instruction",
+        timeoutPolicy={"timeout_seconds": 600},
+    )
+
+    try:
+        async with await WorkflowEnvironment.start_time_skipping() as env:
+            await _register_search_attributes(env)
+            async with (
+                Worker(
+                    env.client,
+                    task_queue=workflow_queue,
+                    workflows=[
+                        MoonMindAgentRun,
+                        MoonMindOmnigentSessionWorkflow,
+                    ],
+                    activities=[_resolve_adapter_metadata],
+                    workflow_runner=UnsandboxedWorkflowRunner(),
+                ),
+                Worker(
+                    env.client,
+                    task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                    activities=[
+                        _resolve_intent,
+                        _load_reconciliation_inputs,
+                        _persist_decision,
+                        _persist_signals,
+                        _ensure_profile,
+                        _ensure_host,
+                        _ensure_session,
+                        _submit_turn,
+                        _record_terminal,
+                        _harvest_evidence,
+                        _publish_workspace,
+                        _stop_provider,
+                        _stop_host,
+                        _release_leases,
+                        _read_event_batch,
+                        _observe_snapshot,
+                        _publish_artifacts,
+                    ],
+                ),
+            ):
+                agent_run_id = f"agent-run-cancel-{pause_phase}-{uuid4()}"
+                handle = await env.client.start_workflow(
+                    MoonMindAgentRun.run,
+                    request,
+                    id=agent_run_id,
+                    task_queue=workflow_queue,
+                )
+                await asyncio.wait_for(PHASE_STARTED.wait(), timeout=20)
+                await handle.cancel()
+                # Let the bounded Activity acknowledge the cancellation race.
+                # AgentRun keeps waiting for the signaled session owner until
+                # the in-flight phase has stopped or settled and cleanup ends.
+                PHASE_RELEASE.set()
+                session_id = canonical_omnigent_session_id(
+                    workflow_id=request.correlation_id,
+                    step_execution_id=request.idempotency_key,
+                    agent_run_id=agent_run_id,
+                )
+                session_handle = env.client.get_workflow_handle(
+                    omnigent_session_workflow_id(session_id)
+                )
+                try:
+                    agent_result = AgentRunResult.model_validate(
+                        await asyncio.wait_for(handle.result(), timeout=20)
+                    )
+                except TimeoutError as exc:
+                    await session_handle.terminate("cancellation test timeout")
+                    await handle.terminate("cancellation test timeout")
+                    raise AssertionError(
+                        "AgentRun cancellation did not converge through cleanup; "
+                        f"phase={pause_phase}, state={STATE}, calls={CALLS}"
+                    ) from exc
+                session_result = AgentRunResult.model_validate(
+                    await session_handle.result()
+                )
+                query_state = await session_handle.query(
+                    "omnigent_session.state"
+                )
+
+        assert query_state["terminalStatus"] == expected_terminal_status, {
+            "calls": CALLS,
+            "state": STATE,
+            "query": query_state,
+        }
+        assert agent_result.failure_class == (
+            "canceled" if expected_terminal_status == "canceled" else None
+        )
+        assert session_result.metadata["canonicalSessionId"] == session_id
+        assert CALLS.index("stop_host") < CALLS.index("release_leases")
+    finally:
+        if PHASE_RELEASE is not None:
+            PHASE_RELEASE.set()
+        PAUSE_PHASE = None
+        PHASE_STARTED = None
+        PHASE_RELEASE = None
