@@ -18,12 +18,22 @@ classification.
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 INVENTORY_CONTRACT_VERSION = "moonmind.omnigent-migration-inventory/v1"
 DEFAULT_DIAGNOSTIC_SAMPLE_LIMIT = 20
+
+# Operator-safe artifact-reference format. A diagnostic ref must be a bounded
+# ``art://<path>`` reference (the canonical Omnigent artifact scheme), never a
+# raw provider session id, credential, token, or host secret. Validating the
+# format at the trusted boundary is what makes the module's guarantee real:
+# ``extra="forbid"`` alone only blocks an *extra* field, not unsafe *contents*
+# of an accepted one.
+DIAGNOSTIC_REF_MAX_LENGTH = 512
+_DIAGNOSTIC_REF_PATTERN = re.compile(r"\Aart://[A-Za-z0-9._~:@\-/]+\Z")
 
 
 class InventoryClass(str, Enum):
@@ -63,6 +73,33 @@ class RecordInventoryView(BaseModel):
     cleanup_pending: bool = Field(False, alias="cleanupPending")
     corrupt: bool = Field(False, alias="corrupt")
     diagnostic_ref: str | None = Field(None, alias="diagnosticRef")
+
+    @field_validator("diagnostic_ref")
+    @classmethod
+    def _validate_diagnostic_ref(cls, value: str | None) -> str | None:
+        """Require a bounded, operator-safe ``art://`` artifact reference.
+
+        A blank value normalizes to ``None``. Anything else must match the
+        bounded artifact-reference format so an unrestricted string (for
+        example a provider session id supplied by mistake) can never reach an
+        operator-facing report.
+        """
+
+        if value is None:
+            return None
+        candidate = value.strip()
+        if not candidate:
+            return None
+        if len(candidate) > DIAGNOSTIC_REF_MAX_LENGTH:
+            raise ValueError(
+                "diagnostic_ref exceeds the maximum artifact-reference length"
+            )
+        if not _DIAGNOSTIC_REF_PATTERN.match(candidate):
+            raise ValueError(
+                "diagnostic_ref must be a bounded operator-safe artifact "
+                "reference of the form 'art://<path>'"
+            )
+        return candidate
 
 
 class InventoryClassCount(BaseModel):
@@ -127,6 +164,11 @@ def classify_record(view: RecordInventoryView) -> InventoryClass:
     ):
         return InventoryClass.AMBIGUOUS_AUTHORITY
     if view.has_canonical_session:
+        # A canonical session is not "ready" while a required chat-binding alias
+        # is still outstanding: emit an alias-producing action instead of a
+        # no-op so previously issued chat handles are never left unresolved.
+        if view.requires_chat_alias:
+            return InventoryClass.ALIAS_REQUIRED
         return InventoryClass.NEW_MODEL_READY
     if view.is_active:
         return InventoryClass.LEGACY_ACTIVE
