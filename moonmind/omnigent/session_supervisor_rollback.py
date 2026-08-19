@@ -76,6 +76,12 @@ class SessionRollbackContext(BaseModel):
     credential_consumers_stopped: bool = Field(
         False, alias="credentialConsumersStopped"
     )
+    # Terminal cleanup evidence. Releasing exclusive provider capacity requires
+    # both confirmed consumer absence *and* completed cleanup, mirroring the
+    # production reconciliation policy in
+    # :mod:`moonmind.omnigent.reconciler.reducer`; a stopped consumer alone never
+    # authorizes release while cleanup authority still owns resources.
+    cleanup_completed: bool = Field(False, alias="cleanupCompleted")
 
 
 class RollbackEffect(BaseModel):
@@ -217,7 +223,11 @@ def resolve_rollback_effect(
         directCodexSubstitution=False,
         mutatesActiveSessionAuthority=False,
         fencedHandoffRequiredForOwnershipTransfer=True,
-        providerCapacityReleaseAllowed=bool(ctx.credential_consumers_stopped),
+        # Release exclusive provider capacity only when consumers have stopped
+        # *and* cleanup is complete — never on a stopped consumer alone.
+        providerCapacityReleaseAllowed=bool(
+            ctx.credential_consumers_stopped and ctx.cleanup_completed
+        ),
     )
 
 

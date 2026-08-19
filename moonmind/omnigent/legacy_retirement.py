@@ -91,8 +91,9 @@ class RetirementGuardError(RuntimeError):
 
 # The code-owned inventory. Nothing is retired yet; the migration/canary/replay
 # evidence in this cohort has not proven replacement coverage. Machine-checkable
-# refs are importable module paths so the guard fails if one is deleted while the
-# path is still required.
+# refs name a concrete ``module:symbol`` (the class/function/coordinator that
+# actually implements the authority path) so the guard fails if that symbol is
+# deleted even when its module is left in place.
 RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
     LegacyPathRecord(
         pathId="omnigent.legacy.bridge_persistence",
@@ -102,14 +103,14 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
             "(overloaded bridge row superseded by the canonical session "
             "aggregate)."
         ),
-        machineCheckableRef="moonmind.omnigent.bridge_store",
+        machineCheckableRef="moonmind.omnigent.bridge_store:OmnigentBridgeSessionStore",
         applicableCriteria=_BASE_CRITERIA,
     ),
     LegacyPathRecord(
         pathId="omnigent.legacy.bridge_execution",
         owner="omnigent-control-plane",
         description="Legacy Omnigent session execution driver.",
-        machineCheckableRef="moonmind.omnigent.execute",
+        machineCheckableRef="moonmind.omnigent.execute:run_omnigent_execution",
         applicableCriteria=_BASE_CRITERIA
         | {RetirementCriterion.CUMULATIVE_REMEDIATION_PASSED},
     ),
@@ -117,7 +118,10 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         pathId="omnigent.legacy.profile_bound_execution",
         owner="omnigent-control-plane",
         description="Legacy profile-bound execution coordinator and routing.",
-        machineCheckableRef="moonmind.omnigent.profile_bound_execution",
+        machineCheckableRef=(
+            "moonmind.omnigent.profile_bound_execution:"
+            "OmnigentProfileBoundExecutionCoordinator"
+        ),
         applicableCriteria=_BASE_CRITERIA
         | {RetirementCriterion.BROWSER_TO_HOST_ACCEPTANCE_PASSED},
     ),
@@ -125,7 +129,9 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         pathId="omnigent.legacy.native_ui_compat",
         owner="omnigent-control-plane",
         description="Legacy native chat / Workflow Detail compatibility projection.",
-        machineCheckableRef="moonmind.omnigent.native_ui_compat",
+        machineCheckableRef=(
+            "moonmind.omnigent.native_ui_compat:classify_native_ui_http"
+        ),
         applicableCriteria=_BASE_CRITERIA
         | {RetirementCriterion.NATIVE_CHAT_ACCEPTANCE_PASSED},
     ),
@@ -133,7 +139,7 @@ RETIREMENT_INVENTORY: tuple[LegacyPathRecord, ...] = (
         pathId="omnigent.legacy.codex_cutover_selection",
         owner="omnigent-control-plane",
         description="Legacy Codex-through-Omnigent cutover runtime selection.",
-        machineCheckableRef="moonmind.omnigent.cutover",
+        machineCheckableRef="moonmind.omnigent.cutover:validate_matrix_artifact",
         applicableCriteria=_BASE_CRITERIA,
     ),
 )
@@ -174,13 +180,23 @@ def evaluate_retirement(
 
 
 def _ref_resolves(ref: str) -> bool:
-    """Whether a machine-checkable module reference still imports."""
+    """Whether a machine-checkable ``module:symbol`` reference still resolves.
 
+    The reference must name a concrete symbol (class, function, coordinator, or
+    registry entry) inside the module, not merely an importable module. This way
+    deleting the still-required implementation fails the guard even when an empty
+    or stub module is left behind. A bare module reference (no ``:symbol``) is
+    rejected so a weakened guard can never silently pass.
+    """
+
+    module_name, _, symbol = ref.partition(":")
+    if not module_name or not symbol:
+        return False
     try:
-        importlib.import_module(ref)
-        return True
+        module = importlib.import_module(module_name)
     except Exception:  # noqa: BLE001 - any import failure means the ref is gone
         return False
+    return hasattr(module, symbol)
 
 
 def assert_retirement_guard(

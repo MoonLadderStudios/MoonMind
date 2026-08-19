@@ -18,12 +18,22 @@ classification.
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 INVENTORY_CONTRACT_VERSION = "moonmind.omnigent-migration-inventory/v1"
 DEFAULT_DIAGNOSTIC_SAMPLE_LIMIT = 20
+
+# Operator-safe diagnostic references must be bounded, validated artifact refs in
+# the canonical ``artifact://`` scheme — never a raw provider session id, token,
+# or credential. The bounded charset and length keep the value safe to surface
+# verbatim in operator-facing inventory reports.
+DIAGNOSTIC_REF_MAX_LENGTH = 256
+_DIAGNOSTIC_REF_PATTERN = re.compile(
+    r"^artifact://[A-Za-z0-9][A-Za-z0-9._/\-]{0,244}$"
+)
 
 
 class InventoryClass(str, Enum):
@@ -63,6 +73,34 @@ class RecordInventoryView(BaseModel):
     cleanup_pending: bool = Field(False, alias="cleanupPending")
     corrupt: bool = Field(False, alias="corrupt")
     diagnostic_ref: str | None = Field(None, alias="diagnosticRef")
+
+    @field_validator("diagnostic_ref")
+    @classmethod
+    def _validate_diagnostic_ref(cls, value: str | None) -> str | None:
+        """Require a bounded, validated ``artifact://`` reference or ``None``.
+
+        ``extra="forbid"`` only blocks *additional* sensitive fields; it does not
+        make the contents of this one safe. A raw provider session id, token, or
+        credential accidentally supplied here would otherwise be copied verbatim
+        into operator-facing reports, so the value is constrained to a bounded
+        artifact-reference format before it is ever accepted or emitted.
+        """
+
+        if value is None:
+            return None
+        candidate = value.strip()
+        if not candidate:
+            return None
+        if len(candidate) > DIAGNOSTIC_REF_MAX_LENGTH:
+            raise ValueError(
+                "diagnostic_ref exceeds the bounded artifact-reference length"
+            )
+        if not _DIAGNOSTIC_REF_PATTERN.match(candidate):
+            raise ValueError(
+                "diagnostic_ref must be a bounded 'artifact://' reference, never "
+                "a raw provider session id, token, or credential"
+            )
+        return candidate
 
 
 class InventoryClassCount(BaseModel):
@@ -107,17 +145,21 @@ def classify_record(view: RecordInventoryView) -> InventoryClass:
     1. corrupt / invalid → ``unsupported_or_corrupt``
     2. conflicting authority, or a duplicate group whose authority is not
        provable → ``ambiguous_authority`` (quarantine; never newest-wins)
-    3. already on the canonical model → ``new_model_ready``
-    4. active legacy session → ``legacy_active`` (keep on recorded owner; an
+    3. already on the canonical model with an outstanding chat-binding alias →
+       ``alias_required`` (the canonical session exists, but the alias must
+       still be created before the record is a no-op)
+    4. already on the canonical model with no outstanding alias →
+       ``new_model_ready``
+    5. active legacy session → ``legacy_active`` (keep on recorded owner; an
        active session is never canonicalized by ownership transfer)
-    5. pending cleanup / janitor authority → ``cleanup_required``
-    6. terminal with provable authority → ``canonicalizable`` (its planned
+    6. pending cleanup / janitor authority → ``cleanup_required``
+    7. terminal with provable authority → ``canonicalizable`` (its planned
        action also creates a safe chat-binding alias when one is needed)
-    7. needs a safe chat-binding alias but is not canonicalizable →
+    8. needs a safe chat-binding alias but is not canonicalizable →
        ``alias_required``
-    8. terminal without provable authority → ``legacy_terminal_readable``
-    9. otherwise (unknown state / missing immutable evidence) →
-       ``unsupported_or_corrupt``
+    9. terminal without provable authority → ``legacy_terminal_readable``
+    10. otherwise (unknown state / missing immutable evidence) →
+        ``unsupported_or_corrupt``
     """
 
     if view.corrupt or not view.immutable_evidence_complete:
@@ -127,6 +169,12 @@ def classify_record(view: RecordInventoryView) -> InventoryClass:
     ):
         return InventoryClass.AMBIGUOUS_AUTHORITY
     if view.has_canonical_session:
+        # A canonical session already exists, but a still-outstanding chat-binding
+        # alias must be produced before the record is truly "ready"; otherwise the
+        # previously issued chat handle stays unresolved. Only a record with no
+        # outstanding alias is new_model_ready (a no-op).
+        if view.requires_chat_alias:
+            return InventoryClass.ALIAS_REQUIRED
         return InventoryClass.NEW_MODEL_READY
     if view.is_active:
         return InventoryClass.LEGACY_ACTIVE

@@ -86,7 +86,12 @@ def test_duplicate_seven_binding_group_all_quarantined() -> None:
 
 def test_report_is_bounded_and_safe() -> None:
     views = [
-        _view(f"t-{i}", is_terminal=True, authority_provable=True, diagnostic_ref=f"art://d/{i}")
+        _view(
+            f"t-{i}",
+            is_terminal=True,
+            authority_provable=True,
+            diagnostic_ref=f"artifact://omnigent/migration/{i}",
+        )
         for i in range(50)
     ]
     report = build_inventory_report(views, sample_limit=5)
@@ -99,7 +104,35 @@ def test_report_is_bounded_and_safe() -> None:
     # Only operator-safe refs appear; the view has no provider-session field at
     # all, so a report can never carry one.
     assert "recordId" not in report.as_dict()
-    assert all(ref.startswith("art://") for ref in entry.diagnostic_refs)
+    assert all(ref.startswith("artifact://") for ref in entry.diagnostic_refs)
+
+
+def test_canonical_with_outstanding_alias_still_requires_alias() -> None:
+    # A record already on the canonical model but still owing a chat-binding
+    # alias must not be classified as a no-op; the alias must still be created.
+    view = _view(has_canonical_session=True, requires_chat_alias=True)
+    assert classify_record(view) is InventoryClass.ALIAS_REQUIRED
+
+
+def test_diagnostic_ref_must_be_bounded_artifact_reference() -> None:
+    import pydantic
+
+    # A raw provider-session-looking value is rejected before it can be emitted.
+    for unsafe in ("sess_live_ABC123", "art://d/1", "x" * 300):
+        try:
+            RecordInventoryView(record_id="b", diagnostic_ref=unsafe)
+        except pydantic.ValidationError:
+            pass
+        else:  # pragma: no cover - defensive
+            raise AssertionError(f"unsafe diagnostic_ref must be rejected: {unsafe!r}")
+
+    # A bounded canonical artifact reference is accepted and normalized.
+    ok = RecordInventoryView(
+        record_id="b", diagnostic_ref="  artifact://omnigent/migration/1  "
+    )
+    assert ok.diagnostic_ref == "artifact://omnigent/migration/1"
+    # Blank values normalize to None rather than surfacing an empty ref.
+    assert RecordInventoryView(record_id="b", diagnostic_ref="   ").diagnostic_ref is None
 
 
 def test_view_forbids_unknown_sensitive_fields() -> None:

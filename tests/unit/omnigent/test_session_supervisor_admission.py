@@ -20,6 +20,7 @@ from moonmind.omnigent.session_supervisor_admission import (
 def _ready(generation: str = "gen-1") -> SupervisorReadiness:
     return SupervisorReadiness(
         deploymentGeneration=generation,
+        supervisorWorkflowRegistered=True,
         compiledIntentReady=True,
         canonicalSchemaReady=True,
         exactArtifactConformancePassed=True,
@@ -147,6 +148,7 @@ def test_each_canary_allowlist_is_exact(field: str, value: str, reason: str) -> 
 @pytest.mark.parametrize(
     "ready_field,reason",
     [
+        ("supervisor_workflow_registered", "supervisor_workflow_not_registered"),
         ("compiled_intent_ready", "compiled_intent_incomplete"),
         ("canonical_schema_ready", "canonical_schema_not_ready"),
         ("exact_artifact_conformance_passed", "exact_artifact_conformance_failed"),
@@ -159,6 +161,7 @@ def test_each_canary_allowlist_is_exact(field: str, value: str, reason: str) -> 
 def test_each_readiness_gate_fails_closed(ready_field: str, reason: str) -> None:
     kwargs = {
         "deploymentGeneration": "gen-1",
+        "supervisorWorkflowRegistered": True,
         "compiledIntentReady": True,
         "canonicalSchemaReady": True,
         "exactArtifactConformancePassed": True,
@@ -168,6 +171,7 @@ def test_each_readiness_gate_fails_closed(ready_field: str, reason: str) -> None
         "historicalReadSupportActive": True,
     }
     alias = {
+        "supervisor_workflow_registered": "supervisorWorkflowRegistered",
         "compiled_intent_ready": "compiledIntentReady",
         "canonical_schema_ready": "canonicalSchemaReady",
         "exact_artifact_conformance_passed": "exactArtifactConformancePassed",
@@ -182,6 +186,28 @@ def test_each_readiness_gate_fails_closed(ready_field: str, reason: str) -> None
     )
     assert snap.admitted is False
     assert snap.reason_code == reason
+
+
+def test_unregistered_workflow_fails_closed_even_when_otherwise_ready() -> None:
+    # Enabling the supervisor flags must not silently admit sessions while the
+    # production MoonMind.OmnigentSession workflow is not yet registered/wired.
+    readiness = SupervisorReadiness(
+        deploymentGeneration="gen-1",
+        supervisorWorkflowRegistered=False,
+        compiledIntentReady=True,
+        canonicalSchemaReady=True,
+        exactArtifactConformancePassed=True,
+        providerCapabilityReady=True,
+        runtimeCapabilityReady=True,
+        rollbackSupportActive=True,
+        historicalReadSupportActive=True,
+    )
+    snap = evaluate_supervisor_admission(
+        policy=_policy(), readiness=readiness, request=_request()
+    )
+    assert snap.admitted is False
+    assert snap.mode == "denied"
+    assert snap.reason_code == "supervisor_workflow_not_registered"
 
 
 def test_empty_allowlists_mean_general_not_canary() -> None:

@@ -44,6 +44,7 @@ def _replay_policy() -> SupervisorRolloutPolicy:
 def _replay_readiness() -> SupervisorReadiness:
     return SupervisorReadiness(
         deploymentGeneration="gen-1",
+        supervisorWorkflowRegistered=True,
         compiledIntentReady=True,
         canonicalSchemaReady=True,
         exactArtifactConformancePassed=True,

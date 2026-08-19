@@ -41,6 +41,53 @@ def test_guard_fails_when_required_path_ref_is_deleted() -> None:
         assert_retirement_guard(broken)
 
 
+def test_guard_fails_when_symbol_deleted_but_module_remains() -> None:
+    # The concrete class/function was removed even though its module still
+    # imports — the guard must still fail because the authority path is gone.
+    broken = (
+        LegacyPathRecord(
+            pathId="omnigent.legacy.bridge_persistence",
+            owner="omnigent-control-plane",
+            description="Module kept, concrete implementation deleted.",
+            machineCheckableRef="moonmind.omnigent.bridge_store:__DeletedStore__",
+            applicableCriteria=frozenset(
+                {RetirementCriterion.HISTORICAL_READS_AVAILABLE}
+            ),
+        ),
+    )
+    with pytest.raises(RetirementGuardError):
+        assert_retirement_guard(broken)
+
+
+def test_guard_fails_when_ref_names_only_a_module() -> None:
+    # A bare module reference (no concrete ``:symbol``) is rejected so a
+    # weakened guard can never silently pass.
+    module_only = (
+        LegacyPathRecord(
+            pathId="omnigent.legacy.bridge_persistence",
+            owner="omnigent-control-plane",
+            description="Ref names only a module, not a concrete symbol.",
+            machineCheckableRef="moonmind.omnigent.bridge_store",
+            applicableCriteria=frozenset(
+                {RetirementCriterion.HISTORICAL_READS_AVAILABLE}
+            ),
+        ),
+    )
+    with pytest.raises(RetirementGuardError):
+        assert_retirement_guard(module_only)
+
+
+def test_inventory_refs_name_concrete_symbols() -> None:
+    # Every current inventory ref must resolve to a concrete symbol.
+    import importlib
+
+    for path in RETIREMENT_INVENTORY:
+        module_name, sep, symbol = path.machine_checkable_ref.partition(":")
+        assert sep == ":" and symbol, path.machine_checkable_ref
+        module = importlib.import_module(module_name)
+        assert hasattr(module, symbol), path.machine_checkable_ref
+
+
 def test_guard_fails_when_retired_path_has_unmet_criteria() -> None:
     retired = (
         LegacyPathRecord(

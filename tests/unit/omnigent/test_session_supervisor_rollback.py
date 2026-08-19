@@ -98,18 +98,32 @@ def test_revert_default_to_legacy_only_when_supported() -> None:
     assert unsupported.direct_codex_substitution is False
 
 
-def test_provider_capacity_release_requires_consumers_stopped() -> None:
+def test_provider_capacity_release_requires_consumers_stopped_and_cleanup_complete() -> None:
     not_stopped = resolve_rollback_effect(
         mode="complete_stop",
-        context=SessionRollbackContext(credentialConsumersStopped=False),
+        context=SessionRollbackContext(
+            credentialConsumersStopped=False, cleanupCompleted=True
+        ),
     )
     assert not_stopped.provider_capacity_release_allowed is False
 
-    stopped = resolve_rollback_effect(
+    # A stopped consumer alone must never authorize release while cleanup
+    # authority still owns resources (matches the reconciler release policy).
+    cleanup_pending = resolve_rollback_effect(
         mode="complete_stop",
-        context=SessionRollbackContext(credentialConsumersStopped=True),
+        context=SessionRollbackContext(
+            credentialConsumersStopped=True, cleanupCompleted=False
+        ),
     )
-    assert stopped.provider_capacity_release_allowed is True
+    assert cleanup_pending.provider_capacity_release_allowed is False
+
+    both = resolve_rollback_effect(
+        mode="complete_stop",
+        context=SessionRollbackContext(
+            credentialConsumersStopped=True, cleanupCompleted=True
+        ),
+    )
+    assert both.provider_capacity_release_allowed is True
 
 
 def test_parse_rollback_mode_normalizes_and_fails_closed() -> None:

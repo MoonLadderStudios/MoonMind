@@ -43,6 +43,7 @@ AdmissionMode = Literal["denied", "shadow", "live"]
 # and deterministic for a given (policy, readiness, request) triple.
 SUPERVISOR_DISABLED = "supervisor_disabled"
 GENERATION_DISABLED = "generation_disabled"
+SUPERVISOR_WORKFLOW_NOT_REGISTERED = "supervisor_workflow_not_registered"
 COMPILED_INTENT_INCOMPLETE = "compiled_intent_incomplete"
 CANONICAL_SCHEMA_NOT_READY = "canonical_schema_not_ready"
 EXACT_ARTIFACT_CONFORMANCE_FAILED = "exact_artifact_conformance_failed"
@@ -100,6 +101,14 @@ class SupervisorReadiness(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     deployment_generation: str = Field(alias="deploymentGeneration")
+    # The production ``MoonMind.OmnigentSession`` Temporal workflow must actually
+    # be registered and wired into the launch boundary before any session is
+    # admitted. Until that integration lands, this evidence is False and
+    # admission fails closed rather than exposing settings that silently admit
+    # nothing (issue #3712 "Register and invoke the supervisor workflow").
+    supervisor_workflow_registered: bool = Field(
+        alias="supervisorWorkflowRegistered"
+    )
     compiled_intent_ready: bool = Field(alias="compiledIntentReady")
     canonical_schema_ready: bool = Field(alias="canonicalSchemaReady")
     exact_artifact_conformance_passed: bool = Field(
@@ -226,6 +235,8 @@ def evaluate_supervisor_admission(
         reason = SUPERVISOR_DISABLED
     elif not policy.generation or policy.generation == DISABLED_GENERATION:
         reason = GENERATION_DISABLED
+    elif not readiness.supervisor_workflow_registered:
+        reason = SUPERVISOR_WORKFLOW_NOT_REGISTERED
     elif not readiness.compiled_intent_ready:
         reason = COMPILED_INTENT_INCOMPLETE
     elif not readiness.canonical_schema_ready:
@@ -288,6 +299,7 @@ def evaluate_supervisor_admission(
 __all__ = [
     "OMNIGENT_SESSION_SUPERVISOR_WORKFLOW_TYPE",
     "SUPERVISOR_ADMISSION_POLICY_VERSION",
+    "SUPERVISOR_WORKFLOW_NOT_REGISTERED",
     "DISABLED_GENERATION",
     "AdmissionMode",
     "SupervisorRolloutPolicy",

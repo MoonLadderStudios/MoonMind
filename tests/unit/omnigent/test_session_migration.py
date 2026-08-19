@@ -54,6 +54,9 @@ class FakeCanonicalRepo:
     async def is_quarantined(self, record_id: str) -> bool:
         return record_id in self.quarantined
 
+    async def has_cleanup_marker(self, record_id: str) -> bool:
+        return record_id in self.cleanup
+
 
 def _view(record_id: str, **overrides: object) -> RecordInventoryView:
     base: dict[str, object] = {
@@ -138,6 +141,8 @@ async def test_partial_failure_then_resume_without_duplication() -> None:
     # Resume on a healthy repo state: clear the fault and continue.
     repo._fail_on = None
     resumed = await execute_migration(plan, repo, mode="resume")
+    # The resumed pass applies at least the previously failed record.
+    assert resumed.applied >= 1
     assert "c2" in repo.canonical_sessions
     # c1 was already applied and is not created again.
     assert repo.create_calls.count("c1") == 1
@@ -175,6 +180,39 @@ async def test_rollback_metadata_describes_reversal_without_deleting() -> None:
     # Rollback metadata never deletes anything.
     assert repo.canonical_sessions == {"c1", "c2"}
     assert repo.quarantined == {"q1"}
+
+
+@pytest.mark.asyncio
+async def test_rollback_metadata_excludes_unapplied_actions_after_partial_failure() -> None:
+    plan = plan_migration(_representative_views())
+    repo = FakeCanonicalRepo(fail_on="c2")
+
+    with pytest.raises(RuntimeError):
+        await execute_migration(plan, repo, mode="apply")
+
+    meta = await execute_migration(plan, repo, mode="rollback_metadata")
+    reversible = {e.record_id for e in meta.rollback_manifest}
+    # c1 ran before the c2 failure and is reversible; c2 and every side effect
+    # planned after it never applied, so they must not appear in the manifest.
+    assert "c1" in reversible
+    assert "c2" not in reversible
+    assert reversible <= {"c1"}
+    # Every manifest entry corresponds to a persisted idempotency marker.
+    for entry in meta.rollback_manifest:
+        assert entry.reversible_marker in repo.applied
+
+
+@pytest.mark.asyncio
+async def test_verify_reports_missing_cleanup_marker() -> None:
+    plan = plan_migration(_representative_views())
+    repo = FakeCanonicalRepo()
+    await execute_migration(plan, repo, mode="apply")
+    # Drop the persisted cleanup marker to simulate a lost/never-applied write.
+    repo.cleanup.discard("clean1")
+    verify = await execute_migration(plan, repo, mode="verify")
+    assert any(
+        d == "missing_cleanup_marker:clean1" for d in verify.discrepancies
+    )
 
 
 @pytest.mark.asyncio

@@ -155,9 +155,11 @@ class CanonicalMigrationRepository(Protocol):
     side effect.
     """
 
-    async def is_applied(self, idempotency_key: str) -> bool: ...
+    async def is_applied(self, idempotency_key: str) -> bool:
+        """Whether an action's idempotency marker is already recorded."""
 
-    async def record_applied(self, idempotency_key: str) -> None: ...
+    async def record_applied(self, idempotency_key: str) -> None:
+        """Persist an action's idempotency marker after its side effects succeed."""
 
     async def create_canonical_session(self, record_id: str) -> None:
         """Create the canonical session and its first turn attempt for a record."""
@@ -171,11 +173,17 @@ class CanonicalMigrationRepository(Protocol):
     async def mark_cleanup_required(self, record_id: str) -> None:
         """Record that a legacy record still owns pending cleanup authority."""
 
-    async def has_canonical_session(self, record_id: str) -> bool: ...
+    async def has_canonical_session(self, record_id: str) -> bool:
+        """Whether the canonical session for a record has been created."""
 
-    async def has_chat_alias(self, record_id: str) -> bool: ...
+    async def has_chat_alias(self, record_id: str) -> bool:
+        """Whether the safe chat-binding alias for a record has been created."""
 
-    async def is_quarantined(self, record_id: str) -> bool: ...
+    async def is_quarantined(self, record_id: str) -> bool:
+        """Whether an ambiguous-authority record is marked quarantined."""
+
+    async def has_cleanup_marker(self, record_id: str) -> bool:
+        """Whether the pending-cleanup marker for a record has been persisted."""
 
 
 def _idempotency_key(record_id: str, kind: PlannedActionKind) -> str:
@@ -271,23 +279,39 @@ async def execute_migration(
                 discrepancies.append(f"missing_chat_alias:{action.record_id}")
             if action.quarantines and not await repo.is_quarantined(action.record_id):
                 discrepancies.append(f"missing_quarantine:{action.record_id}")
+            if action.kind == "mark_cleanup_required" and not (
+                await repo.has_cleanup_marker(action.record_id)
+            ):
+                discrepancies.append(f"missing_cleanup_marker:{action.record_id}")
         return MigrationResult(
             mode=mode, planned=planned, discrepancies=tuple(discrepancies)
         )
 
     if mode == "rollback_metadata":
-        manifest = tuple(
-            RollbackManifestEntry(
-                recordId=action.record_id,
-                idempotencyKey=action.idempotency_key,
-                kind=action.kind,
-                reversibleMarker=action.idempotency_key,
+        # Only actions that actually ran (their idempotency marker is present in
+        # the repository) may appear in the reversal manifest. A partial-failure
+        # run leaves later planned side effects unapplied and unmarked; emitting
+        # reversal entries for them would let a consumer try to reverse work that
+        # never happened, including pre-existing unrelated state.
+        manifest_entries: list[RollbackManifestEntry] = []
+        for action in plan.actions:
+            if not (
+                action.creates_canonical_session
+                or action.creates_chat_alias
+                or action.quarantines
+            ):
+                continue
+            if not await repo.is_applied(action.idempotency_key):
+                continue
+            manifest_entries.append(
+                RollbackManifestEntry(
+                    recordId=action.record_id,
+                    idempotencyKey=action.idempotency_key,
+                    kind=action.kind,
+                    reversibleMarker=action.idempotency_key,
+                )
             )
-            for action in plan.actions
-            if action.creates_canonical_session
-            or action.creates_chat_alias
-            or action.quarantines
-        )
+        manifest = tuple(manifest_entries)
         # Rollback metadata never deletes evidence; it only describes reversal.
         return MigrationResult(
             mode=mode,
