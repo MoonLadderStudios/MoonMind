@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from api_service.db.models import (
+    OmnigentAgentProfile,
+    OmnigentAgentProfileVersion,
     RecurringWorkflowDefinition,
     RecurringWorkflowRun,
     RecurringWorkflowRunOutcome,
@@ -24,6 +26,7 @@ from api_service.db.models import (
 )
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
+    refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
 )
 from moonmind.workflows.recurring.cron import (
@@ -614,6 +617,138 @@ class RecurringWorkflowsService:
                 definition.owner_user_id
             ),
         )
+
+    async def _refresh_managed_bootstrap_target(
+        self,
+        definition: RecurringWorkflowDefinition,
+    ) -> bool:
+        """Advance one schedule when deployment-managed launch authority moves."""
+
+        from api_service.services.omnigent_agent_bootstrap_service import (
+            BOOTSTRAP_PROFILE_ID,
+        )
+
+        target = dict(definition.target or {})
+        initial_parameters = dict(target.get("initialParameters") or {})
+        previous = initial_parameters.get("agentProfileSnapshot")
+        if (
+            not isinstance(previous, Mapping)
+            or previous.get("profileId") != BOOTSTRAP_PROFILE_ID
+        ):
+            return False
+        if target.get("agentProfileSnapshot") != previous:
+            raise RecurringWorkflowValidationError(
+                "managed schedule Agent Profile snapshot identities conflict"
+            )
+
+        profile = await self._session.get(
+            OmnigentAgentProfile,
+            BOOTSTRAP_PROFILE_ID,
+        )
+        if profile is None or profile.active_version is None:
+            raise RecurringWorkflowValidationError(
+                "managed bootstrap Agent Profile is unavailable"
+            )
+        active = await self._session.scalar(
+            select(OmnigentAgentProfileVersion).where(
+                OmnigentAgentProfileVersion.profile_id == BOOTSTRAP_PROFILE_ID,
+                OmnigentAgentProfileVersion.version == profile.active_version,
+            )
+        )
+        if active is None:
+            raise RecurringWorkflowValidationError(
+                "managed bootstrap Agent Profile active version is unavailable"
+            )
+        if (
+            previous.get("version") == active.version
+            and previous.get("digest") == active.digest
+        ):
+            return False
+
+        actor = (
+            await self._session.get(User, definition.owner_user_id)
+            if definition.owner_user_id is not None
+            else None
+        )
+        refreshed = await refresh_managed_bootstrap_snapshot(
+            self._session,
+            parameters=initial_parameters,
+            consumer_type="schedule",
+            consumer_id=str(definition.id),
+            user=actor,
+            replace_existing_usage=True,
+        )
+        target["initialParameters"] = refreshed
+        target["agentProfile"] = dict(refreshed["agentProfile"])
+        target["agentProfileSnapshot"] = dict(refreshed["agentProfileSnapshot"])
+        definition.target = target
+        definition.updated_at = datetime.now(UTC)
+        definition.version = int(definition.version or 0) + 1
+        await self._session.flush()
+        return True
+
+    async def refresh_managed_bootstrap_schedules(self, limit: int = 500) -> int:
+        """Refresh scheduled actions after a managed bootstrap policy cutover."""
+
+        batch_size = max(1, int(limit))
+        definition_ids: list[UUID] = []
+        last_definition_id: UUID | None = None
+        while True:
+            statement = select(RecurringWorkflowDefinition.id).where(
+                RecurringWorkflowDefinition.temporal_schedule_id.is_not(None),
+            )
+            if last_definition_id is not None:
+                statement = statement.where(
+                    RecurringWorkflowDefinition.id > last_definition_id
+                )
+            batch = list(
+                (
+                    await self._session.execute(
+                        statement.order_by(RecurringWorkflowDefinition.id).limit(
+                            batch_size
+                        )
+                    )
+                ).scalars()
+            )
+            if not batch:
+                break
+            definition_ids.extend(batch)
+            last_definition_id = batch[-1]
+            if len(batch) < batch_size:
+                break
+
+        refreshed = 0
+        failures: list[str] = []
+        for definition_id in definition_ids:
+            try:
+                definition = await self._session.get(
+                    RecurringWorkflowDefinition,
+                    definition_id,
+                )
+                if definition is None:
+                    continue
+                if not await self._refresh_managed_bootstrap_target(definition):
+                    continue
+                # Update Temporal before committing the corresponding DB
+                # authority. A crash between the two is repaired idempotently:
+                # the next pass observes the current action and commits the DB.
+                await self._ensure_schedule_action_current(definition)
+                await self._session.commit()
+                refreshed += 1
+            except Exception as exc:
+                await self._session.rollback()
+                failures.append(str(definition_id))
+                logger.warning(
+                    "Failed to refresh managed bootstrap schedule %s: %s",
+                    definition_id,
+                    exc,
+                )
+        if failures:
+            raise RecurringWorkflowValidationError(
+                "managed bootstrap schedule refresh failed for: "
+                + ", ".join(failures)
+            )
+        return refreshed
 
     async def create_definition(
         self,

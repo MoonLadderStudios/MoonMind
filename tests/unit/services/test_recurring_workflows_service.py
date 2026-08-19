@@ -16,6 +16,8 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileVersion,
     RecurringWorkflowDefinition,
     RecurringWorkflowRun,
     RecurringWorkflowRunOutcome,
@@ -727,6 +729,165 @@ async def test_reconcile_repairs_existing_schedule_action_payload(
                 "MoonMind.UserWorkflow"
             )
             assert "workflowType" not in call_kwargs["workflow_input"]
+
+
+async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(
+    tmp_path: Path,
+    mock_temporal_adapter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    old_digest = "sha256:" + "3" * 64
+    new_digest = "sha256:" + "4" * 64
+    old_snapshot = {
+        "profileId": "omnigent-bootstrap-default",
+        "version": 2,
+        "digest": old_digest,
+        "providerProfileRef": "codex_openai_oauth",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@3",
+        "document": {"model": {}, "capture": {}, "rag": {}, "publish": {}},
+    }
+    new_snapshot = {
+        **old_snapshot,
+        "version": 3,
+        "digest": new_digest,
+        "launchPolicyRef": "codex-on-demand@4",
+    }
+    refresh_calls: list[dict[str, object]] = []
+
+    async def refresh_snapshot(
+        session,
+        *,
+        parameters,
+        consumer_type,
+        consumer_id,
+        user,
+        replace_existing_usage,
+    ):
+        refresh_calls.append(
+            {
+                "consumerType": consumer_type,
+                "consumerId": consumer_id,
+                "replaceExistingUsage": replace_existing_usage,
+            }
+        )
+        return {
+            **dict(parameters),
+            "agentProfile": {
+                "profileId": "omnigent-bootstrap-default",
+                "version": 3,
+                "digest": new_digest,
+            },
+            "agentProfileSnapshot": new_snapshot,
+            "omnigent": {
+                "executionTargetRef": "omnigent-codex@1",
+                "launchPolicyRef": "codex-on-demand@4",
+            },
+        }
+
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service."
+        "refresh_managed_bootstrap_snapshot",
+        refresh_snapshot,
+    )
+
+    async with recurring_db(tmp_path) as session_maker, session_maker() as session:
+        service = RecurringWorkflowsService(
+            session,
+            temporal_client_adapter=mock_temporal_adapter,
+        )
+        definition = await service.create_definition(
+            name="Daily Dependabot Resolver",
+            description=None,
+            enabled=True,
+            schedule_type="cron",
+            cron="0 13 * * *",
+            timezone="UTC",
+            scope_type="personal",
+            scope_ref=None,
+            owner_user_id=uuid4(),
+            target={
+                "workflowType": "MoonMind.UserWorkflow",
+                "initialParameters": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-bootstrap-default",
+                        "version": 2,
+                        "digest": old_digest,
+                    },
+                    "agentProfileSnapshot": old_snapshot,
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-codex@1",
+                        "launchPolicyRef": "codex-on-demand@3",
+                    },
+                },
+                "agentProfile": {
+                    "profileId": "omnigent-bootstrap-default",
+                    "version": 2,
+                    "digest": old_digest,
+                },
+                "agentProfileSnapshot": old_snapshot,
+            },
+            policy={},
+        )
+        session.add(
+            OmnigentAgentProfile(
+                profile_id="omnigent-bootstrap-default",
+                display_name="Codex via Omnigent",
+                visibility="workspace",
+                state="active",
+                active_version=3,
+                default_for_runtime=True,
+            )
+        )
+        session.add(
+            OmnigentAgentProfileVersion(
+                profile_id="omnigent-bootstrap-default",
+                version=3,
+                digest=new_digest,
+                document={},
+                validation_result={"ready": True},
+            )
+        )
+        await session.commit()
+
+        old_workflow_type, old_workflow_input = (
+            service._workflow_bundle_for_definition(definition)
+        )
+        mock_temporal_adapter.create_schedule.reset_mock()
+        mock_temporal_adapter.update_schedule.reset_mock()
+        mock_temporal_adapter.describe_schedule.return_value = SimpleNamespace(
+            schedule=SimpleNamespace(
+                action=SimpleNamespace(
+                    workflow=old_workflow_type,
+                    id=make_scheduled_workflow_id_base(definition.id),
+                    args=[old_workflow_input],
+                    task_queue="mm.workflow.user.v2",
+                )
+            )
+        )
+
+        assert await service.refresh_managed_bootstrap_schedules() == 1
+
+        await session.refresh(definition)
+        assert definition.version == 2
+        assert definition.target["agentProfile"]["version"] == 3
+        assert definition.target["initialParameters"]["omnigent"] == {
+            "executionTargetRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@4",
+        }
+        assert refresh_calls == [
+            {
+                "consumerType": "schedule",
+                "consumerId": str(definition.id),
+                "replaceExistingUsage": True,
+            }
+        ]
+        update = mock_temporal_adapter.update_schedule.call_args.kwargs
+        assert update["workflow_input"]["initial_parameters"]["omnigent"][
+            "launchPolicyRef"
+        ] == "codex-on-demand@4"
+
 
 async def test_reconcile_skips_update_when_metadata_and_action_match(
     tmp_path: Path, mock_temporal_adapter
