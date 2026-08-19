@@ -1,0 +1,88 @@
+name: Provider / Omnigent Fault Image Smoke
+
+# Source issue: MoonLadderStudios/MoonMind#3709 (acceptance criterion 7 — the
+# exact-image fault matrix). Runs the deterministic Omnigent fault matrix INSIDE
+# the deployable API and worker images so image authority drift (#3694) and
+# process/runtime-dependency differences fail the smoke rather than passing on a
+# developer checkout. The matrix core lives in
+# moonmind/omnigent/faultlab/image_smoke.py and is invoked as the packaged module
+# `python -m moonmind.omnigent.faultlab.image_smoke` (which ships in the image's
+# own moonmind install; tools/run_omnigent_fault_image_smoke.py is only a local
+# wrapper); the same logic is proven hermetically in
+# tests/unit/omnigent/faultlab/test_image_smoke.py on every PR.
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      app_image:
+        description: "Digest-pinned deployable app image (API + worker share one image)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: omnigent-fault-image-smoke
+  cancel-in-progress: false
+
+jobs:
+  image-smoke:
+    name: Fault matrix in ${{ matrix.role }} image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The API and worker ship from the single deployable app image; run the
+        # matrix under each role's entrypoint runtime.
+        role: [api, worker]
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@v7
+      - name: Resolve pinned image
+        id: image
+        shell: bash
+        env:
+          DISPATCH_APP_IMAGE: ${{ inputs.app_image }}
+          DEFAULT_APP_IMAGE: ${{ vars.MOONMIND_APP_IMAGE }}
+        run: |
+          app_image="${DISPATCH_APP_IMAGE:-$DEFAULT_APP_IMAGE}"
+          if [[ ! "$app_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
+            echo "::error::The deployable app image must be configured by immutable digest"
+            exit 1
+          fi
+          echo "app_image=$app_image" >> "$GITHUB_OUTPUT"
+      - name: Run the fault matrix inside the exact image
+        shell: bash
+        env:
+          APP_IMAGE: ${{ steps.image.outputs.app_image }}
+          ROLE: ${{ matrix.role }}
+        run: |
+          mkdir -p artifacts/omnigent-fault-image-smoke
+          # Execute the packaged module from the image's own installed moonmind
+          # (never a tools/ path the production image does not copy) so a missing
+          # dependency, wrong interpreter, or stripped module in the shipped image
+          # fails the smoke (#3694). ``--role`` resolves that role's real startup
+          # module inside the image so a role-specific stripped dependency fails
+          # too, and ``--image-ref`` records the exact pinned digest as provenance
+          # instead of an unrelated workflow-checkout commit; the driver also
+          # self-stamps the image's own build id read from inside the image.
+          docker run --rm \
+            --entrypoint python \
+            -v "$PWD/artifacts/omnigent-fault-image-smoke:/out" \
+            "$APP_IMAGE" \
+            -m moonmind.omnigent.faultlab.image_smoke \
+            --output "/out/report-${ROLE}.json" \
+            --role "$ROLE" \
+            --image-ref "$APP_IMAGE"
+      - name: Upload secret-safe smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: omnigent-fault-image-smoke-${{ matrix.role }}
+          path: artifacts/omnigent-fault-image-smoke/report-${{ matrix.role }}.json
+          retention-days: 90

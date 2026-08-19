@@ -1,0 +1,28 @@
+desiredCancel: false
+groundTruthTerminal: success
+invariant: cleanup_safety
+maxTurnAttempts: 3
+recoveryRound: 3
+requiresCleanup: true
+requiresHost: true
+requiresProfileLease: true
+scenarioId: cleanup-races-new-continuation
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 1002
+sourceRef: MM-omnigent-cleanup-race
+steps:
+- disconnect: false
+  duplicate: false
+  emit: []
+  'on': submit_turn
+  reorder: false
+  response: success
+  sideEffect: accepted
+- crashAt: after_side_effect_before_receipt
+  disconnect: false
+  duplicate: false
+  emit: []
+  'on': begin_cleanup
+  reorder: false
+  response: success
+  sideEffect: none
