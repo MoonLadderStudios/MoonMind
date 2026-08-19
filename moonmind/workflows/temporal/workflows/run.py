@@ -729,6 +729,9 @@ RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH = (
 RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
     "run-agent-required-capabilities-propagation-v1"
 )
+RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH = (
+    "run-execution-fanout-authorization-v1"
+)
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
@@ -1547,6 +1550,9 @@ class MoonMindRunWorkflow:
         self._remediation_context: dict[str, Any] = {}
         self._remediation_policy: dict[str, Any] = {}
         self._native_skill_binding_by_step: dict[str, dict[str, Any]] = {}
+        self._execution_fanout_authorization_by_step: dict[
+            str, dict[str, Any]
+        ] = {}
         self._resolved_skill_terminal_contract_by_step: dict[
             str, dict[str, Any]
         ] = {}
@@ -18729,6 +18735,12 @@ class MoonMindRunWorkflow:
             resolved,
             normalized_skill,
         )
+        self._execution_fanout_authorization_by_step[node_id] = (
+            self._resolved_skill_execution_fanout_authorization(
+                selected_entry,
+                selected_skill=normalized_skill,
+            )
+        )
         if terminal_contract_enabled:
             terminal_contract = self._resolved_skill_terminal_contract(selected_entry)
             if terminal_contract is not None:
@@ -18818,6 +18830,54 @@ class MoonMindRunWorkflow:
             if str(raw_name or "").strip().lower() == normalized:
                 return entry
         return None
+
+    @staticmethod
+    def _resolved_skill_execution_fanout_authorization(
+        resolved_entry: Any,
+        *,
+        selected_skill: str,
+    ) -> dict[str, Any]:
+        if isinstance(resolved_entry, WorkflowMapping):
+            provenance = resolved_entry.get("provenance")
+            required = resolved_entry.get(
+                "required_capabilities",
+                resolved_entry.get("requiredCapabilities", ()),
+            )
+        else:
+            provenance = getattr(resolved_entry, "provenance", None)
+            required = getattr(resolved_entry, "required_capabilities", ())
+        if isinstance(provenance, WorkflowMapping):
+            raw_source_kind = provenance.get(
+                "source_kind", provenance.get("sourceKind")
+            )
+        else:
+            raw_source_kind = getattr(provenance, "source_kind", None)
+        source_kind = str(
+            getattr(raw_source_kind, "value", raw_source_kind) or ""
+        ).strip().lower()
+        capabilities = {
+            str(value or "").strip().lower()
+            for value in (
+                required
+                if isinstance(required, Iterable)
+                and not isinstance(required, (str, bytes))
+                else ()
+            )
+        }
+        authorized = bool(
+            source_kind in {"built_in", "deployment"}
+            and "execution.fanout" in capabilities
+        )
+        return {
+            "authorized": authorized,
+            "selectedSkill": str(selected_skill or "").strip().lower(),
+            "sourceKind": source_kind or "unresolved",
+            "reasonCode": (
+                "trusted_resolved_skill_requirement"
+                if authorized
+                else "resolved_skill_policy_denied"
+            ),
+        }
 
     @staticmethod
     def _resolved_skill_terminal_contract(
@@ -19684,6 +19744,23 @@ class MoonMindRunWorkflow:
             skill_source_policy["resolvedSkillsetRef"] = resolved_skillset_ref
         if selected_skill:
             skill_source_policy["selectedSkill"] = selected_skill
+        if self._workflow_patch_enabled(
+            RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH
+        ):
+            fanout_authorization = dict(
+                self._execution_fanout_authorization_by_step.get(
+                    node_id,
+                    {
+                        "authorized": False,
+                        "selectedSkill": selected_skill,
+                        "sourceKind": "unresolved",
+                        "reasonCode": "resolved_skill_evidence_unavailable",
+                    },
+                )
+            )
+            if resolved_skillset_ref:
+                fanout_authorization["resolvedSkillsetRef"] = resolved_skillset_ref
+            skill_source_policy["executionFanout"] = fanout_authorization
         execution_ordinal = step_execution or 1
         context_workspace = self._step_execution_workspace(
             node_id,

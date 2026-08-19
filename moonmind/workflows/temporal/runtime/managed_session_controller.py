@@ -49,7 +49,9 @@ from moonmind.security.docker_networks import (
     resolve_control_plane_network,
 )
 from moonmind.security.execution_fanout_capabilities import (
+    EXECUTION_FANOUT_REQUIRED_CAPABILITY,
     mint_execution_fanout_capability,
+    require_execution_fanout_authorization,
 )
 from moonmind.utils.logging import SecretRedactor, scrub_github_tokens
 from moonmind.workflows.codex_session_timeouts import (
@@ -2549,6 +2551,25 @@ class DockerCodexManagedSessionController:
             request.workload_mode == "container-jobs"
             and session_environment.get("MOONMIND_URL")
         )
+        normalized_capabilities = (
+            None
+            if request.required_capabilities is None
+            else {
+                str(item or "").strip().lower()
+                for item in request.required_capabilities
+            }
+        )
+        # Omitted capabilities preserve already-scheduled launch Activity
+        # payloads. New adapters always send an explicit list, including empty.
+        execution_fanout_required = (
+            normalized_capabilities is None
+            or EXECUTION_FANOUT_REQUIRED_CAPABILITY in normalized_capabilities
+        )
+        if execution_fanout_required:
+            require_execution_fanout_authorization(
+                (EXECUTION_FANOUT_REQUIRED_CAPABILITY,),
+                request.execution_fanout_authorization,
+            )
         if container_jobs_available:
             owner = request.container_job_owner or OwnerIdentity(
                 principalId=request.agent_run_id,
@@ -2577,6 +2598,16 @@ class DockerCodexManagedSessionController:
             container_secret_environment[
                 "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"
             ] = capability_token
+            session_environment["MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND"] = (
+                "managed_runtime"
+            )
+            session_environment["MOONMIND_CONTAINER_JOBS_RUNTIME_ID"] = (
+                runtime_id
+            )
+            session_environment["MOONMIND_CONTAINER_JOBS_SESSION_ID"] = (
+                request.session_id
+            )
+        if execution_fanout_required:
             container_secret_environment[
                 "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"
             ] = mint_execution_fanout_capability(
@@ -2594,15 +2625,6 @@ class DockerCodexManagedSessionController:
                 runtime_id=runtime_id,
                 source_kind="managed_session",
                 lifetime_seconds=int(_DEFAULT_SESSION_REAP_MAX_AGE_SECONDS),
-            )
-            session_environment["MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND"] = (
-                "managed_runtime"
-            )
-            session_environment["MOONMIND_CONTAINER_JOBS_RUNTIME_ID"] = (
-                runtime_id
-            )
-            session_environment["MOONMIND_CONTAINER_JOBS_SESSION_ID"] = (
-                request.session_id
             )
         # Managed sessions never receive a Docker endpoint. Repository container
         # work crosses the authenticated container-job service boundary above.

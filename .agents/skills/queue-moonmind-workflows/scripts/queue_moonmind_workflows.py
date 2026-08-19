@@ -145,7 +145,7 @@ def _normalize_child_request(raw: Any) -> dict[str, Any]:
 def _bind_request_to_fanout_capability(request: dict[str, Any]) -> dict[str, Any]:
     """Make the portable child relationship explicit when MoonMind scopes it."""
 
-    if not _text(os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN")):
+    if not _read_execution_fanout_token():
         return request
     if not _request_is_task_shape(request):
         raise RuntimeError(
@@ -245,6 +245,19 @@ def _read_worker_token() -> str | None:
 
 
 def _read_execution_fanout_token() -> str | None:
+    token_file = _text(
+        os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE")
+    )
+    if token_file:
+        path = Path(token_file)
+        if not path.is_file():
+            raise RuntimeError(
+                "execution fan-out capability file is unavailable: " + token_file
+            )
+        token = path.read_text(encoding="utf-8").strip()
+        if not token:
+            raise RuntimeError("execution fan-out capability file is empty")
+        return token
     return _text(os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN")) or None
 
 

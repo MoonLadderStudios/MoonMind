@@ -83,6 +83,10 @@ from moonmind.schemas.agent_runtime_models import (
     RepositoryOutcomePolicy,
 )
 from moonmind.schemas.temporal_activity_models import AcceptedRepositoryEvidence
+from moonmind.security.execution_fanout_capabilities import (
+    ExecutionFanoutCapabilityError,
+    require_execution_fanout_authorization,
+)
 from moonmind.workflows.executions.runtime_capabilities import (
     RuntimeCapabilityError,
     resolve_runtime_execution_capabilities,
@@ -880,6 +884,16 @@ class OmnigentProfileBoundExecutionCoordinator:
         authority_reasons: list[dict[str, Any]] = []
         try:
             await emit("request_validated", "started")
+            fanout_authorization = self._execution_fanout_authorization(request)
+            try:
+                require_execution_fanout_authorization(
+                    self._required_capabilities(request),
+                    fanout_authorization,
+                )
+            except ExecutionFanoutCapabilityError as exc:
+                raise OmnigentOAuthHostError(
+                    str(exc), code="authorization_denied"
+                ) from exc
             if not profile_id:
                 raise OmnigentOAuthHostError(
                     "OAuth-backed Omnigent execution requires executionProfileRef",
@@ -1287,6 +1301,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                     (request.parameters or {}).get("repository") or ""
                 ).strip(),
                 required_capabilities=self._required_capabilities(request),
+                execution_fanout_authorization=fanout_authorization,
                 github_token=github_token,
                 github_mutation_required=self._github_mutation_required(request),
                 effective_launch=effective_launch,
@@ -2596,6 +2611,24 @@ class OmnigentProfileBoundExecutionCoordinator:
     @staticmethod
     def _required_capabilities(request: AgentExecutionRequest) -> tuple[str, ...]:
         return authored_required_capabilities(request)
+
+    @staticmethod
+    def _execution_fanout_authorization(
+        request: AgentExecutionRequest,
+    ) -> Mapping[str, Any] | None:
+        step_execution = request.step_execution
+        if step_execution is None:
+            return None
+        policy = step_execution.skill_source_policy
+        if "executionFanout" not in policy:
+            return None
+        evidence = policy.get("executionFanout")
+        if not isinstance(evidence, Mapping):
+            raise OmnigentOAuthHostError(
+                "execution fan-out authorization evidence is malformed",
+                code="authorization_denied",
+            )
+        return evidence
 
     @classmethod
     async def _github_token(cls, request: AgentExecutionRequest) -> str | None:

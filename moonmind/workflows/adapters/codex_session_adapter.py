@@ -495,6 +495,36 @@ def _jira_skill_blocker_summary(
         )
     return None
 
+
+def _managed_session_required_capabilities(
+    parameters: Mapping[str, Any],
+) -> list[Any] | None:
+    """Preserve omission for already-scheduled launch compatibility."""
+
+    if "requiredCapabilities" not in parameters:
+        return None
+    raw = parameters.get("requiredCapabilities")
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    raise ValueError(
+        "requiredCapabilities must be a list when present on an agent request"
+    )
+
+
+def _execution_fanout_authorization(
+    request: AgentExecutionRequest,
+) -> dict[str, Any] | None:
+    step_execution = request.step_execution
+    if step_execution is None:
+        return None
+    policy = step_execution.skill_source_policy
+    if "executionFanout" not in policy:
+        return None
+    evidence = policy.get("executionFanout")
+    if not isinstance(evidence, Mapping):
+        raise ValueError("executionFanout authorization evidence must be a mapping")
+    return dict(evidence)
+
 def _application_error_metadata(error: ApplicationError) -> dict[str, Any]:
     for detail in error.details:
         if isinstance(detail, Mapping):
@@ -1892,6 +1922,9 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             binding=active_binding,
             environment=environment,
         )
+        required_capabilities = _managed_session_required_capabilities(
+            request.parameters
+        )
         launch_request = LaunchCodexManagedSessionRequest(
             runtimeFamily=managed_session_runtime_family_for_runtime_id(
                 active_binding.runtime_id
@@ -1908,6 +1941,8 @@ class CodexSessionAdapter(ManagedAgentAdapter):
             codexHomePath=str(self._session_root(binding) / ".moonmind" / "codex-home"),
             imageRef=self._session_image_ref,
             workloadMode=workload_mode,
+            requiredCapabilities=required_capabilities,
+            executionFanoutAuthorization=_execution_fanout_authorization(request),
             containerJobOwner=container_job_owner,
             turnCompletionTimeoutSeconds=turn_completion_timeout_seconds,
             environment=launch_environment,

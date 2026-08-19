@@ -1089,15 +1089,44 @@ def test_runtime_script_snapshot_materializes_owned_step_identity(tmp_path) -> N
         f"export MOONMIND_AGENT_RUN_ID='{execution_id}'\n"
         "export MOONMIND_TASK_WORKFLOW_ID='workflow-1'\n"
         "export MOONMIND_RUNTIME_ID='codex_cli'\n"
+        "export MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE="
+        "'/opt/moonmind/capabilities/container-jobs'\n"
+        "export MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE="
+        "'/opt/moonmind/capabilities/execution-fanout'\n"
     )
     assert "must-not-be-persisted" not in profile.read_text(encoding="utf-8")
-    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in profile.read_text(
+    assert "export MOONMIND_CONTAINER_JOBS_BEARER_TOKEN=" not in profile.read_text(
         encoding="utf-8"
     )
-    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in profile.read_text(
+    assert "export MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=" not in profile.read_text(
         encoding="utf-8"
     )
+    assert (target / "capabilities" / "container-jobs").read_text(
+        encoding="utf-8"
+    ) == "must-not-be-persisted\n"
+    assert (target / "capabilities" / "execution-fanout").read_text(
+        encoding="utf-8"
+    ) == "also-must-not-be-persisted\n"
     assert profile.stat().st_mode & 0o777 == 0o444
+    retried = runtime._prepare_runtime_scripts(
+        "workspace-key",
+        current_step_execution_id=execution_id,
+        runtime_environment={
+            "MOONMIND_URL": "http://api:8000",
+            "MOONMIND_AGENT_RUN_ID": execution_id,
+            "MOONMIND_TASK_WORKFLOW_ID": "workflow-1",
+            "MOONMIND_RUNTIME_ID": "codex_cli",
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "retry-container-capability",
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "retry-fanout-capability",
+        },
+    )
+    assert retried == target
+    assert (target / "capabilities" / "container-jobs").read_text(
+        encoding="utf-8"
+    ) == "retry-container-capability\n"
+    assert (target / "capabilities" / "execution-fanout").read_text(
+        encoding="utf-8"
+    ) == "retry-fanout-capability\n"
     with pytest.raises(OmnigentOAuthHostError) as mismatch:
         runtime._prepare_runtime_scripts(
             "workspace-key",
@@ -1423,8 +1452,8 @@ async def test_prepare_host_retry_preserves_manifest_at_docker_mount_seam(
     assert runtime_profile_environment["MOONMIND_URL"] == "http://api:8000"
     assert runtime_profile_environment["MOONMIND_TASK_WORKFLOW_ID"] == "workflow-1"
     assert runtime_profile_environment["MOONMIND_AGENT_RUN_ID"] == "step-1"
-    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in runtime_profile_environment
-    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in runtime_profile_environment
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in runtime_profile_environment
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in runtime_profile_environment
     assert state["launches"] == 1
     assert state["manifest_checks"] == 2
 
@@ -1461,6 +1490,36 @@ async def test_daemon_workspace_root_uses_selected_daemon_volume_mountpoint(
         "agent_workspaces",
         check=False,
     )
+
+
+@pytest.mark.asyncio
+async def test_static_host_rejects_execution_fanout_before_materialization(
+    tmp_path,
+) -> None:
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace(), workspace_root=tmp_path)
+    runtime._prepare_skill_projection = AsyncMock()  # type: ignore[method-assign]
+    runtime._attest_egress = AsyncMock()  # type: ignore[method-assign]
+    launch = compile_effective_launch(
+        profile_ref="omnigent-codex@1",
+        policy_ref="codex-static@1",
+        provider_profile_id="codex",
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime.prepare_host(
+            binding=_binding(),
+            host_lease=_host_lease(),
+            workspace_key="workspace-1",
+            workspace_locator={"kind": "sandbox", "workspaceId": "sandbox-1"},
+            current_workflow_id="workflow-1",
+            current_step_execution_id="step-1",
+            required_capabilities=("execution.fanout",),
+            effective_launch=launch,
+        )
+
+    assert exc_info.value.code == "OMNIGENT_RUNTIME_CAPABILITY_UNSUPPORTED"
+    runtime._prepare_skill_projection.assert_not_awaited()
+    runtime._attest_egress.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1648,9 +1707,13 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         runtime_scripts=tmp_path,
         current_step_execution_id="workflow:run:node-1:execution:1",
         container_job_environment={
-            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN": "scoped-test-token",
+            "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE": (
+                "/opt/moonmind/capabilities/container-jobs"
+            ),
             "MOONMIND_CONTAINER_JOBS_MCP_URL": "http://api:8000/mcp/container",
-            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "fanout-test-token",
+            "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": (
+                "/opt/moonmind/capabilities/execution-fanout"
+            ),
         },
         effective_launch=effective_launch,
         egress_attestation=_egress_attestation(),
@@ -1708,24 +1771,25 @@ async def test_on_demand_host_initializes_state_before_unprivileged_launch(
         "OMNIGENT_RUNNER_ENV_PASSTHROUGH="
         "HTTP_PROXY,HTTPS_PROXY,http_proxy,https_proxy,NO_PROXY,no_proxy,"
         "MOONMIND_ACTIVE_SKILLS_DIR,MOONMIND_STEP_EXECUTION_ID,"
-        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN,"
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE,"
         "MOONMIND_CONTAINER_JOBS_MCP_URL,"
-        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE"
     ) in commands[2]
-    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" in commands[2]
-    assert "scoped-test-token" not in commands[2]
-    assert "fanout-test-token" not in commands[2]
+    assert (
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE="
+        "/opt/moonmind/capabilities/container-jobs"
+    ) in commands[2]
+    assert (
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE="
+        "/opt/moonmind/capabilities/execution-fanout"
+    ) in commands[2]
     assert (
         "MOONMIND_CONTAINER_JOBS_MCP_URL=http://api:8000/mcp/container"
         in commands[2]
     )
     launch_environment = runtime._run.await_args_list[2].kwargs["env"]
-    assert launch_environment["MOONMIND_CONTAINER_JOBS_BEARER_TOKEN"] == (
-        "scoped-test-token"
-    )
-    assert launch_environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"] == (
-        "fanout-test-token"
-    )
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in launch_environment
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in launch_environment
     assert "NO_PROXY=localhost,127.0.0.1" in commands[2]
     assert "no_proxy=localhost,127.0.0.1" in commands[2]
     assert commands[2][commands[2].index("--stop-timeout") + 1] == "20"
@@ -1771,6 +1835,11 @@ def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
         current_workflow_id="workflow-1",
         current_step_execution_id="agent-run-1",
         timeout_seconds=3600,
+        required_capabilities=("docker", "execution.fanout"),
+        execution_fanout_authorization={
+            "authorized": True,
+            "sourceKind": "built_in",
+        },
     )
 
     assert environment["MOONMIND_CONTAINER_JOBS_MCP_URL"] == (
@@ -1793,6 +1862,77 @@ def test_omnigent_container_job_environment_is_sandbox_and_host_lease_scoped(
     assert fanout.parent_workflow_id == "workflow-1"
     assert fanout.agent_run_id == "agent-run-1"
     assert fanout.session_id == "host-lease-1"
+
+
+def test_omnigent_runtime_authority_is_not_minted_without_required_capabilities(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    monkeypatch.setattr(
+        settings.security, "JWT_SECRET_KEY", "test-container-capability-secret"
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    environment = runtime._container_job_environment(
+        binding=_binding().model_copy(
+            update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
+        ),
+        host_lease=_host_lease(),
+        workspace_locator={
+            "kind": "sandbox",
+            "workspaceId": "sandbox-1",
+            "relativePath": "repo",
+        },
+        current_workflow_id="workflow-1",
+        current_step_execution_id="agent-run-1",
+        timeout_seconds=3600,
+        required_capabilities=(),
+    )
+
+    assert environment["MOONMIND_URL"] == "http://api:8000"
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in environment
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
+
+
+def test_omnigent_fanout_mint_rejects_denied_skill_authorization(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        runtime._container_job_environment(
+            binding=_binding().model_copy(
+                update={
+                    "static_host_id": None,
+                    "host_launch_profile_ref": "codex-oauth-v1",
+                }
+            ),
+            host_lease=_host_lease(),
+            workspace_locator={
+                "kind": "sandbox",
+                "workspaceId": "sandbox-1",
+                "relativePath": "repo",
+            },
+            current_workflow_id="workflow-1",
+            current_step_execution_id="agent-run-1",
+            timeout_seconds=3600,
+            required_capabilities=("execution.fanout",),
+            execution_fanout_authorization={
+                "authorized": False,
+                "sourceKind": "repo",
+            },
+        )
+
+    assert exc_info.value.code == "authorization_denied"
 
 
 @pytest.mark.asyncio
@@ -2100,13 +2240,22 @@ async def test_stop_host_cleans_volumes_when_container_is_absent(tmp_path) -> No
         update={"static_host_id": None, "host_launch_profile_ref": "codex-oauth-v1"}
     )
     lease = _host_lease().model_copy(update={"container_name": "mm-host-lease-1"})
+    _, runtime_scripts = runtime._runtime_scripts_target(lease.lease_id)
+    capability_dir = runtime_scripts / "capabilities"
+    capability_dir.mkdir(parents=True)
+    (capability_dir / "execution-fanout").write_text(
+        "expired-test-capability\n",
+        encoding="utf-8",
+    )
 
-    await runtime.stop_host(binding=binding, host_lease=lease)
+    result = await runtime.stop_host(binding=binding, host_lease=lease)
 
     commands = [call.args for call in runtime._run.await_args_list]
     assert commands[0][:3] == ("docker", "inspect", "--format")
     assert ("docker", "volume", "rm", "-f", "mm-host-lease-1-artifacts") in commands
     assert ("docker", "volume", "rm", "-f", "mm-host-lease-1-cache") in commands
+    assert result["resourceCleanup"]["runtimeCapabilityFilesRemoved"] is True
+    assert not runtime_scripts.exists()
 
 
 @pytest.mark.asyncio
@@ -2173,6 +2322,7 @@ async def test_stop_host_publishes_resolvable_terminal_egress_and_cleanup_author
         "containerPresent": False,
         "mode": "on_demand_remove",
         "remainingOwnedVolumes": [],
+        "runtimeCapabilityFilesRemoved": True,
     }
     assert terminal["launchEvidenceRef"] == "artifact://omnigent/launch.json"
 

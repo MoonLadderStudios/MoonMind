@@ -260,9 +260,19 @@ async def test_default_command_runner_clears_supplemental_groups_when_uid_change
     assert "group" not in captured_kwargs
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("required_capabilities", "expects_fanout"),
+    [
+        (None, True),
+        ((), False),
+        (("execution.fanout",), True),
+    ],
+)
 async def test_controller_launches_container_and_returns_typed_handle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    required_capabilities: tuple[str, ...] | None,
+    expects_fanout: bool,
 ) -> None:
     monkeypatch.delenv("MOONMIND_PYTHON_TEST_IMAGE", raising=False)
     monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
@@ -270,7 +280,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     session_store = ManagedSessionStore(tmp_path / "session-store")
     session_supervisor = AsyncMock()
     session_supervisor.emit_session_event = Mock()
-    request = LaunchCodexManagedSessionRequest(
+    request_payload = dict(
         agentRunId="task-1",
         workflowId="wf-task-1",
         sessionId="sess-1",
@@ -282,6 +292,14 @@ async def test_controller_launches_container_and_returns_typed_handle(
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
         turnCompletionTimeoutSeconds=1800,
     )
+    if required_capabilities is not None:
+        request_payload["requiredCapabilities"] = list(required_capabilities)
+    if required_capabilities == ("execution.fanout",):
+        request_payload["executionFanoutAuthorization"] = {
+            "authorized": True,
+            "sourceKind": "built_in",
+        }
+    request = LaunchCodexManagedSessionRequest(**request_payload)
     commands: list[tuple[str, ...]] = []
     docker_run_env: dict[str, str] = {}
 
@@ -375,18 +393,22 @@ async def test_controller_launches_container_and_returns_typed_handle(
     )
     assert capability.agent_run_id == "task-1"
     assert capability.session_id == "sess-1"
-    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in run_command
-    assert not any(
-        item.startswith("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=")
-        for item in run_command
-    )
-    fanout = verify_execution_fanout_capability(
-        docker_run_env["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
-        secret="test_jwt_secret_key",
-    )
-    assert fanout.parent_workflow_id == "wf-task-1"
-    assert fanout.agent_run_id == "task-1"
-    assert fanout.session_id == "sess-1"
+    if expects_fanout:
+        assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in run_command
+        assert not any(
+            item.startswith("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=")
+            for item in run_command
+        )
+        fanout = verify_execution_fanout_capability(
+            docker_run_env["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
+            secret="test_jwt_secret_key",
+        )
+        assert fanout.parent_workflow_id == "wf-task-1"
+        assert fanout.agent_run_id == "task-1"
+        assert fanout.session_id == "sess-1"
+    else:
+        assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in run_command
+        assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in docker_run_env
     assert not any(item.startswith("DOCKER_HOST=") for item in run_command)
     assert not any(item.startswith("SYSTEM_DOCKER_HOST=") for item in run_command)
     assert "python3" in run_command
@@ -897,10 +919,16 @@ async def test_no_docker_profile_does_not_advertise_container_jobs(
         codexHomePath="/home/app/.codex",
         imageRef="moonmind:latest",
         workloadMode="no-docker",
+        requiredCapabilities=["execution.fanout"],
+        executionFanoutAuthorization={
+            "authorized": True,
+            "sourceKind": "deployment",
+        },
         environment={"MOONMIND_URL": "http://api:8000"},
     )
     commands: list[tuple[str, ...]] = []
     launched_payload: dict[str, object] = {}
+    docker_run_env: dict[str, str] = {}
 
     async def _fake_runner(
         command: tuple[str, ...],
@@ -908,11 +936,11 @@ async def test_no_docker_profile_does_not_advertise_container_jobs(
         input_text: str | None = None,
         env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
-        del env
         commands.append(command)
         if command[:3] == ("docker", "rm", "-f"):
             return 1, "", "No such container"
         if command[:2] == ("docker", "run"):
+            docker_run_env.update(env or {})
             return 0, "ctr-no-docker\n", ""
         if "ready" in command:
             return 0, '{"ready": true}\n', ""
@@ -950,6 +978,18 @@ async def test_no_docker_profile_does_not_advertise_container_jobs(
     assert not any(
         item.startswith("MOONMIND_CONTAINER_JOBS_") for item in run_command
     )
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in run_command
+    assert not any(
+        item.startswith("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=")
+        for item in run_command
+    )
+    fanout = verify_execution_fanout_capability(
+        docker_run_env["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
+        secret="test_jwt_secret_key",
+    )
+    assert fanout.parent_workflow_id == "task-no-docker"
+    assert fanout.agent_run_id == "task-no-docker"
+    assert fanout.session_id == "sess-no-docker"
     metadata = launched_payload["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["capabilities"]["containerJobs"] == {
