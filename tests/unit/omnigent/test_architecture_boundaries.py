@@ -189,3 +189,67 @@ def test_adapters_sqlalchemy_inside_persistence_is_allowed(tmp_path) -> None:
     assert not any(
         v.rule == "adapters-sqlalchemy-containment" for v in violations
     ), "\n".join(v.render() for v in violations)
+
+
+def test_pure_layer_provider_native_string_is_flagged(tmp_path) -> None:
+    # A provider-native status string in the pure domain layer is vendor
+    # vocabulary that must be translated to canonical vocabulary in an adapter.
+    _clean_tree(tmp_path)
+    _write(
+        root=tmp_path,
+        rel="domain/status.py",
+        source="TERMINAL = 'codex_completed'\n",
+    )
+    rules = {v.rule for v in checker.check_omnigent_architecture(tmp_path)}
+    assert "pure-layer-provider-vocabulary" in rules
+
+
+def test_ports_layer_provider_native_import_is_flagged(tmp_path) -> None:
+    # Ports are infra-free too: importing a provider-native module leaks vendor
+    # vocabulary into the port surface.
+    _clean_tree(tmp_path)
+    _write(
+        root=tmp_path,
+        rel="ports/provider.py",
+        source="from moonmind.providers.claude import ClaudeClient\n",
+    )
+    violations = checker.check_omnigent_architecture(tmp_path)
+    assert any(
+        v.rule == "pure-layer-provider-vocabulary" for v in violations
+    ), "\n".join(v.render() for v in violations)
+
+
+def test_provider_native_vocabulary_allowed_in_adapters(tmp_path) -> None:
+    # Adapters are exactly where provider-native vocabulary is translated into
+    # canonical domain observations/outcomes, so it must NOT be flagged there.
+    _clean_tree(tmp_path)
+    _write(
+        root=tmp_path,
+        rel="adapters/provider_http/claude_client.py",
+        source="PROVIDER_TERMINAL = 'claude_completed'\n",
+    )
+    violations = checker.check_omnigent_architecture(tmp_path)
+    assert not any(
+        v.rule == "pure-layer-provider-vocabulary" for v in violations
+    ), "\n".join(v.render() for v in violations)
+
+
+def test_pure_layer_docstring_naming_provider_is_not_flagged(tmp_path) -> None:
+    # Docstrings may name the providers a pure layer abstracts; only canonical
+    # (non-docstring) string constants and imports are constrained.
+    _clean_tree(tmp_path)
+    _write(
+        root=tmp_path,
+        rel="domain/observations.py",
+        source=(
+            '"""Canonical observations translated from Codex, Claude, and '
+            'Gemini providers."""\n\n'
+            "from enum import Enum\n\n\n"
+            "class ObservationKind(str, Enum):\n"
+            "    TURN_COMPLETED = 'turn_completed'\n"
+        ),
+    )
+    violations = checker.check_omnigent_architecture(tmp_path)
+    assert not any(
+        v.rule == "pure-layer-provider-vocabulary" for v in violations
+    ), "\n".join(v.render() for v in violations)

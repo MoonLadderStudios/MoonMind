@@ -68,9 +68,14 @@ These directions are enforced by `tools/check_omnigent_architecture.py`
 (forbidden infrastructure/framework/settings imports and environment reads in the
 infra-free `domain`/`ports`/`application` layers, no back-edges/cycles across
 layers, web-framework containment to the API/`ui_facade` boundary, direct
-SQLAlchemy confined to `adapters/persistence/`, and single canonical vocabulary
-for the `OmnigentFailureReason`, `ControlPlaneOutcome`, and `FencingScope`
-tables) and covered by `tests/unit/omnigent/test_architecture_boundaries.py`.
+SQLAlchemy confined to `adapters/persistence/`, provider-native vendor vocabulary
+kept out of the infra-free layers — no vendor/runtime name such as `codex`,
+`claude`, `jules`, `gemini`, `anthropic`, or `openai` in an import target or a
+non-docstring string literal, so the pure layers speak only canonical vocabulary
+and providers are translated at the adapter boundary — and single canonical
+vocabulary for the `OmnigentFailureReason`, `ControlPlaneOutcome`, and
+`FencingScope` tables) and covered by
+`tests/unit/omnigent/test_architecture_boundaries.py`.
 
 ## 4. Canonical aggregate owners
 

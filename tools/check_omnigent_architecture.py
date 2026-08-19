@@ -35,6 +35,15 @@ rules:
    adapters (``adapters/persistence/``); any other adapter subtree that imports
    the ORM is reaching past the persistence port.
 
+6. **Provider-native vocabulary containment.** The infra-free layers (``domain``,
+   ``ports``, ``application``) must not embed provider-native vendor vocabulary --
+   runtime/vendor names such as ``codex``, ``claude``, ``jules``, ``gemini``,
+   ``anthropic``, or ``openai`` -- in import targets or string-literal constants.
+   Provider behaviour belongs behind adapters, which translate provider-native
+   vocabulary into canonical domain observations and outcomes; the pure layers
+   speak only the canonical vocabulary. Human-readable docstrings are exempt so
+   the layers can still document which providers they abstract.
+
 The checker intentionally does not fail on file length; it measures
 responsibility through dependency and ownership rules, not line counts. Legacy
 Omnigent modules that predate the decomposition are not classified into an
@@ -107,6 +116,24 @@ SINGLE_DEFINITION_TYPES: frozenset[str] = frozenset(
     {"OmnigentFailureReason", "ControlPlaneOutcome", "FencingScope"}
 )
 
+# Provider-native vendor vocabulary must stay behind adapters (and their
+# compatibility helpers), which translate it into canonical domain observations
+# and outcomes. The infra-free layers (domain, ports, application) speak only the
+# canonical vocabulary, so a vendor/runtime name leaking into an import target or
+# a string-literal constant there is a boundary violation. These tokens are the
+# concrete provider/runtime identities MoonMind orchestrates; matching is a
+# case-insensitive substring test so provider-native status strings like
+# ``codex_completed`` or route fragments like ``/claude/`` are caught too.
+PROVIDER_NATIVE_TOKENS: tuple[str, ...] = (
+    "codex",
+    "claude",
+    "jules",
+    "gemini",
+    "anthropic",
+    "openai",
+    "opencode",
+)
+
 # Allowed dependency direction: a layer may only import layers with a rank at or
 # below its own. adapters(3) -> application(2) -> ports(1) -> domain(0).
 LAYER_RANK: dict[str, int] = {
@@ -171,6 +198,56 @@ def _reads_environment(tree: ast.AST) -> list[int]:
             value = node.value
             if isinstance(value, ast.Name) and value.id == "os":
                 hits.append(node.lineno)
+    return hits
+
+
+def _docstring_constant_ids(tree: ast.AST) -> frozenset[int]:
+    """Return ``id()`` of every module/class/function docstring node.
+
+    Docstrings are human-readable prose that may legitimately name the providers
+    a pure layer abstracts, so they are exempt from provider-native vocabulary
+    containment. Every other string-literal constant is canonical vocabulary and
+    must not embed a vendor/runtime name.
+    """
+
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(
+            node,
+            (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef),
+        ):
+            body = getattr(node, "body", None)
+            if not body:
+                continue
+            first = body[0]
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                ids.add(id(first.value))
+    return frozenset(ids)
+
+
+def _provider_native_string_hits(tree: ast.AST) -> list[tuple[str, str, int]]:
+    """Return ``(token, literal, lineno)`` for provider vocab in string literals.
+
+    Docstrings are excluded (see :func:`_docstring_constant_ids`). Matching is a
+    case-insensitive substring test against :data:`PROVIDER_NATIVE_TOKENS`.
+    """
+
+    docstring_ids = _docstring_constant_ids(tree)
+    hits: list[tuple[str, str, int]] = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+            continue
+        if id(node) in docstring_ids:
+            continue
+        lowered = node.value.lower()
+        for token in PROVIDER_NATIVE_TOKENS:
+            if token in lowered:
+                hits.append((token, node.value, node.lineno))
+                break
     return hits
 
 
@@ -246,6 +323,44 @@ def check_omnigent_architecture(
                         line=lineno,
                         detail=(
                             f"{layer!r} layer must not read environment variables"
+                        ),
+                    )
+                )
+            # Rule 6: provider-native vocabulary containment. Vendor/runtime names
+            # in an import target or a (non-docstring) string literal mean the
+            # pure layer is speaking provider-native vocabulary that belongs behind
+            # an adapter/compatibility boundary.
+            for module, lineno in imports:
+                lowered_module = module.lower()
+                token = next(
+                    (t for t in PROVIDER_NATIVE_TOKENS if t in lowered_module),
+                    None,
+                )
+                if token is not None:
+                    violations.append(
+                        Violation(
+                            rule="pure-layer-provider-vocabulary",
+                            path=rel_str,
+                            line=lineno,
+                            detail=(
+                                f"{layer!r} layer must not import provider-native "
+                                f"module {module!r} (vendor token {token!r}); "
+                                "provider vocabulary belongs behind an adapter"
+                            ),
+                        )
+                    )
+            for token, literal, lineno in _provider_native_string_hits(tree):
+                snippet = literal if len(literal) <= 60 else literal[:57] + "..."
+                violations.append(
+                    Violation(
+                        rule="pure-layer-provider-vocabulary",
+                        path=rel_str,
+                        line=lineno,
+                        detail=(
+                            f"{layer!r} layer must not embed provider-native "
+                            f"vocabulary (vendor token {token!r} in string "
+                            f"{snippet!r}); translate it to canonical domain "
+                            "vocabulary in an adapter"
                         ),
                     )
                 )
