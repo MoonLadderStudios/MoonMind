@@ -13397,6 +13397,8 @@ export interface components {
             policy?: {
                 [key: string]: unknown;
             } | null;
+            /** Version */
+            version: number;
         };
         /** UserCreate */
         UserCreate: {

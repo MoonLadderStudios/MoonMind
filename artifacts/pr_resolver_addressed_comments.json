@@ -1,12 +1,22 @@
 [
   {
-    "id": 3812528685,
-    "disposition": "addressed",
-    "rationale": "Updated PINNED_OMNIGENT_COMMIT and refreshed pinned native UI compatibility evidence to the checked-out submodule commit to eliminate pin drift across auth and compatibility checks."
+    "id": 4974996686,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary only; the three concrete inline findings are classified separately."
   },
   {
-    "id": 4971576672,
-    "disposition": "not-applicable",
-    "rationale": "Non-actionable bot review summary comment excluded from review-gating."
+    "id": 3815293692,
+    "disposition": "addressed",
+    "rationale": "The refresh sweep now rolls back and logs a failed schedule while continuing with the remaining schedules, with regression coverage."
+  },
+  {
+    "id": 3815293719,
+    "disposition": "addressed",
+    "rationale": "Managed schedule authority now waits until the selected OAuth host binding references the active profile version's launch policy, with deferred-cutover coverage."
+  },
+  {
+    "id": 3815293738,
+    "disposition": "addressed",
+    "rationale": "Automatic refresh and authored updates now share a row lock, while PATCH requires the current schedule version and rejects stale target replacement with HTTP 409."
   }
 ]

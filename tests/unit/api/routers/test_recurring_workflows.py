@@ -19,6 +19,7 @@ from api_service.db.models import (
 )
 from api_service.services.recurring_workflows_service import (
     RecurringScheduleRuntimeSummary,
+    RecurringWorkflowConflictError,
     RecurringWorkflowValidationError,
 )
 
@@ -101,6 +102,19 @@ def test_recurring_workflow_validation_error_maps_to_422() -> None:
         "code": "invalid_recurring_workflow",
         "message": "target.workflowType is required",
     }
+
+
+def test_recurring_workflow_version_conflict_maps_to_409() -> None:
+    exc = recurring_router._map_error(
+        RecurringWorkflowConflictError("refresh and retry")
+    )
+
+    assert exc.status_code == status.HTTP_409_CONFLICT
+    assert exc.detail == {
+        "code": "recurring_workflow_version_conflict",
+        "message": "refresh and retry",
+    }
+
 
 @pytest.mark.asyncio
 async def test_list_recurring_workflows_global_requires_operator() -> None:

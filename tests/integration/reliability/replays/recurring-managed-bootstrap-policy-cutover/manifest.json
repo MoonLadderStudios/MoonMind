@@ -1,0 +1,39 @@
+{
+  "incidentWorkflowId": "mm:2d8480da-045c-4569-81b3-5b0b0a0ee9a0-2026-08-19T13:00:00Z",
+  "incidentRunId": "01a01a1b-6cd7-7832-a6be-90792d80c8a4",
+  "definitionId": "2d8480da-045c-4569-81b3-5b0b0a0ee9a0",
+  "failureCode": "OMNIGENT_LAUNCH_POLICY_BINDING_CONFLICT",
+  "failureMessage": "explicit launch selection conflicts with the durable host binding",
+  "storedSnapshot": {
+    "profileId": "omnigent-bootstrap-default",
+    "version": 2,
+    "digest": "sha256:52a92c4e9786c566f253a48b9f45bf0770ac4ec2e76f46eb5ea363b2af54b61a",
+    "providerProfileRef": "codex_openai_oauth",
+    "executionProfileRef": "omnigent-codex@1",
+    "launchPolicyRef": "codex-on-demand@3",
+    "document": {
+      "model": {},
+      "capture": {},
+      "rag": {},
+      "publish": {}
+    }
+  },
+  "activeSnapshot": {
+    "profileId": "omnigent-bootstrap-default",
+    "version": 3,
+    "digest": "sha256:8f21b0a610ed9f7f0bb73de12e78a16e02bb6694fb288d8526348fa63145541a",
+    "providerProfileRef": "codex_openai_oauth",
+    "executionProfileRef": "omnigent-codex@1",
+    "launchPolicyRef": "codex-on-demand@4",
+    "document": {
+      "model": {},
+      "capture": {},
+      "rag": {},
+      "publish": {}
+    }
+  },
+  "durableHostBinding": {
+    "executionProfileRef": "omnigent-codex@1",
+    "launchPolicyRef": "codex-on-demand@4"
+  }
+}
