@@ -118,6 +118,23 @@ class _FakeUpstream:
         return self._responses[path]
 
 
+_SERVER_IMAGE_DIGEST_REF = "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "b" * 64
+
+
+@pytest.fixture(autouse=True)
+def _verified_immutable_server_image(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serve as a deployment with verified immutable image evidence.
+
+    MoonLadderStudios/MoonMind#3685: the native-UI compatibility version derives
+    from the deployment's declared immutable Omnigent server image, so serving
+    tests must declare one. A mutable tag stays unverified and fails closed —
+    covered in ``tests/unit/omnigent/test_omnigent_settings.py``.
+    """
+
+    monkeypatch.delenv("OMNIGENT_NATIVE_UI_VERSION", raising=False)
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", _SERVER_IMAGE_DIGEST_REF)
+
+
 def _index_response() -> NativeUiUpstreamResponse:
     return NativeUiUpstreamResponse(
         status_code=200, content=_INDEX_HTML, media_type="text/html"

@@ -215,6 +215,7 @@ def build_chat_bootstrap(
     bootstrap: dict[str, Any] = {
         "schemaVersion": NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION,
         "chatBindingId": chat_binding_id,
+        "uiBase": scoped_ui_base(chat_binding_id),
         "apiBase": scoped_api_base(chat_binding_id),
         "wsBase": scoped_api_base(chat_binding_id),
         "mode": mode,
