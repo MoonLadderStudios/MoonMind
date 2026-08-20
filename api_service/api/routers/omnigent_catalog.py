@@ -101,7 +101,7 @@ class EligibleProviderProfile(BaseModel):
     profile_id: str = Field(alias="profileId")
     label: str
     provider_id: str = Field(alias="providerId")
-    runtime_id: Literal["codex_cli", "claude_code"] = Field(alias="runtimeId")
+    runtime_id: Literal["codex_cli", "claude_code", "opencode"] = Field(alias="runtimeId")
     busy: bool = False
     queue_when_busy: bool = Field(alias="queueWhenBusy")
 
@@ -110,7 +110,7 @@ class IneligibleProviderProfile(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     profile_id: str = Field(alias="profileId")
     label: str
-    runtime_id: Literal["codex_cli", "claude_code"] = Field(alias="runtimeId")
+    runtime_id: Literal["codex_cli", "claude_code", "opencode"] = Field(alias="runtimeId")
     gate_reasons: list[GateReason] = Field(alias="gateReasons")
 
 
@@ -456,7 +456,7 @@ async def get_omnigent_codex_catalog_readiness(
             await session.execute(
                 select(ManagedAgentProviderProfile).where(
                     ManagedAgentProviderProfile.runtime_id.in_(
-                        ("codex_cli", "claude_code")
+                        ("codex_cli", "claude_code", "opencode")
                     )
                 )
             )
@@ -474,7 +474,7 @@ async def get_omnigent_codex_catalog_readiness(
             await session.execute(
                 select(ProviderProfileSlotLease).where(
                     ProviderProfileSlotLease.runtime_id.in_(
-                        ("codex_cli", "claude_code")
+                        ("codex_cli", "claude_code", "opencode")
                     )
                 )
             )
@@ -517,7 +517,13 @@ async def get_omnigent_codex_catalog_readiness(
             getattr(row.rate_limit_policy, "value", row.rate_limit_policy) == "queue"
         )
         compatible = (
-            credential_source == "oauth_volume" and materialization == "oauth_home"
+            (credential_source == "oauth_volume" and materialization == "oauth_home")
+            or (
+                runtime_id == "opencode"
+                and credential_source == "secret_ref"
+                and materialization in {"composite", "api_key_env", "config_bundle"}
+                and row.provider_id in {"opencode-go", "opencode"}
+            )
         )
         if compatible and readiness["launch_ready"] and (not busy or queue_when_busy):
             eligible_by_runtime[runtime_id] = eligible_by_runtime.get(runtime_id, 0) + 1

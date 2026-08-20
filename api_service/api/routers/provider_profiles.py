@@ -1442,20 +1442,6 @@ _API_KEY_MAPPINGS: dict[tuple[str, str], _ApiKeyMapping] = {
         auth_strategy="opencode_auth_json",
         ready_label="OpenCode Go API key ready",
     ),
-    # Alias: allow generic "opencode" provider_id for compatibility
-    ("opencode", "opencode"): _ApiKeyMapping(
-        runtime_id="opencode",
-        provider_id="opencode",
-        secret_role="opencode_api_key",
-        env_key="OPENCODE_API_KEY",
-        clear_env_keys=(
-            "OPENCODE_AUTH_CONTENT",
-            "OPENCODE_CONFIG",
-            "OPENCODE_CONFIG_CONTENT",
-        ),
-        auth_strategy="opencode_auth_json",
-        ready_label="OpenCode Go API key ready",
-    ),
 }
 
 
@@ -1466,7 +1452,7 @@ def _api_key_mapping_for_profile(row: ManagedAgentProviderProfile) -> _ApiKeyMap
             status_code=422,
             detail=(
                 "API-key setup is only supported for first-party Anthropic, "
-                "and OpenAI profiles."
+                "OpenAI, and OpenCode Go profiles."
             ),
         )
     return mapping
@@ -1538,20 +1524,15 @@ def _apply_api_key_setup_to_profile(
             clear_env_keys.append(env_key)
     row.clear_env_keys = clear_env_keys
     if mapping.provider_id in {"opencode-go", "opencode"}:
-        # OpenCode auth is a file, not an env var. Use file_templates for the
-        # materializer to read, but keep env_template clean. The trusted
-        # materializer writes /home/app/.local/share/opencode/auth.json directly
-        # from the secret, so we store only the mapping reference here.
-        row.file_templates = [
-            t for t in (row.file_templates or []) if t.get("path") != "/home/app/.local/share/opencode/auth.json"
-        ] + [
-            {
-                "path": "/home/app/.local/share/opencode/auth.json",
-                "from_secret_ref": mapping.secret_role,
-                "mode": "0600",
-                "provider_key": "opencode-go",
-            }
-        ]
+        # OpenCode auth is a file materialized via opencode-auth-json@1 trusted
+        # materializer, which knows the exact target path and permissions. Do not
+        # store an invalid file_templates contract (RuntimeFileTemplate forbids
+        # from_secret_ref/mode/provider_key and rejects absolute paths outside
+        # runtime_support_dir). Rely solely on secret_refs + materializer logic.
+        if row.file_templates:
+            row.file_templates = [
+                t for t in row.file_templates if t.get("path") != "/home/app/.local/share/opencode/auth.json"
+            ]
         # Do not pollute env_template with OpenCode key; clear any prior
         if mapping.env_key in (row.env_template or {}):
             row.env_template = {k: v for k, v in (row.env_template or {}).items() if k != mapping.env_key}
@@ -1702,88 +1683,103 @@ async def _validate_opencode_api_key(api_key: str) -> None:
     """Validate OpenCode Go API key via isolated disposable credential materialization.
 
     Mirrors issue §9: materialize the proposed key to a temp auth.json using the
-    same pinned OpenCode structure, query the model catalog, require at least one
-    opencode-go/<model-id> result, then delete temp state.
+    same pinned OpenCode structure, query the authenticated model catalog, require
+    at least one opencode-go/<model-id> result, then delete temp state. Fails
+    closed when catalog evidence is unavailable; isolates ambient forbidden env
+    and surfaces materialization failures as 422.
     """
+    import contextlib
+    import json
+    import os
+    import shutil
     import tempfile
-    from pathlib import Path
 
-    # Use the harness_platform materializer's isolated path logic.
-    # We create a temp root, write auth.json, then attempt to list models.
-    # If opencode CLI is not present, we fall back to syntactic validation.
+    from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
     from moonmind.omnigent.harness_platform.materializers import (
         FORBIDDEN_AMBIENT_ENV_KEYS,
-        OPENCODE_AUTH_TARGET_PATH,
-        materialize_opencode_auth_json,
         cleanup_opencode_auth,
+        materialize_opencode_auth_json,
     )
 
-    # Ensure ambient forbidden env is clear for validation
-    for key in FORBIDDEN_AMBIENT_ENV_KEYS:
-        if key in __import__("os").environ:
-            # Clear only for this validation's ambient check; materializer will fail otherwise
-            pass
+    @contextlib.contextmanager
+    def _isolated_forbidden_env():
+        saved: dict[str, str] = {}
+        for k in FORBIDDEN_AMBIENT_ENV_KEYS:
+            val = os.environ.pop(k, None)
+            if val is not None:
+                saved[k] = val
+        try:
+            yield
+        finally:
+            for k, v in saved.items():
+                os.environ[k] = v
+
     tmp_root = tempfile.mkdtemp(prefix="opencode-validate-")
     try:
-        # Materialize to temp location
-        handle = materialize_opencode_auth_json(
-            api_key=api_key,
-            provider_profile_ref="opencode-validate",
-            provider_lease_ref="validate-lease",
-            credential_generation=1,
-            host_root=tmp_root,
-        )
-        # Attempt to invoke opencode CLI for model discovery if available.
-        # We use a disposable env with XDG_DATA_HOME pointing to our temp.
-        import os
-        import subprocess
-
-        # The opencode CLI reads auth from $HOME/.local/share/opencode/auth.json by default,
-        # but we placed it under host_root; for validation we set HOME to tmp_root/home/app
-        fake_home = Path(tmp_root) / "home" / "app"
-        # The file is at host_root/home/app/.local/share/opencode/auth.json
-        # For CLI discovery, we need to ensure opencode sees it.
-        # If binary missing, consider syntactic validation sufficient.
+        # Isolate ambient env and materialize; convert HarnessPlatformError to 422
         try:
-            proc = subprocess.run(
-                ["opencode", "--version"],
-                capture_output=True,
-                timeout=5,
+            with _isolated_forbidden_env():
+                handle = materialize_opencode_auth_json(
+                    api_key=api_key,
+                    provider_profile_ref="opencode-validate",
+                    provider_lease_ref="validate-lease",
+                    credential_generation=1,
+                    host_root=tmp_root,
+                )
+                handle_json = json.dumps(handle)
+                assert api_key not in handle_json, "handle leaked secret"
+        except HarnessPlatformError as exc:
+            raise HTTPException(status_code=422, detail="API key validation failed.") from exc
+
+        # Live provider validation: query authenticated model catalog and require opencode-go entry
+        try:
+            client = _get_claude_manual_validation_client()
+            response = await client.get(
+                "https://api.opencode.ai/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
             )
-            if proc.returncode != 0:
-                # No CLI; syntactic pass
-                return
-            # Query model catalog: opencode models list (hypothetical)
-            # Fallback: opencode may expose via `opencode mcp` or API. We try `opencode auth status` or list.
-            # For hermetic test, we stub success if version matches.
-            version_output = proc.stdout.decode(errors="ignore") + proc.stderr.decode(errors="ignore")
-            # Require at least one opencode-go model; stub passes when CLI exists
-            # Real implementation would run: opencode models --json and parse opencode-go/ entries
-            if "1.18" not in version_output and "1.17" not in version_output:
-                # Still consider valid if CLI present but version slightly off; materializer already verified.
-                pass
-            # Simulate catalog requirement: at least one opencode-go model must be accessible.
-            # In live env with real key, we would call the provider's catalog endpoint.
-            # Here we pass syntactic check as success.
-            return
-        except FileNotFoundError:
-            # opencode not installed in this environment; syntactic validation is the best we can do
-            return
-        except Exception:
-            # Any error in catalog query should be treated as validation failure if we have a real endpoint
-            # For now, treat as pass for local dev
-            return
-        finally:
-            # Ensure handle is secret-free
-            handle_json = __import__("json").dumps(handle)
-            assert api_key not in handle_json, "handle leaked secret"
+        except httpx.HTTPError as exc:
+            logger.warning("opencode_api_key_validation_failed", exc_info=True)
+            raise HTTPException(status_code=502, detail="API key validation failed.") from exc
+
+        if response.status_code in {401, 403}:
+            raise HTTPException(status_code=401, detail="API key validation failed.")
+        if response.status_code >= 400:
+            raise HTTPException(status_code=502, detail="API key validation failed.")
+
+        # Require at least one opencode-go model in catalog; fail closed if unavailable
+        try:
+            body = response.json()
+            models: list[Any] = []
+            if isinstance(body, dict):
+                data = body.get("data")
+                if isinstance(data, list):
+                    models = data
+                elif isinstance(data, dict):
+                    models = [data]
+            elif isinstance(body, list):
+                models = body
+            has_opencode = any(
+                (
+                    isinstance(m, dict)
+                    and str(m.get("id") or m.get("model") or m.get("name") or "").startswith("opencode-go/")
+                )
+                or (isinstance(m, str) and m.startswith("opencode-go/"))
+                for m in models
+            )
+            if not has_opencode:
+                text = response.text or ""
+                if "opencode-go/" not in text:
+                    raise HTTPException(status_code=422, detail="API key validation failed.")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="API key validation failed.") from exc
     finally:
-        # Cleanup temp credential state
         try:
             cleanup_opencode_auth(host_root=tmp_root, provider_profile_ref="opencode-validate", credential_generation=1)
-            import shutil as _shutil
-            _shutil.rmtree(tmp_root, ignore_errors=True)
-        except Exception:
+            shutil.rmtree(tmp_root, ignore_errors=True)
+        except Exception:  # best-effort cleanup
             pass
 
 

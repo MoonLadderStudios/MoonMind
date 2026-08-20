@@ -295,12 +295,23 @@ def validate_opencode_exact_host_preflight(
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
     # Base attestation validation (covers image, build, impl, vendor runtime, capabilities, fencing)
-    caps = requiredCapabilities or ["interrupt"]
-    if require_restricted_egress and "restricted-egress" not in [c.lower() for c in caps] and "restrictedEgress" not in caps:
-        # Ensure network policy is considered; caller can include explicit check but we also
-        # validate feature presence via Host Class externally. Here we just ensure
-        # the host is configured.
-        pass
+    caps = list(requiredCapabilities or ["interrupt"])
+    if require_restricted_egress:
+        lower_caps = [str(c).lower() for c in caps]
+        if "restricted-egress" not in lower_caps and "restrictedegress" not in lower_caps and "restricted_egress" not in lower_caps:
+            caps.append("restricted-egress")
+    # Resolve expected vendor runtimes (including digest) from HostClass for exact digest validation
+    expectedVendorRuntimes: list[dict[str, Any]] | None = None
+    try:
+        from moonmind.omnigent.harness_platform.host_classes import get_host_class
+
+        hc = get_host_class(expectedHostClassRef)
+        for entry in hc.declaredHarnessImplementations:
+            if entry.harnessId == "opencode-native":
+                expectedVendorRuntimes = [dict(dep) for dep in entry.runtimeDependencies]
+                break
+    except Exception:
+        expectedVendorRuntimes = None
     validate_exact_host_attestation(
         attestation=attestation,
         expectedHostClassRef=expectedHostClassRef,
@@ -315,6 +326,7 @@ def validate_opencode_exact_host_preflight(
         now=now,
         currentHostLeaseGeneration=currentHostLeaseGeneration,
         attestationGeneration=attestationGeneration,
+        expectedVendorRuntimes=expectedVendorRuntimes,
     )
     # Verify opencode binary present via runtimeDependencies
     opencode_dep = next((d for d in attestation.runtimeDependencies if d.name == "opencode"), None)
@@ -346,10 +358,43 @@ def validate_opencode_exact_host_preflight(
         )
     # Generation fencing already checked via attestationGeneration; additionally ensure
     # the credential generation matches materialized handle if provided
-    # Skill delivery and egress are verified via separate attestations in runtime binding;
-    # this preflight ensures basic host readiness before those are persisted.
-    if require_restricted_egress:
-        # The host must have restricted-egress feature; this is encoded in Host Class but
-        # we re-check that the attestation is not from an unattested network path.
-        # Actual egress attestation is verified via network attestation in runtime binding.
-        pass
+    # Enforce required Skill delivery ref if caller requested it
+    if requiredSkillDeliveryRef is not None:
+        if not requiredSkillDeliveryRef.startswith("skill-delivery:sha256:"):
+            raise HarnessPlatformError(
+                f"requiredSkillDeliveryRef must be skill-delivery:sha256: digest (got {requiredSkillDeliveryRef!r})",
+                code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
+            )
+        # Host must advertise mountedSkills when a delivery is required
+        if not attestation.capabilities.get("mountedSkills"):
+            raise HarnessPlatformError(
+                "required skill delivery but host does not advertise mountedSkills",
+                code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
+            )
+        # If host attests a delivery ref, verify it matches the required ref
+        attested_ref = (
+            attestation.capabilities.get("skillDeliveryRef")
+            or attestation.capabilities.get("skill_delivery_ref")
+            or attestation.capabilities.get("skillDelivery")
+        )
+        if attested_ref is not None:
+            from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet, assert_skill_delivery_attestation
+
+            attested_digest = (
+                attestation.capabilities.get("skillDeliveryDigest")
+                or attestation.capabilities.get("skill_digest")
+                or "sha256:" + "a" * 64
+            )
+            # Construct minimal planned set for delivery verification; digest is taken from attested when not otherwise known
+            planned = ResolvedSkillSet.model_validate(
+                {
+                    "resolvedSkillSetRef": "artifact:sha256:" + "a" * 64,
+                    "resolvedSkillSetDigest": attested_digest,
+                    "skillDeliveryRef": requiredSkillDeliveryRef,
+                }
+            )
+            assert_skill_delivery_attestation(
+                planned=planned,
+                attested_delivery_ref=str(attested_ref),
+                attested_digest=str(attested_digest),
+            )

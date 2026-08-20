@@ -16,12 +16,17 @@ on:
         default: "1.18.11"
         type: string
 
+permissions:
+  contents: read
+
 env:
   REGISTRY_IMAGE: ghcr.io/moonladderstudios/omnigent-host-opencode
 
 jobs:
   metadata:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       image_name: ${{ steps.meta.outputs.image_name }}
       version_tag: ${{ steps.meta.outputs.version_tag }}
@@ -58,22 +63,50 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Resolve Omnigent base digest
-        id: base
-        run: |
-          # Derive pinned base from OMNIGENT_HOST_IMAGE_REF if set, else inspect ghcr.io/omnigent-ai/omnigent-host:latest
-          if [ -n "${{ vars.OMNIGENT_BASE_IMAGE_REF || '' }}" ]; then
-            echo "base_image=${{ vars.OMNIGENT_BASE_IMAGE_REF }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "base_image=ghcr.io/omnigent-ai/omnigent-host:latest" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Login to GHCR
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve Omnigent base digest
+        id: base
+        run: |
+          set -euo pipefail
+          if [ -n "${{ vars.OMNIGENT_BASE_IMAGE_REF || '' }}" ]; then
+            BASE_REF="${{ vars.OMNIGENT_BASE_IMAGE_REF }}"
+            if ! echo "$BASE_REF" | grep -qE '@sha256:[0-9a-f]{64}$'; then
+              echo "::error::OMNIGENT_BASE_IMAGE_REF must be digest-pinned (got $BASE_REF)" >&2
+              exit 1
+            fi
+            echo "base_image=${BASE_REF}" >> "$GITHUB_OUTPUT"
+            DIGEST="$(echo "$BASE_REF" | grep -oE 'sha256:[0-9a-f]{64}')"
+            echo "base_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "Using pinned base from vars: ${BASE_REF}"
+          else
+            BASE_TAG="ghcr.io/omnigent-ai/omnigent-host:latest"
+            echo "Resolving ${BASE_TAG} to digest-pinned ref..."
+            # Pull and inspect to get RepoDigest (requires prior login)
+            docker pull "${BASE_TAG}" >/dev/null
+            DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${BASE_TAG}" 2>/dev/null | grep -oE 'sha256:[0-9a-f]{64}' || true)"
+            if [ -z "${DIGEST}" ]; then
+              # Fallback via buildx imagetools inspect (no pull)
+              DIGEST="$(docker buildx imagetools inspect "${BASE_TAG}" --format '{{json .Manifest}}' 2>/dev/null | grep -oE 'sha256:[0-9a-f]{64}' | head -n1 || true)"
+            fi
+            if [ -z "${DIGEST}" ]; then
+              echo "::error::Failed to resolve base image digest for ${BASE_TAG}" >&2
+              exit 1
+            fi
+            # Ensure digest has prefix
+            if [[ "${DIGEST}" != sha256:* ]]; then
+              DIGEST="sha256:${DIGEST}"
+            fi
+            PINNED="ghcr.io/omnigent-ai/omnigent-host@${DIGEST}"
+            echo "base_image=${PINNED}" >> "$GITHUB_OUTPUT"
+            echo "base_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+            echo "Resolved base to ${PINNED}"
+          fi
 
       - name: Set up Docker Buildx
         id: setup-buildx

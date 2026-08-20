@@ -331,10 +331,7 @@ def materialize_opencode_auth_json(
     try:
         # Best-effort ownership; may fail in test environments without privilege
         os.chown(parent, uid, gid)
-    except OSError:
-        # In hermetic test containers running as non-root, chown may fail;
-        # record but don't hide if running as root and mismatch persists.
-        # For now, ignore permission error but ensure file ownership is checked later.
+    except OSError:  # best-effort ownership in non-root test containers; verified later if root
         pass
     # Write file atomically with 0600
     payload_bytes = build_opencode_auth_json_bytes(api_key=api_key)
@@ -344,7 +341,7 @@ def materialize_opencode_auth_json(
     try:
         if tmp_path.exists():
             tmp_path.unlink()
-    except OSError:
+    except OSError:  # best-effort cleanup of stale tmp file
         pass
     # Write with restrictive umask
     old_umask = os.umask(0o077)
@@ -353,7 +350,7 @@ def materialize_opencode_auth_json(
         os.chmod(tmp_path, OPENCODE_AUTH_FILE_MODE)
         try:
             os.chown(tmp_path, uid, gid)
-        except OSError:
+        except OSError:  # best-effort ownership in non-root test containers
             pass
         # Atomic move
         tmp_path.replace(target_path)
@@ -365,7 +362,7 @@ def materialize_opencode_auth_json(
         try:
             if tmp_path.exists():
                 tmp_path.unlink()
-        except OSError:
+        except OSError:  # best-effort tmp cleanup
             pass
     # Verify file exists with correct mode (best-effort uid/gid check)
     try:
@@ -396,6 +393,25 @@ def materialize_opencode_auth_json(
                 f"auth.json ownership mismatch: {st.st_uid}:{st.st_gid} != {uid}:{gid}",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
             )
+    # Persist generation fencing evidence alongside auth.json (private sidecar)
+    generation_path = parent / ".opencode-auth-generation"
+    try:
+        # Write generation with restrictive perms; best-effort chown
+        old_umask2 = os.umask(0o077)
+        try:
+            generation_path.write_text(str(credential_generation), encoding="utf-8")
+            os.chmod(generation_path, OPENCODE_AUTH_FILE_MODE)
+            try:
+                os.chown(generation_path, uid, gid)
+            except OSError:  # best-effort ownership in non-root containers
+                pass
+        finally:
+            os.umask(old_umask2)
+    except OSError as exc:
+        raise HarnessPlatformError(
+            f"failed to persist generation sidecar: {exc}",
+            code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
+        ) from exc
     # Ensure no conflicting env vars were introduced
     _assert_no_forbidden_ambient_env()
     # Return secret-free handle (issue §5 step 11)
@@ -488,14 +504,31 @@ def verify_opencode_auth_file(
             "auth.json apiKey mismatch",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
-    # Generation is tracked via handle, not file content; we verify caller-provided generation via handle
+    # Verify generation fencing via sidecar file instead of echoing expectation
+    if expected_generation is not None:
+        generation_path = parent / ".opencode-auth-generation"
+        try:
+            observed = int(generation_path.read_text(encoding="utf-8").strip())
+        except Exception as exc:
+            raise HarnessPlatformError(
+                f"auth generation sidecar missing or invalid: {exc}",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+            ) from exc
+        if observed != expected_generation:
+            raise HarnessPlatformError(
+                f"credential generation mismatch: observed {observed} != expected {expected_generation}",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED,
+            )
+        verified_generation = observed
+    else:
+        verified_generation = None
     return {
         "targetPath": OPENCODE_AUTH_TARGET_PATH,
         "providerKey": OPENCODE_PROVIDER_KEY,
         "hasApiKey": True,
         "fileMode": oct(stat.S_IMODE(st.st_mode)),
         "parentMode": oct(stat.S_IMODE(parent.stat().st_mode)),
-        "generation": expected_generation,
+        "generation": verified_generation,
     }
 
 
@@ -525,21 +558,28 @@ def cleanup_opencode_auth(
             f"failed to cleanup auth.json: {exc}",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         ) from exc
+    # Remove generation sidecar
+    try:
+        gen_path = parent / ".opencode-auth-generation"
+        if gen_path.exists():
+            gen_path.unlink()
+    except OSError:  # best-effort generation cleanup
+        pass
     # Try to remove parent if empty (best-effort)
     try:
         if parent.exists() and not any(parent.iterdir()):
             parent.rmdir()
             removed_parent = True
-    except OSError:
+    except OSError:  # best-effort parent cleanup
         pass
     # Also remove any tmp files
     try:
         for tmp in parent.glob(".auth.json.tmp.*"):
             try:
                 tmp.unlink()
-            except OSError:
+            except OSError:  # best-effort tmp cleanup
                 pass
-    except OSError:
+    except OSError:  # best-effort glob cleanup
         pass
     return {
         "cleanupRef": f"credential-cleanup:{provider_profile_ref or 'unknown'}:{credential_generation or 0}",
@@ -557,11 +597,10 @@ def assert_opencode_materialization_secret_free(handle: dict[str, Any], raw_key:
         raise AssertionError("handle leaked raw api key")
 
 
-def clear_forbidden_ambient_env() -> dict[str, str]:
-    """Remove conflicting ambient credentials and return the cleared snapshot."""
-    cleared: dict[str, str] = {}
+def clear_forbidden_ambient_env() -> list[str]:
+    """Remove conflicting ambient credentials and return the cleared key names (no raw values)."""
+    cleared: list[str] = []
     for key in FORBIDDEN_AMBIENT_ENV_KEYS:
-        val = os.environ.pop(key, None)
-        if val is not None:
-            cleared[key] = val
+        if os.environ.pop(key, None) is not None:
+            cleared.append(key)
     return cleared

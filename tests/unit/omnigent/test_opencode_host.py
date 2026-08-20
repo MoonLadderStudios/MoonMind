@@ -63,7 +63,7 @@ def _make_attestation(host_class_ref="omnigent-opencode@1", version="1.18.11"):
             "harnessImplementation": {"package": "omnigent", "version": "1.0.0", "digest": "sha256:" + "a" * 64, "pluginEntryPoint": None},
             "runtimeDependencies": [{"name": "opencode", "version": version, "digest": "sha256:" + "d" * 64}],
             "configured": True,
-            "capabilities": {"interrupt": True, "streaming": True},
+            "capabilities": {"interrupt": True, "streaming": True, "restricted-egress": True},
             "observedAt": datetime.now(UTC),
         }
     )
@@ -73,7 +73,9 @@ def test_opencode_host_class_is_dedicated():
     hc = get_opencode_host_class()
     assert hc.ref == "omnigent-opencode@1"
     assert hc.imageRef.startswith("ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:")
-    assert hc.imageRef == OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT
+    # Default image ref is now derived from OMNIGENT_OPENCODE_HOST_IMAGE/TAG, not the fabricated c*64 placeholder
+    assert hc.imageRef != OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT
+    assert hc.imageRef == get_opencode_host_image_ref()
     # Only opencode-native, not codex
     harness_ids = {e.harnessId for e in hc.declaredHarnessImplementations}
     assert harness_ids == {"opencode-native"}
@@ -119,9 +121,25 @@ def test_opencode_version_supported_range():
 
 
 def test_opencode_image_ref_fail_closed():
-    # Default without env
+    # Default without env consults OMNIGENT_OPENCODE_HOST_IMAGE/TAG and returns executable digest-pinned ref
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
-    assert get_opencode_host_image_ref() == OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT
+    os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE", None)
+    os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_TAG", None)
+    default_ref = get_opencode_host_image_ref()
+    assert default_ref.startswith("ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:")
+    assert default_ref != OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT
+    # Custom host image/tag is consulted
+    os.environ["OMNIGENT_OPENCODE_HOST_IMAGE"] = "ghcr.io/custom/opencode-host"
+    os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_TAG"] = "1.18.11"
+    custom_ref = get_opencode_host_image_ref()
+    assert custom_ref.startswith("ghcr.io/custom/opencode-host@sha256:")
+    os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE", None)
+    os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_TAG", None)
+    # Placeholder c*64 also fails closed now
+    os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "c" * 64
+    with pytest.raises(HarnessPlatformError):
+        get_opencode_host_image_ref()
+    os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
     # Mutable tag fails closed
     os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = "ghcr.io/moonladderstudios/omnigent-host-opencode:latest"
     with pytest.raises(HarnessPlatformError) as exc:
@@ -292,7 +310,7 @@ def test_exact_host_preflight_fails_when_opencode_missing():
             "harnessImplementation": {"package": "omnigent", "version": "1.0.0", "digest": "sha256:" + "a" * 64, "pluginEntryPoint": None},
             "runtimeDependencies": [],  # missing opencode
             "configured": True,
-            "capabilities": {"interrupt": True},
+            "capabilities": {"interrupt": True, "restricted-egress": True},
             "observedAt": datetime.now(UTC),
         }
     )
@@ -335,7 +353,7 @@ def test_exact_host_preflight_fails_when_harness_not_opencode():
             "harnessImplementation": {"package": "omnigent", "version": "1.0.0", "digest": "sha256:" + "a" * 64, "pluginEntryPoint": None},
             "runtimeDependencies": [{"name": "opencode", "version": "1.18.11", "digest": "sha256:" + "d" * 64}],
             "configured": True,
-            "capabilities": {"interrupt": True},
+            "capabilities": {"interrupt": True, "restricted-egress": True},
             "observedAt": datetime.now(UTC),
         }
     )
