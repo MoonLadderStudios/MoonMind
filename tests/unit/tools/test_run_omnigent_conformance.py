@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "tools/run_omnigent_conformance.py"
@@ -138,3 +140,127 @@ def test_runner_derives_group_results_from_executed_commands(
     }
     assert evidence["commandResults"][0]["exitCode"] == 0
     assert evidence["commandResults"][0]["logDigest"].startswith("sha256:")
+
+
+def test_fake_provider_activation_via_cli_flag_is_recorded() -> None:
+    runner = _load_runner()
+    selection = runner.resolve_fake_provider_selection(
+        cli_flag=True, env={}, auth_mode="deterministic-fake"
+    )
+    assert selection == {
+        "requested": True,
+        "engaged": True,
+        "authMode": "deterministic-fake",
+        "source": "cli",
+    }
+
+
+def test_fake_provider_activation_via_env_var_is_recorded() -> None:
+    runner = _load_runner()
+    selection = runner.resolve_fake_provider_selection(
+        cli_flag=False,
+        env={runner.FAKE_PROVIDER_ENV: "1"},
+        auth_mode="deterministic-fake",
+    )
+    assert selection["requested"] is True
+    assert selection["engaged"] is True
+    assert selection["source"] == "env"
+
+
+def test_fake_provider_not_requested_stays_disengaged() -> None:
+    runner = _load_runner()
+    selection = runner.resolve_fake_provider_selection(
+        cli_flag=False, env={}, auth_mode="credentialed-live"
+    )
+    assert selection == {
+        "requested": False,
+        "engaged": False,
+        "authMode": "credentialed-live",
+    }
+
+
+def test_fake_provider_requires_deterministic_fake_auth_mode() -> None:
+    runner = _load_runner()
+    with pytest.raises(runner.ConformanceContractError):
+        runner.resolve_fake_provider_selection(
+            cli_flag=True, env={}, auth_mode="credentialed-live"
+        )
+
+
+def test_main_records_fake_provider_selection_in_evidence(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = _load_runner()
+    monkeypatch.setattr(
+        runner, "COMMANDS", (("python", "-m", "pytest", "proof-a.py"),)
+    )
+    monkeypatch.setattr(runner, "EVIDENCE_GROUPS", {})
+    monkeypatch.setattr(runner, "PENDING_EVIDENCE_GROUPS", set())
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+    monkeypatch.setattr(runner, "assert_secret_free", lambda _value: None)
+    monkeypatch.delenv(runner.FAKE_PROVIDER_ENV, raising=False)
+    monkeypatch.setattr(
+        runner.sys,
+        "argv",
+        [
+            "run_omnigent_conformance.py",
+            "--output-dir",
+            str(tmp_path),
+            "--server-image",
+            "server@sha256:" + "a" * 64,
+            "--host-image",
+            "host@sha256:" + "b" * 64,
+            "--host-architecture",
+            "linux/amd64",
+            "--fake-provider",
+        ],
+    )
+
+    runner.main()
+    evidence = json.loads((tmp_path / "runner-evidence.json").read_text())
+    assert evidence["fakeProvider"] == {
+        "requested": True,
+        "engaged": True,
+        "authMode": "deterministic-fake",
+        "source": "cli",
+    }
+
+
+def test_main_fails_fast_when_fake_provider_auth_mode_mismatches(
+    monkeypatch, tmp_path: Path
+) -> None:
+    runner = _load_runner()
+    # No layer should run when activation is rejected up front.
+    ran: list[object] = []
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda *args, **kwargs: ran.append(args) or SimpleNamespace(returncode=0),
+    )
+    monkeypatch.delenv(runner.FAKE_PROVIDER_ENV, raising=False)
+    monkeypatch.setattr(
+        runner.sys,
+        "argv",
+        [
+            "run_omnigent_conformance.py",
+            "--output-dir",
+            str(tmp_path),
+            "--server-image",
+            "server@sha256:" + "a" * 64,
+            "--host-image",
+            "host@sha256:" + "b" * 64,
+            "--host-architecture",
+            "linux/amd64",
+            "--auth-mode",
+            "credentialed-live",
+            "--fake-provider",
+        ],
+    )
+
+    assert runner.main() == 1
+    assert ran == []
+    assert not (tmp_path / "runner-evidence.json").exists()

@@ -27,8 +27,6 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
-from moonmind.workflows.executions.runtime_defaults import normalize_runtime_id
-from moonmind.workflows.executions.execution_contract import resolve_publish_mode_for_skill
 
 logger = logging.getLogger(__name__)
 
@@ -412,7 +410,10 @@ def _runtime_text(value: Any) -> str | None:
 def _runtime_modes_match(left: str | None, right: str | None) -> bool:
     if not left or not right:
         return False
-    return normalize_runtime_id(left) == normalize_runtime_id(right)
+    # Runtime identifiers are canonical internal identities.  The portable
+    # helper compares them exactly instead of importing MoonMind's application
+    # package (or maintaining an alias table of its own).
+    return _normalize_runtime_mode(left) == _normalize_runtime_mode(right)
 
 
 def _load_parent_runtime_selection(
@@ -582,6 +583,8 @@ def _resolve_artifacts_dir(
         return spool_path
 
     for candidate in _repo_context_candidates(task_context_path):
+        if not candidate.is_file():
+            continue
         artifacts_dir = _artifacts_dir_from_task_context_path(candidate)
         if artifacts_dir is not None:
             return artifacts_dir
@@ -607,7 +610,6 @@ def _build_queue_request(
     max_attempts: int,
     inherit_runtime_from_caller: bool = False,
 ) -> dict[str, Any]:
-    publish_mode = resolve_publish_mode_for_skill("pr-resolver", "auto")
     runtime_payload: dict[str, Any] = {}
     if runtime.mode:
         runtime_payload["mode"] = runtime.mode
@@ -638,7 +640,7 @@ def _build_queue_request(
                 "startingBranch": branch,
                 "branch": branch,
             },
-            "publish": {"mode": publish_mode},
+            "publish": {"mode": "auto"},
         },
     }
 
@@ -755,6 +757,19 @@ def _read_worker_token() -> str | None:
 
 
 def _read_execution_fanout_token() -> str | None:
+    token_file = str(
+        os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE", "")
+    ).strip()
+    if token_file:
+        path = Path(token_file)
+        if not path.is_file():
+            raise RuntimeError(
+                "execution fan-out capability file is unavailable: " + token_file
+            )
+        token = path.read_text(encoding="utf-8").strip()
+        if not token:
+            raise RuntimeError("execution fan-out capability file is empty")
+        return token
     token = str(
         os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "")
     ).strip()
