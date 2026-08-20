@@ -430,7 +430,9 @@ class OmnigentOAuthHostRuntime:
                 code=HostPreflightFailure.BINDING_MISMATCH.value,
             )
 
-        container_name = deterministic_host_container_name(host_lease.lease_id)
+        container_name = host_lease.container_name or deterministic_host_container_name(
+            host_lease.lease_id
+        )
         if await self._container_present(container_name):
             await self._assert_container_owned(container_name, host_lease.lease_id)
             await self._run("docker", "rm", "-f", container_name, check=False)
@@ -2107,13 +2109,19 @@ class OmnigentOAuthHostRuntime:
                     "attachment_absent_before_cleanup"
                 )
         if not binding.host_launch_profile_ref:
-            container_name = deterministic_host_container_name(host_lease.lease_id)
-            if await self._container_present(container_name):
-                await self._assert_container_owned(container_name, host_lease.lease_id)
-                await self._run("docker", "rm", "-f", container_name, check=False)
+            container_name = host_lease.container_name
+            if container_name and await self._container_present(container_name):
+                await self._assert_container_owned(
+                    container_name, host_lease.lease_id
+                )
+                await self._run(
+                    "docker", "rm", "-f", container_name, check=False
+                )
             await self.stop_static_host(binding=binding)
             cleanup_result = "drained_owned_static_host"
-            container_present = await self._container_present(container_name)
+            container_present = bool(
+                container_name and await self._container_present(container_name)
+            )
             cleanup_ok = not container_present and (
                 not attachment_identity
                 or not await self.container_exists(attachment_identity)

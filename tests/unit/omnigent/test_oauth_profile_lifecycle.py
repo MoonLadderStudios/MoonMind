@@ -613,7 +613,10 @@ async def test_static_host_cleanup_removes_lease_owned_credential_validator() ->
     runtime._run = AsyncMock(return_value=(0, "", ""))
     runtime.stop_static_host = AsyncMock()
 
-    result = await runtime.stop_host(binding=_binding(), host_lease=_host_lease())
+    lease = _host_lease().model_copy(
+        update={"container_name": "mm-omnigent-host-host-lease-1"}
+    )
+    result = await runtime.stop_host(binding=_binding(), host_lease=lease)
 
     assert result["cleanupResult"] == "drained_owned_static_host"
     runtime._assert_container_owned.assert_awaited_once_with(

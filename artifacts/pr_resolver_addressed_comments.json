@@ -1,22 +1,32 @@
 [
   {
-    "id": 4977865976,
+    "id": 3819559431,
+    "disposition": "addressed",
+    "rationale": "The activity now accepts only objective cleanupResult values before marking the host lease stopped. OmnigentOAuthHostRuntime.stop_host already raises OMNIGENT_HOST_CLEANUP_INCOMPLETE when the container, owned volumes, or runtime files remain, and the new activity regression proves a failed cleanup result leaves the validation lease nonterminal."
+  },
+  {
+    "id": 3819559440,
+    "disposition": "addressed",
+    "rationale": "Bound-host revalidation now captures provider-login failures, always invokes lease-owned host cleanup, marks the lease stopped only after cleanup succeeds, and then propagates the original preflight failure. The activity regression exercises this failure ordering."
+  },
+  {
+    "id": 3819559447,
+    "disposition": "addressed",
+    "rationale": "OAuth revalidation no longer creates or passes an empty execution workspace. The credential-only preflight mounts only the approved OAuth volume and runs the provider login-status command in the selected host image; its runtime test asserts that /workspaces/run is absent."
+  },
+  {
+    "id": 3819559454,
+    "disposition": "addressed",
+    "rationale": "OAuth revalidation no longer waits for Omnigent host registration. The credential-only provider login check has a 60-second bound, leaving the existing 180-second activity budget for deterministic cleanup."
+  },
+  {
+    "id": 4980223622,
     "disposition": "not-applicable",
-    "rationale": "Codex automated review summary only; the three concrete inline findings are classified separately."
+    "rationale": "Automated review summary only; the five concrete inline findings from this review are classified separately."
   },
   {
-    "id": 3817669960,
+    "id": 3819559461,
     "disposition": "addressed",
-    "rationale": "The native-UI compatibility version now resolves from one authority: an explicit OMNIGENT_NATIVE_UI_VERSION pin, otherwise verified immutable image evidence (an OMNIGENT_IMAGE_REF sha256 digest reports PINNED_OMNIGENT_COMMIT). A mutable tag such as :latest still reports unknown and fails closed, so AC11/AC12 hold, and no separate undocumented override is required: pinning the same immutable image the execution catalog and launch policies already demand also serves native Workflow Chat. Compose comments and docs/Omnigent/OmnigentBridge.md were corrected (they still claimed a default), and tests/unit/omnigent/test_omnigent_settings.py covers explicit pin, digest derivation, mutable-tag unknown, and the end-to-end gate outcome."
-  },
-  {
-    "id": 3817669964,
-    "disposition": "addressed",
-    "rationale": "Introduced one shared execution-budget authority (resolve_execution_timeout_seconds in moonmind/schemas/agent_runtime_models.py). The AgentRun workflow now publishes its effective budget into the launch request timeoutPolicy behind agent-run-shared-execution-budget-v1, and agent_runtime_launch derives the supervisor deadline from that same resolver instead of its own 3600s literal, so an explicitly requested budget is honored at both boundaries. Covered by tests/unit/workflows/temporal/workflows/test_agent_run_shared_execution_budget.py including the pre-patch in-flight payload case."
-  },
-  {
-    "id": 3817669962,
-    "disposition": "addressed",
-    "rationale": "Reverted the global widening: DEFAULT_MANAGED_TIMEOUT_SECONDS is 3600 again, so no managed run holds its provider slot longer or delays actionable failure by default. A genuinely long run requests the larger budget explicitly via timeoutPolicy.timeout_seconds, which is now effective end-to-end because the workflow budget and the process supervisor share one timeout authority (previously an explicit request was still killed at the launch default). A regression test asserts the managed default is not widened."
+    "rationale": "The activity no longer calls the full prepare_host execution contract. The new credential-only boundary validates the durable effective-launch image and binding identity but does not require an execution workspace, resolved Skill snapshot, artifact gateway, or fabricated execution authority."
   }
 ]
