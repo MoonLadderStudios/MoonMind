@@ -1,0 +1,6 @@
+{
+  "activeSkillsPath": "/opt/moonmind-skills",
+  "skillDocument": "/opt/moonmind-skills/fix-comments/SKILL.md",
+  "runnerEnvironmentVariable": "MOONMIND_ACTIVE_SKILLS_DIR",
+  "firstMessageHeader": "Active MoonMind skill snapshot:"
+}

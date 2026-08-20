@@ -3,15 +3,17 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import runpy
 import sqlite3
 import subprocess
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import httpx
 import pytest
@@ -21,11 +23,22 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
 from temporalio.testing import ActivityEnvironment
 
-from api_service.db.models import Base, OmnigentPolicy, OmnigentPolicyVersion
+from api_service.db.models import (
+    Base,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileVersion,
+    OmnigentPolicy,
+    OmnigentPolicyVersion,
+    RecurringWorkflowDefinition,
+    RecurringWorkflowScheduleType,
+    RecurringWorkflowScopeType,
+)
 from api_service.services.omnigent_policies import (
     bootstrap_document,
     seed_bootstrap_policies,
 )
+from api_service.services.recurring_workflows_service import RecurringWorkflowsService
+from moonmind.config.settings import settings
 from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
 from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
@@ -36,6 +49,8 @@ from moonmind.omnigent.bridge_store import (
 from moonmind.omnigent.execute import (
     OmnigentSessionStillRunningError,
     _await_marked_turn_terminal,
+    _build_omnigent_first_message,
+    _first_message_text,
     _marked_turn_item_state,
     _persisted_pre_dispatch_item_ids,
     _safe_heartbeat,
@@ -68,6 +83,7 @@ from moonmind.schemas.managed_session_models import (
     SendCodexManagedSessionTurnRequest,
 )
 from moonmind.schemas.agent_runtime_models import (
+    MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     AgentExecutionRequest,
     AgentRunResult,
     AgentRuntimeStepExecutionLaunch,
@@ -103,10 +119,14 @@ from moonmind.workflows.temporal.activity_catalog import build_default_activity_
 from moonmind.workflows.temporal.runtime.codex_session_runtime import (
     CodexManagedSessionRuntime,
 )
+from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
+)
+from moonmind.workflows.temporal.schedule_mapping import (
+    make_scheduled_workflow_id_base,
 )
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import (
@@ -189,6 +209,128 @@ pytestmark = [
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+async def test_managed_launcher_reuses_runtime_owned_workspace_with_exact_git_trust(
+    tmp_path: Path,
+) -> None:
+    replay_id = "managed-launcher-reused-workspace-git-ownership"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    run_id = "reused-workspace"
+    run_store = ManagedRunStore(tmp_path / "managed_runs")
+    launcher = ManagedRuntimeLauncher(run_store)
+    repo_path = (tmp_path / "workspaces" / run_id / "repo").resolve()
+    repo_path.mkdir(parents=True)
+    commands: list[tuple[object, ...]] = []
+    safe_prefix = (
+        "git",
+        "-c",
+        f"safe.directory={repo_path}",
+        "-C",
+        str(repo_path),
+    )
+
+    async def checked_command(*command: object, **_kwargs: object) -> None:
+        commands.append(command)
+        if command[: len(safe_prefix)] != safe_prefix:
+            raise RuntimeError(manifest["observedFailure"])
+
+    async def command_result(
+        *command: object, **_kwargs: object
+    ) -> tuple[int, str, str]:
+        commands.append(command)
+        if command[: len(safe_prefix)] != safe_prefix:
+            raise RuntimeError(manifest["observedFailure"])
+        return 0, manifest["preparedCommitSha"], ""
+
+    launcher._run_checked_command = checked_command  # type: ignore[method-assign]
+    launcher._run_command = command_result  # type: ignore[method-assign]
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId=manifest["runtime"],
+        executionProfileRef="claude_anthropic_oauth",
+        correlationId="replay-correlation",
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:step-6",
+        workspaceSpec={
+            "repository": manifest["repository"],
+            "targetBranch": manifest["targetBranch"],
+            "resolvedRepositoryTarget": {
+                "remoteTipExpectation": {"kind": "read_only"},
+                "preparedRevision": {
+                    "kind": "git_commit",
+                    "commitSha": manifest["preparedCommitSha"],
+                },
+            },
+        },
+    )
+
+    resolved = await launcher._prepare_workspace_path(
+        run_id=run_id,
+        request=request,
+        workspace_path=None,
+    )
+
+    assert expected["safeDirectoryScope"] == "exact_reused_workspace"
+    assert expected["checkoutMode"] == "pinned_branch_reset"
+    assert expected["workspaceReused"] is True
+    assert resolved == str(repo_path)
+    assert all(command[: len(safe_prefix)] == safe_prefix for command in commands)
+
+
+async def test_lost_managed_process_retries_once_over_authoritative_workspace() -> None:
+    replay_id = "managed-process-lost-during-reconciliation"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    agent_run = MoonMindAgentRun()
+    agent_run.run_id = manifest["agentRunId"]
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId=manifest["runtime"],
+        executionProfileRef=manifest["executionProfileRef"],
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:implement",
+        instructionRef="Implement the selected issue and publish the result.",
+        workspaceSpec={"repository": "MoonLadderStudios/MoonMind"},
+    )
+    failure = AgentRunResult(
+        summary=f"Process {manifest['lostPid']} not found during reconciliation",
+        failureClass=manifest["failureClass"],
+        providerErrorCode=MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+    )
+
+    recovery = agent_run._managed_process_loss_recovery_request(
+        request=request,
+        result=failure,
+    )
+
+    assert recovery is not None
+    assert expected["recoveryMode"] == "fresh_process"
+    assert expected["maxRecoveries"] == 1
+    assert recovery.workspace_spec["workspaceLocator"]["kind"] == expected[
+        "workspaceKind"
+    ]
+    assert (
+        recovery.execution_profile_ref == request.execution_profile_ref
+    ) is expected["sameExecutionProfile"]
+    assert (
+        recovery.idempotency_key == request.idempotency_key
+    ) is expected["sameIdempotencyKey"]
+    assert agent_run._managed_process_loss_recovery_history == [
+        {
+            "attempt": 1,
+            "mode": expected["recoveryMode"],
+            "reason": expected["recoveryReason"],
+            "outcome": "requested",
+        }
+    ]
+    assert (
+        agent_run._managed_process_loss_recovery_request(
+            request=recovery,
+            result=failure,
+        )
+        is None
+    )
 
 
 async def test_omnigent_server_image_authority_drift_reconciles_before_launch(
@@ -834,6 +976,163 @@ async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(
     )
     assert target.agent_id == expected["resolvedAgentId"]
     assert target.agent_name == expected["resolvedAgentName"]
+
+
+async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay the stale schedule action that conflicted with its host binding."""
+
+    replay_id = "recurring-managed-bootstrap-policy-cutover"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    definition_id = UUID(manifest["definitionId"])
+    old_snapshot = manifest["storedSnapshot"]
+    active_snapshot = manifest["activeSnapshot"]
+
+    async def refresh_snapshot(
+        session,
+        *,
+        parameters,
+        consumer_type,
+        consumer_id,
+        user,
+        replace_existing_usage,
+    ):
+        assert consumer_type == "schedule"
+        assert consumer_id == str(definition_id)
+        assert replace_existing_usage is True
+        return {
+            **dict(parameters),
+            "agentProfile": {
+                "profileId": active_snapshot["profileId"],
+                "version": active_snapshot["version"],
+                "digest": active_snapshot["digest"],
+            },
+            "agentProfileSnapshot": active_snapshot,
+            "omnigent": {
+                "executionTargetRef": active_snapshot["executionProfileRef"],
+                "launchPolicyRef": active_snapshot["launchPolicyRef"],
+            },
+        }
+
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service."
+        "refresh_managed_bootstrap_snapshot",
+        refresh_snapshot,
+    )
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'replay.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            definition = RecurringWorkflowDefinition(
+                id=definition_id,
+                name="Daily Dependabot Resolver",
+                enabled=True,
+                schedule_type=RecurringWorkflowScheduleType.CRON,
+                cron="0 13 * * *",
+                timezone="UTC",
+                temporal_schedule_id=f"mm-schedule:{definition_id}",
+                owner_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                scope_type=RecurringWorkflowScopeType.PERSONAL,
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {
+                        "targetRuntime": "omnigent",
+                        "agentProfile": {
+                            "profileId": old_snapshot["profileId"],
+                            "version": old_snapshot["version"],
+                            "digest": old_snapshot["digest"],
+                        },
+                        "agentProfileSnapshot": old_snapshot,
+                        "omnigent": {
+                            "executionTargetRef": old_snapshot[
+                                "executionProfileRef"
+                            ],
+                            "launchPolicyRef": old_snapshot["launchPolicyRef"],
+                        },
+                    },
+                    "agentProfile": {
+                        "profileId": old_snapshot["profileId"],
+                        "version": old_snapshot["version"],
+                        "digest": old_snapshot["digest"],
+                    },
+                    "agentProfileSnapshot": old_snapshot,
+                },
+                policy={},
+                version=1,
+            )
+            session.add_all(
+                [
+                    definition,
+                    OmnigentAgentProfile(
+                        profile_id=active_snapshot["profileId"],
+                        display_name="Codex via Omnigent",
+                        visibility="workspace",
+                        state="active",
+                        active_version=active_snapshot["version"],
+                        default_for_runtime=True,
+                    ),
+                    OmnigentAgentProfileVersion(
+                        profile_id=active_snapshot["profileId"],
+                        version=active_snapshot["version"],
+                        digest=active_snapshot["digest"],
+                        document={},
+                        validation_result={"ready": True},
+                    ),
+                ]
+            )
+            await session.commit()
+
+            update_schedule = AsyncMock()
+            adapter = SimpleNamespace(
+                resolve_workflow_task_queue=lambda _workflow: "mm.workflow.user.v2",
+                describe_schedule=AsyncMock(),
+                update_schedule=update_schedule,
+            )
+            service = RecurringWorkflowsService(
+                session,
+                temporal_client_adapter=adapter,
+            )
+            old_workflow_type, old_workflow_input = (
+                service._workflow_bundle_for_definition(definition)
+            )
+            adapter.describe_schedule.return_value = SimpleNamespace(
+                schedule=SimpleNamespace(
+                    action=SimpleNamespace(
+                        workflow=old_workflow_type,
+                        id=make_scheduled_workflow_id_base(definition_id),
+                        args=[old_workflow_input],
+                        task_queue="mm.workflow.user.v2",
+                    )
+                )
+            )
+
+            assert await service.refresh_managed_bootstrap_schedules() == 1
+            await session.refresh(definition)
+
+            assert definition.version == expected["definitionVersion"]
+            assert definition.target["agentProfile"]["version"] == expected[
+                "refreshedProfileVersion"
+            ]
+            assert definition.target["initialParameters"]["omnigent"][
+                "launchPolicyRef"
+            ] == expected["refreshedLaunchPolicyRef"]
+            assert (
+                manifest["durableHostBinding"]["launchPolicyRef"]
+                == expected["refreshedLaunchPolicyRef"]
+            )
+            assert update_schedule.await_count == 1
+            update_input = update_schedule.await_args.kwargs["workflow_input"]
+            assert update_input["initial_parameters"]["omnigent"][
+                "launchPolicyRef"
+            ] == expected["refreshedLaunchPolicyRef"]
+    finally:
+        await engine.dispose()
 
 
 async def test_runtime_switch_rebinds_managed_session_authority_before_activity() -> (
@@ -2688,6 +2987,223 @@ async def test_unposted_terminal_bridge_reopens_for_temporal_activity_retry(
     ]
 
 
+async def test_cleaned_up_host_retry_rebinds_fresh_endpoint_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:4e1c43a5 at host readiness and cleanup-authority handoffs."""
+
+    replay_id = "omnigent-cleanup-authority-retry"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=tmp_path,
+        workspace_root=tmp_path / "workspaces",
+    )
+    runtime._run = AsyncMock(
+        side_effect=[
+            (1, "", "container is not running"),
+            (1, "", "container is restarting"),
+            (0, "", ""),
+            (0, "", ""),
+        ]
+    )
+    sleep = AsyncMock()
+    monkeypatch.setattr(oauth_host_runtime_module.asyncio, "sleep", sleep)
+
+    await runtime._exec_check("mm-host-replay")
+
+    assert runtime._run.await_count == expected["preflightAttemptCount"] + 1
+    assert sleep.await_count == expected["preflightSleepCount"]
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/bridge.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    store = OmnigentBridgeSessionStore(sessions)
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=manifest["idempotencyKey"],
+    )
+    policy_authority = {
+        "policyId": "codex-static",
+        "policyVersion": 1,
+        "policyRef": "codex-static@1",
+        "policyDigest": "sha256:" + "1" * 64,
+        "snapshotRef": "policy:sha256:" + "2" * 64,
+        "validation": {"valid": True},
+    }
+    launch = {
+        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
+        "launchPolicyRef": "codex-static@1",
+        "policyAuthority": policy_authority,
+        "enforcedEgress": True,
+    }
+    try:
+        await store.bind_profile_authorization(
+            request=request,
+            endpoint_ref="embedded",
+            provider_profile_id="profile-replay",
+            provider_lease_id="provider-lease-1",
+            credential_generation=1,
+            host_binding_ref="binding-replay",
+            host_lease_ref="host-lease-replay",
+            omnigent_host_id="host-1",
+            effective_launch_snapshot=launch,
+        )
+        await store.bind_egress_cleanup_authority(
+            request=request,
+            host_lease_ref="host-lease-replay",
+            egress_evidence={
+                "attachmentIdentity": "host-container-replay",
+                "endpointIdentity": manifest["firstEndpointIdentity"],
+                "validationResult": "passed",
+            },
+            launch_evidence_ref="artifact://launch-1",
+        )
+        await store.record_lifecycle_event(
+            request.idempotency_key,
+            event_type="terminal",
+            status="failed",
+            metadata={"cleanupCompleted": True, "leaseReleased": True},
+        )
+
+        reopened = await store.get_or_create(
+            request=request,
+            endpoint_ref="embedded",
+            agent_id=None,
+            agent_name=None,
+            target_metadata={},
+        )
+        await store.bind_profile_authorization(
+            request=request,
+            endpoint_ref="embedded",
+            provider_profile_id="profile-replay",
+            provider_lease_id="provider-lease-1",
+            credential_generation=1,
+            host_binding_ref="binding-replay",
+            host_lease_ref="host-lease-replay",
+            omnigent_host_id="host-2",
+            effective_launch_snapshot=launch,
+        )
+        await store.bind_egress_cleanup_authority(
+            request=request,
+            host_lease_ref="host-lease-replay",
+            egress_evidence={
+                "attachmentIdentity": "host-container-replay",
+                "endpointIdentity": manifest["replacementEndpointIdentity"],
+                "validationResult": "passed",
+            },
+            launch_evidence_ref="artifact://launch-2",
+        )
+        active = await store.get_egress_cleanup_authority(
+            host_lease_ref="host-lease-replay"
+        )
+    finally:
+        await engine.dispose()
+
+    assert reopened.status == expected["reopenedStatus"]
+    archived = reopened.metadata_["unpostedAttemptHistory"][-1]
+    assert archived["egressCleanupAuthority"]["phase"] == expected[
+        "archivedAuthorityPhase"
+    ]
+    assert active is not None
+    assert active["egressEvidence"]["endpointIdentity"] == expected[
+        "activeEndpointIdentity"
+    ]
+
+
+async def test_fresh_omnigent_launch_is_not_reaped_before_materialization() -> None:
+    """Replay mm:4ce41531 at the coordinator-to-janitor authority handoff."""
+
+    replay_id = "omnigent-fresh-launch-janitor-race"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    now = datetime.now(timezone.utc)
+    lease = SimpleNamespace(
+        lease_id="host-lease-fresh-launch",
+        provider_profile_id="profile-replay",
+        provider_lease_id="provider-lease-fresh-launch",
+        binding_ref="binding-replay",
+        container_name="host-container-fresh-launch",
+        omnigent_session_id=None,
+        last_heartbeat_at=now
+        - timedelta(seconds=manifest["heartbeatAgeSeconds"]),
+        expires_at=now + timedelta(hours=1),
+        status=manifest["leaseStatusAtJanitorScan"],
+    )
+    cleanup_claims: list[str] = []
+    stopped: list[str] = []
+    released: list[str] = []
+    cleanup_records: list[dict] = []
+
+    class Repository:
+        async def list_active_host_leases(self):
+            return [lease]
+
+        async def list_terminal_host_leases_with_active_provider_capacity(self):
+            return []
+
+        async def get_binding_for_profile(self, _profile_id):
+            return None
+
+        async def claim_host_lease_cleanup(self, lease_id, **_kwargs):
+            cleanup_claims.append(lease_id)
+            return lease
+
+        async def validate_binding(self, _binding_ref):
+            raise AssertionError("fresh launch must not enter cleanup")
+
+        async def mark_host_lease_stopped(self, lease_id):
+            stopped.append(lease_id)
+            return lease
+
+    class Runtime:
+        async def container_exists(self, name):
+            assert name == lease.container_name
+            return False
+
+        async def list_managed_containers(self):
+            return []
+
+        async def stop_host(self, **_kwargs):
+            stopped.append(lease.lease_id)
+            return {}
+
+    class LeaseClient:
+        async def release_lease(self, provider_lease):
+            released.append(provider_lease.lease_id)
+
+    class RunStore:
+        async def cleanup_required_host_lease_refs(self):
+            return set()
+
+        async def embedded_reconciliation_host_lease_refs(self, **_kwargs):
+            return {}
+
+        async def record_terminal_cleanup(self, **kwargs):
+            cleanup_records.append(kwargs)
+
+    result = await OmnigentOAuthHostJanitor(
+        repository=Repository(),
+        runtime=Runtime(),
+        client=SimpleNamespace(),
+        run_store=RunStore(),
+        lease_client=LeaseClient(),
+        heartbeat_timeout_seconds=manifest["heartbeatTimeoutSeconds"],
+    ).run()
+
+    assert result["count"] == expected["janitorActionCount"]
+    assert len(cleanup_claims) == expected["cleanupClaimCount"]
+    assert len(stopped) == expected["hostStopCount"]
+    assert len(released) == expected["providerLeaseReleaseCount"]
+    assert bool(cleanup_records) is expected["durableCleanupFailureRecorded"]
+
+
 async def test_abandoned_omnigent_host_cleanup_releases_provider_capacity() -> None:
     """Replay mm:651a14f6 after cancellation killed its coordinator Activity."""
 
@@ -3067,6 +3583,127 @@ async def test_omnigent_on_demand_runner_inherits_enforced_proxy_environment(
         if value.startswith("OMNIGENT_RUNNER_ENV_PASSTHROUGH=")
     )
     assert passthrough.split(",") == expected["passthroughNames"]
+
+
+async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:2d8480da at the Omnigent runner-to-Codex shell boundary."""
+
+    replay_id = "omnigent-codex-moonmind-env-handoff"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    monkeypatch.setenv("MOONMIND_URL", manifest["moonmindUrl"])
+    monkeypatch.setattr(
+        settings.security,
+        "JWT_SECRET_KEY",
+        "replay-container-capability-key",
+    )
+    runtime = OmnigentOAuthHostRuntime(
+        client=SimpleNamespace(),
+        scripts_dir=REPO_ROOT / "services" / "omnigent" / "scripts",
+        workspace_root=tmp_path,
+    )
+    runtime_environment = runtime._container_job_environment(
+        binding=_oauth_binding().model_copy(
+            update={
+                "static_host_id": None,
+                "host_launch_profile_ref": "codex-oauth-v1",
+            }
+        ),
+        host_lease=_oauth_host_lease(),
+        workspace_locator=manifest["workspaceLocator"],
+        current_workflow_id=manifest["incidentWorkflowId"],
+        current_step_execution_id=manifest["stepExecutionId"],
+        timeout_seconds=3600,
+        required_capabilities=manifest["requiredCapabilities"],
+    )
+    runtime_scripts = runtime._prepare_runtime_scripts(
+        manifest["incidentWorkflowId"],
+        current_step_execution_id=manifest["stepExecutionId"],
+        runtime_environment=runtime_environment,
+    )
+    profile = (runtime_scripts / "moonmind-execution.sh").read_text(
+        encoding="utf-8"
+    )
+
+    for name in expected["toolShellEnvironmentNames"]:
+        assert f"export {name}=" in profile
+    assert f"'{manifest['moonmindUrl']}'" in profile
+    assert f"'{manifest['incidentWorkflowId']}'" in profile
+    for secret_name in expected["excludedSecretNames"]:
+        assert f"export {secret_name}=" not in profile
+        assert runtime_environment[secret_name] not in profile
+    capability_file = runtime_scripts / "capabilities" / "execution-fanout"
+    assert capability_file.read_text(encoding="utf-8").strip() == (
+        runtime_environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"]
+    )
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in runtime_environment
+
+
+async def test_omnigent_batch_fanout_crosses_only_scoped_execution_proxy_routes(
+) -> None:
+    """Replay mm:2d8480da at the Omnigent-to-MoonMind API proxy boundary."""
+
+    replay_id = "omnigent-batch-fanout-execution-proxy"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    squid_config = (
+        REPO_ROOT / "docker" / "sandbox-egress-proxy" / "squid.conf"
+    ).read_text(encoding="utf-8")
+    proxy_environment = dict(
+        value.split("=", 1) for value in omnigent_proxy_env()
+    )
+
+    assert manifest["terminalFailureCode"] == "CHILD_WORKFLOW_QUEUE_FAILED"
+    assert manifest["matchedPrs"] == 10
+    assert manifest["attempts"] == 4
+    assert "api" not in proxy_environment["NO_PROXY"].split(",")
+
+    required_header_acls = " ".join(expected["requiredHeaderAcls"])
+    assert (
+        "acl moonmind_execution_fanout req_header "
+        "X-MoonMind-Execution-Fanout ^v1$"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_bearer req_header Authorization -i "
+        "^Bearer[[:space:]]+[^[:space:]]+$"
+    ) in squid_config
+
+    for route in expected["allowedRoutes"]:
+        acl = f"acl {route['acl']} urlpath_regex {route['pathRegex']}"
+        allow = (
+            "http_access allow omnigent_listener moonmind_api "
+            f"moonmind_api_port {route['acl']} {required_header_acls} "
+            f"{route['method']}"
+        )
+        assert acl in squid_config
+        assert allow in squid_config
+        assert squid_config.index(allow) < squid_config.index(
+            "http_access deny omnigent_control"
+        )
+
+    describe_regex = expected["allowedRoutes"][1]["pathRegex"]
+    assert describe_regex.startswith("-i ")
+    describe_pattern = describe_regex.removeprefix("-i ")
+    assert re.fullmatch(
+        describe_pattern,
+        "/api/executions/mm%3Aegress-probe",
+        flags=re.IGNORECASE,
+    )
+    for suffix in expected["rejectedEncodedChildSuffixes"]:
+        assert not re.fullmatch(
+            describe_pattern,
+            "/api/executions/mm%3Aegress-probe" + suffix,
+            flags=re.IGNORECASE,
+        )
+
+    for denied in expected["deniedAclCombinations"]:
+        assert (
+            "http_access allow omnigent_listener moonmind_api "
+            f"moonmind_api_port {denied['acl']} {denied['method']}"
+        ) not in squid_config
 
 
 async def test_omnigent_codex_remote_bridge_has_loopback_only_proxy_bypass() -> None:
@@ -4534,6 +5171,55 @@ async def test_omnigent_pr_resolver_runtime_authority_replay(
     assert evaluated.metadata["terminalContractEvidencePath"] == expected[
         "terminalContractEvidencePath"
     ]
+
+
+async def test_omnigent_profile_bound_skill_activation_replay() -> None:
+    """Replay mm:b56b53bd at the verified snapshot-to-first-message boundary."""
+
+    replay_id = "omnigent-profile-bound-skill-activation"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex_openai_oauth",
+        correlationId=manifest["incidentWorkflowId"],
+        idempotencyKey=f"{manifest['incidentWorkflowId']}:skill-activation-replay",
+        instructionRef="ignored inline instruction",
+        resolvedSkillsetRef=manifest["resolvedSkillsetRef"],
+        parameters={
+            "metadata": {
+                "moonmind": {"selectedSkill": manifest["selectedSkill"]}
+            }
+        },
+    )
+    request = _bind_exact_host(
+        request,
+        host_id="host-replay",
+        workspace_path="/workspaces/run",
+        profile_authorization={
+            "providerProfileId": "codex_openai_oauth",
+            "hostLeaseRef": "lease-replay",
+        },
+        harness="codex-native",
+        agent_name=CODEX_STOCK_AGENT_NAME,
+    )
+
+    class Gateway:
+        async def read_text(self, _ref: str) -> str:
+            raise AssertionError("inline replay prompt must not read an artifact")
+
+    message = await _build_omnigent_first_message(
+        request=request,
+        prompt={"text": manifest["firstMessage"]},
+        artifact_gateway=Gateway(),
+    )
+    text = _first_message_text(message)
+
+    assert text.startswith(expected["firstMessageHeader"])
+    assert expected["skillDocument"] in text
+    assert expected["runnerEnvironmentVariable"] in text
+    assert text.endswith(manifest["firstMessage"])
 
 
 async def test_omnigent_pr_resolver_publish_evidence_handoff_replay(

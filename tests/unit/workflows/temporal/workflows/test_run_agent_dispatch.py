@@ -1724,6 +1724,31 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "prohibited",
         )
 
+    def test_resolved_skill_fanout_authorization_requires_trusted_provenance(self) -> None:
+        authorize = MoonMindRunWorkflow._resolved_skill_execution_fanout_authorization
+
+        assert authorize(
+            {
+                "provenance": {"sourceKind": "built_in"},
+                "requiredCapabilities": ["execution.fanout"],
+            },
+            selected_skill="batch-workflows",
+        )["authorized"] is True
+        assert authorize(
+            {
+                "provenance": {"sourceKind": "repo"},
+                "requiredCapabilities": ["execution.fanout"],
+            },
+            selected_skill="untrusted-batch",
+        )["authorized"] is False
+        assert authorize(
+            {
+                "provenance": {"sourceKind": "deployment"},
+                "requiredCapabilities": [],
+            },
+            selected_skill="ordinary-skill",
+        )["authorized"] is False
+
     def test_build_agent_execution_request_compiles_trusted_remediation_authority(self) -> None:
         from unittest.mock import patch
 

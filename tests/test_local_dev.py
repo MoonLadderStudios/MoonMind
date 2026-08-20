@@ -202,6 +202,10 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     services = compose_data.get("services", {})
     networks = compose_data.get("networks", {})
 
+    assert networks.get("control-plane-network") == {
+        "name": "${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}"
+    }, "the control-plane network must be Compose-managed with a stable name"
+
     sandbox_network = networks.get("sandbox-egress-network")
     assert isinstance(
         sandbox_network, dict
@@ -247,7 +251,7 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
         "sandbox-egress-network",
     )
     assert _network_names(proxy_service) == {
-        "local-network",
+        "control-plane-network",
         "sandbox-egress-network",
         "restricted-egress-network",
         "omnigent-egress-network",
@@ -285,6 +289,32 @@ def test_sandbox_worker_uses_internal_egress_network_for_mm_785():
     assert (
         "http_access allow omnigent_listener moonmind_api moonmind_api_port "
         "moonmind_container_tool POST"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_create urlpath_regex ^/api/executions$"
+        in squid_config
+    )
+    assert (
+        "acl moonmind_execution_describe urlpath_regex "
+        "-i ^/api/executions/([a-z0-9._~:-]|%3a)+$"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_fanout req_header "
+        "X-MoonMind-Execution-Fanout ^v1$"
+    ) in squid_config
+    assert (
+        "acl moonmind_execution_bearer req_header Authorization -i "
+        "^Bearer[[:space:]]+[^[:space:]]+$"
+    ) in squid_config
+    assert (
+        "http_access allow omnigent_listener moonmind_api moonmind_api_port "
+        "moonmind_execution_create moonmind_execution_fanout "
+        "moonmind_execution_bearer POST"
+    ) in squid_config
+    assert (
+        "http_access allow omnigent_listener moonmind_api moonmind_api_port "
+        "moonmind_execution_describe moonmind_execution_fanout "
+        "moonmind_execution_bearer GET"
     ) in squid_config
     assert "169.254.0.0/16" in squid_config
     assert "http_access deny forbidden_destination" in squid_config
@@ -494,7 +524,7 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
     ), "omnigent-db-init service is missing from docker-compose.yaml"
     assert init_service.get("restart") == "no"
     assert init_service["depends_on"]["postgres"]["condition"] == "service_healthy"
-    assert _network_names(init_service) == {"local-network"}
+    assert _network_names(init_service) == {"control-plane-network"}
 
     init_env = _env_map(init_service.get("environment"))
     assert init_env["OMNIGENT_POSTGRES_USER"] == (
@@ -527,7 +557,7 @@ def test_omnigent_compose_uses_shared_postgres_for_mm_970():
         == "service_completed_successfully"
     )
     assert _network_names(omnigent_service) == {
-        "local-network",
+        "control-plane-network",
         "omnigent-egress-network",
     }
     assert omnigent_service["ports"] == ["${OMNIGENT_PORT:-8000}:8000"]

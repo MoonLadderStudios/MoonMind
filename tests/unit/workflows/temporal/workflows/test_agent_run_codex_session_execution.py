@@ -8,6 +8,7 @@ import pytest
 from temporalio.exceptions import ApplicationError
 
 from moonmind.schemas.agent_runtime_models import (
+    MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     AgentExecutionRequest,
     AgentRuntimeStepExecutionLaunch,
     AgentTerminalContract,
@@ -367,6 +368,122 @@ async def test_terminal_contract_uses_fresh_process_when_session_cannot_continue
         "relativePath": "repo",
     }
     assert "do not schedule a wake-up" in continuation.instruction_ref
+
+
+async def test_lost_managed_process_gets_one_workspace_preserving_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    run.run_id = "run-claude-lost-process"
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        executionProfileRef="claude-anthropic-oauth",
+        correlationId="mm:lost-process-workflow",
+        idempotencyKey="mm:lost-process-workflow:implement",
+        instructionRef="Implement the requested issue and publish the result.",
+        workspaceSpec={
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetBranch": "github-issue-implement-moonladderstudios-9eea789f",
+        },
+        parameters={"model": "claude-opus-4-8", "publishMode": "auto"},
+    )
+    lost = AgentRunResult(
+        summary="Process 36009 not found during reconciliation",
+        failureClass="system_error",
+        providerErrorCode=MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+    )
+
+    recovery = run._managed_process_loss_recovery_request(
+        request=request,
+        result=lost,
+    )
+
+    assert recovery is not None
+    assert recovery.execution_profile_ref == request.execution_profile_ref
+    assert recovery.parameters == request.parameters
+    assert recovery.idempotency_key == request.idempotency_key
+    assert recovery.workspace_spec["workspaceLocator"] == {
+        "kind": "managed_runtime",
+        "runtimeId": "claude_code",
+        "agentRunId": "run-claude-lost-process",
+        "relativePath": "repo",
+    }
+    assert "reuse completed work instead of duplicating it" in (
+        recovery.instruction_ref
+    )
+
+    recovered = run._with_managed_process_loss_recovery_history(
+        AgentRunResult(summary="Published the requested pull request.")
+    )
+    assert recovered.metadata["managedProcessLossRecoveryOutcome"] == "recovered"
+    assert recovered.metadata["managedProcessLossRecoveryHistory"] == [
+        {
+            "attempt": 1,
+            "mode": "fresh_process",
+            "reason": "process_lost_during_reconciliation",
+            "outcome": "recovered",
+        }
+    ]
+
+
+async def test_lost_managed_process_recovery_is_bounded_and_typed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    run = MoonMindAgentRun()
+    run.run_id = "run-claude-lost-twice"
+    request = AgentExecutionRequest(
+        agentKind="managed",
+        agentId="claude_code",
+        executionProfileRef="claude-anthropic-oauth",
+        correlationId="mm:lost-process-twice",
+        idempotencyKey="mm:lost-process-twice:implement",
+        workspaceSpec={"repository": "MoonLadderStudios/MoonMind"},
+    )
+    unrelated = AgentRunResult(
+        summary="Managed runtime unavailable",
+        failureClass="system_error",
+        providerErrorCode="MANAGED_RUNTIME_UNAVAILABLE",
+    )
+    legacy_untyped = AgentRunResult(
+        summary="Process not found during reconciliation",
+        failureClass="system_error",
+    )
+    assert (
+        run._managed_process_loss_recovery_request(
+            request=request,
+            result=unrelated,
+        )
+        is None
+    )
+    assert (
+        run._managed_process_loss_recovery_request(
+            request=request,
+            result=legacy_untyped,
+        )
+        is None
+    )
+
+    lost = AgentRunResult(
+        summary="Process not found during reconciliation",
+        failureClass="system_error",
+        providerErrorCode=MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
+    )
+    assert run._managed_process_loss_recovery_request(
+        request=request,
+        result=lost,
+    )
+    exhausted = run._with_managed_process_loss_recovery_history(lost)
+    assert exhausted.metadata["managedProcessLossRecoveryOutcome"] == "exhausted"
+    assert (
+        run._managed_process_loss_recovery_request(
+            request=request,
+            result=exhausted,
+        )
+        is None
+    )
 
 
 async def test_terminal_checkpoint_activity_failure_preserves_primary_result(

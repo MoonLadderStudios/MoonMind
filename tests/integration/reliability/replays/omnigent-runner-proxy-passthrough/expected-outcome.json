@@ -1,5 +1,5 @@
 {
-  "invariant": "every isolated Omnigent runner receives the host's enforced proxy and loopback-only bypass configuration while retaining only non-secret execution identity and GitHub config selectors",
+  "invariant": "every isolated Omnigent runner receives the host's enforced proxy and loopback-only bypass configuration while retaining only non-secret active-skill, execution-identity, and GitHub config selectors",
   "passthroughNames": [
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -7,6 +7,7 @@
     "https_proxy",
     "NO_PROXY",
     "no_proxy",
+    "MOONMIND_ACTIVE_SKILLS_DIR",
     "MOONMIND_STEP_EXECUTION_ID",
     "XDG_CONFIG_HOME",
     "GH_PROMPT_DISABLED",

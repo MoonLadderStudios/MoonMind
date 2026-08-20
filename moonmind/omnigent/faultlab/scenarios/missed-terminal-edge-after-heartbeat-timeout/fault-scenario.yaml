@@ -1,0 +1,28 @@
+desiredCancel: false
+groundTruthTerminal: success
+invariant: eventual_convergence
+maxTurnAttempts: 3
+recoveryRound: 4
+requiresCleanup: true
+requiresHost: true
+requiresProfileLease: true
+scenarioId: missed-terminal-edge-after-heartbeat-timeout
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 3698
+sourceRef: '#3698'
+steps:
+- disconnect: false
+  duplicate: false
+  emit: []
+  'on': submit_turn
+  reorder: false
+  response: success
+  sideEffect: accepted
+- disconnect: true
+  duplicate: false
+  emit:
+  - type: turn.running
+  'on': read_events
+  reorder: false
+  response: success
+  sideEffect: none

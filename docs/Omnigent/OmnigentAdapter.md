@@ -268,6 +268,7 @@ The owning worker resolves and validates the locator, performs root-containment 
 | Workflow workspace | `/workspaces/run` for on-demand | Workflow-scoped, policy-resolved, daemon-visible |
 | Resolved skills | `/opt/moonmind-skills` | Immutable run snapshot, read-only |
 | Versioned tools | `/opt/moonmind-tools` | Pinned bundle, read-only |
+| Runtime capability files | `/opt/moonmind/capabilities` | Lease-owned, read-only, created only for policy-authorized requirements |
 | Artifact handoff | Policy-selected path or gateway | Never conflated with the OAuth or host-state volume |
 | Temporary storage | `/tmp` | Bounded, removable, and non-authoritative |
 | Optional caches | Policy-selected | Explicit owner, scope, retention, and invalidation |
@@ -279,6 +280,24 @@ The supported host user is UID/GID `1000:1000` with `HOME=/home/app`. On-demand 
 The host attaches only to the network selected by the effective deployment/policy snapshot and required for MoonMind/Omnigent communication. A network name is not itself an egress policy. Restricted egress requires an enforced network, proxy, or firewall boundary and must fail closed when a selected policy cannot be realized.
 
 Host registration credentials and OpenAI OAuth credentials remain separate. Neither may substitute for the other.
+
+The Omnigent network route to MoonMind is transport, not authority. The runtime
+adapter derives grants from the normalized Required Capabilities and policy
+snapshot. For `execution.fanout`, the workflow must also attest that the
+immutable resolved Skill has built-in or deployment-managed provenance and the
+derived requirement; an authored capability string is never sufficient
+authority. The adapter then mints a short-lived parent-scoped bearer,
+writes it to the lease-owned read-only capability directory, and exposes only
+`MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE` to the runner and login shell.
+Runs without that requirement receive neither the file nor its selector. Raw
+capability values must not be written to shell profiles, Docker arguments,
+durable artifacts, or diagnostics.
+
+The baseline file handoff requires a run-dedicated on-demand host. If an
+advanced static-host selection requests `execution.fanout`, preflight blocks
+before workspace or host mutation and directs the operator to the canonical
+on-demand profile; MoonMind does not place a run-scoped bearer into shared host
+state or silently broaden the selected policy.
 
 ---
 
@@ -346,7 +365,23 @@ Cleanup is idempotent across activity retry and worker failure:
 
 - on-demand cleanup stops and removes the deterministic container and its lease-owned Omnigent state volume;
 - static cleanup stops or drains the dedicated Codex host according to policy;
-- expired, missing, orphaned, and stale-generation hosts are reconciled by the host janitor;
+- container absence is cleanup evidence only after the lease crosses the
+  materialization boundary into `ready` or `assigned`; an `allocating` or
+  `starting` lease is cleanup-eligible only when it is expired, stale, or named
+  by explicit durable reconciliation evidence;
+- before stopping a host or releasing capacity, the janitor atomically claims
+  the observed lease status and heartbeat and moves it to `draining`; a
+  concurrent heartbeat or state transition defeats the claim and defers cleanup
+  to a later reconciliation pass;
+- heartbeat renewal is itself conditional on a heartbeat-owning state, so a
+  cleanup claim and heartbeat cannot both succeed; the claim renews a bounded
+  cleanup-ownership expiry, and the coordinator relinquishes cleanup and
+  Provider Profile release when that authority is lost;
+- orphan discovery resolves the container's durable host-lease label and reloads
+  that lease before removal; any lease-owned container stays on the fenced lease
+  cleanup path even when it appeared after the janitor's initial snapshot;
+- expired, missing-after-materialization, orphaned, and stale-generation hosts
+  are reconciled by the host janitor;
 - cleanup failure leaves explicit `janitorRequired` evidence and does not falsely release credential capacity;
 - Provider Profile release is the final lifecycle action.
 

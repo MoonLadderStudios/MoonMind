@@ -591,6 +591,471 @@ class OmnigentBridgeSessionEvent(Base):
     )
 
 
+# ---------------------------------------------------------------------------
+# Omnigent control-plane durable aggregates
+#
+# Source: MoonLadderStudios/MoonMind#3703 ([Omnigent control plane 2/11]).
+# The overloaded ``omnigent_bridge_sessions`` row conflates logical
+# provider-session state with request/turn/continuation/cleanup attempts. These
+# aggregates separate the durable concepts so illegal lifecycle ownership is
+# hard or impossible to represent:
+#   * OmnigentSession               - one canonical provider-session authority
+#   * OmnigentTurnAttempt           - one logical turn/continuation/remediation
+#   * OmnigentObservation           - append-only bounded observation index
+#   * OmnigentCommand               - durable logical-side-effect journal
+#   * OmnigentReconciliationDecision- append-only reconciliation record
+#   * OmnigentChatBindingAlias      - safe resolution of prior binding handles
+# The legacy bridge tables are intentionally left in place; this issue is
+# additive (migration/rollout retirement is owned by a later issue).
+# ---------------------------------------------------------------------------
+
+
+class OmnigentSession(Base):
+    """One canonical row per logical provider-session authority.
+
+    Source: MoonLadderStudios/MoonMind#3703. Database invariants prevent more
+    than one canonical session authority for a Workflow/provider-session scope
+    and prevent two canonical rows from owning the same opaque chat binding.
+    Conflicting immutable authority fails closed at the repository boundary
+    rather than selecting the newest row.
+    """
+
+    __tablename__ = "omnigent_sessions"
+    __table_args__ = (
+        # At most one canonical authority per (workflow, provider session).
+        # provider_session_ref is nullable so a not-yet-attached session carries
+        # NULL; NULLs are distinct under both SQLite and Postgres unique indexes.
+        Index(
+            "uq_omnigent_sessions_scope",
+            "moonmind_workflow_id",
+            "provider_session_ref",
+            unique=True,
+        ),
+        # One opaque chat-binding identity maps to exactly one canonical session.
+        Index(
+            "uq_omnigent_sessions_chat_binding",
+            "chat_binding_id",
+            unique=True,
+        ),
+        Index("ix_omnigent_sessions_workflow", "moonmind_workflow_id"),
+        Index("ix_omnigent_sessions_deadline", "next_reconciliation_deadline"),
+    )
+
+    session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+
+    # Workflow / run / step / agent-run scope.
+    moonmind_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    moonmind_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    moonmind_agent_run_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Provider and compatibility profile.
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    compatibility_profile: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    # Provider session attachment + one opaque chat-binding identity.
+    provider_session_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    chat_binding_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Immutable intent ref and digest.
+    intent_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    intent_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    # Desired / observed / reconciled lifecycle state.
+    desired_state: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="pending", server_default="pending"
+    )
+    observed_state: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    reconciled_state: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    # Active turn attempt + provider cursors / frontier.
+    active_turn_attempt_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    provider_event_cursor: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    snapshot_frontier: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Provider Profile / host binding / host lease / credential generations.
+    provider_profile_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    host_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    provider_profile_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    host_lease_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    credential_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+    # Compatibility and image-manifest refs.
+    compatibility_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    image_manifest_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+
+    # Terminal / cleanup / historical-read state. Session terminality is stored
+    # separately from turn-attempt terminality (a terminal attempt does not
+    # terminalize the session).
+    terminal_state: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    terminal_evidence_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    cleanup_state: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="pending", server_default="pending"
+    )
+    historical_read_state: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="live", server_default="live"
+    )
+
+    # Optimistic revision and fencing generation.
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    # Next reconciliation deadline and last decision reference.
+    next_reconciliation_deadline: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_decision_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    metadata_: Mapped[dict[str, Any]] = mapped_column(
+        "metadata", mutable_json_dict(), nullable=False, default=dict
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentTurnAttempt(Base):
+    """One row per logical instruction / continuation / steering / remediation
+    turn.
+
+    Source: MoonLadderStudios/MoonMind#3703. Only a turn attempt owns request
+    idempotency. It deliberately has **no** ``chat_binding_id`` column, so an
+    attempt can never carry chat-binding authority, and it cannot independently
+    terminalize the canonical session (attempt terminality is stored here;
+    session terminality lives on :class:`OmnigentSession`).
+    """
+
+    __tablename__ = "omnigent_turn_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", name="uq_omnigent_turn_attempts_idempotency_key"
+        ),
+        Index("ix_omnigent_turn_attempts_session", "session_id"),
+        Index("ix_omnigent_turn_attempts_state", "state"),
+    )
+
+    turn_attempt_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        nullable=False,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+
+    # Step Execution and remediation / continuation lineage.
+    step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    lineage_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="instruction", server_default="instruction"
+    )
+    parent_turn_attempt_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    remediation_of_turn_attempt_id: Mapped[Optional[str]] = mapped_column(
+        String(255), nullable=True
+    )
+
+    # Request idempotency + instruction digest (attempt-owned).
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    instruction_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    # Provider marker + provider turn / item identity.
+    provider_marker: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    provider_turn_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    provider_item_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Delivery lifecycle: prepared, dispatching, delivery_unknown, accepted,
+    # running, terminal.
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="prepared", server_default="prepared"
+    )
+    terminal_state: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    attempt_outcome: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    terminal_evidence_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentObservation(Base):
+    """Append-only, bounded index over authoritative observations.
+
+    Source: MoonLadderStudios/MoonMind#3703. Bounded searchable fields live in
+    PostgreSQL; full redacted payloads live in artifacts referenced by
+    ``payload_ref``. Deduplication identity and source sequence are enforced by
+    unique constraints so replayed batches are idempotent.
+    """
+
+    __tablename__ = "omnigent_observations"
+    __table_args__ = (
+        Index(
+            "uq_omnigent_observations_dedup",
+            "session_id",
+            "deduplication_key",
+            unique=True,
+        ),
+        Index("ix_omnigent_observations_session_observed", "session_id", "observed_at"),
+        Index("ix_omnigent_observations_type", "session_id", "observation_type"),
+    )
+
+    observation_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        nullable=False,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    observation_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_sequence: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    source_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    deduplication_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    payload_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    bounded_index_: Mapped[dict[str, Any]] = mapped_column(
+        "bounded_index", mutable_json_dict(), nullable=False, default=dict
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentCommand(Base):
+    """Durable command and idempotency journal for logical side effects.
+
+    Source: MoonLadderStudios/MoonMind#3703. This journal supports idempotency
+    and audit; Temporal remains the orchestration authority. A logical command
+    identity is unique so retries and delivery-ambiguous dispatches collapse to
+    one journal row.
+    """
+
+    __tablename__ = "omnigent_commands"
+    __table_args__ = (
+        UniqueConstraint(
+            "idempotency_key", name="uq_omnigent_commands_idempotency_key"
+        ),
+        Index("ix_omnigent_commands_session", "session_id"),
+        Index("ix_omnigent_commands_status", "status"),
+    )
+
+    command_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        nullable=False,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    command_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    turn_attempt_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    expected_session_revision: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    payload_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    # Owner identity class (e.g. "session_supervisor", "janitor"): a low
+    # cardinality class, never a high-cardinality identity, so it is safe for
+    # metric labels (#3704).
+    owner_class: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Per-claim fencing token identifying the exact claimant that won execution
+    # authority. Unlike the low-cardinality ``owner_class`` (a safe metric label),
+    # this uniquely binds delivery/result settlement to the winning claimant so a
+    # racing loser that shares an ``owner_class`` cannot settle the command (#3704).
+    claim_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    provider_receipt_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    delivery_ambiguous: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    result_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    # Own monotonic state_version so a claim/delivery/result transition is a
+    # revision-fenced compare-and-swap, not a blind field overwrite (#3704).
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    retry_policy_: Mapped[dict[str, Any]] = mapped_column(
+        "retry_policy", mutable_json_dict(), nullable=False, default=dict
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
+class OmnigentReconciliationDecision(Base):
+    """Append-only record of a reconciliation decision.
+
+    Source: MoonLadderStudios/MoonMind#3703.
+    """
+
+    __tablename__ = "omnigent_reconciliation_decisions"
+    __table_args__ = (
+        Index(
+            "ix_omnigent_reconciliation_decisions_session_created",
+            "session_id",
+            "created_at",
+        ),
+    )
+
+    decision_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        nullable=False,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    input_state_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    observation_frontier_digest: Mapped[Optional[str]] = mapped_column(
+        String(128), nullable=True
+    )
+    expected_revision: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fencing_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    decision_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason_code: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    resulting_command_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    next_deadline: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    product_visible_transition: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    trace_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+    diagnostics_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentChatBindingAlias(Base):
+    """Safe resolution of previously issued chat-binding handles.
+
+    Source: MoonLadderStudios/MoonMind#3703. Duplicate chat-binding URLs from
+    the legacy bridge rows resolve to the canonical session (``active``) or fail
+    closed as a stable diagnostic (``quarantined``). Aliases never expose
+    provider session IDs; they map only to the canonical ``session_id``.
+    """
+
+    __tablename__ = "omnigent_chat_binding_aliases"
+    __table_args__ = (
+        Index("ix_omnigent_chat_binding_aliases_session", "session_id"),
+    )
+
+    chat_binding_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        nullable=True,
+    )
+    alias_state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="active", server_default="active"
+    )
+    diagnostic_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class OmnigentCleanupAuthority(Base):
+    """Durable cleanup / janitor authority for one canonical session.
+
+    Source: MoonLadderStudios/MoonMind#3704 ([Omnigent control plane 3/11]).
+    Cleanup must be fenced against the host, Provider Profile lease, and
+    provider-session generations it was claimed against, so a janitor cannot
+    stop or release resources that now belong to a replacement generation. The
+    ``generation`` is a strictly increasing token; each claim bumps it. Exactly
+    one owner may hold ``claimed`` (a claim compare-and-swaps against the current
+    ``revision``), and a former owner cannot complete cleanup after a newer
+    generation is claimed.
+    """
+
+    __tablename__ = "omnigent_cleanup_authority"
+    __table_args__ = (
+        Index("ix_omnigent_cleanup_authority_state", "state"),
+    )
+
+    session_id: Mapped[str] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_sessions.session_id"),
+        primary_key=True,
+    )
+    schema_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    state: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unclaimed", server_default="unclaimed"
+    )
+    owner_class: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    # Per-claim fencing token identifying the exact janitor that won cleanup
+    # authority. ``owner_class`` stays a low-cardinality metric label; this token
+    # binds completion to the winning claimant so a racing janitor sharing an
+    # ``owner_class`` cannot complete a cleanup it never won (#3704).
+    claim_token: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    fenced_host_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fenced_profile_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    fenced_provider_epoch: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+
 class WorkflowCheckpointBranch(Base):
     """Product-level checkpoint branch persisted separately from git refs."""
 

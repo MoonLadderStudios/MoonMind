@@ -1,0 +1,5 @@
+{
+  "safeDirectoryScope": "exact_reused_workspace",
+  "checkoutMode": "pinned_branch_reset",
+  "workspaceReused": true
+}

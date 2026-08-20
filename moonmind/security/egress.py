@@ -17,12 +17,14 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.security.docker_networks import resolve_control_plane_network
+
 CommandRunner = Callable[[Sequence[str]], Awaitable[tuple[int, bytes, bytes]]]
 
 ENFORCER_IMPLEMENTATION = "docker-internal-proxy/v1"
 # Digest of the reviewed, mounted Squid policy. Attestation compares this
 # deployment-owned value with both the container label and the live file.
-EGRESS_CONFIG_DIGEST = "sha256:742cc613eaeed6b3dfb37e5c4d167b4766a35f16cf9781cfd6fabac673d41e5d"
+EGRESS_CONFIG_DIGEST = "sha256:a64c798e3fed5252e86811d344ad8f509332e81b06ee75ddc6ad2f2198fc3713"
 # Deployment-owned network names. Compose resolves these same overrides when it
 # creates the networks (``restricted-egress-network`` /
 # ``sandbox-egress-network``), so an operator that sets the documented override
@@ -37,6 +39,7 @@ _SANDBOX_EGRESS_NETWORK_REF = os.environ.get(
 OMNIGENT_EGRESS_NETWORK_REF = os.environ.get(
     "MOONMIND_OMNIGENT_EGRESS_NETWORK", "moonmind_omnigent-egress-network"
 )
+CONTROL_PLANE_NETWORK_REF = resolve_control_plane_network()
 EGRESS_GATEWAY_REF = "moonmind-sandbox-egress-proxy"
 PROXY_URL = "http://sandbox-egress-proxy:3128"
 OMNIGENT_PROXY_URL = "http://omnigent-egress-proxy:3129"
@@ -45,7 +48,7 @@ _EXPECTED_GATEWAY_NETWORKS = frozenset(
         EGRESS_NETWORK_REF,
         _SANDBOX_EGRESS_NETWORK_REF,
         OMNIGENT_EGRESS_NETWORK_REF,
-        "local-network",
+        CONTROL_PLANE_NETWORK_REF,
     }
 )
 

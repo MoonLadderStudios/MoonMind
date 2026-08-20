@@ -67,6 +67,9 @@ from api_service.api.routers.omnigent_native_ui import (
 )
 from api_service.api.routers.omnigent_catalog import router as omnigent_catalog_router
 from api_service.api.routers.omnigent_policies import router as omnigent_policies_router
+from api_service.api.routers.omnigent_session_timeline import (
+    router as omnigent_session_timeline_router,
+)
 from api_service.api.routers.workflow_proposals import router as workflow_proposals_router
 from api_service.api.routers.presets import (
     router as presets_router,
@@ -294,6 +297,32 @@ async def _sync_omnigent_bootstrap_policies(
         return False
 
 
+async def _sync_managed_bootstrap_recurring_schedules() -> bool:
+    """Advance recurring actions to the active managed bootstrap snapshot."""
+
+    try:
+        from api_service.services.recurring_workflows_service import (
+            RecurringWorkflowsService,
+        )
+
+        async with get_async_session_context() as session:
+            refreshed = await RecurringWorkflowsService(
+                session,
+            ).refresh_managed_bootstrap_schedules(limit=500)
+        if refreshed:
+            logger.info(
+                "Refreshed managed bootstrap recurring schedules: count=%s",
+                refreshed,
+            )
+        return True
+    except Exception:
+        logger.warning(
+            "Managed bootstrap recurring schedule refresh deferred",
+            exc_info=True,
+        )
+        return False
+
+
 async def _reconcile_omnigent_bootstrap_once(
     *,
     refresh_images: bool,
@@ -302,7 +331,12 @@ async def _reconcile_omnigent_bootstrap_once(
         refresh_images=refresh_images
     )
     agent_ready = await _sync_omnigent_bootstrap_agent_profile()
-    return policies_ready and agent_ready
+    schedules_ready = (
+        await _sync_managed_bootstrap_recurring_schedules()
+        if policies_ready and agent_ready
+        else False
+    )
+    return policies_ready and agent_ready and schedules_ready
 
 
 async def _maintain_omnigent_bootstrap_reconciliation(
@@ -493,6 +527,7 @@ app.include_router(
 app.include_router(native_ui_router, prefix=NATIVE_UI_MOUNT_PATH)
 app.include_router(omnigent_catalog_router)
 app.include_router(omnigent_policies_router)
+app.include_router(omnigent_session_timeline_router)
 app.include_router(workflow_console_router)
 app.include_router(presets_router)
 app.include_router(temporal_artifacts_router)

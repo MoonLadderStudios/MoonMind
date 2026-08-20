@@ -142,6 +142,28 @@ def _normalize_child_request(raw: Any) -> dict[str, Any]:
     return request
 
 
+def _bind_request_to_fanout_capability(request: dict[str, Any]) -> dict[str, Any]:
+    """Make the portable child relationship explicit when MoonMind scopes it."""
+
+    if not _read_execution_fanout_token():
+        return request
+    if not _request_is_task_shape(request):
+        raise RuntimeError(
+            "execution fan-out capabilities accept task-shaped requests only"
+        )
+    payload = request.get("payload")
+    assert isinstance(payload, dict)
+    inheritance = _text(
+        payload.get("runtimeInheritance") or payload.get("runtime_inheritance")
+    )
+    if inheritance and inheritance != "caller":
+        raise RuntimeError(
+            'execution fan-out capabilities require runtimeInheritance="caller"'
+        )
+    payload["runtimeInheritance"] = "caller"
+    return request
+
+
 def _load_manifest(
     manifest_path: Path,
     *,
@@ -188,7 +210,9 @@ def _load_manifest(
         raw_request = item.get("request")
         if raw_request is None:
             raise RuntimeError(f"workflow item {ref} is missing request")
-        request = _normalize_child_request(raw_request)
+        request = _bind_request_to_fanout_capability(
+            _normalize_child_request(raw_request)
+        )
         key = _request_idempotency_key(request) or _text(item.get("idempotencyKey"))
         if key:
             _set_request_idempotency_key(request, key)
@@ -220,6 +244,23 @@ def _read_worker_token() -> str | None:
     return path.read_text(encoding="utf-8").strip() or None
 
 
+def _read_execution_fanout_token() -> str | None:
+    token_file = _text(
+        os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE")
+    )
+    if token_file:
+        path = Path(token_file)
+        if not path.is_file():
+            raise RuntimeError(
+                "execution fan-out capability file is unavailable: " + token_file
+            )
+        token = path.read_text(encoding="utf-8").strip()
+        if not token:
+            raise RuntimeError("execution fan-out capability file is empty")
+        return token
+    return _text(os.getenv("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN")) or None
+
+
 def _read_api_auth_headers() -> dict[str, str]:
     headers: dict[str, str] = {}
     auth_header = _text(os.getenv("MOONMIND_AUTH_HEADER"))
@@ -246,7 +287,12 @@ def _read_api_auth_headers() -> dict[str, str]:
 
 def _request_headers() -> dict[str, str]:
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    headers.update(_read_api_auth_headers())
+    fanout_token = _read_execution_fanout_token()
+    if fanout_token:
+        headers["Authorization"] = f"Bearer {fanout_token}"
+        headers["X-MoonMind-Execution-Fanout"] = "v1"
+    else:
+        headers.update(_read_api_auth_headers())
     token = _read_worker_token()
     if token:
         headers["X-MoonMind-Worker-Token"] = token

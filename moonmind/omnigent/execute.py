@@ -52,6 +52,7 @@ from moonmind.omnigent.failure_classification import (
     failure_class_for_terminal_status,
 )
 from moonmind.omnigent.settings import (
+    OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR,
     OMNIGENT_DISABLED_MESSAGE,
     build_omnigent_gate,
     resolved_api_token,
@@ -70,6 +71,9 @@ from moonmind.workflows.adapters.omnigent_agent_adapter import (
 from moonmind.workflows.adapters.omnigent_client import (
     OmnigentClientError,
     OmnigentHttpClient,
+)
+from moonmind.workflows.skills.run_projection import (
+    prepend_skill_activation_summary,
 )
 
 _NON_TERMINAL_STATUSES = {
@@ -194,6 +198,28 @@ async def _build_omnigent_first_message(
         text = "\n\n".join(parts)
 
     parameters = request.parameters if isinstance(request.parameters, dict) else {}
+    omnigent = parameters.get("omnigent")
+    profile_authorization = (
+        omnigent.get("_moonmindProfileAuthorization")
+        if isinstance(omnigent, Mapping)
+        else None
+    )
+    if request.resolved_skillset_ref and isinstance(
+        profile_authorization, Mapping
+    ):
+        # The profile-bound host preflight has already verified and mounted the
+        # exact resolved snapshot at this fixed runner-visible path. Put the
+        # canonical activation block in the actual first message so explicit
+        # prompt text and artifact-backed prompts cannot bypass Skill delivery.
+        text = prepend_skill_activation_summary(
+            text,
+            parameters=parameters,
+            materialization_metadata={
+                "visiblePath": OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR,
+                "canonicalAliasAvailable": False,
+            },
+            skills_on_demand_enabled=False,
+        )
     metadata = parameters.get("metadata")
     moonmind = metadata.get("moonmind") if isinstance(metadata, dict) else {}
     if not isinstance(moonmind, dict):

@@ -14,7 +14,7 @@ profiles:
     envAllowlist:
       - CI
       - DOCKER_HOST
-      - MOONMIND_DOCKER_NETWORK
+      - MOONMIND_CONTROL_PLANE_NETWORK
     networkPolicy: docker_proxy
     resources:
       cpu: "4"

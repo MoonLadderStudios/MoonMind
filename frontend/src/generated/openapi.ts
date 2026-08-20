@@ -3839,6 +3839,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/sessions/{session_id}/timeline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Timeline
+         * @description Return the machine-readable operator timeline for one canonical session.
+         */
+        get: operations["get_session_timeline_api_omnigent_sessions__session_id__timeline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/sessions/{session_id}/stuck-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Stuck State
+         * @description Return bounded stuck-state findings and the safe automated response.
+         *
+         *     Uses server time (``now``) via the control-plane clock; the response is a
+         *     fenced reconcile recommendation or a quarantine escalation. This endpoint
+         *     never mutates state — it surfaces the recommendation for the reconciliation
+         *     workflow and operators to act on.
+         */
+        get: operations["get_session_stuck_state_api_omnigent_sessions__session_id__stuck_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/secrets": {
         parameters: {
             query?: never;
@@ -13352,6 +13397,8 @@ export interface components {
             policy?: {
                 [key: string]: unknown;
             } | null;
+            /** Version */
+            version: number;
         };
         /** UserCreate */
         UserCreate: {
@@ -17747,6 +17794,8 @@ export interface operations {
         parameters: {
             query?: never;
             header?: {
+                Authorization?: string | null;
+                "X-MoonMind-Execution-Fanout"?: string | null;
                 "X-MoonMind-Task-Workflow-Id"?: string | null;
                 "X-MoonMind-Agent-Run-Id"?: string | null;
                 "X-MoonMind-Agent-Run-Identifier"?: string | null;
@@ -18420,7 +18469,10 @@ export interface operations {
             query?: {
                 source?: string | null;
             };
-            header?: never;
+            header?: {
+                Authorization?: string | null;
+                "X-MoonMind-Execution-Fanout"?: string | null;
+            };
             path: {
                 workflow_id: string;
             };
@@ -22894,6 +22946,72 @@ export interface operations {
             header?: never;
             path: {
                 policy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_timeline_api_omnigent_sessions__session_id__timeline_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_stuck_state_api_omnigent_sessions__session_id__stuck_state_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
             };
             cookie?: never;
         };

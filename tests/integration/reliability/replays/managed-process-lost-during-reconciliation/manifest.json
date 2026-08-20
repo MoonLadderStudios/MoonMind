@@ -1,0 +1,12 @@
+{
+  "failureShapeId": "managed-process-lost-during-reconciliation",
+  "incidentWorkflowId": "mm:e5ff4c80-c9c4-5e26-83f7-3fe5cc2f894a",
+  "agentRunId": "08fd02d1-f242-4dba-86d5-6646d8617a43",
+  "runtime": "claude_code",
+  "executionProfileRef": "claude_anthropic_oauth",
+  "lostPid": 36009,
+  "priorProviderCooldowns": 4,
+  "failureClass": "system_error",
+  "providerErrorCode": "MANAGED_PROCESS_LOST_DURING_RECONCILIATION",
+  "workspaceDirty": true
+}

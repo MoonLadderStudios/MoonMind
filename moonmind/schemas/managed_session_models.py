@@ -1173,6 +1173,14 @@ class LaunchCodexManagedSessionRequest(_CodexManagedSessionRemoteContract):
     workload_mode: ManagedSessionWorkloadMode = Field(
         "container-jobs", alias="workloadMode"
     )
+    required_capabilities: tuple[NonBlankStr, ...] | None = Field(
+        None,
+        alias="requiredCapabilities",
+    )
+    execution_fanout_authorization: dict[str, Any] | None = Field(
+        None,
+        alias="executionFanoutAuthorization",
+    )
     container_job_owner: OwnerIdentity | None = Field(
         None, alias="containerJobOwner"
     )

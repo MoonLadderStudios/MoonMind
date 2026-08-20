@@ -1,8 +1,10 @@
 # Required Capabilities
 
+**Document Class:** Canonical declarative
+**Viewpoint:** Module Contract Specification
 Status: Desired State
 Owners: MoonMind Engineering
-Last Updated: 2026-06-17
+Last Updated: 2026-08-18
 Canonical for: `requiredCapabilities` declaration, derivation, normalization, readiness checks, and failure semantics
 Related: `docs/Workflows/WorkflowArchitecture.md`, `docs/Steps/StepTypes.md`, `docs/Steps/SkillSystem.md`, `docs/Workflows/SkillAndPlanContracts.md`, `docs/Temporal/ManagedAndExternalAgentExecutionModel.md`
 
@@ -285,7 +287,41 @@ Minimum readiness:
 3. resource and network policy are enforceable;
 4. publishable workspace contents are protected from container-only side effects unless explicitly intended.
 
-### 7.5 Runtime-mode capabilities
+### 7.5 `execution.fanout`
+
+`execution.fanout` means a runtime may create bounded child Workflow Executions
+under its current parent and inspect only those children. It does not grant
+general MoonMind API access.
+
+Skill metadata with `sideEffect.kind: enqueue_children` automatically contributes
+this requirement during trusted backend normalization. Built-in batch Skills
+therefore work without an operator permission toggle, while repo and local Skill
+metadata still passes through the normal untrusted-source policy checks.
+The Run workflow records a compact allow/deny attestation from the immutable
+resolved Skill entry: only built-in or deployment-managed provenance with the
+derived requirement authorizes bearer minting. An authored top-level token is
+still only a requirement and cannot grant fan-out by itself. Missing attestation
+is reserved for replay of launches scheduled before this contract existed.
+Standard Codex and Claude workers advertise fan-out readiness so trusted batch
+Skills work by default. That readiness label is not authority: the attestation
+and launch-boundary policy check remain mandatory before bearer minting.
+
+Minimum readiness:
+
+1. policy authorizes child execution fan-out for the resolved Skill and caller;
+2. the runtime adapter can materialize a short-lived bearer bound to the parent
+   Workflow Execution, agent run, step, runtime session, and runtime id;
+3. the runtime can reach only the exact execution-create and child-describe API
+   paths through its enforced network profile;
+4. for profile-bound Omnigent, the portable queue helper can read the
+   lease-owned capability file before the model begins work.
+
+The API accepts this authority only for idempotent task/workflow child requests
+with `runtimeInheritance="caller"`. It rejects schedules, unrelated execution
+reads, and broader API operations. A policy denial or materialization failure
+blocks before runtime launch with capability provenance and safe remediation.
+
+### 7.6 Runtime-mode capabilities
 
 Runtime tokens such as `codex_cli` or `claude_code` mean the selected runtime adapter is available and compatible with the workflow's Skill, Tool, policy, and provider profile requirements.
 
@@ -296,7 +332,7 @@ Minimum readiness:
 3. required model/provider profile constraints are satisfied;
 4. runtime-specific materialization, prompt, Skill bundle, and artifact contracts can be honored.
 
-### 7.6 Scoped future capabilities
+### 7.7 Scoped future capabilities
 
 Coarse names remain valid. Future scoped aliases may refine semantics:
 

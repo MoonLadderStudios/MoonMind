@@ -651,6 +651,53 @@ interface OmnigentCodexCatalogReadiness {
   };
 }
 
+export const OMNIGENT_READINESS_REFRESH_MS = 2_000;
+
+const OMNIGENT_RECOVERABLE_GATE_CODES = new Set([
+  "bridge_conformance_gated",
+  "bridge_endpoint_not_ready",
+  "immutable_image_unavailable",
+  "no_eligible_codex_oauth_profile",
+  "on_demand_backend_unavailable",
+  "profile_capacity_unavailable",
+  "static_host_not_ready",
+]);
+
+interface OmnigentReadinessSelection {
+  executionTargetRef?: string;
+  providerProfileRef?: string;
+}
+
+export function omnigentReadinessRefetchInterval(
+  catalog: OmnigentCodexCatalogReadiness | undefined,
+  selection: OmnigentReadinessSelection = {},
+): number | false {
+  if (!catalog) return false;
+  const executionTargetRef =
+    selection.executionTargetRef || catalog.defaultExecutionProfileRef;
+  const selectedExecutionProfile = (catalog.executionProfiles || []).find(
+    (profile) => profile.ref === executionTargetRef,
+  );
+  const selectedIneligibleProviderProfile = (
+    catalog.ineligibleProviderProfiles || []
+  ).find((profile) => profile.profileId === selection.providerProfileRef);
+  if (
+    selectedExecutionProfile?.available !== false &&
+    !selectedIneligibleProviderProfile &&
+    catalog.available
+  ) {
+    return false;
+  }
+  const reasons = [
+    ...(selectedExecutionProfile?.gateReasons || catalog.gateReasons || []),
+    ...(selectedIneligibleProviderProfile?.gateReasons || []),
+  ];
+  return reasons.length > 0 &&
+    reasons.every((reason) => OMNIGENT_RECOVERABLE_GATE_CODES.has(reason.code))
+    ? OMNIGENT_READINESS_REFRESH_MS
+    : false;
+}
+
 interface ProviderModelEffortTier {
   label?: string | null;
   model?: string | null;
@@ -3488,6 +3535,18 @@ function schemaAlternativeRequiredGroups(
     .filter((group) => group.length > 0);
 }
 
+function schemaGuidedInputNames(
+  schema: Record<string, unknown> | undefined,
+): Set<string> {
+  const names = schemaRequired(schema);
+  for (const group of schemaAlternativeRequiredGroups(schema)) {
+    for (const name of group) {
+      names.add(name);
+    }
+  }
+  return names;
+}
+
 function capabilityFieldLabel(name: string, schema: Record<string, unknown>): string {
   return String(schema.title || name)
     .trim()
@@ -6247,6 +6306,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     },
     staleTime: 0,
     refetchOnWindowFocus: true,
+    refetchInterval: (query) =>
+      runtime === "omnigent"
+        ? omnigentReadinessRefetchInterval(query.state.data, {
+            executionTargetRef: omnigentExecutionTargetRef,
+            providerProfileRef: providerProfile,
+          })
+        : false,
   });
 
   const activeProviderProfiles: ProviderProfile[] = runtime === "omnigent"
@@ -12107,11 +12173,34 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                   step.skillInputContractDigest,
                   selectedSkillDetail?.contractDigest,
                 ) || step.skillInputContractNotice;
-              const visibleSkillSchemaFields = schemaContractHasFields(
+              const selectedSkillHasInputFields = schemaContractHasFields(
                 selectedSkillDetail,
-              )
-                ? Object.entries(schemaProperties(selectedSkillDetail?.inputSchema))
+              );
+              const availableSkillSchemaFields = selectedSkillHasInputFields
+                ? Object.entries(
+                    schemaProperties(selectedSkillDetail?.inputSchema),
+                  ).filter(([name]) => {
+                    const uiSchema = capabilityFieldUiSchema(
+                      selectedSkillDetail?.uiSchema,
+                      name,
+                    );
+                    return capabilityFieldVisible(
+                      uiSchema,
+                      step.presetInputValues,
+                      selectedSkillDetail?.defaults,
+                    );
+                  })
                 : [];
+              const guidedSkillInputNames = schemaGuidedInputNames(
+                selectedSkillDetail?.inputSchema,
+              );
+              const visibleSkillSchemaFields = showAdvancedStepOptions
+                ? availableSkillSchemaFields
+                : availableSkillSchemaFields.filter(([name]) =>
+                    guidedSkillInputNames.has(name),
+                  );
+              const hiddenOptionalSkillInputCount =
+                availableSkillSchemaFields.length - visibleSkillSchemaFields.length;
               const toolSearchText = toolSearchTextByStep[step.localId] || "";
               const trustedToolDefinitions = trustedToolsQuery.data || [];
               const toolChoiceGroups = groupedToolChoices(
@@ -12591,7 +12680,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                           </span>
                         )}
                       </div>
-                      {selectedSkillDetail && visibleSkillSchemaFields.length === 0 ? (
+                      {selectedSkillDetail && !selectedSkillHasInputFields ? (
                         <div
                           className="notice small"
                           data-testid={`skill-schema-fallback-${index}`}
@@ -12605,6 +12694,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
                             This Skill does not publish structured input fields.
                           </span>
                         </div>
+                      ) : null}
+
+                      {selectedSkillHasInputFields &&
+                      !showAdvancedStepOptions &&
+                      hiddenOptionalSkillInputCount > 0 ? (
+                        <p
+                          className="small"
+                          data-testid={`skill-optional-inputs-notice-${index}`}
+                        >
+                          Optional Skill inputs are hidden. Advanced mode shows
+                          customization fields.
+                        </p>
                       ) : null}
 
                       {showSkillArgsField ? (
@@ -13468,9 +13569,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             role="note"
           >
             <p className="small">
-              Adds skill args and required capabilities to each step. Optional
-              worker routing overrides; runtime, publish mode, skills, and
-              presets already add the common capabilities automatically.
+              Shows optional Skill inputs, skill args, required capabilities,
+              and worker routing overrides. Runtime, publish mode, skills, and
+              presets already add common capabilities automatically.
             </p>
           </div>
         ) : null}

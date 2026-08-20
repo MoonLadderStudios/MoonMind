@@ -1,0 +1,31 @@
+desiredCancel: false
+groundTruthTerminal: success
+invariant: monotonic_authority
+maxTurnAttempts: 3
+recoveryRound: 4
+requiresCleanup: true
+requiresHost: true
+requiresProfileLease: true
+scenarioId: stale-snapshot-after-newer-frontier
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 3665
+sourceRef: '#3665'
+steps:
+- disconnect: false
+  duplicate: false
+  emit: []
+  'on': submit_turn
+  reorder: false
+  response: success
+  sideEffect: accepted
+- disconnect: false
+  duplicate: false
+  emit: []
+  'on': observe_snapshot
+  reorder: false
+  response: success
+  return:
+    providerSessionId: other
+    sessionState: completed
+    unfinishedToolCalls: 0
+  sideEffect: none

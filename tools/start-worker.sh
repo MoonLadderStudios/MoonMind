@@ -58,7 +58,7 @@ TOKEN_POLICY_PATH="${MOONMIND_WORKER_TOKEN_POLICY_FILE:-$TOKEN_POLICY_PATH_DEFAU
 BOOTSTRAP="$(lower "${MOONMIND_WORKER_BOOTSTRAP_TOKEN:-true}")"
 ENFORCE_TOKEN_POLICY="$(lower "${MOONMIND_WORKER_ENFORCE_TOKEN_POLICY:-false}")"
 ALLOWED_TYPES_RAW="${MOONMIND_WORKER_ALLOWED_TYPES:-task,codex_exec,codex_skill}"
-CAPABILITIES_RAW="${MOONMIND_WORKER_CAPABILITIES:-codex,git,gh,docker,proposals_write}"
+CAPABILITIES_RAW="${MOONMIND_WORKER_CAPABILITIES:-codex,git,gh,docker,proposals_write,execution.fanout}"
 normalize_csv() {
   printf '%s' "$1" | tr -d '[:space:]'
 }
@@ -300,7 +300,7 @@ allowed_types = [
 capabilities = [
     item.strip()
     for item in os.environ.get(
-        "MOONMIND_WORKER_CAPABILITIES", "codex,git,gh,docker,proposals_write"
+        "MOONMIND_WORKER_CAPABILITIES", "codex,git,gh,docker,proposals_write,execution.fanout"
     ).split(",")
     if item.strip()
 ]

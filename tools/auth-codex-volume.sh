@@ -85,7 +85,6 @@ _run_auth_command() {
 
   docker compose run --rm -it \
     ${COMPOSE_PROFILE_ARGS[@]+"${COMPOSE_PROFILE_ARGS[@]}"} \
-    ${COMPOSE_NETWORK_ARGS[@]+"${COMPOSE_NETWORK_ARGS[@]}"} \
     --user app \
     --entrypoint /bin/bash \
     -e TERM="${CODEX_TERM}" \
@@ -135,22 +134,12 @@ cmd_sync() {
 cmd_login() {
   _require_docker
 
-  local NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
   local AUTH_SERVICE="${CODEX_AUTH_SERVICE:-temporal-worker-sandbox}"
   local AUTH_PROFILE="${CODEX_AUTH_PROFILE:-}"
-
-  if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
-    docker network create "$NETWORK_NAME" >/dev/null
-  fi
 
   if ! [ -t 0 ] || ! [ -t 1 ]; then
     echo "Error: --login requires an interactive terminal." >&2
     exit 1
-  fi
-
-  COMPOSE_NETWORK_ARGS=()
-  if docker compose run --help 2>/dev/null | grep -Eq '(^|[[:space:]])--network([[:space:]]|=|$)'; then
-    COMPOSE_NETWORK_ARGS+=(--network "$NETWORK_NAME")
   fi
 
   COMPOSE_PROFILE_ARGS=()

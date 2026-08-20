@@ -28,10 +28,14 @@ from moonmind.schemas.managed_session_models import (
 from moonmind.security.container_job_capabilities import (
     verify_container_job_session_capability,
 )
+from moonmind.security.execution_fanout_capabilities import (
+    verify_execution_fanout_capability,
+)
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
     ManagedSessionReapResult,
     _default_command_runner,
+    _managed_session_docker_network,
     _parse_docker_timestamp,
 )
 from moonmind.workflows.temporal.runtime.managed_session_store import (
@@ -50,6 +54,15 @@ def _clear_managed_session_docker_policy_env(
     monkeypatch.delenv("MOONMIND_WORKFLOW_DOCKER_MODE", raising=False)
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_MODE", raising=False)
     monkeypatch.delenv("MOONMIND_MANAGED_SESSION_REAP_MAX_AGE_SECONDS", raising=False)
+    monkeypatch.delenv("MOONMIND_CONTROL_PLANE_NETWORK", raising=False)
+
+
+def test_managed_session_network_uses_canonical_control_plane_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_CONTROL_PLANE_NETWORK", "custom-control-plane")
+
+    assert _managed_session_docker_network() == "custom-control-plane"
 
 
 class _LocalArtifactStorage:
@@ -247,19 +260,27 @@ async def test_default_command_runner_clears_supplemental_groups_when_uid_change
     assert "group" not in captured_kwargs
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("required_capabilities", "expects_fanout"),
+    [
+        (None, True),
+        ((), False),
+        (("execution.fanout",), True),
+    ],
+)
 async def test_controller_launches_container_and_returns_typed_handle(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
+    required_capabilities: tuple[str, ...] | None,
+    expects_fanout: bool,
 ) -> None:
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
     monkeypatch.delenv("MOONMIND_PYTHON_TEST_IMAGE", raising=False)
     monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
     workspace_root = tmp_path / "agent_jobs"
     session_store = ManagedSessionStore(tmp_path / "session-store")
     session_supervisor = AsyncMock()
     session_supervisor.emit_session_event = Mock()
-    request = LaunchCodexManagedSessionRequest(
+    request_payload = dict(
         agentRunId="task-1",
         workflowId="wf-task-1",
         sessionId="sess-1",
@@ -271,6 +292,14 @@ async def test_controller_launches_container_and_returns_typed_handle(
         imageRef="ghcr.io/moonladderstudios/moonmind:latest",
         turnCompletionTimeoutSeconds=1800,
     )
+    if required_capabilities is not None:
+        request_payload["requiredCapabilities"] = list(required_capabilities)
+    if required_capabilities == ("execution.fanout",):
+        request_payload["executionFanoutAuthorization"] = {
+            "authorized": True,
+            "sourceKind": "built_in",
+        }
+    request = LaunchCodexManagedSessionRequest(**request_payload)
     commands: list[tuple[str, ...]] = []
     docker_run_env: dict[str, str] = {}
 
@@ -335,7 +364,7 @@ async def test_controller_launches_container_and_returns_typed_handle(
     assert "--mount" in run_command
     assert "-v" not in run_command
     assert "--network" in run_command
-    assert "local-network" in run_command
+    assert "moonmind_control-plane-network" in run_command
     assert request.image_ref in run_command
     assert (
         "MOONMIND_SESSION_TURN_COMPLETION_TIMEOUT_SECONDS=1800" in run_command
@@ -364,6 +393,22 @@ async def test_controller_launches_container_and_returns_typed_handle(
     )
     assert capability.agent_run_id == "task-1"
     assert capability.session_id == "sess-1"
+    if expects_fanout:
+        assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in run_command
+        assert not any(
+            item.startswith("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=")
+            for item in run_command
+        )
+        fanout = verify_execution_fanout_capability(
+            docker_run_env["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
+            secret="test_jwt_secret_key",
+        )
+        assert fanout.parent_workflow_id == "wf-task-1"
+        assert fanout.agent_run_id == "task-1"
+        assert fanout.session_id == "sess-1"
+    else:
+        assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in run_command
+        assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in docker_run_env
     assert not any(item.startswith("DOCKER_HOST=") for item in run_command)
     assert not any(item.startswith("SYSTEM_DOCKER_HOST=") for item in run_command)
     assert "python3" in run_command
@@ -409,8 +454,6 @@ async def test_launch_session_injects_generic_managed_agent_env(
     authoritatively over caller-supplied passthrough values (every managed
     agent session honors the same contract as ``ManagedRuntimeLauncher``)."""
 
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
         agentRunId="task-1",
@@ -646,8 +689,6 @@ async def test_controller_record_keeps_auth_and_runtime_homes_out_of_artifact_re
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
     workspace_root = tmp_path / "agent_jobs"
     session_store = ManagedSessionStore(tmp_path / "session-store")
     session_supervisor = AsyncMock()
@@ -721,8 +762,6 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
     monkeypatch.delenv("MOONMIND_URL", raising=False)
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
@@ -780,15 +819,13 @@ async def test_controller_uses_request_moonmind_url_for_docker_network(
         command for command in commands if command[:2] == ("docker", "run")
     )
     assert "--network" in run_command
-    assert "local-network" in run_command
+    assert "moonmind_control-plane-network" in run_command
 
 @pytest.mark.asyncio
 async def test_unrestricted_policy_uses_container_jobs_without_raw_docker(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.delenv("MOONMIND_MANAGED_SESSION_DOCKER_NETWORK", raising=False)
-    monkeypatch.delenv("MOONMIND_DOCKER_NETWORK", raising=False)
     monkeypatch.setenv("MOONMIND_DOCKER_PROXY_NETWORK", "docker-proxy-test")
     workspace_root = tmp_path / "agent_jobs"
     request = LaunchCodexManagedSessionRequest(
@@ -882,10 +919,16 @@ async def test_no_docker_profile_does_not_advertise_container_jobs(
         codexHomePath="/home/app/.codex",
         imageRef="moonmind:latest",
         workloadMode="no-docker",
+        requiredCapabilities=["execution.fanout"],
+        executionFanoutAuthorization={
+            "authorized": True,
+            "sourceKind": "deployment",
+        },
         environment={"MOONMIND_URL": "http://api:8000"},
     )
     commands: list[tuple[str, ...]] = []
     launched_payload: dict[str, object] = {}
+    docker_run_env: dict[str, str] = {}
 
     async def _fake_runner(
         command: tuple[str, ...],
@@ -893,11 +936,11 @@ async def test_no_docker_profile_does_not_advertise_container_jobs(
         input_text: str | None = None,
         env: dict[str, str] | None = None,
     ) -> tuple[int, str, str]:
-        del env
         commands.append(command)
         if command[:3] == ("docker", "rm", "-f"):
             return 1, "", "No such container"
         if command[:2] == ("docker", "run"):
+            docker_run_env.update(env or {})
             return 0, "ctr-no-docker\n", ""
         if "ready" in command:
             return 0, '{"ready": true}\n', ""
@@ -935,6 +978,18 @@ async def test_no_docker_profile_does_not_advertise_container_jobs(
     assert not any(
         item.startswith("MOONMIND_CONTAINER_JOBS_") for item in run_command
     )
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" in run_command
+    assert not any(
+        item.startswith("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN=")
+        for item in run_command
+    )
+    fanout = verify_execution_fanout_capability(
+        docker_run_env["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
+        secret="test_jwt_secret_key",
+    )
+    assert fanout.parent_workflow_id == "task-no-docker"
+    assert fanout.agent_run_id == "task-no-docker"
+    assert fanout.session_id == "sess-no-docker"
     metadata = launched_payload["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["capabilities"]["containerJobs"] == {

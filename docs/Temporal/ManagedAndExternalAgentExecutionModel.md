@@ -14,7 +14,7 @@ with the run rather than rewriting it after registry or credential changes.
 **Document Class:** Canonical declarative  
 **Status:** Current  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-14
+**Last updated:** 2026-08-17
 **Authority:** Unified Temporal lifecycle and ownership model for true agent execution, including profile-bound Codex execution through Omnigent hosts
 
 Implementation progress belongs in the roadmap, issues, and pull requests. This document defines durable product and runtime contracts.
@@ -384,6 +384,7 @@ Rules:
 - a managed-runtime locator must match the current runtime and AgentRun store identity;
 - legacy `workspacePath` fields are compatibility inputs during the replay window and cannot create new authority;
 - a provider/session workspace string is derived from the trusted resolution result;
+- host-side Git commands trust only the exact resolved workspace for that command, so a repository handed between the worker and runtime UIDs remains usable without a global trust exemption;
 - arbitrary absolute paths from workflow parameters are rejected;
 - cleanup removes only state owned by the matching run or lease.
 
@@ -396,6 +397,35 @@ The generic Container Jobs plane owns reusable workspace-resolution and daemon-t
 ### 11.1 Direct managed runtimes
 
 Direct managed runtimes receive a workflow-scoped workspace and artifact area, runtime-specific credential materialization, immutable Skill projection, and bounded temporary state. Runtime-owned environment values take precedence over untrusted passthrough values.
+
+Managed sessions and profile-bound Omnigent hosts whose normalized
+`requiredCapabilities` include `execution.fanout` receive a separate short-lived
+execution fan-out bearer after policy authorization. The requirement is derived
+automatically when a resolved Skill declares `sideEffect.kind: enqueue_children`,
+so the supported batch path requires no operator permission toggle. That bearer is bound
+to the parent Workflow Execution, agent run, runtime session, and runtime id; it
+is not interchangeable with the container-job bearer or a user API token. The
+execution API accepts the bearer only for idempotent task/workflow child
+requests with `runtimeInheritance="caller"`, rejects schedule and direct-create
+shapes, records the authoritative `parentWorkflowId`, and limits describe calls
+to children of that parent. Restricted Omnigent egress additionally requires
+the fan-out marker and bearer on the exact create and child-describe paths.
+Profile-bound Omnigent hosts expose the bearer through a lease-owned read-only
+file and pass only its non-secret selector into runner and login-shell
+environments. Hosts without the requirement receive neither the bearer nor the
+selector.
+
+The Run workflow derives the mint authorization from immutable resolved-Skill
+provenance and carries it in `stepExecution.skillSourcePolicy.executionFanout`.
+Built-in and deployment-managed Skills are eligible; repo/local Skills and
+top-level-only declarations are denied before runtime launch. The absent field
+is a replay marker for already-scheduled launch payloads, not a current default.
+
+The Run workflow derives the mint authorization from immutable resolved-Skill
+provenance and carries it in `stepExecution.skillSourcePolicy.executionFanout`.
+Built-in and deployment-managed Skills are eligible; repo/local Skills and
+top-level-only declarations are denied before runtime launch. The absent field
+is a replay marker for already-scheduled launch payloads, not a current default.
 
 ### 11.2 Profile-bound Omnigent hosts
 
@@ -534,6 +564,12 @@ Each lane reconciles its own side effects:
 - Omnigent reconciles bridge attempts, first-message markers, profile bindings, host leases, deterministic containers, registered hosts, sessions, credential generations, and janitor work.
 
 No lane silently creates replacement authority while the original may still be active.
+When direct-runtime startup reconciliation proves that the recorded PID no
+longer exists, the result carries a typed process-loss code. A one-shot lane may
+perform one replacement attempt with the same immutable request, Provider
+Profile, idempotency key, and authoritative workspace. The replacement inspects
+local and remotely visible side effects before repeating work. A second process
+loss is terminal and retains the workspace for checkpoint or operator recovery.
 
 ---
 
