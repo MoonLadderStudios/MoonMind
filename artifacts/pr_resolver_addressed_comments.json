@@ -98,5 +98,15 @@
     "id": 4972324465,
     "disposition": "not-applicable",
     "rationale": "Informational Codex review summary with no specific requested change; individual findings are tracked as separate review comments."
+  },
+  {
+    "id": 3825780392,
+    "disposition": "addressed",
+    "rationale": "Changed ReconcileDispatcher Protocol stub from single-line ellipsis to pass with comment to satisfy linter while preserving Protocol semantics."
+  },
+  {
+    "id": 3825780407,
+    "disposition": "addressed",
+    "rationale": "Changed DiagnosticPublisher Protocol stub similarly from ellipsis to pass."
   }
 ]

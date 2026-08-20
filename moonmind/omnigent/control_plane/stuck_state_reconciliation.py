@@ -104,7 +104,8 @@ class ReconcileDispatcher(Protocol):
         reason_code: str,
         expected_revision: str,
         expected_fencing_generation: str,
-    ) -> None: ...  # Protocol stub
+    ) -> None:
+        pass  # Protocol stub
 
 
 class DiagnosticPublisher(Protocol):
@@ -116,7 +117,8 @@ class DiagnosticPublisher(Protocol):
         session: SessionRecord,
         decision_id: str,
         payload: dict[str, object],
-    ) -> str: ...  # Protocol stub
+    ) -> str:
+        pass  # Protocol stub
 
 
 @dataclass(frozen=True)
