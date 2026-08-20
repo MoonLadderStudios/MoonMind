@@ -258,6 +258,7 @@ _RUNTIME_ADAPTERS = {
         "compose_service": "omnigent-host-codex",
         "start_script": "/opt/moonmind/start-codex-oauth-host.sh",
         "generation_env": "CODEX_CREDENTIAL_GENERATION",
+        "login_command": ("codex", "login", "status"),
         "env": (
             "CODEX_HOME=/home/app/.codex",
             "CODEX_CONFIG_HOME=/home/app/.codex",
@@ -273,6 +274,7 @@ _RUNTIME_ADAPTERS = {
         "compose_service": "omnigent-host-claude",
         "start_script": "/opt/moonmind/start-claude-oauth-host.sh",
         "generation_env": "CLAUDE_CREDENTIAL_GENERATION",
+        "login_command": ("claude", "auth", "status"),
         "env": (
             "CLAUDE_HOME=/home/app/.claude",
             "CLAUDE_CONFIG_DIR=/home/app/.claude",
@@ -401,6 +403,114 @@ class OmnigentOAuthHostRuntime:
             "-f",
             str(compose_path.resolve()),
         )
+
+    async def validate_credential_mount(
+        self,
+        *,
+        binding: OmnigentOAuthHostBinding,
+        host_lease: OmnigentHostLease,
+        effective_launch: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Validate OAuth in the selected host image without launching execution."""
+
+        launch = self._validate_effective_launch(
+            binding=binding, effective_launch=effective_launch
+        )
+        adapter = self._runtime_adapter(binding)
+        auth_volume = binding.credential_mount_ref.auth_volume_ref
+        if (
+            host_lease.provider_profile_id != binding.provider_profile_id
+            or host_lease.binding_ref != binding.binding_ref
+            or host_lease.credential_generation != auth_volume.credential_generation
+            or launch.get("providerRuntime") not in {None, auth_volume.runtime_id}
+            or launch.get("harness") != adapter["harness"]
+        ):
+            raise OmnigentOAuthHostError(
+                "credential validation authority does not match the OAuth host binding",
+                code=HostPreflightFailure.BINDING_MISMATCH.value,
+            )
+
+        container_name = deterministic_host_container_name(host_lease.lease_id)
+        if await self._container_present(container_name):
+            await self._assert_container_owned(container_name, host_lease.lease_id)
+            await self._run("docker", "rm", "-f", container_name, check=False)
+            if await self._container_present(container_name):
+                raise OmnigentOAuthHostError(
+                    "prior OAuth credential validator could not be removed",
+                    code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+                )
+
+        host_image_ref = str(launch["hostImageRef"])
+        host_path = await self._discover_upstream_path(host_image_ref)
+        args = [
+            "docker",
+            "run",
+            "--name",
+            container_name,
+            "--label",
+            "moonmind.kind=omnigent-oauth-credential-validator",
+            "--label",
+            f"moonmind.provider_profile_id={binding.provider_profile_id}",
+            "--label",
+            f"moonmind.host_lease_id={host_lease.lease_id}",
+            "--label",
+            f"moonmind.credential_generation={host_lease.credential_generation}",
+            "--user",
+            f"{launch['runtimeUid']}:{launch['runtimeGid']}",
+            "--workdir",
+            "/home/app",
+            "--network",
+            "none",
+            *structured_container_security_args(),
+            "--cpus",
+            str(int(launch["limits"]["cpuMillis"]) / 1000),
+            "--memory",
+            f"{launch['limits']['memoryMiB']}m",
+            "--pids-limit",
+            str(launch["limits"]["processes"]),
+            "--read-only",
+            "--tmpfs",
+            f"/tmp:rw,noexec,nosuid,size={launch['limits']['temporaryStorageMiB']}m",
+            "--mount",
+            (
+                "type=volume,"
+                f"src={auth_volume.volume_ref},dst={adapter['home']},readonly"
+            ),
+            "--env",
+            f"PATH={self._prepend_tools_path(host_path)}",
+            "--env",
+            "HOME=/home/app",
+            "--env",
+            f"{adapter['generation_env']}={host_lease.credential_generation}",
+        ]
+        for runtime_env in adapter["env"]:
+            args.extend(["--env", runtime_env])
+        args.extend(["--entrypoint", "/usr/bin/env"])
+        for key in _FORBIDDEN_ENV:
+            args.extend(["-u", key])
+        args.extend([host_image_ref, *adapter["login_command"]])
+        try:
+            result = await asyncio.wait_for(
+                self._run(*args, check=False), timeout=60
+            )
+        except TimeoutError as exc:
+            raise OmnigentOAuthHostError(
+                "OAuth credential validation timed out",
+                code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+            ) from exc
+        if result[0] != 0:
+            raise OmnigentOAuthHostError(
+                "OAuth credential validation failed",
+                code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+            )
+        return {
+            "status": "ready",
+            "providerProfileId": binding.provider_profile_id,
+            "runtimeId": auth_volume.runtime_id,
+            "credentialGeneration": host_lease.credential_generation,
+            "loginStatus": "authenticated",
+            "validationMode": "credential_only",
+        }
 
     async def prepare_host(
         self,
@@ -1997,13 +2107,20 @@ class OmnigentOAuthHostRuntime:
                     "attachment_absent_before_cleanup"
                 )
         if not binding.host_launch_profile_ref:
+            container_name = deterministic_host_container_name(host_lease.lease_id)
+            if await self._container_present(container_name):
+                await self._assert_container_owned(container_name, host_lease.lease_id)
+                await self._run("docker", "rm", "-f", container_name, check=False)
             await self.stop_static_host(binding=binding)
             cleanup_result = "drained_owned_static_host"
-            cleanup_ok = not attachment_identity or not await self.container_exists(
-                attachment_identity
+            container_present = await self._container_present(container_name)
+            cleanup_ok = not container_present and (
+                not attachment_identity
+                or not await self.container_exists(attachment_identity)
             )
             resource_cleanup = {
                 "containerRunning": not cleanup_ok,
+                "containerPresent": container_present,
                 "mode": "static_drain",
             }
         else:

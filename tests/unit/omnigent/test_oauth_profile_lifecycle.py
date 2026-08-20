@@ -542,6 +542,93 @@ def _host_lease() -> OmnigentHostLease:
     )
 
 
+@pytest.mark.asyncio
+async def test_credential_mount_preflight_runs_provider_login_without_execution_launch(
+) -> None:
+    launch = {
+        "hostImageRef": "example.invalid/omnigent-host@sha256:" + "a" * 64,
+        "providerRuntime": "codex_cli",
+        "harness": "codex-native",
+        "runtimeUid": 1000,
+        "runtimeGid": 1000,
+        "limits": {
+            "cpuMillis": 1000,
+            "memoryMiB": 512,
+            "processes": 128,
+            "temporaryStorageMiB": 64,
+        },
+    }
+    binding = _binding().model_copy(
+        update={
+            "static_host_id": None,
+            "host_launch_profile_ref": "codex-on-demand@1",
+            "effective_launch_snapshot": launch,
+        }
+    )
+    lease = _host_lease().model_copy(
+        update={
+            "omnigent_host_id": None,
+            "status": "starting",
+            "effective_launch_snapshot": launch,
+        }
+    )
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._validate_effective_launch = MagicMock(return_value=launch)
+    runtime._container_present = AsyncMock(return_value=False)
+    runtime._discover_upstream_path = AsyncMock(return_value="/usr/local/bin:/usr/bin")
+    runtime._run = AsyncMock(return_value=(0, "Logged in", ""))
+
+    result = await runtime.validate_credential_mount(
+        binding=binding,
+        host_lease=lease,
+        effective_launch=launch,
+    )
+
+    assert result == {
+        "status": "ready",
+        "providerProfileId": "codex",
+        "runtimeId": "codex_cli",
+        "credentialGeneration": 3,
+        "loginStatus": "authenticated",
+        "validationMode": "credential_only",
+    }
+    command = runtime._run.await_args.args
+    assert command[:2] == ("docker", "run")
+    assert "none" in command
+    assert "type=volume,src=codex_auth_volume,dst=/home/app/.codex,readonly" in command
+    assert "/workspaces/run" not in command
+    assert command[-4:] == (
+        launch["hostImageRef"],
+        "codex",
+        "login",
+        "status",
+    )
+
+
+@pytest.mark.asyncio
+async def test_static_host_cleanup_removes_lease_owned_credential_validator() -> None:
+    runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
+    runtime._container_present = AsyncMock(side_effect=[True, False])
+    runtime._assert_container_owned = AsyncMock()
+    runtime._run = AsyncMock(return_value=(0, "", ""))
+    runtime.stop_static_host = AsyncMock()
+
+    result = await runtime.stop_host(binding=_binding(), host_lease=_host_lease())
+
+    assert result["cleanupResult"] == "drained_owned_static_host"
+    runtime._assert_container_owned.assert_awaited_once_with(
+        "mm-omnigent-host-host-lease-1", "host-lease-1"
+    )
+    runtime._run.assert_awaited_once_with(
+        "docker",
+        "rm",
+        "-f",
+        "mm-omnigent-host-host-lease-1",
+        check=False,
+    )
+    runtime.stop_static_host.assert_awaited_once_with(binding=_binding())
+
+
 def test_claude_profile_materializes_exact_oauth_home_without_secret_data() -> None:
     profile = SimpleNamespace(
         profile_id="claude-oauth",

@@ -14,11 +14,8 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
-import os
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -32,12 +29,6 @@ from api_service.db.models import (
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
 from moonmind.provider_profiles.oauth_policy import (
     effective_oauth_capacity_for_finalization,
-)
-from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
-from moonmind.workflows.temporal.runtime.workspace_locators import (
-    SandboxWorkspaceRecord,
-    SandboxWorkspaceRecordStore,
-    resolve_sandbox_workspace_locator,
 )
 from moonmind.workflows.temporal.runtime.providers.registry import (
     get_provider_bootstrap_command,
@@ -120,14 +111,14 @@ async def oauth_session_revalidate_bound_host(
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+    from moonmind.omnigent.oauth_hosts import (
+        OmnigentOAuthHostError,
+        OmnigentOAuthHostRepository,
+    )
     from moonmind.omnigent.settings import (
         resolved_api_token,
         resolved_proxy_forward_headers,
         resolved_server_url,
-    )
-    from moonmind.repositories.lore_runtime import (
-        build_lore_repository_adapter_from_environment,
     )
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
@@ -157,33 +148,6 @@ async def oauth_session_revalidate_bound_host(
             expected_status="allocating",
             new_status="starting",
         )
-    current_workflow_id = f"oauth-session:{session_id}"
-    current_step_execution_id = f"oauth-revalidate:{session_id}"
-    workspace_id = hashlib.sha256(
-        f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
-    ).hexdigest()[:24]
-    workspace_locator = SandboxWorkspaceLocator(workspaceId=workspace_id)
-    workspace_root = Path(
-        os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
-    ).resolve()
-    workspace_record = SandboxWorkspaceRecord(
-        workspace_id=workspace_id,
-        workflow_id=current_workflow_id,
-        step_execution_id=current_step_execution_id,
-        relative_path=workspace_locator.relative_path,
-    )
-    workspace_record_store = SandboxWorkspaceRecordStore(workspace_root)
-    workspace_record_store.ensure(workspace_record)
-    workspace_path = resolve_sandbox_workspace_locator(
-        workspace_locator,
-        workspace_root=workspace_root,
-        expected_workspace_id=workspace_id,
-        owner_record=workspace_record,
-        expected_workflow_id=current_workflow_id,
-        expected_step_execution_id=current_step_execution_id,
-        must_exist=False,
-    )
-    workspace_path.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         async with httpx.AsyncClient() as http_client:
             client = OmnigentHttpClient(
@@ -192,32 +156,42 @@ async def oauth_session_revalidate_bound_host(
                 client=http_client,
                 upstream_header_allowlist=resolved_proxy_forward_headers(),
             )
-            runtime = OmnigentOAuthHostRuntime(
-                client=client,
-                lore_repository_adapter=build_lore_repository_adapter_from_environment(),
-                workspace_root=workspace_root,
-            )
-            preflight = await runtime.prepare_host(
-                binding=binding,
-                host_lease=lease,
-                workspace_key=current_step_execution_id,
-                workspace_locator=workspace_locator.model_dump(
-                    by_alias=True, mode="json"
-                ),
-                current_workflow_id=current_workflow_id,
-                current_step_execution_id=current_step_execution_id,
-            )
-            if lease.status == "starting":
-                lease = await repository.transition_host_lease(
-                    lease.lease_id,
-                    expected_status="starting",
-                    new_status="ready",
-                    fields={"omnigent_host_id": preflight["hostId"]},
+            runtime = OmnigentOAuthHostRuntime(client=client)
+            preflight_error: BaseException | None = None
+            preflight: dict[str, Any] | None = None
+            try:
+                preflight = await runtime.validate_credential_mount(
+                    binding=binding,
+                    host_lease=lease,
+                    effective_launch=(
+                        lease.effective_launch_snapshot
+                        or binding.effective_launch_snapshot
+                    ),
                 )
-            if binding.host_launch_profile_ref:
-                await runtime.stop_host(binding=binding, host_lease=lease)
+            except (Exception, asyncio.CancelledError) as exc:
+                preflight_error = exc
+
+            cleanup_error: BaseException | None = None
+            try:
+                cleanup = await runtime.stop_host(binding=binding, host_lease=lease)
+                if cleanup.get("cleanupResult") not in {
+                    "succeeded",
+                    "drained_owned_static_host",
+                }:
+                    raise OmnigentOAuthHostError(
+                        "OAuth credential validator cleanup was not proven",
+                        code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+                    )
+            except (Exception, asyncio.CancelledError) as exc:
+                cleanup_error = exc
+            if cleanup_error is not None:
+                if preflight_error is not None:
+                    raise cleanup_error from preflight_error
+                raise cleanup_error
             await repository.mark_host_lease_stopped(lease.lease_id)
-    except Exception:
+            if preflight_error is not None:
+                raise preflight_error
+    except (Exception, asyncio.CancelledError):
         async with get_async_session_context() as db:
             from sqlalchemy.future import select
             from api_service.db.models import (
@@ -252,11 +226,13 @@ async def oauth_session_revalidate_bound_host(
                     session=db, runtime_id=profile.runtime_id
                 )
         raise
+    if preflight is None:
+        raise RuntimeError("OAuth credential preflight produced no result")
     return {
         "profile_id": profile_id,
         "status": "ready",
         "credential_generation": lease.credential_generation,
-        "host_id": preflight["hostId"],
+        "validation_mode": preflight["validationMode"],
     }
 
 

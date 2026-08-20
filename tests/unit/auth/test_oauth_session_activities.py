@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -24,6 +23,11 @@ from api_service.db.models import (
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
+from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.provider_profiles.lease_client import (
+    CredentialLeasePurpose,
+    ProviderProfileLeaseClient,
+)
 from moonmind.workflows.temporal.activities import oauth_session_activities
 from moonmind.workflows.temporal.activities.oauth_session_activities import (
     oauth_session_register_profile,
@@ -34,13 +38,9 @@ from moonmind.workflows.temporal.activities.oauth_session_activities import (
 from moonmind.workflows.temporal.activity_catalog import build_default_activity_catalog
 from moonmind.workflows.temporal.activity_catalog import AGENT_RUNTIME_FLEET
 from moonmind.workflows.temporal.activity_catalog import ARTIFACTS_FLEET
+from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 from moonmind.workflows.temporal.runtime.providers import registry as provider_registry
 from moonmind.workflows.temporal.workers import list_registered_workflow_types
-from moonmind.provider_profiles.lease_client import (
-    CredentialLeasePurpose,
-    ProviderProfileLeaseClient,
-)
-from moonmind.workflows.temporal.artifacts import TemporalArtifactActivities
 
 @pytest_asyncio.fixture
 async def _oauth_activity_session_factory(tmp_path):
@@ -200,22 +200,21 @@ class TestOAuthSessionWorkflowRegistration:
 
 
 @pytest.mark.asyncio
-async def test_revalidate_bound_host_supplies_workspace_authority_to_runtime(
-    tmp_path,
+async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     session_id = "oas-revalidate-bound-host"
-    current_workflow_id = f"oauth-session:{session_id}"
-    current_step_execution_id = f"oauth-revalidate:{session_id}"
-    workspace_id = hashlib.sha256(
-        f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
-    ).hexdigest()[:24]
-    binding = SimpleNamespace(host_launch_profile_ref="codex-on-demand@1")
+    effective_launch = {"snapshotRef": "omnigent-launch:sha256:test"}
+    binding = SimpleNamespace(
+        host_launch_profile_ref="codex-on-demand@1",
+        effective_launch_snapshot=effective_launch,
+    )
     lease = SimpleNamespace(
         lease_id="ohl-revalidate",
         status="allocating",
         credential_generation=7,
         omnigent_host_id=None,
+        effective_launch_snapshot=effective_launch,
     )
     observed: dict[str, object] = {}
 
@@ -245,45 +244,35 @@ async def test_revalidate_bound_host_supplies_workspace_authority_to_runtime(
             lease.status = "stopped"
 
     class Runtime:
-        def __init__(self, *, workspace_root, **_kwargs) -> None:
-            observed["workspace_root"] = workspace_root
+        def __init__(self, **_kwargs) -> None:
+            pass
 
-        async def prepare_host(
+        async def validate_credential_mount(
             self,
             *,
             binding,
             host_lease,
-            workspace_key,
-            workspace_locator,
-            current_workflow_id,
-            current_step_execution_id,
-            **_kwargs,
+            effective_launch,
         ):
-            observed["prepare_host"] = {
+            observed["validate_credential_mount"] = {
                 "binding": binding,
                 "host_lease": host_lease,
-                "workspace_key": workspace_key,
-                "workspace_locator": workspace_locator,
-                "current_workflow_id": current_workflow_id,
-                "current_step_execution_id": current_step_execution_id,
+                "effective_launch": effective_launch,
             }
-            workspace = (
-                tmp_path
-                / "temporal_sandbox"
-                / workspace_locator["workspaceId"]
-                / workspace_locator["relativePath"]
-            )
-            assert workspace.is_dir()
-            return {"hostId": "host-revalidated"}
+            if observed.get("fail_validation"):
+                raise RuntimeError("credential preflight failed")
+            return {"validationMode": "credential_only"}
 
-        async def stop_host(self, **kwargs) -> None:
+        async def stop_host(self, **kwargs):
             observed["stop_host"] = kwargs
+            if observed.get("fail_cleanup"):
+                return {"cleanupResult": "failed"}
+            return {"cleanupResult": "succeeded"}
 
     class Client:
         def __init__(self, **_kwargs) -> None:
             pass
 
-    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setattr(
         "moonmind.omnigent.oauth_hosts.OmnigentOAuthHostRepository", Repository
     )
@@ -319,22 +308,58 @@ async def test_revalidate_bound_host_supplies_workspace_authority_to_runtime(
         "profile_id": "codex_openai_oauth",
         "status": "ready",
         "credential_generation": 7,
-        "host_id": "host-revalidated",
+        "validation_mode": "credential_only",
     }
-    assert observed["prepare_host"] == {
+    assert observed["validate_credential_mount"] == {
         "binding": binding,
         "host_lease": lease,
-        "workspace_key": current_step_execution_id,
-        "workspace_locator": {
-            "kind": "sandbox",
-            "workspaceId": workspace_id,
-            "relativePath": "repo",
-        },
-        "current_workflow_id": current_workflow_id,
-        "current_step_execution_id": current_step_execution_id,
+        "effective_launch": effective_launch,
     }
+    assert observed["stop_host"] == {"binding": binding, "host_lease": lease}
     assert lease.status == "stopped"
-    assert (tmp_path / "temporal_sandbox" / ".workspace_records").is_dir()
+
+    @asynccontextmanager
+    async def no_profile_context():
+        class Database:
+            async def execute(self, _statement):
+                return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+        yield Database()
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        no_profile_context,
+    )
+    observed["fail_validation"] = True
+    lease.status = "allocating"
+
+    with pytest.raises(RuntimeError, match="credential preflight failed"):
+        await oauth_session_activities.oauth_session_revalidate_bound_host(
+            {
+                "session_id": session_id,
+                "profile_id": "codex_openai_oauth",
+                "provider_lease_id": "provider-lease-revalidate",
+            }
+        )
+
+    assert lease.status == "stopped"
+    assert observed["stop_host"] == {"binding": binding, "host_lease": lease}
+
+    observed["fail_validation"] = False
+    observed["fail_cleanup"] = True
+    lease.status = "allocating"
+
+    with pytest.raises(OmnigentOAuthHostError, match="cleanup was not proven"):
+        await oauth_session_activities.oauth_session_revalidate_bound_host(
+            {
+                "session_id": session_id,
+                "profile_id": "codex_openai_oauth",
+                "provider_lease_id": "provider-lease-revalidate",
+            }
+        )
+
+    assert lease.status == "starting"
 
 
 @pytest.mark.asyncio
