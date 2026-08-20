@@ -33,6 +33,53 @@ AUTO_RUNTIME_SENTINEL = "auto"
 MANAGED_PROCESS_LOST_DURING_RECONCILIATION = (
     "MANAGED_PROCESS_LOST_DURING_RECONCILIATION"
 )
+
+# --- Execution budget authority ----------------------------------------------
+# One shared timeout authority for an agent run (MoonLadderStudios/MoonMind#3685
+# review): the AgentRun workflow's execution budget and the managed process
+# supervisor's kill deadline are the same boundary and must derive from the same
+# value. Previously the workflow defaulted managed runs one way while
+# ``agent_runtime.launch`` independently defaulted the supervisor to 3600s, so an
+# explicitly requested larger budget could not take effect — the process was
+# still killed at one hour. A run needing more than the default requests it
+# explicitly through ``timeoutPolicy.timeout_seconds`` instead of widening the
+# fallback for every managed run.
+DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600  # 1 hour
+DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600  # 6 hours
+
+
+def resolve_execution_timeout_seconds(
+    *,
+    agent_kind: str = "managed",
+    timeout_policy: Mapping[str, Any] | Any | None = None,
+) -> int:
+    """Return the effective execution budget in seconds for one agent run.
+
+    An explicit ``timeout_seconds`` in the request's timeout policy always wins;
+    otherwise the kind-specific default applies. Both the workflow budget and the
+    process supervisor call this so the two deadlines cannot diverge.
+    """
+
+    default_seconds = (
+        DEFAULT_EXTERNAL_TIMEOUT_SECONDS
+        if agent_kind == "external"
+        else DEFAULT_MANAGED_TIMEOUT_SECONDS
+    )
+    if timeout_policy is None:
+        return default_seconds
+    if isinstance(timeout_policy, Mapping):
+        requested = timeout_policy.get("timeout_seconds")
+    else:
+        requested = getattr(timeout_policy, "timeout_seconds", None)
+    if requested is None:
+        return default_seconds
+    try:
+        seconds = int(requested)
+    except (TypeError, ValueError):
+        return default_seconds
+    return seconds if seconds > 0 else default_seconds
+
+
 AgentRunState = Literal[
     "queued",
     "awaiting_slot",
@@ -1957,6 +2004,9 @@ def build_canonical_result(payload: dict[str, Any]) -> AgentRunResult:
     return AgentRunResult(**data)
 
 __all__ = [
+    "DEFAULT_EXTERNAL_TIMEOUT_SECONDS",
+    "DEFAULT_MANAGED_TIMEOUT_SECONDS",
+    "resolve_execution_timeout_seconds",
     "AgentExecutionRequest",
     "AgentKind",
     "ExternalExecutionStyle",

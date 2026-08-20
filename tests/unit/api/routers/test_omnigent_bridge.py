@@ -152,6 +152,14 @@ def _validated_embedded_evidence(monkeypatch):
 def test_readiness_reports_selected_mode_and_conformance_state(monkeypatch) -> None:
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "https://omnigent.example.test")
+    # Native-UI serving readiness derives its compatibility version from the
+    # deployment's declared immutable server image
+    # (MoonLadderStudios/MoonMind#3685); a mutable tag reports not-ready.
+    monkeypatch.delenv("OMNIGENT_NATIVE_UI_VERSION", raising=False)
+    monkeypatch.setenv(
+        "OMNIGENT_IMAGE_REF",
+        "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "c" * 64,
+    )
     app = FastAPI()
     app.include_router(router, prefix=OMNIGENT_BRIDGE_MOUNT_PATH)
     app.dependency_overrides[get_current_user()] = _mock_user

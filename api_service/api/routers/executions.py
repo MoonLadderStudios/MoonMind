@@ -81,7 +81,7 @@ from api_service.db.models import (
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
-    refresh_managed_bootstrap_snapshot_for_rerun,
+    refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
 )
 from api_service.services.control_stop_continuation import (
@@ -17687,9 +17687,10 @@ async def rerun_execution(
     # task dependency edges and recovery metadata from a prior execution.
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
     reserved_workflow_id = f"mm:{_uuid4()}"
-    initial_params = await refresh_managed_bootstrap_snapshot_for_rerun(
+    initial_params = await refresh_managed_bootstrap_snapshot(
         session,
         parameters=initial_params,
+        consumer_type="workflow",
         consumer_id=reserved_workflow_id,
         user=user,
     )
