@@ -3,7 +3,6 @@
 Covers all 30 acceptance criteria via TDD.
 """
 
-import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -20,10 +19,7 @@ from moonmind.omnigent.harness_platform.attestation import (
     HostHarnessAttestation,
     validate_exact_host_attestation,
 )
-from moonmind.omnigent.harness_platform.capabilities import (
-    compute_class_admission,
-    validate_exact_host_capabilities,
-)
+from moonmind.omnigent.harness_platform.capabilities import compute_class_admission
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessImplementationIdentity,
     TrustState,

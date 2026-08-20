@@ -20,33 +20,25 @@ Lifecycle ordering preserved (19 steps 1-13).
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from moonmind.omnigent.harness_platform.agent_profile import (
     OmnigentAgentProfileV2,
     validate_agent_profile,
 )
-from moonmind.omnigent.harness_platform.attestation import HostHarnessAttestation
-from moonmind.omnigent.harness_platform.capabilities import (
-    ClassAdmissionDecision,
-    compute_class_admission,
-)
+from moonmind.omnigent.harness_platform.capabilities import compute_class_admission
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessCatalogSnapshot,
     HarnessTrustRecord,
-    TrustState,
     is_launchable_trust,
 )
 from moonmind.omnigent.harness_platform.credential_bindings import (
     CredentialBindingSet,
     validate_binding_set_for_plan,
-    parse_binding_set_ref,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
     OmnigentExecutionPlanPayload,
-    ModelConfig,
     compute_model_config_digest,
     create_execution_plan_envelope,
 )
@@ -55,8 +47,6 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import (
-    HostClass,
-    LaunchPolicy,
     get_host_class,
     get_launch_policy,
     validate_policy_for_host_class,
