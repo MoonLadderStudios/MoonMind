@@ -86,6 +86,17 @@ def test_running_status_with_observed_state():
     assert timeline.status is TimelineStatus.RUNNING
 
 
+def test_retrying_status_is_explained_from_durable_reason():
+    session = _session(
+        provider_session_ref="psr-1",
+        observed_state="active",
+        metadata={"last_reason_code": "retry_transient_observation"},
+    )
+    timeline = build_timeline(session=session)
+    assert timeline.status is TimelineStatus.RETRYING
+    assert "retrying" in str(timeline.status_detail)
+
+
 def test_delivery_unknown_status_takes_precedence():
     command = CommandRecord(
         command_id="cmd-1",
@@ -148,12 +159,31 @@ def test_timeline_survives_live_resource_deletion():
     assert doc["terminal"]["state"] == "success"
     assert doc["terminal"]["evidenceRef"] == "evidence-xyz"
     assert doc["lastDecision"]["decisionCode"] == "record_provider_terminal"
-    # Trace has no registered route in this phase, so the link is omitted rather
-    # than pointed at a nonexistent /api/omnigent/traces route (would 404).
     assert doc["lastDecision"]["traceLink"] is None
     assert doc["links"]["trace"] is None
     # Artifact-backed diagnostics link uses the registered /api/artifacts route.
     assert doc["lastDecision"]["diagnosticsLink"] == "/api/artifacts/artifact456"
+
+
+def test_timeline_projects_only_server_authored_trace_and_log_links():
+    decision = DecisionRecord(
+        decision_id="dec-1",
+        session_id="sess-1",
+        decision_code="await_observation",
+        trace_ref="trace123",
+        created_at=NOW,
+    )
+    doc = build_timeline(
+        session=_session(),
+        decisions=[decision],
+        trace_link="/api/omnigent/sessions/sess-1/trace",
+        log_link="/api/omnigent/sessions/sess-1/logs",
+    ).to_dict()
+    assert doc["links"] == {
+        "trace": "/api/omnigent/sessions/sess-1/trace",
+        "logs": "/api/omnigent/sessions/sess-1/logs",
+    }
+    assert doc["lastDecision"]["traceLink"] == doc["links"]["trace"]
 
 
 def test_timeline_drops_secret_like_refs_and_host_paths():

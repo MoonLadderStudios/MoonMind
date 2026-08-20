@@ -46,6 +46,7 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
+from moonmind.omnigent.control_plane import spans as control_plane_spans
 from moonmind.omnigent.failure_classification import (
     OmnigentFailureReason,
     classify_omnigent_failure,
@@ -1301,6 +1302,15 @@ async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
         pass
 
 
+def _activity_attempt() -> int:
+    """Return the current Temporal attempt without requiring Activity context."""
+
+    try:
+        return max(1, int(activity.info().attempt))
+    except RuntimeError:
+        return 1
+
+
 async def _publish_active_journals(
     *,
     artifact_gateway: OmnigentArtifactGateway,
@@ -1660,7 +1670,13 @@ async def run_omnigent_execution(
                     }
                 )
             if not session_id:
-                create_response = await client.create_session(session_payload)
+                with control_plane_spans.omnigent_span(
+                    control_plane_spans.SESSION_ENSURE_PROVIDER_ATTACHMENT,
+                    runtime="omnigent",
+                    harness=str(session_payload.get("harness") or "unknown"),
+                    attempt_ordinal=_activity_attempt(),
+                ):
+                    create_response = await client.create_session(session_payload)
                 session_id = _session_id(create_response)
                 external_state["retry"].update(
                     {
@@ -1962,7 +1978,14 @@ async def run_omnigent_execution(
                 # before dispatch; anything already queued remains pre-post
                 # replay, while events emitted during request handling are live.
                 message_posted_gate.set()
-                first_message_response = await client.post_event(session_id, first_message)
+                with control_plane_spans.omnigent_span(
+                    control_plane_spans.TURN_SUBMIT,
+                    runtime="omnigent",
+                    attempt_ordinal=_activity_attempt(),
+                ):
+                    first_message_response = await client.post_event(
+                        session_id, first_message
+                    )
                 first_message_posted = True
                 first_message_response_identifiers = _first_message_response_identifiers(
                     first_message_response

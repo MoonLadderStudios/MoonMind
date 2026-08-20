@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeVar
 
@@ -35,6 +36,8 @@ from moonmind.omnigent.checkpoints import (
     validate_cold_restore_target,
 )
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+from moonmind.omnigent.control_plane import metrics as control_plane_metrics
+from moonmind.omnigent.control_plane import spans as control_plane_spans
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.remediation_workspace import (
     RemediationWorkspaceBinding,
@@ -702,7 +705,14 @@ class OmnigentProfileBoundExecutionCoordinator:
             # A lease heartbeat must run until provider execution completes.
             # Propagate its failure so the execution is canceled instead of
             # being silently interrupted later by the stale-lease janitor.
-            heartbeat_task.result()
+            try:
+                heartbeat_task.result()
+            except Exception:
+                control_plane_metrics.increment(
+                    control_plane_metrics.LEASE_RENEWAL_CONFLICTS,
+                    lease_scope="host",
+                )
+                raise
             raise RuntimeError("host lease heartbeat stopped unexpectedly")
         finally:
             for task in (execution_task, heartbeat_task):
@@ -1020,11 +1030,16 @@ class OmnigentProfileBoundExecutionCoordinator:
                 tenant_id=follow_up_tenant,
             )
             enforce_required_follow_up_retrieval(authored_follow_up, follow_up_block)
-            effective_launch = _compile_persisted_effective_launch(
-                policy_snapshot,
-                provider_profile_id=profile_id,
-                follow_up_retrieval=follow_up_block,
-            )
+            with control_plane_spans.omnigent_span(
+                control_plane_spans.COMPATIBILITY_VERIFY,
+                runtime=provider_runtime,
+                compatibility_digest=policy_snapshot.get("policyDigest"),
+            ):
+                effective_launch = _compile_persisted_effective_launch(
+                    policy_snapshot,
+                    provider_profile_id=profile_id,
+                    follow_up_retrieval=follow_up_block,
+                )
             if (
                 self._repository_mutation_required(request)
                 and not effective_launch["repositoryMutation"]
@@ -1116,23 +1131,28 @@ class OmnigentProfileBoundExecutionCoordinator:
                 current_stage = "workspace_intent_compilation"
                 await emit(current_stage, "started")
                 try:
-                    workspace_intent = compile_workspace_intent(
-                        request,
-                        workflow_id=workflow_id,
-                        step_execution_id=(
-                            step_execution_id or request.idempotency_key
-                        ),
-                        run_id=(
-                            request.step_execution.run_id
-                            if request.step_execution is not None
-                            else None
-                        ),
-                        logical_step_id=(
-                            request.step_execution.logical_step_id
-                            if request.step_execution is not None
-                            else None
-                        ),
-                    )
+                    with control_plane_spans.omnigent_span(
+                        control_plane_spans.INTENT_COMPILE,
+                        runtime=provider_runtime,
+                        attempt_ordinal=_activity_attempt(),
+                    ):
+                        workspace_intent = compile_workspace_intent(
+                            request,
+                            workflow_id=workflow_id,
+                            step_execution_id=(
+                                step_execution_id or request.idempotency_key
+                            ),
+                            run_id=(
+                                request.step_execution.run_id
+                                if request.step_execution is not None
+                                else None
+                            ),
+                            logical_step_id=(
+                                request.step_execution.logical_step_id
+                                if request.step_execution is not None
+                                else None
+                            ),
+                        )
                 except WorkspaceIntentCompilationError as exc:
                     raise OmnigentOAuthHostError(str(exc), code=exc.code) from exc
                 # Durable, bounded, credential-free, path-safe compilation
@@ -1176,20 +1196,28 @@ class OmnigentProfileBoundExecutionCoordinator:
             await emit(
                 current_stage, "waiting", metadata={"providerProfileId": profile_id}
             )
-            provider_lease = await self._lease_client.acquire_execution_lease(
-                runtime_id=provider_runtime,
-                profile_id=profile_id,
-                owner_id=owner_id,
-                purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
-                metadata={
-                    "workflowId": workflow_id,
-                    "stepExecutionId": step_execution_id,
-                    "idempotencyKey": request.idempotency_key,
-                    # The coordinator runs in an Activity. The deterministic
-                    # lease owner is retry identity; workflowId remains safe
-                    # diagnostic ownership metadata.
-                    "ownerIsWorkflow": False,
-                },
+            lease_started = time.monotonic()
+            with control_plane_spans.omnigent_span(
+                control_plane_spans.PROFILE_LEASE_ENSURE,
+                runtime=provider_runtime,
+                attempt_ordinal=_activity_attempt(),
+            ):
+                provider_lease = await self._lease_client.acquire_execution_lease(
+                    runtime_id=provider_runtime,
+                    profile_id=profile_id,
+                    owner_id=owner_id,
+                    purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
+                    metadata={
+                        "workflowId": workflow_id,
+                        "stepExecutionId": step_execution_id,
+                        "idempotencyKey": request.idempotency_key,
+                        "ownerIsWorkflow": False,
+                    },
+                )
+            control_plane_metrics.observe(
+                control_plane_metrics.LEASE_ACQUIRE_LATENCY,
+                time.monotonic() - lease_started,
+                lease_scope="provider_profile",
             )
             await emit(current_stage, "completed")
             current_stage = "profile_lease_acquired"
@@ -1239,6 +1267,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
             current_stage = "host_lease_created"
             await emit(current_stage, "started")
+            host_lease_started = time.monotonic()
             host_lease = await self._create_host_lease_after_profile_idle(
                 binding=binding,
                 provider_lease=provider_lease,
@@ -1249,6 +1278,11 @@ class OmnigentProfileBoundExecutionCoordinator:
             )
             if host_lease.status in {"stopped", "failed"}:
                 host_lease = await self._hosts.restart_host_lease(host_lease.lease_id)
+            control_plane_metrics.observe(
+                control_plane_metrics.LEASE_ACQUIRE_LATENCY,
+                time.monotonic() - host_lease_started,
+                lease_scope="host",
+            )
             await emit(
                 current_stage,
                 "completed",
@@ -1362,11 +1396,17 @@ class OmnigentProfileBoundExecutionCoordinator:
                     else self._attachment_refs(request)
                 ),
             )
-            preflight = await self._execute_with_host_lease_heartbeat(
-                preflight_operation,
-                host_lease_ref=host_lease.lease_id,
-                ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
-            )
+            with control_plane_spans.omnigent_span(
+                control_plane_spans.HOST_ENSURE,
+                runtime=provider_runtime,
+                host_mode=effective_launch.get("hostMode"),
+                attempt_ordinal=_activity_attempt(),
+            ):
+                preflight = await self._execute_with_host_lease_heartbeat(
+                    preflight_operation,
+                    host_lease_ref=host_lease.lease_id,
+                    ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
+                )
             await emit(current_stage, "completed")
             workspace_resolution = preflight.get("workspaceResolution")
             authority_workspace_resolution = (
@@ -1544,20 +1584,25 @@ class OmnigentProfileBoundExecutionCoordinator:
                             },
                         )
                         try:
-                            publication = await self._runtime.publish_workspace(
-                                workspace_locator=workspace_locator_payload or {},
-                                current_workflow_id=workflow_id,
-                                current_step_execution_id=(
-                                    step_execution_id or request.idempotency_key
-                                ),
-                                publication_identity=request.idempotency_key,
-                                publish_mode=publish_mode,
-                                base_branch=self._starting_branch(request),
-                                repository=str(
-                                    (request.parameters or {}).get("repository") or ""
-                                ).strip(),
-                                github_token=github_token,
-                            )
+                            with control_plane_spans.omnigent_span(
+                                control_plane_spans.WORKSPACE_PUBLISH,
+                                runtime=provider_runtime,
+                                attempt_ordinal=_activity_attempt(),
+                            ):
+                                publication = await self._runtime.publish_workspace(
+                                    workspace_locator=workspace_locator_payload or {},
+                                    current_workflow_id=workflow_id,
+                                    current_step_execution_id=(
+                                        step_execution_id or request.idempotency_key
+                                    ),
+                                    publication_identity=request.idempotency_key,
+                                    publish_mode=publish_mode,
+                                    base_branch=self._starting_branch(request),
+                                    repository=str(
+                                        (request.parameters or {}).get("repository") or ""
+                                    ).strip(),
+                                    github_token=github_token,
+                                )
                         except Exception as exc:
                             code = str(
                                 getattr(exc, "code", None)
@@ -2041,23 +2086,28 @@ class OmnigentProfileBoundExecutionCoordinator:
                                 expected_status="assigned",
                                 new_status="draining",
                             )
-                        cleanup_evidence = await self._runtime.stop_host(
-                            binding=binding,
-                            host_lease=host_lease,
-                            effective_launch=effective_launch,
-                            egress_evidence=(
-                                preflight.get("egressAttestation")
-                                if isinstance(preflight, Mapping)
-                                else None
-                            ),
-                            launch_evidence_ref=(
-                                str(preflight.get("egressEvidenceRef") or "") or None
-                                if isinstance(preflight, Mapping)
-                                else None
-                            ),
-                            evidence_request=request,
-                            artifact_gateway=self._artifact_service,
-                        )
+                        with control_plane_spans.omnigent_span(
+                            control_plane_spans.CLEANUP_EXECUTE,
+                            runtime=provider_runtime,
+                            host_mode=effective_launch.get("hostMode"),
+                        ):
+                            cleanup_evidence = await self._runtime.stop_host(
+                                binding=binding,
+                                host_lease=host_lease,
+                                effective_launch=effective_launch,
+                                egress_evidence=(
+                                    preflight.get("egressAttestation")
+                                    if isinstance(preflight, Mapping)
+                                    else None
+                                ),
+                                launch_evidence_ref=(
+                                    str(preflight.get("egressEvidenceRef") or "") or None
+                                    if isinstance(preflight, Mapping)
+                                    else None
+                                ),
+                                evidence_request=request,
+                                artifact_gateway=self._artifact_service,
+                            )
                         authority_cleanup_evidence = dict(cleanup_evidence or {})
                         await self._hosts.mark_host_lease_stopped(host_lease.lease_id)
                         safe_to_release_provider = True

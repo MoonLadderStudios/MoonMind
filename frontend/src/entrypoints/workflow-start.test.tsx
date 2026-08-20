@@ -669,6 +669,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
       }],
       blockers: ["autonomous_rollout_gate_closed"],
     },
+    admissionReadiness: {},
   } satisfies components["schemas"]["OmnigentCodexCatalogReadiness"];
   const readyAgentProfiles = [{
     profileId: "team-codex",

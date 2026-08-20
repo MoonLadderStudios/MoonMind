@@ -17,6 +17,36 @@ from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 
 
+_DEFAULT = object()
+
+
+def _attested_bridge_session(
+    *,
+    server_digest: str = "1",
+    host_digest: str = "2",
+    observed_at: datetime | None = None,
+):
+    server_sha = server_digest * 64
+    host_sha = host_digest * 64
+    return SimpleNamespace(
+        metadata_={
+            catalog.EGRESS_CLEANUP_AUTHORITY_KEY: {
+                "schemaVersion": catalog.EGRESS_CLEANUP_AUTHORITY_VERSION,
+                "phase": "attested",
+                "egressEvidence": {
+                    "serverImageRefObserved": (
+                        "registry.test/server@sha256:" + server_sha
+                    ),
+                    "serverImageDigest": "sha256:" + server_sha,
+                    "workloadImageRef": "registry.test/host@sha256:" + host_sha,
+                    "workloadImageDigest": "sha256:" + host_sha,
+                    "validatedAt": (observed_at or datetime.now(UTC)).isoformat(),
+                },
+            }
+        }
+    )
+
+
 class _Scalars:
     def __init__(self, rows):
         self._rows = rows
@@ -35,12 +65,41 @@ class _Result:
     def all(self):
         return self._rows
 
+    def one(self):
+        return self._rows
+
+    def scalar_one_or_none(self):
+        return self._rows
+
 
 class _Session:
-    def __init__(self, profiles, *, slots=(), bindings=(), host_leases=(), policies=()):
+    def __init__(
+        self,
+        profiles,
+        *,
+        slots=(),
+        bindings=(),
+        host_leases=(),
+        policies=(),
+        bridge_sessions=_DEFAULT,
+        schema_versions=(1, 1),
+        latest_observation_at=_DEFAULT,
+        snapshot_observed_at=_DEFAULT,
+        event_observed_at=_DEFAULT,
+    ):
+        if latest_observation_at is _DEFAULT:
+            latest_observation_at = datetime.now(UTC)
+        if snapshot_observed_at is _DEFAULT:
+            snapshot_observed_at = latest_observation_at
+        if event_observed_at is _DEFAULT:
+            event_observed_at = latest_observation_at
+        if bridge_sessions is _DEFAULT:
+            bridge_sessions = (_attested_bridge_session(),)
         self._results = iter((
             _Result(profiles), _Result(slots), _Result(bindings),
-            _Result(host_leases), _Result(policies),
+            _Result(host_leases), _Result(policies), _Result(bridge_sessions),
+            _Result(schema_versions),
+            _Result((snapshot_observed_at, event_observed_at)),
         ))
 
     async def execute(self, _statement):
@@ -79,6 +138,29 @@ def _profile(**overrides):
     return SimpleNamespace(**values)
 
 
+def _bootstrap_header(
+    *,
+    server_digest: str = "1",
+    host_digest: str = "2",
+    observed_at: datetime | None = None,
+) -> str:
+    return catalog.json.dumps(
+        {
+            "schemaVersion": catalog._BOOTSTRAP_EVIDENCE_SCHEMA_VERSION,
+            "observedAt": (observed_at or datetime.now(UTC)).isoformat(),
+            "providerSnapshotObserved": True,
+            "eventTransportObserved": True,
+            "serverImageRefObserved": (
+                "registry.test/server@sha256:" + server_digest * 64
+            ),
+            "hostImageRefObserved": (
+                "registry.test/host@sha256:" + host_digest * 64
+            ),
+            "uiBuildRefObserved": "abc123",
+        }
+    )
+
+
 def _config(*, enabled=True):
     return SimpleNamespace(
         enabled=enabled,
@@ -93,6 +175,8 @@ def _config(*, enabled=True):
 
 def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setattr(catalog, "get_bridge_config", lambda: _config(enabled=enabled))
+    monkeypatch.setattr(catalog, "_reconciler_generation_available", lambda: True)
+    monkeypatch.setattr(catalog, "_websocket_runtime_available", lambda: True)
     monkeypatch.setattr(catalog, "_secret_ref_results_for_rows", lambda rows: {r.profile_id: {} for r in rows})
 
     async def statuses(*_args, **_kwargs):
@@ -115,6 +199,12 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
             backend_ready=True,
             enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
             enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
+            workflow_types=frozenset({"MoonMind.AgentSession"}),
+            activity_types=frozenset({
+                "agent_runtime.reconcile_managed_sessions",
+                "integration.omnigent.oauth_host_janitor",
+            }),
+            immutable_worker_build=True,
         )
 
     monkeypatch.setattr(catalog, "_live_deployment_readiness", live_readiness)
@@ -124,7 +214,19 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://omnigent:8000")
     monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "/evidence/matrix.json")
     monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", "abc123")
-    monkeypatch.setattr(catalog.Path, "read_text", lambda *_args, **_kwargs: "{}")
+    acceptance_generated_at = datetime.now(UTC).isoformat()
+    monkeypatch.setattr(
+        catalog.Path,
+        "read_text",
+        lambda *_args, **_kwargs: catalog.json.dumps({
+            "generatedAt": acceptance_generated_at,
+            "sourceCommit": "abc123",
+            "images": {
+                "serverDigest": "sha256:" + "1" * 64,
+                "hostDigest": "sha256:" + "2" * 64,
+            },
+        }),
+    )
     monkeypatch.setattr(catalog, "validate_acceptance_manifest", lambda *_args, **_kwargs: None)
     app = FastAPI()
     app.include_router(catalog.router)
@@ -148,17 +250,33 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
     assert response.json()["available"] is True
 
 
+def test_reconciler_readiness_uses_the_actual_static_workflow_registration():
+    assert catalog._reconciler_generation_available() is True
+
+
 def test_protected_first_run_canary_uses_normal_catalog_without_published_manifest(
     monkeypatch,
 ):
     monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN", "canary-secret")
-    client = TestClient(_app(monkeypatch, session=_Session([_profile()])))
+    client = TestClient(
+        _app(
+            monkeypatch,
+            session=_Session(
+                [_profile()],
+                bridge_sessions=(),
+                latest_observation_at=None,
+            ),
+        )
+    )
     monkeypatch.delenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", raising=False)
     monkeypatch.delenv("MOONMIND_SOURCE_COMMIT", raising=False)
 
     response = client.get(
         "/api/omnigent/codex-catalog-readiness",
-        headers={"X-MoonMind-Acceptance-Canary": "canary-secret"},
+        headers={
+            "X-MoonMind-Acceptance-Canary": "canary-secret",
+            catalog._BOOTSTRAP_EVIDENCE_HEADER: _bootstrap_header(),
+        },
     )
 
     assert response.status_code == 200
@@ -166,17 +284,31 @@ def test_protected_first_run_canary_uses_normal_catalog_without_published_manife
     assert "acceptance_evidence_unavailable" not in {
         reason["code"] for reason in payload["gateReasons"]
     }
+    assert payload["available"] is True
+    assert payload["admissionReadiness"]["admitNew"] is True
 
 
 def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
     monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN", "canary-secret")
-    client = TestClient(_app(monkeypatch, session=_Session([_profile()])))
+    client = TestClient(
+        _app(
+            monkeypatch,
+            session=_Session(
+                [_profile()],
+                bridge_sessions=(),
+                latest_observation_at=None,
+            ),
+        )
+    )
     monkeypatch.delenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", raising=False)
     monkeypatch.delenv("MOONMIND_SOURCE_COMMIT", raising=False)
 
     response = client.get(
         "/api/omnigent/codex-catalog-readiness",
-        headers={"X-MoonMind-Acceptance-Canary": "wrong"},
+        headers={
+            "X-MoonMind-Acceptance-Canary": "wrong",
+            catalog._BOOTSTRAP_EVIDENCE_HEADER: _bootstrap_header(),
+        },
     )
 
     body = response.json()
@@ -184,7 +316,16 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
         reason["code"] for reason in body["supportGateReasons"]
     }
     assert body["schemaVersion"] == "moonmind.omnigent-codex-readiness.v2"
-    assert body["available"] is True
+    assert body["available"] is False
+    assert set(body["admissionReadiness"]["blocking"]) >= {
+        "provider_snapshot",
+        "event_transport",
+        "server_build",
+        "ui_build",
+        "host_build",
+        "exact_image",
+        "protected_live_evidence",
+    }
     assert body["cutover"] == {
         "policyVersion": "moonmind.codex-omnigent-cutover/v1",
         "configuredPhase": "opt_in",
@@ -399,7 +540,7 @@ def test_catalog_projects_authoritative_deployment_gates(
         ("/evidence/matrix.json", ""),
     ],
 )
-def test_catalog_reports_missing_acceptance_evidence_without_blocking_launch(
+def test_catalog_fails_closed_when_protected_acceptance_evidence_is_missing(
     monkeypatch, manifest_path, source_commit
 ):
     app = _app(monkeypatch, session=_Session([_profile()]))
@@ -415,13 +556,35 @@ def test_catalog_reports_missing_acceptance_evidence_without_blocking_launch(
 
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
-    assert body["available"] is True
+    assert body["available"] is False
     assert "acceptance_evidence_unavailable" in {
         reason["code"] for reason in body["supportGateReasons"]
     }
-    assert "acceptance_evidence_unavailable" not in {
+    assert "protected_live_evidence" in body["admissionReadiness"]["blocking"]
+    assert "omnigent_admission_readiness_failed" in {
         reason["code"] for reason in body["gateReasons"]
     }
+
+
+@pytest.mark.parametrize(
+    ("capability", "helper"),
+    [
+        ("reconciler_generation", "_reconciler_generation_available"),
+        ("websocket", "_websocket_runtime_available"),
+    ],
+)
+def test_catalog_fails_closed_on_missing_loaded_runtime_capability(
+    monkeypatch, capability, helper
+):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+    monkeypatch.setattr(catalog, helper, lambda: False)
+
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is False
+    assert capability in body["admissionReadiness"]["blocking"]
+    assert body["admissionReadiness"]["allowHistoricalReads"] is True
+    assert body["admissionReadiness"]["allowCleanup"] is True
 
 
 def test_catalog_rejects_placeholder_image_digests(monkeypatch):
@@ -640,18 +803,167 @@ def test_catalog_fails_closed_on_live_service_readiness(
     assert expected in {reason["code"] for reason in body["gateReasons"]}
 
 
+def test_catalog_blocks_new_admission_on_stale_persisted_observation(monkeypatch):
+    session = _Session(
+        [_profile()],
+        latest_observation_at=datetime.now(UTC) - timedelta(minutes=11),
+    )
+    body = TestClient(_app(monkeypatch, session=session)).get(
+        "/api/omnigent/codex-catalog-readiness"
+    ).json()
+    assert "observation_freshness" in body["admissionReadiness"]["blocking"]
+    assert body["admissionReadiness"]["allowHistoricalReads"] is True
+    assert body["admissionReadiness"]["allowCleanup"] is True
+
+
+def test_catalog_blocks_new_admission_when_janitor_activity_is_not_deployed(
+    monkeypatch,
+):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+
+    async def readiness():
+        return catalog.LiveDeploymentReadiness(
+            endpoint_ready=True,
+            backend_ready=True,
+            enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
+            enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
+            workflow_types=frozenset({"MoonMind.AgentSession"}),
+            activity_types=frozenset({"agent_runtime.reconcile_managed_sessions"}),
+            immutable_worker_build=True,
+        )
+
+    monkeypatch.setattr(catalog, "_live_deployment_readiness", readiness)
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+    assert "janitor" in body["admissionReadiness"]["blocking"]
+    assert body["admissionReadiness"]["allowHistoricalReads"] is True
+    assert body["admissionReadiness"]["allowCleanup"] is True
+
+
+def test_catalog_blocks_new_admission_on_stale_build_manifest(monkeypatch):
+    app = _app(monkeypatch, session=_Session([_profile()]))
+    monkeypatch.setattr(
+        catalog.Path,
+        "read_text",
+        lambda *_args, **_kwargs: catalog.json.dumps({
+            "generatedAt": (datetime.now(UTC) - timedelta(days=2)).isoformat(),
+            "sourceCommit": "abc123",
+            "images": {
+                "serverDigest": "sha256:" + "9" * 64,
+                "hostDigest": "sha256:" + "8" * 64,
+            },
+        }),
+    )
+    body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
+    assert "exact_image" in body["admissionReadiness"]["blocking"]
+    assert body["admissionReadiness"]["allowHistoricalReads"] is True
+    assert body["admissionReadiness"]["allowCleanup"] is True
+
+
+def test_healthy_generic_endpoint_does_not_infer_provider_capabilities(monkeypatch):
+    body = TestClient(
+        _app(
+            monkeypatch,
+            session=_Session([_profile()], latest_observation_at=None),
+        )
+    ).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is False
+    assert set(body["admissionReadiness"]["blocking"]) >= {
+        "provider_snapshot",
+        "event_transport",
+        "observation_freshness",
+    }
+    assert body["admissionReadiness"]["allowHistoricalReads"] is True
+    assert body["admissionReadiness"]["allowCleanup"] is True
+
+
+def test_configured_images_do_not_replace_observed_deployment_manifest(monkeypatch):
+    body = TestClient(
+        _app(
+            monkeypatch,
+            session=_Session(
+                [_profile()],
+                bridge_sessions=[
+                    _attested_bridge_session(server_digest="9", host_digest="8")
+                ],
+            ),
+        )
+    ).get("/api/omnigent/codex-catalog-readiness").json()
+
+    assert body["available"] is False
+    assert set(body["admissionReadiness"]["blocking"]) >= {
+        "server_build",
+        "ui_build",
+        "host_build",
+        "exact_image",
+    }
+    assert body["admissionReadiness"]["allowHistoricalReads"] is True
+    assert body["admissionReadiness"]["allowCleanup"] is True
+
+
+def test_stale_authenticated_bootstrap_evidence_fails_closed(monkeypatch):
+    monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN", "canary-secret")
+    client = TestClient(
+        _app(
+            monkeypatch,
+            session=_Session(
+                [_profile()],
+                bridge_sessions=(),
+                latest_observation_at=None,
+            ),
+        )
+    )
+    monkeypatch.delenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", raising=False)
+    monkeypatch.delenv("MOONMIND_SOURCE_COMMIT", raising=False)
+
+    body = client.get(
+        "/api/omnigent/codex-catalog-readiness",
+        headers={
+            "X-MoonMind-Acceptance-Canary": "canary-secret",
+            catalog._BOOTSTRAP_EVIDENCE_HEADER: _bootstrap_header(
+                observed_at=datetime.now(UTC) - timedelta(minutes=6)
+            ),
+        },
+    ).json()
+
+    assert body["available"] is False
+    assert set(body["admissionReadiness"]["blocking"]) >= {
+        "provider_snapshot",
+        "event_transport",
+        "server_build",
+        "host_build",
+        "protected_live_evidence",
+    }
+
+
 @pytest.mark.asyncio
 async def test_live_readiness_requires_worker_route_backend_and_network(monkeypatch):
     responses = iter([
         _HealthResponse(),
         _HealthResponse({
             "ready": True,
+            "buildId": "build-1",
+            "registryFingerprint": "sha256:registry",
+            "immutableReleaseIdentity": True,
             "taskQueues": ["mm.activity.agent_runtime"],
+            "activityTypes": [
+                "agent_runtime.reconcile_managed_sessions",
+                "integration.omnigent.oauth_host_janitor",
+            ],
             "containerBackend": {
                 "ready": True,
                 "enforcedNetworkRefs": [OMNIGENT_EGRESS_NETWORK_REF],
                 "enforcedEgressProfileRefs": [OMNIGENT_EGRESS_PROFILE.ref],
             },
+        }),
+        _HealthResponse({
+            "ready": True,
+            "buildId": "build-1",
+            "registryFingerprint": "sha256:workflow-registry",
+            "immutableReleaseIdentity": True,
+            "taskQueues": ["mm.workflow"],
+            "workflowTypes": ["MoonMind.AgentSession"],
+            "activityTypes": [],
         }),
     ])
 
@@ -676,6 +988,12 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
         backend_ready=True,
         enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
         enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
+        workflow_types=frozenset({"MoonMind.AgentSession"}),
+        activity_types=frozenset({
+            "agent_runtime.reconcile_managed_sessions",
+            "integration.omnigent.oauth_host_janitor",
+        }),
+        immutable_worker_build=True,
     )
 
 

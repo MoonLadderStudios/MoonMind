@@ -1,5 +1,120 @@
 [
   {
+    "id": 3813108025,
+    "disposition": "addressed",
+    "rationale": "Added Protocol stub comment to ReconcileDispatcher.request_reconcile ellipsis (line 107) to clarify it is an intentional interface stub, not a no-effect statement."
+  },
+  {
+    "id": 3813108036,
+    "disposition": "addressed",
+    "rationale": "Added Protocol stub comment to DiagnosticPublisher.publish ellipsis (line 119) for same reason."
+  },
+  {
+    "id": 3813108054,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except in bridge_proxy._metric_increment: telemetry failures are auxiliary and must not affect lifecycle authority."
+  },
+  {
+    "id": 3813108065,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except in bridge_proxy._metric_observe for same telemetry rationale."
+  },
+  {
+    "id": 3813108078,
+    "disposition": "addressed",
+    "rationale": "Added missing comment to second worker readiness except in omnigent_catalog._live_deployment_readiness: readiness is fail-closed, malformed worker metadata must not advertise launch authority."
+  },
+  {
+    "id": 3813108087,
+    "disposition": "addressed",
+    "rationale": "Added comment to empty except in omnigent_catalog protected evidence observe: telemetry failures must not affect lifecycle authority."
+  },
+  {
+    "id": 3813108094,
+    "disposition": "addressed",
+    "rationale": "Added comment to empty except in repositories SessionRepository.mark_terminal latency observe; telemetry failures are ignored."
+  },
+  {
+    "id": 3813108101,
+    "disposition": "addressed",
+    "rationale": "Added comment to empty except in repositories ObservationRepository schema value increment; telemetry failures are ignored."
+  },
+  {
+    "id": 3813108115,
+    "disposition": "addressed",
+    "rationale": "Added comment to stuck_state_reconciliation._increment_metric except: telemetry failures must not affect lifecycle authority."
+  },
+  {
+    "id": 3813108132,
+    "disposition": "addressed",
+    "rationale": "Added comment to stuck_state_reconciliation._observe_metric except: same telemetry rationale."
+  },
+  {
+    "id": 3813135896,
+    "disposition": "addressed",
+    "rationale": "Fixed TemporalOmnigentReconcileDispatcher to route to MoonMind.OmnigentSession workflow via omnigent-session:{session_id} and signal operator_reconcile_requested, instead of hard-coded wf:session:codex_cli which does not exist for external Omnigent sessions. Commit 9708607.. now routes correctly; test updated."
+  },
+  {
+    "id": 3813135902,
+    "disposition": "addressed",
+    "rationale": "Persist observation_frontier_digest on every decision via compute_digest of providerEventCursor/snapshotFrontier/revision in stuck_state_reconciliation._record_observation_and_decision, preventing false REPEATED_RECONCILIATION_NO_PROGRESS."
+  },
+  {
+    "id": 3813135905,
+    "disposition": "addressed",
+    "rationale": "Added rotation offset to list_reconciliation_candidates (offset param) and sweep now rotates by observed_now timestamp % 100, preventing same oldest rows from monopolizing bounded batch."
+  },
+  {
+    "id": 3813135910,
+    "disposition": "addressed",
+    "rationale": "Changed LIVE_CONFORMANCE_EVIDENCE_STALE detection in stuck_state.py to not fire on missing evidence alone when runner is unknown; only stale timestamp or explicit runner_down is actionable, matching durable wiring expectation."
+  },
+  {
+    "id": 3813135915,
+    "disposition": "addressed",
+    "rationale": "Modified omnigent_catalog snapshot_ready/event_transport_ready to treat missing observations as not-yet-observed rather than hard admission blocker, while support gate still surfaces missing protected evidence; provider observations are expected to be persisted at snapshot/event boundary."
+  },
+  {
+    "id": 3813135922,
+    "disposition": "addressed",
+    "rationale": "Fixed omnigent_session_timeline to prefer latest journal decision via latest_for_session instead of stale last_decision_ref, with fallback to pointer only when journal empty."
+  },
+  {
+    "id": 3813135931,
+    "disposition": "addressed",
+    "rationale": "Added SessionRepository.recover_from_quarantine fenced recovery method that restores historical_read_state from quarantined to live under current fencing, providing authorized operator remediation path."
+  },
+  {
+    "id": 3813135936,
+    "disposition": "addressed",
+    "rationale": "Fixed Depends(get_current_user) to Depends(get_current_user()) in all four timeline routes, resolving 403 for authorized operators."
+  },
+  {
+    "id": 3825494788,
+    "disposition": "addressed",
+    "rationale": "Same as 3813108094: added explanatory comment to repositories 963 empty except; duplicate bot finding on same line."
+  },
+  {
+    "id": 4972324465,
+    "disposition": "not-applicable",
+    "rationale": "Informational Codex review summary with no specific requested change; individual findings are tracked as separate review comments."
+  },
+  {
+    "id": 3825780392,
+    "disposition": "addressed",
+    "rationale": "Changed ReconcileDispatcher Protocol stub from single-line ellipsis to pass with comment to satisfy linter while preserving Protocol semantics."
+  },
+  {
+    "id": 3825780407,
+    "disposition": "addressed",
+    "rationale": "Changed DiagnosticPublisher Protocol stub similarly from ellipsis to pass."
+  },
+  {
+    "id": 3825914206,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except in test helper _build_app: get_current_user may fail when auth settings not configured, override is best-effort."
+  },
+  {
     "id": 3825741220,
     "path": ".github/workflows/docker-publish-opencode-host.yml",
     "line": 43,

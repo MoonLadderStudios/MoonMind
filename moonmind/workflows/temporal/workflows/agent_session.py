@@ -22,6 +22,7 @@ with workflow.unsafe.imports_passed_through():
         CodexManagedSessionLocator,
         ManagedSessionPlaneContract,
         CodexManagedSessionRequestTrackingEntry,
+        CodexManagedSessionReconcileRequest,
         CodexManagedSessionSendFollowUpRequest,
         CodexManagedSessionSnapshot,
         CodexManagedSessionState,
@@ -704,6 +705,62 @@ class MoonMindAgentSessionWorkflow:
         payload: CodexManagedSessionSendFollowUpRequest,
     ) -> None:
         self._validate_mutation_allowed()
+
+    @workflow.update(name="ReconcileOmnigentSession")
+    async def reconcile_omnigent_session(
+        self,
+        payload: CodexManagedSessionReconcileRequest,
+    ) -> dict[str, Any]:
+        """Re-observe through the production Activity under durable fencing."""
+
+        async with self._mutation_lock:
+            # The detector's durable command id is the cross-delivery
+            # idempotency authority. Temporal assigns a distinct Update id when
+            # a caller retries as a new request, so using current_update_info()
+            # here would permit the same command to execute twice.
+            request_tracking_id = payload.request_id
+            existing = (
+                self._request_tracking_state.get(request_tracking_id)
+                if request_tracking_id is not None
+                else None
+            )
+            if existing is not None and existing.action == "reconcile_session":
+                if existing.status == "completed":
+                    return {"accepted": True, "alreadyApplied": True}
+            self._validate_request_not_completed(
+                request_id=request_tracking_id,
+                action="reconcile_session",
+            )
+            self._record_request_tracking(
+                request_id=request_tracking_id,
+                action="reconcile_session",
+                status="accepted",
+            )
+            try:
+                result = await self._execute_routed_activity(
+                    "agent_runtime.reconcile_managed_sessions",
+                    {
+                        "omnigentReconcileRequest": payload.model_dump(by_alias=True),
+                        "omnigentWorkflowId": workflow.info().workflow_id.removesuffix(
+                            ":session:codex_cli"
+                        ),
+                    },
+                )
+            except Exception:
+                self._record_request_tracking(
+                    request_id=request_tracking_id,
+                    action="reconcile_session",
+                    status="failed",
+                )
+                raise
+            self._record_request_tracking(
+                request_id=request_tracking_id,
+                action="reconcile_session",
+                status="completed",
+            )
+            self._last_control_reason = payload.reason_code
+            self._update_operator_visibility("reconciled from durable observation")
+            return dict(result) if isinstance(result, Mapping) else {"accepted": True}
 
     @workflow.update(name="InterruptTurn")
     async def interrupt_turn_update(

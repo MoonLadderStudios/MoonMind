@@ -41,6 +41,14 @@ from .stuck_state import (
     detect_stuck_state,
     plan_response,
 )
+from .stuck_state_reconciliation import (
+    DiagnosticPublisher,
+    ReconcileDispatcher,
+    StuckStateInspection,
+    StuckStateReconciliationService,
+    StuckStateSweepResult,
+    inspect_stuck_state,
+)
 from .timeline import (
     SessionTimeline,
     TimelineStatus,
@@ -189,6 +197,12 @@ __all__ = [
     "StuckStateReason",
     "detect_stuck_state",
     "plan_response",
+    "DiagnosticPublisher",
+    "ReconcileDispatcher",
+    "StuckStateInspection",
+    "StuckStateReconciliationService",
+    "StuckStateSweepResult",
+    "inspect_stuck_state",
     # new-admission readiness
     "AdmissionReadiness",
     "CapabilityReadiness",

@@ -150,6 +150,14 @@ BROWSER_RECORD_ORDER = (
     "sideEffectAudit",
 )
 BROWSER_RECORD_TYPES = set(BROWSER_RECORD_ORDER)
+CATALOG_BOOTSTRAP_EVIDENCE_VERSION = (
+    "moonmind.omnigent.catalog-bootstrap-evidence/v1"
+)
+CATALOG_BOOTSTRAP_EVIDENCE_ENV = (
+    "MOONMIND_OMNIGENT_CATALOG_BOOTSTRAP_EVIDENCE"
+)
+_IMMUTABLE_IMAGE_REF = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
+_SAFE_BUILD_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,254}$")
 REMEDIATION_RECORD_TYPES = REQUIRED_REMEDIATION_SOURCE_RECORD_TYPES
 PROHIBITED_RETAINED_AUTHORITY = re.compile(
     r'(?i)"(?:rawHostShell|dockerSocket|sqlConnection|storageKey|credentialValue|'
@@ -290,6 +298,79 @@ SCENARIO_EVIDENCE_ENV = {
     "failures": "MOONMIND_OMNIGENT_FAILURE_EVIDENCE",
     "workflow_chat": "MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE",
 }
+
+
+def _validated_catalog_bootstrap_evidence(
+    value: object,
+    *,
+    now: datetime | None = None,
+) -> dict[str, object]:
+    """Validate the live adapter's bounded first-admission observations."""
+
+    if not isinstance(value, dict):
+        raise ConformanceContractError(
+            "browser setup lacks catalog bootstrap observations"
+        )
+    required = {
+        "schemaVersion",
+        "observedAt",
+        "providerSnapshotObserved",
+        "eventTransportObserved",
+        "serverImageRefObserved",
+        "hostImageRefObserved",
+        "uiBuildRefObserved",
+    }
+    if set(value) != required:
+        raise ConformanceContractError(
+            "browser setup catalog bootstrap observations have an invalid shape"
+        )
+    if (
+        value.get("schemaVersion") != CATALOG_BOOTSTRAP_EVIDENCE_VERSION
+        or value.get("providerSnapshotObserved") is not True
+        or value.get("eventTransportObserved") is not True
+    ):
+        raise ConformanceContractError(
+            "browser setup did not directly observe required provider capabilities"
+        )
+    server_ref = str(value.get("serverImageRefObserved") or "").strip()
+    host_ref = str(value.get("hostImageRefObserved") or "").strip()
+    ui_ref = str(value.get("uiBuildRefObserved") or "").strip()
+    if (
+        not _IMMUTABLE_IMAGE_REF.fullmatch(server_ref)
+        or not _IMMUTABLE_IMAGE_REF.fullmatch(host_ref)
+        or server_ref.endswith("@sha256:" + "0" * 64)
+        or host_ref.endswith("@sha256:" + "0" * 64)
+        or not _SAFE_BUILD_REF.fullmatch(ui_ref)
+    ):
+        raise ConformanceContractError(
+            "browser setup lacks immutable observed deployment builds"
+        )
+    try:
+        observed_at = datetime.fromisoformat(
+            str(value.get("observedAt") or "").replace("Z", "+00:00")
+        )
+    except ValueError as exc:
+        raise ConformanceContractError(
+            "browser setup catalog bootstrap timestamp is invalid"
+        ) from exc
+    if observed_at.tzinfo is None:
+        raise ConformanceContractError(
+            "browser setup catalog bootstrap timestamp lacks a timezone"
+        )
+    age = (now or datetime.now(timezone.utc)) - observed_at.astimezone(timezone.utc)
+    if age < timedelta(0) or age > timedelta(minutes=5):
+        raise ConformanceContractError(
+            "browser setup catalog bootstrap observations are not fresh"
+        )
+    return {
+        "schemaVersion": CATALOG_BOOTSTRAP_EVIDENCE_VERSION,
+        "observedAt": observed_at.astimezone(timezone.utc).isoformat(),
+        "providerSnapshotObserved": True,
+        "eventTransportObserved": True,
+        "serverImageRefObserved": server_ref,
+        "hostImageRefObserved": host_ref,
+        "uiBuildRefObserved": ui_ref,
+    }
 
 
 def _validate_remediation_browser_lineage(
@@ -911,6 +992,16 @@ class LiveRunner:
         evidence_refs: list[str] = []
         for row in BROWSER_ROWS:
             setup = self.action("browser-setup", row)
+            bootstrap_evidence = _validated_catalog_bootstrap_evidence(
+                setup.get("catalogBootstrapEvidence")
+            )
+            # Only the protected canary receives this bounded live-observation
+            # manifest. The catalog authenticates the separate canary bearer
+            # before it parses or trusts these values.
+            self.env[CATALOG_BOOTSTRAP_EVIDENCE_ENV] = json.dumps(
+                bootstrap_evidence,
+                separators=(",", ":"),
+            )
             observation = self.browser_observation(row)
             result = self.action("browser", row, browserObservation=observation)
             if result.get("row") != row:

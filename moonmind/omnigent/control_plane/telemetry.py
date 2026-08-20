@@ -10,10 +10,11 @@ and the fixed :data:`CONFLICT_METRICS` names): no workflow, run, session, turn,
 host, lease, profile, user, or credential identity is ever used as a label, so a
 high-cardinality identity can never enter the metric label space.
 
-The registry is process-local and additive; a host exporter reads
-:func:`snapshot` and maps the bounded names/labels onto its metric backend. The
-module also emits a structured, secret-free log line per event so operators can
-correlate a conflict without a metrics pipeline.
+The registry keeps a process-local aggregate for diagnostics and emits the same
+bounded counters through the process OpenTelemetry meter. The module also emits
+a structured, secret-free log line per event so operators can correlate a
+conflict without a metrics pipeline. Telemetry failures never change the
+authoritative persistence result.
 """
 
 from __future__ import annotations
@@ -56,7 +57,33 @@ CONFLICT_METRICS: frozenset[str] = frozenset(
 )
 
 _lock = threading.Lock()
+_otel_lock = threading.Lock()
 _counts: Counter[tuple[str, str]] = Counter()
+_otel_counters: dict[str, object] = {}
+
+
+def _otel_counter(name: str) -> object:
+    with _otel_lock:
+        existing = _otel_counters.get(name)
+        if existing is not None:
+            return existing
+        from opentelemetry import metrics as otel_metrics
+
+        instrument = otel_metrics.get_meter(
+            "moonmind.omnigent.control_plane"
+        ).create_counter(f"omnigent_control_plane_{name}")
+        _otel_counters[name] = instrument
+        return instrument
+
+
+def _emit_otel(name: str, scope: str) -> None:
+    try:
+        _otel_counter(name).add(1, attributes={"fencing_scope": scope})  # type: ignore[attr-defined]
+    except Exception:
+        logger.warning(
+            "Omnigent concurrency OpenTelemetry metric recording failed",
+            exc_info=True,
+        )
 
 
 def _record(name: str, *, scope: Optional[FencingScope] = None) -> None:
@@ -65,6 +92,7 @@ def _record(name: str, *, scope: Optional[FencingScope] = None) -> None:
     label = scope.value if scope is not None else "session"
     with _lock:
         _counts[(name, label)] += 1
+    _emit_otel(name, label)
     logger.info(
         "omnigent.control_plane.concurrency",
         extra={"metric": name, "fencing_scope": label},
