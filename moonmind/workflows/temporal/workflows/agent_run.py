@@ -521,6 +521,15 @@ async def external_adapter_execution_style(agent_id: str) -> str:
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
     @staticmethod
+    def _workflow_patch_enabled(patch_id: str) -> bool:
+        try:
+            return bool(workflow.patched(patch_id))
+        except Exception as exc:
+            if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                return False
+            raise
+
+    @staticmethod
     def _workflow_child_task_queue() -> str:
         if workflow.patched(AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
             return settings.temporal.user_workflow_v2_task_queue
@@ -702,7 +711,9 @@ class MoonMindAgentRun:
         kwargs = self._execute_kwargs_for_route(route)
         if (
             activity_name == "agent_runtime.evaluate_terminal_evidence"
-            and not workflow.patched(TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID)
+            and not self._workflow_patch_enabled(
+                TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID
+            )
         ):
             # Preserve the exact command emitted by histories created before
             # terminal evaluation moved to its starvation-resistant control
