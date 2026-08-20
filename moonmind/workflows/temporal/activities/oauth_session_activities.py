@@ -13,9 +13,12 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
 
 from __future__ import annotations
 
-import logging
 import asyncio
+import hashlib
+import logging
+import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -29,6 +32,12 @@ from api_service.db.models import (
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
 from moonmind.provider_profiles.oauth_policy import (
     effective_oauth_capacity_for_finalization,
+)
+from moonmind.schemas.workspace_locator_models import SandboxWorkspaceLocator
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    SandboxWorkspaceRecord,
+    SandboxWorkspaceRecordStore,
+    resolve_sandbox_workspace_locator,
 )
 from moonmind.workflows.temporal.runtime.providers.registry import (
     get_provider_bootstrap_command,
@@ -148,6 +157,33 @@ async def oauth_session_revalidate_bound_host(
             expected_status="allocating",
             new_status="starting",
         )
+    current_workflow_id = f"oauth-session:{session_id}"
+    current_step_execution_id = f"oauth-revalidate:{session_id}"
+    workspace_id = hashlib.sha256(
+        f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    workspace_locator = SandboxWorkspaceLocator(workspaceId=workspace_id)
+    workspace_root = Path(
+        os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
+    ).resolve()
+    workspace_record = SandboxWorkspaceRecord(
+        workspace_id=workspace_id,
+        workflow_id=current_workflow_id,
+        step_execution_id=current_step_execution_id,
+        relative_path=workspace_locator.relative_path,
+    )
+    workspace_record_store = SandboxWorkspaceRecordStore(workspace_root)
+    workspace_record_store.ensure(workspace_record)
+    workspace_path = resolve_sandbox_workspace_locator(
+        workspace_locator,
+        workspace_root=workspace_root,
+        expected_workspace_id=workspace_id,
+        owner_record=workspace_record,
+        expected_workflow_id=current_workflow_id,
+        expected_step_execution_id=current_step_execution_id,
+        must_exist=False,
+    )
+    workspace_path.mkdir(mode=0o700, parents=True, exist_ok=True)
     try:
         async with httpx.AsyncClient() as http_client:
             client = OmnigentHttpClient(
@@ -159,11 +195,17 @@ async def oauth_session_revalidate_bound_host(
             runtime = OmnigentOAuthHostRuntime(
                 client=client,
                 lore_repository_adapter=build_lore_repository_adapter_from_environment(),
+                workspace_root=workspace_root,
             )
             preflight = await runtime.prepare_host(
                 binding=binding,
                 host_lease=lease,
-                workspace_key=f"oauth-revalidate:{session_id}",
+                workspace_key=current_step_execution_id,
+                workspace_locator=workspace_locator.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                current_workflow_id=current_workflow_id,
+                current_step_execution_id=current_step_execution_id,
             )
             if lease.status == "starting":
                 lease = await repository.transition_host_lease(

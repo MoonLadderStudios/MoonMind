@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -196,6 +197,145 @@ class TestOAuthSessionWorkflowRegistration:
         assert route.activity_type == "oauth_session.cleanup_stale"
         assert route.fleet == "artifacts"
         assert route.timeouts.start_to_close_seconds == 60
+
+
+@pytest.mark.asyncio
+async def test_revalidate_bound_host_supplies_workspace_authority_to_runtime(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "oas-revalidate-bound-host"
+    current_workflow_id = f"oauth-session:{session_id}"
+    current_step_execution_id = f"oauth-revalidate:{session_id}"
+    workspace_id = hashlib.sha256(
+        f"{current_workflow_id}:{current_step_execution_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    binding = SimpleNamespace(host_launch_profile_ref="codex-on-demand@1")
+    lease = SimpleNamespace(
+        lease_id="ohl-revalidate",
+        status="allocating",
+        credential_generation=7,
+        omnigent_host_id=None,
+    )
+    observed: dict[str, object] = {}
+
+    class Repository:
+        def __init__(self, _session_factory) -> None:
+            pass
+
+        async def refresh_binding_generation(self, profile_id: str):
+            assert profile_id == "codex_openai_oauth"
+            return binding
+
+        async def create_or_get_host_lease(self, **kwargs):
+            observed["lease_request"] = kwargs
+            return lease
+
+        async def transition_host_lease(
+            self, _lease_id, *, expected_status, new_status, fields=None
+        ):
+            assert lease.status == expected_status
+            lease.status = new_status
+            for key, value in dict(fields or {}).items():
+                setattr(lease, key, value)
+            return lease
+
+        async def mark_host_lease_stopped(self, lease_id: str) -> None:
+            assert lease_id == lease.lease_id
+            lease.status = "stopped"
+
+    class Runtime:
+        def __init__(self, *, workspace_root, **_kwargs) -> None:
+            observed["workspace_root"] = workspace_root
+
+        async def prepare_host(
+            self,
+            *,
+            binding,
+            host_lease,
+            workspace_key,
+            workspace_locator,
+            current_workflow_id,
+            current_step_execution_id,
+            **_kwargs,
+        ):
+            observed["prepare_host"] = {
+                "binding": binding,
+                "host_lease": host_lease,
+                "workspace_key": workspace_key,
+                "workspace_locator": workspace_locator,
+                "current_workflow_id": current_workflow_id,
+                "current_step_execution_id": current_step_execution_id,
+            }
+            workspace = (
+                tmp_path
+                / "temporal_sandbox"
+                / workspace_locator["workspaceId"]
+                / workspace_locator["relativePath"]
+            )
+            assert workspace.is_dir()
+            return {"hostId": "host-revalidated"}
+
+        async def stop_host(self, **kwargs) -> None:
+            observed["stop_host"] = kwargs
+
+    class Client:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_hosts.OmnigentOAuthHostRepository", Repository
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.oauth_host_runtime.OmnigentOAuthHostRuntime", Runtime
+    )
+    monkeypatch.setattr(
+        "moonmind.workflows.adapters.omnigent_client.OmnigentHttpClient", Client
+    )
+    monkeypatch.setattr(
+        "moonmind.repositories.lore_runtime.build_lore_repository_adapter_from_environment",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_server_url", lambda: "http://omnigent"
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_api_token", lambda: "test-token"
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.settings.resolved_proxy_forward_headers", lambda: ()
+    )
+
+    result = await oauth_session_activities.oauth_session_revalidate_bound_host(
+        {
+            "session_id": session_id,
+            "profile_id": "codex_openai_oauth",
+            "provider_lease_id": "provider-lease-revalidate",
+        }
+    )
+
+    assert result == {
+        "profile_id": "codex_openai_oauth",
+        "status": "ready",
+        "credential_generation": 7,
+        "host_id": "host-revalidated",
+    }
+    assert observed["prepare_host"] == {
+        "binding": binding,
+        "host_lease": lease,
+        "workspace_key": current_step_execution_id,
+        "workspace_locator": {
+            "kind": "sandbox",
+            "workspaceId": workspace_id,
+            "relativePath": "repo",
+        },
+        "current_workflow_id": current_workflow_id,
+        "current_step_execution_id": current_step_execution_id,
+    }
+    assert lease.status == "stopped"
+    assert (tmp_path / "temporal_sandbox" / ".workspace_records").is_dir()
+
 
 @pytest.mark.asyncio
 async def test_register_profile_activity_persists_oauth_home_codex_profile(
