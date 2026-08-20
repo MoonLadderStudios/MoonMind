@@ -3010,14 +3010,15 @@ async def main_async() -> None:
     runtime = None
     if os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0") == "1":
         try:
-            from opentelemetry.sdk.resources import Resource
-            from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry import trace
             from temporalio.contrib.opentelemetry import TracingInterceptor
+            from moonmind.observability.telemetry import (
+                TelemetrySettings,
+                initialize_telemetry,
+            )
 
-            if not isinstance(trace.get_tracer_provider(), TracerProvider):
-                resource = Resource.create({"service.name": topology.service_name})
-                trace.set_tracer_provider(TracerProvider(resource=resource))
+            initialize_telemetry(
+                TelemetrySettings.from_env(service_name=topology.service_name)
+            )
             interceptors.append(TracingInterceptor())
 
             # Setup Prometheus metrics for worker health and queue polling behavior.

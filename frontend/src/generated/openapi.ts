@@ -3859,6 +3859,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/sessions/{session_id}/trace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Session Trace Link */
+        get: operations["get_session_trace_link_api_omnigent_sessions__session_id__trace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/sessions/{session_id}/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Session Log Link */
+        get: operations["get_session_log_link_api_omnigent_sessions__session_id__logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/sessions/{session_id}/stuck-state": {
         parameters: {
             query?: never;
@@ -3872,8 +3906,8 @@ export interface paths {
          *
          *     Uses server time (``now``) via the control-plane clock; the response is a
          *     fenced reconcile recommendation or a quarantine escalation. This endpoint
-         *     never mutates state — it surfaces the recommendation for the reconciliation
-         *     workflow and operators to act on.
+         *     never mutates state; the durable scheduled reconciler separately records and
+         *     executes the same pure response plan.
          */
         get: operations["get_session_stuck_state_api_omnigent_sessions__session_id__stuck_state_get"];
         put?: never;
@@ -9924,6 +9958,10 @@ export interface components {
             };
             /** Remediationrelease */
             remediationRelease: {
+                [key: string]: unknown;
+            };
+            /** Admissionreadiness */
+            admissionReadiness: {
                 [key: string]: unknown;
             };
         };
@@ -22993,6 +23031,68 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_trace_link_api_omnigent_sessions__session_id__trace_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_log_link_api_omnigent_sessions__session_id__logs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
