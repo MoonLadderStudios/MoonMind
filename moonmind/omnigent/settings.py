@@ -98,20 +98,19 @@ def resolved_default_agent_name(*, env: Mapping[str, Any] | None = None) -> str:
 def resolved_native_ui_version(*, env: Mapping[str, Any] | None = None) -> str:
     """Return the asserted native Omnigent UI/server version for the deployment.
 
-    MoonLadderStudios/MoonMind#3638: serving the native UI is gated on a
-    known-compatible version. Operators pin the running upstream native UI/server
-    build with ``OMNIGENT_NATIVE_UI_VERSION``; when unset it defaults to the
-    single upstream source pin MoonMind is verified against
-    (``PINNED_OMNIGENT_COMMIT``) so the canonical Compose deployment serves the
-    native chat UI without extra configuration. Upgrading the image is a
-    deliberate step: an operator sets a new version that must pass conformance
-    before it is treated as supported.
+    MoonLadderStudios/MoonMind#3638, MoonLadderStudios/MoonMind#3685: serving the
+    native UI is gated on a known-compatible version. Operators must explicitly
+    pin the running upstream native UI/server build with
+    ``OMNIGENT_NATIVE_UI_VERSION``; when unset the gate reports unknown and
+    fails closed. Previously this defaulted to ``PINNED_OMNIGENT_COMMIT`` which
+    allowed a mutable ``latest`` image to be reported as verified. The canonical
+    Compose deployment must now explicitly set a verified version; blank is
+    treated as unknown and the readiness gate will report native UI unavailable
+    until a verified build is pinned.
     """
 
-    from moonmind.omnigent.host_auth_adapter import PINNED_OMNIGENT_COMMIT
-
     source = env if env is not None else os.environ
-    return _clean(source.get("OMNIGENT_NATIVE_UI_VERSION")) or PINNED_OMNIGENT_COMMIT
+    return _clean(source.get("OMNIGENT_NATIVE_UI_VERSION"))
 
 
 def resolved_native_ui_serving_enabled(

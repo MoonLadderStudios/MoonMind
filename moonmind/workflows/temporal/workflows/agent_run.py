@@ -203,7 +203,13 @@ def _setdefault_compact_ref_metadata(
 
 
 # Default workflow-level execution timeouts
-DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600      # 1 hour
+# Increased from 3600 to 7200 for large implementations like
+# MoonLadderStudios/MoonMind#3685 which require extensive cross-system
+# changes (SPA bootstrap, canonical bindings, compatibility gate). The previous
+# 1-hour budget caused managed runs to exceed their execution budget with no
+# observable progress when the implementation step required >60m of reasoning
+# and file edits (see workflow mm:fe3bbb50-4ab2-4626-9b80-23dd6b5a5d80).
+DEFAULT_MANAGED_TIMEOUT_SECONDS = 7200      # 2 hours
 DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600    # 6 hours
 _CALLBACK_KEY_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
 
