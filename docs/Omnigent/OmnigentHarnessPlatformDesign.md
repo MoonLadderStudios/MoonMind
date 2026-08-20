@@ -3,8 +3,8 @@
 **Status:** Proposed  
 **Document Class:** System / Feature Design View  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-08-19  
-**Authority:** Desired-state architecture for making Omnigent the primary harness wrapper provider for MoonMind while preserving the existing Codex product path until a generic realization proves equivalent support.
+**Last updated:** 2026-08-20  
+**Authority:** Desired-state architecture for making Omnigent the primary harness-wrapper provider for MoonMind while preserving the existing Codex product path until a generic realization proves equivalent support.
 
 ## Related documents
 
@@ -19,7 +19,10 @@
 - [`docs/Omnigent/ControlPlaneAggregates.md`](./ControlPlaneAggregates.md)
 - [`docs/Omnigent/ControlPlaneConcurrencyAndFencing.md`](./ControlPlaneConcurrencyAndFencing.md)
 - [`docs/Omnigent/ConformanceAndLiveSmoke.md`](./ConformanceAndLiveSmoke.md)
+- [`docs/Omnigent/OmnigentHostMountedTools.md`](./OmnigentHostMountedTools.md)
 - [`docs/Security/ProviderProfiles.md`](../Security/ProviderProfiles.md)
+- [`docs/Security/SecretsSystem.md`](../Security/SecretsSystem.md)
+- [`docs/Steps/SkillSystem.md`](../Steps/SkillSystem.md)
 - [`docs/Temporal/ManagedAndExternalAgentExecutionModel.md`](../Temporal/ManagedAndExternalAgentExecutionModel.md)
 - [`docs/Workflows/WorkspaceLocators.md`](../Workflows/WorkspaceLocators.md)
 - [`docs/Workflows/CheckpointBranchSystem.md`](../Workflows/CheckpointBranchSystem.md)
@@ -27,19 +30,19 @@
 
 ## Advance organizer
 
-**One sentence:** MoonMind treats Omnigent as one stable external execution provider whose dynamically discovered harnesses are admitted through capability, credential, host, policy, and conformance contracts rather than through one MoonMind runtime implementation per harness.
+**One sentence:** MoonMind treats Omnigent as one stable external execution provider whose dynamically discovered harnesses are admitted through immutable agent, capability, credential, host, policy, Skill, and conformance contracts rather than through one MoonMind runtime implementation per harness.
 
-**One paragraph:** A workflow selects a versioned Omnigent Agent Profile. MoonMind resolves the profile against a pinned Omnigent harness catalog, compatible Provider Profiles, approved credential materializers, an immutable Host Class, and a launch policy. It compiles these choices into one secret-free execution plan before acquiring credentials or mutating a host. The current Codex profile-bound lane remains a fully valid realization of this plan and continues to serve Codex without behavioral change while the generic planner, catalog, and materializer system mature. New harnesses use the generic contracts without requiring new branches throughout the workflow coordinator.
+**One paragraph:** A workflow selects a versioned Omnigent Agent Profile. MoonMind resolves the exact agent source, pinned Omnigent harness build, resolved Skill snapshot, versioned credential-binding set, compatible Provider Profiles, approved credential materializers, immutable Host Class, launch policy, model configuration, and execution realizer. It compiles the pre-host decisions into one secret-free execution-plan payload before acquiring provider leases or mutating a host. After lease acquisition and host realization, a separate fenced runtime binding records the acquired credential generations, exact-host harness attestation, live model validation, workspace resolution, session identity, and cleanup authority. The current Codex profile-bound lane remains a valid explicit realizer and continues to serve Codex without reduced behavior while the generic realizer matures.
 
-**Full description:** MoonMind owns durable workflow orchestration, authority, credentials, workspace preparation, publication, evidence, recovery, and cleanup. Omnigent owns provider sessions, runners, harness execution, and the live harness protocol. The platform discovers what Omnigent understands, observes what a particular host can execute, and then intersects those facts with MoonMind policy. Discovery never grants trust. A harness becomes launchable only when its exact version is trusted, its required credential strategy is approved, a compatible host is ready, the selected model is valid, and the requested workflow capabilities can be enforced. Support is proven per combination rather than inferred from code presence.
+**Full description:** MoonMind owns durable workflow orchestration, authority, credentials, workspace preparation, Skills, publication, evidence, recovery, and cleanup. Omnigent owns provider sessions, runners, harness execution, and the live harness protocol. The platform discovers what an Omnigent endpoint understands, admits a Host Class using immutable class-level evidence, and later verifies what the exact selected host actually contains. Discovery never grants trust. Class-level admission never substitutes for exact-host proof. A harness combination becomes launchable only when its exact implementation is trusted, its agent source is immutable, every required credential slot is safely materializable, its model configuration is valid, its resolved Skills are pinned, an exact host proves the selected harness build and required capabilities, and MoonMind can enforce the requested policy. Support is proven for the exact model and execution realizer, not inferred from code presence or a harness name.
 
 ## 1. Purpose
 
 MoonMind is moving toward Omnigent as the primary wrapper around coding-agent harnesses. The target is not a collection of separate MoonMind runtimes named after every agent. The target is one Omnigent execution platform that can run any trusted and realizable harness reported by the selected Omnigent endpoint.
 
-This design generalizes the existing Codex-through-Omnigent system. It does not discard that work. The current Codex lane supplies the reference implementation for profile selection, credential leasing, host leasing, workspace materialization, bridge authorization, session execution, publication, checkpoint evidence, cleanup, and support qualification.
+This design generalizes the existing Codex-through-Omnigent system. It does not discard that work. The current Codex lane supplies the reference implementation for Agent Profile selection, Provider Profile leasing, OAuth-generation fencing, host leasing, workspace materialization, resolved Skill delivery, bridge authorization, session execution, publication, checkpoint evidence, cleanup, and support qualification.
 
-The design owns the general target architecture. The existing Codex documents continue to own the current Codex specialization until a later evidence-backed cutover explicitly moves that specialization onto the generic realizer. A conflict must be resolved without weakening the current Codex contract.
+The design owns the generic target architecture. The existing Codex documents continue to own the current Codex specialization until a later evidence-backed cutover explicitly moves that specialization onto the generic realizer. A conflict is resolved without weakening the current Codex contract.
 
 ## 2. Goals
 
@@ -47,14 +50,16 @@ The platform has the following goals:
 
 1. **One top-level Omnigent identity.** Every harness executes through `agentKind=external`, `agentId=omnigent`.
 2. **Catalog-driven harness support.** MoonMind discovers harness identities and declared capabilities from Omnigent instead of keeping a hand-maintained runtime list.
-3. **No coordinator branch per harness.** Adding an approved harness is primarily a catalog, materializer, Host Class, policy, and conformance operation.
-4. **Preserve the Codex path.** Existing Codex identities, Provider Profiles, OAuth volumes, host services, lifecycle evidence, support gates, and rollback behavior remain usable while the generic system develops.
-5. **Capability-derived planning.** The planner selects only combinations that satisfy workflow, harness, host, credential, bridge, and policy requirements.
-6. **Provider-account capacity across harnesses.** A provider account, quota, cooldown, or mutable credential home remains one shared authority even when several harnesses can use it.
-7. **Safe extension.** Built-in and community harnesses can be discovered without granting an untrusted plugin secrets, host authority, or production support.
-8. **Local-first operation.** Docker Compose remains the normal local deployment. On-demand hosts add no permanent container footprint.
-9. **Objective support claims.** A harness combination is supported only when the required conformance evidence exists.
-10. **Durable recovery.** Retry, continuation, branch, remediation, cancellation, and janitor behavior use the same fenced authority model for every harness.
+3. **Exact implementation identity.** Trust, launch, and support bind the harness package, plugin, Omnigent build, vendor runtime, and content digests rather than a canonical harness name alone.
+4. **No coordinator branch per harness.** Adding an approved harness is primarily a catalog, materializer, Host Class, policy, Agent Profile, and conformance operation.
+5. **Preserve the Codex path.** Existing Codex identities, Provider Profiles, OAuth volumes, host services, lifecycle evidence, support gates, and rollback behavior remain usable while the generic system develops.
+6. **Two-stage capability proof.** Pre-host admission uses catalog and Host Class evidence. Exact-host capabilities are validated after host realization and before runner or session creation.
+7. **Provider-account capacity across harnesses.** A provider account, quota, cooldown, or mutable credential home remains one shared authority even when several harnesses can use it.
+8. **Immutable Skills.** Agent Profile Skill intent resolves to one per-run Skill snapshot and delivery descriptor before plan commitment.
+9. **Safe extension.** Built-in and community harnesses can be discovered without granting an untrusted plugin secrets, host authority, or production support.
+10. **Local-first operation.** Docker Compose remains the normal local deployment. On-demand hosts add no permanent container footprint.
+11. **Objective support claims.** A combination is supported only when evidence proves its exact model configuration and execution realizer.
+12. **Durable recovery.** Retry, continuation, branch, remediation, cancellation, credential rotation, and janitor behavior use the same fenced authority model for every harness.
 
 ## 3. Non-goals
 
@@ -64,11 +69,13 @@ This design does not:
 - recreate provider agents inside MoonMind.
 - claim that every discovered harness is immediately production-supported.
 - install arbitrary harness software during an ordinary production workflow launch.
-- permit a workflow to supply raw Docker options, host paths, volume names, host ids, or credentials.
+- permit a workflow to supply raw Docker options, host paths, volume names, host ids, credential generations, or credentials.
 - remove the direct Codex fallback or the current Codex-through-Omnigent lane before their existing retirement contracts permit it.
 - require one universal host image containing every possible harness.
+- treat a Host Class declaration as proof that an exact host is ready.
 - treat an upstream capability declaration as proof that MoonMind can safely enforce the capability.
 - replace the Omnigent control-plane aggregate and fencing designs with a second session authority.
+- put mutable Skill source content or Skill bodies in the execution plan.
 - make display names, aliases, or provider marketing names durable identity.
 
 ## 4. Governing decisions
@@ -82,7 +89,7 @@ agentKind = external
 agentId   = omnigent
 ```
 
-Harness, agent, endpoint, model, Provider Profile, Host Class, policy, and session selections are nested authority. MoonMind does not add top-level identities such as `omnigent_opencode`, `omnigent_qwen`, or `omnigent_claude`.
+Harness, agent source, endpoint, model, Provider Profile, Host Class, policy, realizer, host, and session selections are nested authority. MoonMind does not add top-level identities such as `omnigent_opencode`, `omnigent_qwen`, or `omnigent_claude`.
 
 ### 4.2 MoonMind owns authority
 
@@ -90,6 +97,8 @@ MoonMind owns:
 
 - workflow and Step ordering.
 - immutable Agent Profile selection.
+- immutable agent-source and bundle identity.
+- resolved Skill selection and delivery.
 - Provider Profile selection and account capacity.
 - credential-materialization approval.
 - host and network policy.
@@ -102,13 +111,13 @@ MoonMind owns:
 Omnigent owns:
 
 - harness registration and metadata.
-- agent bundles and stable upstream agent identity.
+- agent imports and stable upstream agent identity.
 - host and runner protocol.
 - live provider session behavior.
 - harness-specific message, tool, elicitation, and terminal behavior.
 - harness-native resume and fork mechanisms.
 
-No Omnigent catalog row, agent bundle, host claim, or plugin declaration can broaden MoonMind authority.
+No Omnigent catalog row, agent bundle, host claim, setup operation, or plugin declaration can broaden MoonMind authority.
 
 ### 4.3 Discovery is not trust
 
@@ -119,67 +128,95 @@ discovered
   != trusted
   != installed
   != authenticated
+  != class-admissible
+  != exact-host-attested
   != launchable
   != supported
 ```
 
-A discovered harness may be visible in Settings while remaining non-launchable. A trusted harness may still lack a compatible host. An installed harness may still lack credentials. A launchable combination may remain experimental until conformance evidence proves support.
+A discovered harness may be visible in Settings while remaining non-launchable. A trusted harness may still lack a compatible Host Class. A class-admissible on-demand combination may still fail exact-host attestation after the container starts. A launchable combination may remain experimental until conformance evidence proves support.
 
 ### 4.4 Current Codex is a conforming specialization
 
-The existing Codex profile-bound implementation is the first registered execution realizer. The generic platform must be able to compile a Codex execution plan that delegates to the existing implementation without changing its observable contract.
+The existing Codex profile-bound implementation is the first registered execution realizer. The generic platform can compile a Codex execution plan that delegates to the existing implementation without changing its observable contract.
 
 The existing path is not an emergency fallback selected after a generic failure. It is an explicit, versioned realization selected before launch. A failed explicit generic selection never silently switches to Codex.
 
-### 4.5 Plans are immutable and secret-free
+### 4.5 Plans and runtime bindings are separate authority
 
-Every launch is compiled into a digest-addressed `OmnigentExecutionPlan` before Provider Profile lease acquisition, secret resolution, workspace mutation, or host creation.
+A launch has two immutable authority objects:
 
-The plan contains references and compatibility decisions. It never contains secret bodies, OAuth files, resolved host filesystem paths, Docker socket authority, or caller-authored host ids.
+1. `OmnigentExecutionPlanPayload` records decisions that can be made before provider leases and an exact host exist.
+2. `OmnigentRuntimeBinding` records the resources and generations actually acquired or attested after plan commitment.
 
-### 4.6 Live readiness is authoritative
+The plan never pretends to know an exact host or a leased credential generation before those exist. The runtime binding cannot change plan decisions such as harness, agent source, Provider Profile, materializer, Host Class, policy, model configuration, Skills, or realizer.
 
-Catalog and Host Class manifests provide planning evidence. The exact selected host must still report the selected harness as ready before runner or session creation.
+### 4.6 Plan digests are not self-referential
 
-### 4.7 Support is combination-specific
+The canonical plan payload does not contain its own digest. MoonMind canonicalizes and hashes `OmnigentExecutionPlanPayload`, then stores it in an envelope:
 
-Support applies to a combination of:
-
-```text
-Omnigent version
-+ harness version
-+ agent version or bundle digest
-+ credential materializer
-+ Provider Profile class
-+ Host Class and architecture
-+ launch policy
-+ capability requirements
+```yaml
+schemaVersion: moonmind.omnigent-execution-plan-envelope.v1
+planRef: omnigent-execution-plan:sha256:...
+payload: <canonical OmnigentExecutionPlanPayload>
 ```
 
-Support for one combination does not imply support for another.
+`planRef` is computed only from canonical `payload` bytes. It is never part of those bytes. Recomputing the digest from the payload must reproduce the envelope ref exactly.
+
+### 4.7 Capability proof is two-stage
+
+Before lease acquisition, the planner computes a class-level admission decision from workflow requirements, Agent Profile requirements, the pinned harness catalog, approved materializers, Host Class declarations, bridge capabilities, launch policy, and support policy.
+
+After host realization, a fenced verifier computes an exact-host capability attestation from the live host and compares it with the plan. Runner and session creation are forbidden until this second decision passes.
+
+### 4.8 Support is combination-specific
+
+Support applies to the digest of an exact support combination:
+
+```text
+Omnigent server and host build
++ harness implementation package/version/digest
++ vendor runtime or CLI version/digest when applicable
++ agent source identity and bundle digest when applicable
++ credential materializer versions
++ Provider Profile compatibility class
++ Host Class, host image, and architecture
++ launch policy version
++ exact normalized model configuration digest
++ execution realizer version
++ required capability set
+```
+
+Two runs that differ by selected model, normalized model options, reasoning effort, or `executionRealizerRef` have different support keys. Evidence for one does not qualify the other.
 
 ## 5. System topology
 
 ```text
 MoonMind workflow or Step
   -> immutable Omnigent Agent Profile snapshot
+  -> immutable agent-source resolution
+  -> immutable ResolvedSkillSet and delivery descriptor
   -> Omnigent Execution Planner
-       -> pinned harness catalog
-       -> Provider Profile and credential bindings
+       -> pinned harness catalog and trust record
+       -> versioned credential-binding set
+       -> Provider Profile compatibility
        -> credential materializer registry
-       -> Host Class registry and live host readiness
+       -> Host Class registry
        -> launch policy and MoonMind capability policy
-  -> secret-free OmnigentExecutionPlan
+       -> class-level admission decision
+  -> digest-addressed OmnigentExecutionPlan envelope
   -> fenced Omnigent control plane
-       -> Provider Profile leases
+       -> Provider Profile leases and acquired generations
        -> host binding and host lease
        -> workspace materialization
        -> credential materialization
-       -> exact host readiness
+       -> exact-host harness-build attestation
+       -> exact-host capability and model validation
+       -> immutable OmnigentRuntimeBinding
   -> stock Omnigent server and host protocol
        -> runner
        -> selected harness
-       -> selected upstream agent
+       -> selected upstream agent or imported bundle
   -> MoonMind bridge, evidence, publication, checkpoint, and cleanup
 ```
 
@@ -193,21 +230,27 @@ The following identities are distinct:
 | --- | --- |
 | `endpointRef` | Selected Omnigent control plane |
 | `harnessCatalogRef` | Immutable observed harness catalog snapshot |
+| `harnessImplementationRef` | Exact trusted core/plugin implementation package, version, and digest |
 | `harnessId` | Canonical Omnigent harness identifier |
-| `agentProfileRef` | MoonMind-owned immutable Agent Profile version |
-| `agentId` and `agentVersion` | Stable upstream Omnigent agent identity |
+| `agentProfileSnapshotRef` | MoonMind-owned immutable Agent Profile version and digest |
+| `agentSourceRef` | Immutable upstream or artifact-backed agent-source identity |
+| `resolvedSkillSetRef` | Immutable per-run resolved Skill snapshot |
+| `skillDeliveryRef` | Immutable metadata describing how the Skill snapshot is delivered to the selected host |
 | `providerProfileRef` | Provider account, credential, capacity, and cooldown authority |
 | `credentialMaterializerRef` | Approved method for presenting one Provider Profile to the harness |
-| `credentialBindingSetRef` | Named mapping from Agent Profile credential slots to Provider Profiles and materializers |
+| `credentialBindingSetRef` | Immutable binding-set id, version, and digest |
 | `hostClassRef` | Immutable host environment and image contract |
 | `launchPolicyRef` | Host mode, limits, network, capture, cleanup, and control policy |
+| `modelConfigDigest` | Digest of qualified model id, effort, route, and normalized options |
 | `executionRealizerRef` | Versioned implementation that realizes the plan |
-| `executionPlanRef` | Digest of the complete secret-free launch decision |
+| `executionPlanRef` | Digest of the canonical pre-host plan payload |
+| `runtimeBindingRef` | Digest-addressed acquired-generation and exact-host binding |
 | `hostBindingRef` and `hostLeaseRef` | Durable host ownership |
 | `providerLeaseRef` | Durable provider-account capacity ownership |
 | `omnigentHostId` | Exact host reported by Omnigent after realization |
 | `omnigentSessionId` | Exact provider session |
 | `chatBindingId` | Opaque MoonMind native Workflow Chat identity |
+| `supportCombinationKey` | Digest identifying the exact combination qualified by support evidence |
 
 Display labels may change without changing identity. Aliases are accepted only at discovery or user-input edges. Durable plans store canonical identifiers.
 
@@ -226,8 +269,10 @@ The effective inventory uses three views:
 ```text
 /v1/harnesses -> what the Omnigent endpoint understands
 /v1/agents    -> which stable agent definitions may be selected
-/v1/hosts     -> which connected hosts can execute each harness now
+/v1/hosts     -> which connected hosts exist and their current readiness
 ```
+
+The first two views provide pre-host planning evidence. The third provides live evidence only for already-existing connected hosts. It cannot stand in for a not-yet-created on-demand host.
 
 ### 7.2 Catalog snapshot
 
@@ -237,7 +282,8 @@ A snapshot has this logical shape:
 schemaVersion: moonmind.omnigent-harness-catalog.v1
 endpointRef: default
 omnigentVersion: "<semver>"
-observedAt: 2026-08-19T20:00:00Z
+omnigentBuildDigest: sha256:...
+observedAt: 2026-08-20T06:00:00Z
 sourceDigest: sha256:...
 catalogRef: omnigent-harness-catalog:sha256:...
 pluginLoadErrors: []
@@ -247,10 +293,16 @@ harnesses:
       - opencode
       - native-opencode
     label: OpenCode
-    source:
-      kind: core
+    implementation:
+      sourceKind: core
       package: omnigent
       version: "<semver>"
+      digest: sha256:...
+      pluginEntryPoint: null
+    runtimeRequirements:
+      binaries:
+        - name: opencode
+          versionConstraint: ">=1.17.7,<1.19.0"
     capabilities:
       integrationMode: native-server
       authModel: own-auth
@@ -273,30 +325,113 @@ Unknown capability values remain unknown. They are not coerced to supported or u
 
 ### 7.3 Trust classification
 
-Each canonical harness version has one trust state:
+Each canonical harness implementation has one trust state:
 
-- `core_trusted`: shipped by the approved Omnigent distribution.
-- `plugin_approved`: supplied by an explicitly approved plugin package and version.
+- `core_trusted`: shipped by the approved Omnigent distribution and bound to its build digest.
+- `plugin_approved`: supplied by an explicitly approved plugin package, version, entry point, and digest.
 - `quarantined`: discovered but not approved to receive credentials or execute workflows.
 - `blocked`: explicitly denied by policy or a security finding.
 
-Trust is bound to package identity, version, and digest where available. A plugin name alone is insufficient.
+Trust is bound to implementation identity. A plugin name or canonical harness id alone is insufficient.
 
 ### 7.4 Freshness
 
-Catalog snapshots are immutable. New launches require a snapshot inside the configured freshness bound unless the selected policy explicitly permits a previously verified offline snapshot. Historical runs retain their original snapshot ref.
+Catalog snapshots are immutable. New plans require a snapshot inside the configured freshness bound unless the selected policy explicitly permits a previously verified offline snapshot. Historical plans retain their original snapshot ref.
 
 An endpoint outage may retain the last known catalog for diagnostics. It does not silently make stale harnesses launchable.
 
-## 8. Omnigent Agent Profiles
+## 8. Exact-host harness attestation
 
-### 8.1 Role
+### 8.1 Purpose
 
-An Omnigent Agent Profile is the reusable MoonMind selection surface. It describes the desired agent, harness, capabilities, model, workspace, tools, capture, continuation, and publication behavior.
+A Host Class says what an image or connected-host class is expected to contain. It does not prove what the exact selected host contains at launch time.
 
-It does not own credentials, raw host authority, or secret material.
+Before runner or session creation, the selected host must publish or make available a bounded `HostHarnessAttestation` for the exact harness:
 
-### 8.2 Versioned document
+```yaml
+schemaVersion: moonmind.omnigent-host-harness-attestation.v1
+hostId: host_...
+hostClassRef: omnigent-native-standard@3
+hostImageRef: ghcr.io/example/omnigent-host@sha256:...
+omnigentVersion: "<semver>"
+omnigentBuildDigest: sha256:...
+harnessId: opencode-native
+harnessImplementation:
+  package: omnigent
+  version: "<semver>"
+  digest: sha256:...
+  pluginEntryPoint: null
+runtimeDependencies:
+  - name: opencode
+    version: 1.18.11
+    digest: sha256:...
+configured: true
+capabilities:
+  interrupt: true
+  streaming: true
+observedAt: 2026-08-20T06:05:00Z
+attestationRef: artifact:...
+```
+
+The attestation carries no credentials or unbounded environment data.
+
+### 8.2 Match rule
+
+The exact host passes only when:
+
+- `hostClassRef`, image digest, architecture, and Omnigent build match the plan.
+- the canonical harness id matches.
+- the harness implementation package, version, entry point, and digest match the trusted catalog record.
+- every required vendor runtime or CLI satisfies the pinned or policy-allowed version and digest rule.
+- every required exact-host capability is positively reported.
+- the attestation is fresh and belongs to the current host-lease fencing generation.
+
+Readiness by canonical harness id alone is insufficient.
+
+### 8.3 Protocol compatibility
+
+MoonMind prefers an upstream Omnigent host-protocol or read-only host endpoint that exposes this safe attestation. Until upstream exposes all fields, a Host Class may use an approved MoonMind verifier at the trusted host-realization boundary. The verifier may inspect the immutable image and exact runtime binaries, but it does not alter Omnigent runner behavior or invent a second host protocol.
+
+A connected static host that changes its plugin or vendor runtime invalidates prior attestation. New sessions fail closed until the new implementation is trusted and requalified.
+
+## 9. Omnigent Agent Profiles
+
+### 9.1 Role
+
+An Omnigent Agent Profile is the reusable MoonMind selection surface. It describes the desired agent source, harness, capabilities, model, workspace, Skills, tools, capture, continuation, and publication behavior.
+
+It does not own credentials, acquired credential generations, raw host authority, or secret material.
+
+### 9.2 Discriminated agent source
+
+An Agent Profile v2 uses exactly one source variant.
+
+A stock or pre-existing upstream agent uses:
+
+```yaml
+source:
+  kind: upstream
+  upstreamId: opencode-native-ui
+  upstreamVersion: "<agent-version>"
+  upstreamSnapshotDigest: sha256:...
+```
+
+An imported, custom, or MoonMind-generated bundle uses:
+
+```yaml
+source:
+  kind: bundle
+  bundleArtifactRef: artifact:...
+  bundleDigest: sha256:...
+  importReceiptRef: omnigent-agent-import:...
+  importedAgentId: moonmind-opencode-default
+  importedAgentVersion: "<upstream-version>"
+  importedContentDigest: sha256:...
+```
+
+The bundle variant pins both MoonMind artifact authority and the resulting upstream import identity. A historical plan can therefore detect replacement or conflicting content under the same upstream id.
+
+### 9.3 Versioned document
 
 The desired document shape is:
 
@@ -305,12 +440,15 @@ schemaVersion: moonmind.omnigent-agent-profile.v2
 endpointRef: default
 
 source:
+  kind: upstream
   upstreamId: opencode-native-ui
   upstreamVersion: "<agent-version>"
+  upstreamSnapshotDigest: sha256:...
 
 harness:
   id: opencode-native
   catalogRef: omnigent-harness-catalog:sha256:...
+  implementationRef: omnigent-harness-implementation:sha256:...
 
 requirements:
   harness:
@@ -365,13 +503,13 @@ allowedLaunchPolicyRefs:
   - omnigent-on-demand@1
 ```
 
-### 8.3 Compatibility with existing profiles
+### 9.4 Compatibility with existing profiles
 
-Existing v1 Agent Profile versions remain immutable and replayable. Their `harness`, `providerRequirements`, execution profile, and policy fields compile through a compatibility decoder into the same generic planning inputs.
+Existing v1 Agent Profile versions remain immutable and replayable. Their source, `harness`, `providerRequirements`, execution profile, policy, Skill intent, and model fields compile through a compatibility decoder into the generic planning inputs.
 
 New profile versions may continue to use the current v1 form until the v2 authoring surface is available. The compatibility decoder is required for historical and in-flight authority. It is not a second mutable profile system.
 
-### 8.4 Agent templates
+### 9.5 Agent templates
 
 A trusted harness may use:
 
@@ -380,21 +518,50 @@ A trusted harness may use:
 - an immutable imported bundle.
 - a MoonMind-generated portable default bundle.
 
-A deterministic template factory may generate a minimal agent bundle for an approved harness. The generated bundle is validated, stored as an artifact, imported through the authenticated Omnigent boundary, and pinned by upstream identity and bundle digest.
+A deterministic template factory may generate a minimal agent bundle for an approved harness. The generated bundle is validated, stored as an artifact, imported through the authenticated Omnigent boundary, and represented with the bundle source variant.
 
 The template factory adapts only structural harness needs. It does not duplicate provider-agent semantics.
 
-## 9. Provider Profiles and credential binding sets
+## 10. Resolved Skills and delivery
 
-### 9.1 Provider Profile continuity
+### 10.1 Skill intent is not executable authority
 
-`ManagedAgentProviderProfile` remains the durable authority for provider account selection, credentials, generation, concurrency, cooldown, enabled state, and readiness.
+The `skills` list in an Agent Profile identifies desired Skill names and constraints. It is not the executable Skill content. Repository, deployment-managed, and local-overlay sources can change independently of the Agent Profile.
+
+Before plan commitment, MoonMind resolves Skill intent through the canonical Skill System into one immutable per-run snapshot.
+
+### 10.2 Plan references
+
+The execution plan carries compact references only:
+
+```yaml
+resolvedSkills:
+  resolvedSkillSetRef: artifact:...
+  resolvedSkillSetDigest: sha256:...
+  skillDeliveryRef: skill-delivery:sha256:...
+```
+
+`resolvedSkillSetRef` identifies the immutable Skill bundle. `skillDeliveryRef` identifies the normalized materialization metadata needed to expose the same bundle through `$MOONMIND_ACTIVE_SKILLS_DIR` and any safe convenience aliases.
+
+Skill bodies, source repositories, local paths, and unbounded instructions do not enter the plan or Temporal history.
+
+### 10.3 Retry and continuation
+
+A retry reuses the same resolved Skill refs. It does not re-resolve mutable Skill sources.
+
+A branch or remediation run may select and resolve a new Skill snapshot only through a new explicit execution plan. The lineage records both the prior and replacement Skill refs.
+
+## 11. Provider Profiles and credential-binding sets
+
+### 11.1 Provider Profile continuity
+
+`ManagedAgentProviderProfile` remains the durable authority for provider account selection, credentials, current generation, concurrency, cooldown, enabled state, and readiness.
 
 The generic platform does not create a parallel account-profile system. Existing Codex and Claude profiles remain valid.
 
 Runtime-specific fields in an existing profile are interpreted as compatibility constraints for the selected credential materializer. They do not require immediate destructive migration.
 
-### 9.2 Credential slots
+### 11.2 Credential slots
 
 An Agent Profile names the credential roles required by the harness. A role may be optional.
 
@@ -409,22 +576,44 @@ vendor-login
 
 Repository and publication credentials remain capability-scoped MoonMind credentials. They are not model-provider slots.
 
-### 9.3 Credential binding set
+### 11.3 Versioned credential-binding set
 
-A versioned binding set maps every required slot to one Provider Profile and one materializer:
+A binding set has a stable id and immutable versions. Each version stores canonical JSON and a digest:
 
 ```yaml
 schemaVersion: moonmind.omnigent-credential-bindings.v1
 bindingSetId: opencode-go-primary
+version: 3
+digest: sha256:...
 bindings:
   primary-model:
     providerProfileRef: opencode-go-default
     materializerRef: opencode-auth-json@1
 ```
 
-A binding set contains references only.
+The authoritative ref includes all three identity parts:
 
-### 9.4 Capacity
+```text
+omnigent-credential-bindings:opencode-go-primary@3#sha256:<digest>
+```
+
+Plans and evidence carry that exact ref. Editing a binding set appends a new version and never changes historical authority.
+
+### 11.4 Credential generation ownership
+
+The plan selects a Provider Profile and materializer. It does not select or record a credential generation before lease acquisition.
+
+After the Provider Profile lease is acquired, the runtime binding records the exact acquired generation. This rule handles rotation safely:
+
+- rotation before the first lease acquisition is allowed because no run has acquired a generation yet.
+- the acquired generation becomes sticky once the runtime binding is persisted.
+- rotation after runtime binding requires the credential-maintenance lane to fence or drain the bound host and session.
+- a retry reuses the recorded generation while it remains authoritative.
+- no retry silently adopts a newer generation.
+
+A generation mismatch after binding produces a typed fenced outcome and reconciliation. It never causes plan mutation or credential substitution.
+
+### 11.5 Capacity
 
 Effective capacity is the minimum of:
 
@@ -436,27 +625,27 @@ launch policy capacity
 worker and container backend capacity
 ```
 
-All leases for one execution are acquired in deterministic order by Provider Profile id. They are released in reverse order after host and credential cleanup.
+All Provider Profile leases for one execution are acquired in deterministic order by Provider Profile id. They are released in reverse order after host and credential cleanup.
 
 A provider cooldown applies across every harness using the same Provider Profile. Switching harnesses does not evade quota or cooldown authority.
 
-## 10. Credential materializer registry
+## 12. Credential materializer registry
 
-### 10.1 Purpose
+### 12.1 Purpose
 
-A credential materializer is the trusted boundary that turns a Provider Profile reference into the runtime state a harness can consume.
+A credential materializer is the trusted boundary that turns a leased Provider Profile and acquired generation into runtime state a harness can consume.
 
 The harness plugin may describe what it needs. MoonMind decides whether a materializer is trusted, which secret roles it may resolve, which target paths are allowed, which host modes may use it, and how cleanup works.
 
-### 10.2 Materializer contract
+### 12.2 Materializer contract
 
 A materializer declares:
 
 ```yaml
 materializerId: opencode-auth-json
 version: 1
-acceptedHarnesses:
-  - opencode-native
+acceptedHarnessImplementations:
+  - omnigent-harness-implementation:sha256:...
 acceptedAuthModels:
   - own-auth
 supportedHostModes:
@@ -488,13 +677,14 @@ refresh or replace when allowed
 cleanup
 ```
 
-### 10.3 Materializer outputs
+### 12.3 Materializer outputs
 
 Materialization returns a secret-free handle:
 
 ```yaml
 credentialRuntimeRef: credential-runtime:...
 providerProfileRef: opencode-go-default
+providerLeaseRef: provider-lease:...
 credentialGeneration: 4
 materializerRef: opencode-auth-json@1
 mountClass: provider-auth
@@ -506,9 +696,7 @@ attestationRef: artifact:...
 
 Secret bodies never enter the handle.
 
-### 10.4 Built-in materializer classes
-
-The platform supports these materializer classes:
+### 12.4 Built-in materializer classes
 
 | Class | Use |
 | --- | --- |
@@ -520,27 +708,27 @@ The platform supports these materializer classes:
 | `host-owned-auth` | Pre-authenticated connected host where MoonMind does not copy the credential |
 | `none` | Harness requires no model credential |
 
-### 10.5 Mutable credential state
+### 12.5 Mutable credential state
 
 A mutable credential store requires exclusive ownership unless a provider-specific design proves safe concurrent refresh.
 
-Refreshed state must either persist to the authoritative credential store or be rejected before launch. A disposable copy that silently loses refresh state is invalid.
+Refreshed state either persists to the authoritative credential store or is rejected before launch. A disposable copy that silently loses refresh state is invalid.
 
-### 10.6 Current Codex materializer
+### 12.6 Current Codex materializer
 
 The existing Codex OAuth volume, generation checks, startup scripts, readiness checks, profile lease, and release-last cleanup form the initial `codex-oauth-home@1` materializer.
 
 The generic materializer interface wraps those existing operations. It does not require rewriting them before another harness can be added.
 
-## 11. Host Classes
+## 13. Host Classes
 
-### 11.1 Purpose
+### 13.1 Purpose
 
-A Host Class is an immutable declaration of an environment capable of running a set of harnesses and materializers.
+A Host Class is an immutable declaration of an environment expected to run a set of harness implementations and materializers.
 
-A Host Class is not a live host. It is a selectable environment contract. The exact host must still prove live readiness.
+A Host Class is not a live host. It is class-level admission evidence. The exact host must still pass the attestation in section 8.
 
-### 11.2 Host Class document
+### 13.2 Host Class document
 
 ```yaml
 schemaVersion: moonmind.omnigent-host-class.v1
@@ -548,14 +736,19 @@ hostClassId: omnigent-native-standard
 version: 3
 imageRef: ghcr.io/example/omnigent-host@sha256:...
 omnigentVersion: "<semver>"
+omnigentBuildDigest: sha256:...
 architectures:
   - linux/amd64
 
-declaredHarnesses:
-  - codex-native
-  - claude-native
-  - opencode-native
-  - pi-native
+declaredHarnessImplementations:
+  - harnessId: opencode-native
+    implementationRef: omnigent-harness-implementation:sha256:...
+    runtimeDependencies:
+      - name: opencode
+        version: 1.18.11
+        digest: sha256:...
+  - harnessId: codex-native
+    implementationRef: omnigent-harness-implementation:sha256:...
 
 integrationModes:
   - native-tui
@@ -584,15 +777,15 @@ runtime:
   home: /home/app
 ```
 
-### 11.3 Existing host realizations
+### 13.3 Existing host realizations
 
-The existing `omnigent-host-codex` static service, Codex on-demand container path, scripts, OAuth volume, state volumes, mounted tools, Skill projection, restricted egress, and health checks remain one registered Host Class realization.
+The existing `omnigent-host-codex` static service, Codex on-demand container path, scripts, OAuth volume, state volumes, mounted tools, resolved Skill projection, restricted egress, and health checks remain one registered Host Class realization.
 
 The current Claude static service may be registered independently.
 
 No existing service is renamed merely to make the implementation appear generic. The generic planner selects these concrete realizations through descriptors.
 
-### 11.4 Host composition
+### 13.4 Host composition
 
 MoonMind may operate several bounded Host Classes:
 
@@ -604,15 +797,15 @@ MoonMind may operate several bounded Host Classes:
 
 A single large image is not required.
 
-### 11.5 Installation policy
+### 13.5 Installation policy
 
-Host-side harness installation is an operator setup or image-building action. An ordinary production workflow does not download or install a new harness.
+Host-side harness installation is an operator setup or image-building action. An ordinary supported production workflow does not download or install a new harness.
 
-Development and connected-host flows may expose Omnigent setup operations. The resulting host readiness is observed and never inferred from an installation request alone.
+Development and connected-host flows may expose Omnigent setup operations. The resulting host readiness and build attestation are observed and never inferred from an installation request alone.
 
-## 12. Launch policies
+## 14. Launch policies
 
-### 12.1 Generic policy
+### 14.1 Generic policy
 
 A launch policy governs host behavior rather than provider identity:
 
@@ -648,15 +841,15 @@ controlCapabilities:
   - clear_context
 ```
 
-### 12.2 Existing Codex policies
+### 14.2 Existing Codex policies
 
 `codex-on-demand@1` and `codex-static@1` remain valid policy versions. The generic compiler reads their normalized policy fields without relying on the `codex-` prefix.
 
 They may continue to govern Codex for as long as their support and rollback contracts require. A future generic policy may replace them for new selections only after equivalent behavior is proven.
 
-### 12.3 Policy intersection
+### 14.3 Policy intersection
 
-A policy is compatible only when it permits:
+A policy is class-admissible only when it permits:
 
 - the harness integration mode.
 - the selected Host Class.
@@ -668,69 +861,97 @@ A policy is compatible only when it permits:
 
 Policy mismatch blocks before lease acquisition.
 
-## 13. Capability negotiation
+## 15. Capability negotiation
 
-### 13.1 Capability planes
+### 15.1 Pre-host admission decision
 
 The planner computes:
 
 ```text
 workflow requirements
 ∩ Agent Profile requirements
-∩ harness declarations
-∩ exact host readiness
+∩ pinned harness-catalog declarations
+∩ Host Class declarations
 ∩ credential materializer capabilities
 ∩ MoonMind bridge capabilities
 ∩ launch policy
+∩ support policy
 ```
 
-### 13.2 Required, preferred, and unknown
+The result is an immutable `ClassAdmissionDecision`. It may prove class-level compatibility. It does not claim that an on-demand exact host is already ready.
 
-- Missing required capability blocks launch.
-- Unknown required capability blocks launch.
+The plan also records `runtimeValidationRequirements`, which name every fact that must be proven later. Typical requirements include exact harness implementation, vendor CLI version, restricted-egress attachment, mounted Skills, mounted tools, model availability, and intervention support.
+
+### 15.2 Exact-host validation decision
+
+After the host exists, a verifier computes:
+
+```text
+ClassAdmissionDecision
+∩ exact HostHarnessAttestation
+∩ exact network and mount attestation
+∩ live model-option attestation
+∩ current bridge and session-control readiness
+```
+
+The result is a fenced `ExactHostCapabilityDecision` stored in the runtime binding. Missing, unknown, stale, or mismatched required evidence blocks runner and session creation.
+
+### 15.3 Required, preferred, and unknown
+
+- Missing required class-level capability blocks plan creation.
+- Unknown required class-level capability blocks plan creation.
+- Missing or unknown required exact-host capability blocks realization before runner or session creation.
 - Missing preferred capability may produce an explicit degraded decision.
 - Unknown preferred capability is recorded as unknown and may be treated as unavailable.
 - A degraded decision never broadens authority.
-- No mismatch silently selects another harness, Provider Profile, Host Class, or policy.
+- No mismatch silently selects another harness, Provider Profile, Host Class, model, policy, or realizer.
 
-### 13.3 Representative capability rules
+### 15.4 Representative capability rules
 
-| Requirement | Admission evidence |
+| Requirement | Admission and runtime evidence |
 | --- | --- |
-| Active cancellation | Harness interrupt support, bridge control support, and policy permission |
-| Token streaming | Harness streaming declaration and observed stream conformance |
-| Warm continuation | Warm reattach support and retained session or host state |
-| Cold continuation | Workspace checkpoint plus a supported rebuild or new-session continuation strategy |
-| Tool approval | Harness elicitation mode plus MoonMind approval authority |
-| Unattended execution | No unresolved interactive login, trust, or permission step |
-| Subagent fanout | Harness subagent support plus MoonMind execution-fanout capability |
-| Image input | Harness image support and bridge transport support |
-| Reasoning effort | Compatible effort family and model support |
-| Model override | Compatible model family and live model-option validation |
-| Repository mutation | Workspace authority, Git tooling, credential capability, and publish policy |
-| Restricted egress | Enforced network attestation for the exact host |
-| Native Workflow Chat | Capability intersection and binding-scoped enforcement |
+| Active cancellation | Harness declaration, Host Class declaration, exact-host interrupt attestation, bridge support, policy permission |
+| Token streaming | Harness declaration plus support evidence for the exact model and realizer |
+| Warm continuation | Warm-reattach declaration plus retained and fenced session or host state |
+| Cold continuation | Workspace checkpoint plus a supported rebuild or new-session strategy |
+| Tool approval | Harness elicitation declaration, exact-host implementation match, and MoonMind approval authority |
+| Unattended execution | No unresolved interactive login, trust, install, or permission step on the exact host |
+| Subagent fanout | Harness declaration, exact-host support, and MoonMind execution-fanout capability |
+| Image input | Harness declaration, exact bridge transport, and model support |
+| Reasoning effort | Compatible effort family and exact normalized model configuration |
+| Model override | Compatible model family and live model-option attestation |
+| Repository mutation | Workspace authority, exact Git/tool readiness, credential capability, and publish policy |
+| Restricted egress | Class policy plus enforced network attestation for the exact host |
+| Resolved Skills | Plan-pinned Skill refs plus exact-host delivery attestation |
+| Native Workflow Chat | Binding-scoped intersection and bridge enforcement |
 
-## 14. Omnigent execution plan
+## 16. Omnigent execution plan
 
-### 14.1 Plan document
+### 16.1 Canonical plan payload
 
-The planner emits:
+The planner emits a payload that contains only pre-host decisions:
 
 ```yaml
-schemaVersion: moonmind.omnigent-execution-plan.v1
+schemaVersion: moonmind.omnigent-execution-plan-payload.v1
 endpointRef: default
 agentProfileSnapshotRef: omnigent-agent-profile:...
 harnessCatalogRef: omnigent-harness-catalog:sha256:...
 harnessId: opencode-native
-agentId: opencode-native-ui
-agentVersion: "<agent-version>"
+harnessImplementationRef: omnigent-harness-implementation:sha256:...
 
-credentialBindingSetRef: opencode-go-primary
+agentSource:
+  kind: bundle
+  bundleArtifactRef: artifact:...
+  bundleDigest: sha256:...
+  importReceiptRef: omnigent-agent-import:...
+  importedAgentId: moonmind-opencode-default
+  importedAgentVersion: "<upstream-version>"
+  importedContentDigest: sha256:...
+
+credentialBindingSetRef: omnigent-credential-bindings:opencode-go-primary@3#sha256:...
 credentialBindings:
   primary-model:
     providerProfileRef: opencode-go-default
-    credentialGeneration: 4
     materializerRef: opencode-auth-json@1
 
 hostClassRef: omnigent-native-standard@3
@@ -738,10 +959,18 @@ launchPolicyRef: omnigent-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 
 model:
-  id: opencode/...
+  qualifiedId: opencode/...
   effort: null
+  routeRef: opencode-go
+  normalizedOptions: {}
+  modelConfigDigest: sha256:...
 
-capabilityDecision:
+resolvedSkills:
+  resolvedSkillSetRef: artifact:...
+  resolvedSkillSetDigest: sha256:...
+  skillDeliveryRef: skill-delivery:sha256:...
+
+classAdmissionDecision:
   requiredSatisfied:
     - interrupt
     - repository.read
@@ -751,51 +980,116 @@ capabilityDecision:
   degraded: []
   unknown: []
 
+runtimeValidationRequirements:
+  - exact-harness-implementation
+  - exact-vendor-runtime
+  - exact-network-egress
+  - exact-skill-delivery
+  - live-model-option
+
 workspaceIntentRef: workspace-intent:sha256:...
 capturePolicyRef: ...
 policySnapshotRef: omnigent-policy:sha256:...
-planRef: omnigent-execution-plan:sha256:...
+supportCombinationKey: omnigent-support:sha256:...
 ```
 
-### 14.2 Plan exclusions
+The payload intentionally contains no `credentialGeneration`, `providerLeaseRef`, exact host id, exact host readiness result, or `planRef`.
 
-The plan excludes:
+### 16.2 Plan envelope and canonicalization
+
+MoonMind serializes the payload as canonical JSON with:
+
+- UTF-8 encoding.
+- sorted object keys.
+- no insignificant whitespace.
+- normalized enum and null representation.
+- no envelope fields.
+
+It hashes those bytes and persists:
+
+```yaml
+schemaVersion: moonmind.omnigent-execution-plan-envelope.v1
+planRef: omnigent-execution-plan:sha256:<payload-digest>
+payload: <the canonical payload>
+```
+
+Verification removes no fields and substitutes no placeholder. It canonicalizes only `payload` and compares the resulting digest with `planRef`.
+
+### 16.3 Plan exclusions
+
+The payload excludes:
 
 - secret bodies.
 - OAuth or vendor credential files.
+- acquired credential generations.
+- Provider Profile lease refs.
+- exact host ids and exact-host readiness claims.
 - Docker volume names.
 - Docker socket access.
 - arbitrary bind sources.
 - resolved worker or daemon paths.
 - caller-provided host ids.
 - mutable environment-derived authority.
+- Skill bodies and mutable Skill source paths.
 - unbounded upstream metadata.
 
-### 14.3 Runtime binding
+## 17. Runtime binding
 
-After the plan is committed and leases are acquired, the realizer creates a separate fenced runtime binding containing:
+### 17.1 Binding contract
 
-- Provider Profile lease refs.
-- credential runtime refs.
-- host binding and host lease refs.
-- credential generations.
-- exact host id.
-- exact workspace resolution.
-- exact model-option attestation.
-- exact session id.
-- cleanup authority refs.
+After the plan is committed and Provider Profile leases are acquired, the realizer creates a separate fenced binding:
 
-The runtime binding references the plan and never changes its decisions.
+```yaml
+schemaVersion: moonmind.omnigent-runtime-binding.v1
+runtimeBindingRef: omnigent-runtime-binding:sha256:...
+executionPlanRef: omnigent-execution-plan:sha256:...
+providerLeases:
+  primary-model:
+    providerProfileRef: opencode-go-default
+    providerLeaseRef: provider-lease:...
+    credentialGeneration: 4
+    credentialRuntimeRef: credential-runtime:...
+hostBindingRef: host-binding:...
+hostLeaseRef: host-lease:...
+hostLeaseGeneration: 7
+omnigentHostId: host_...
+hostHarnessAttestationRef: artifact:...
+exactHostCapabilityDecisionRef: artifact:...
+workspaceResolutionRef: workspace-resolution:...
+modelOptionAttestationRef: artifact:...
+skillDeliveryAttestationRef: artifact:...
+omnigentSessionId: null
+cleanupAuthorityRefs: []
+```
 
-## 15. Control-plane integration
+Mutable lifecycle fields are stored through the fenced control-plane aggregates. The logical binding identity and its immutable acquired generations never change.
+
+### 17.2 Credential rotation
+
+The first successful Provider Profile lease acquisition determines the binding generation. A rotation that happens before that acquisition is not a conflict because the plan selected the account and materializer, not a generation.
+
+After the runtime binding exists:
+
+- the recorded generation is mandatory at materialization, host readiness, session creation, execution, and cleanup boundaries.
+- a newer Provider Profile generation does not update the binding.
+- credential maintenance drains or fences bound consumers before activating replacement state according to the Provider Profile contract.
+- a stale activity receives `fencing_conflict` or an equivalent typed result and reconciles.
+
+### 17.3 Exact-host mismatch
+
+If the exact host reports another harness implementation, plugin digest, vendor runtime, image, architecture, capability set, model catalog, network posture, or Skill delivery than the plan permits, realization fails before runner or session creation.
+
+The realizer cleans up only resources it owns, records the mismatch as bounded evidence, and retains the same plan for diagnosis. It does not amend the plan to match the host.
+
+## 18. Control-plane integration
 
 The generic platform uses the canonical Omnigent control-plane aggregates.
 
-`OmnigentSession` owns the immutable Agent Profile snapshot ref, execution plan ref, provider session authority, chat binding, desired and observed lifecycle state, revision, and fencing generations.
+`OmnigentSession` owns the immutable Agent Profile snapshot ref, agent-source ref, resolved Skill refs, execution-plan ref, runtime-binding ref, provider session authority, chat binding, desired and observed lifecycle state, revision, and fencing generations.
 
-`OmnigentTurnAttempt` owns request idempotency and attempt delivery. It cannot replace the execution plan or terminalize the session.
+`OmnigentTurnAttempt` owns request idempotency and attempt delivery. It cannot replace the plan or runtime binding and cannot terminalize the session.
 
-`OmnigentObservation` records bounded catalog, host, model, event, and cleanup evidence. Full payloads remain artifact-backed.
+`OmnigentObservation` records bounded catalog, host, model, event, Skill-delivery, and cleanup evidence. Full payloads remain artifact-backed.
 
 `OmnigentCommand` journals host, runner, session, message, interruption, harvest, and cleanup side effects.
 
@@ -803,52 +1097,61 @@ Provider Profile, host lease, session supervisor, and cleanup generations fence 
 
 The generic design does not create a second session authority beside these aggregates.
 
-## 16. Execution lifecycle
+## 19. Execution lifecycle
 
 A conforming realization preserves this order:
 
 1. Validate workflow and Step authority.
 2. Resolve the immutable Agent Profile snapshot.
-3. Resolve the pinned harness catalog and trust state.
-4. Resolve the exact upstream agent or bundle.
-5. Negotiate required and preferred capabilities.
-6. Resolve credential slots and compatible Provider Profiles.
-7. Select compatible materializers.
-8. Select a compatible Host Class and launch policy.
-9. Compile and persist the execution plan.
-10. Acquire Provider Profile leases in deterministic order.
-11. Resolve or create the durable host binding and host lease.
-12. Materialize the authoritative workspace.
-13. Materialize credential runtime state.
-14. Start or attach the selected host realization.
-15. Confirm the exact host reports the exact harness as ready.
-16. Resolve and attest live model options when a model is selected.
-17. Persist the exact host and credential binding.
-18. Create or reattach the Omnigent session.
-19. Persist the session identity before posting the first message.
-20. Prepare and post the idempotent first message.
-21. Stream and normalize events.
-22. Route approvals, intervention, and control through capability enforcement.
-23. Harvest artifacts, repository evidence, capture, and checkpoints.
-24. Stop or drain the provider session as required.
-25. Clean up run-scoped materializer state.
-26. Remove the on-demand host or release the connected host.
-27. Persist terminal cleanup evidence.
-28. Release Provider Profile leases last.
+3. Resolve the pinned harness catalog, implementation identity, and trust state.
+4. Resolve the exact upstream or bundle-backed agent source.
+5. Resolve Agent Profile Skill intent into an immutable `ResolvedSkillSet` and delivery descriptor.
+6. Resolve the exact credential-binding-set version and digest.
+7. Resolve credential slots and compatible Provider Profiles.
+8. Select compatible materializers.
+9. Select a compatible Host Class and launch policy using class-level evidence.
+10. Compute the class-level required and preferred capability admission decision.
+11. Normalize the exact model configuration and compute `modelConfigDigest`.
+12. Select the versioned execution realizer and compute `supportCombinationKey`.
+13. Compile, canonicalize, hash, and persist the execution-plan envelope.
+14. Acquire Provider Profile leases in deterministic order.
+15. Persist the initial runtime binding with every acquired Provider Profile generation.
+16. Resolve or create the durable host binding and host lease.
+17. Materialize the authoritative workspace.
+18. Materialize credential runtime state using the acquired generations.
+19. Start or attach the selected host realization.
+20. Obtain a fenced exact-host harness-build attestation.
+21. Confirm the exact host implementation and vendor runtimes match the plan.
+22. Validate exact-host capabilities, network posture, mounted tools, and resolved Skill delivery.
+23. Resolve and attest live model options for the selected model configuration.
+24. Persist the exact-host capability, model, workspace, Skill, and cleanup refs in the runtime binding.
+25. Create or reattach the Omnigent session.
+26. Persist the session identity before posting the first message.
+27. Prepare and post the idempotent first message.
+28. Stream and normalize events.
+29. Route approvals, intervention, and control through capability enforcement.
+30. Harvest artifacts, repository evidence, capture, and checkpoints.
+31. Stop or drain the provider session as required.
+32. Clean up run-scoped materializer state.
+33. Remove the on-demand host or release the connected host.
+34. Persist terminal cleanup evidence.
+35. Release Provider Profile leases last.
 
-A retry reuses the same plan, session, command identities, workspace authority, and applicable host authority. It does not replan against a newer catalog or silently change account, model, harness, or host policy.
+A retry reuses the same plan, runtime binding after it exists, acquired generations, resolved Skills, session, command identities, workspace authority, and applicable host authority. It does not replan against a newer catalog or silently change account, model, harness implementation, bundle content, Host Class, policy, or realizer.
 
-## 17. Session, continuation, branch, and remediation semantics
+An exact-host validation failure does not invalidate the pre-host plan. It proves that the chosen realization did not satisfy it. A new Host Class, model, binding-set version, or realizer requires a new plan and explicit lineage.
+
+## 20. Session, continuation, branch, and remediation semantics
 
 Harness declarations guide continuation but do not replace MoonMind checkpoint authority.
 
-### 17.1 Warm reattach
+### 20.1 Warm reattach
 
-Warm reattach is valid only when the same provider session and compatible host state remain authoritative. A newer host or credential generation requires explicit reconciliation.
+Warm reattach is valid only when the same provider session, runtime binding, acquired credential generations, harness implementation, and compatible host state remain authoritative. A newer host implementation or credential generation requires explicit reconciliation and cannot be silently adopted.
 
-### 17.2 Cold continuation
+### 20.2 Cold continuation
 
-A cold continuation uses immutable workspace checkpoint evidence, prior result refs, and a harness-supported strategy:
+A cold continuation uses immutable workspace checkpoint evidence, prior result refs, resolved Skill refs, and a harness-supported strategy:
 
 - rebuild vendor-native history.
 - inject a bounded continuation preamble.
@@ -857,30 +1160,37 @@ A cold continuation uses immutable workspace checkpoint evidence, prior result r
 
 The planner does not pretend that all harnesses have equivalent resume semantics.
 
-### 17.3 Branches and remediation
+### 20.3 Branches and remediation
 
 Checkpoint branches and remediation preserve:
 
 - Agent Profile snapshot.
-- harness and agent identity.
-- Provider Profile bindings and generations.
+- discriminated agent-source identity.
+- harness implementation identity.
+- resolved Skill and delivery refs.
+- credential-binding-set version and digest.
+- Provider Profile bindings and acquired generations after binding.
 - materializer refs.
 - Host Class and launch policy.
-- execution plan lineage.
+- model configuration digest.
+- execution realizer and support-combination key.
+- execution-plan and runtime-binding lineage.
 - workspace checkpoint authority.
 
-A branch or remediation attempt may select a different harness only through a new explicit Agent Profile and policy decision. It is never an implicit recovery fallback.
+A branch or remediation attempt may select a different harness, model, Skill set, binding set, Host Class, or realizer only through a new explicit plan. It is never an implicit recovery fallback.
 
-## 18. Native Workflow Chat and controls
+## 21. Native Workflow Chat and controls
 
 Native Workflow Chat continues to use the binding-scoped facade.
 
 The effective control surface is the intersection of:
 
 ```text
-upstream session and harness capabilities
+upstream session capabilities
+∩ exact-host capability decision
 ∩ Agent Profile snapshot
 ∩ execution plan
+∩ runtime binding
 ∩ workflow and Step state
 ∩ caller permission
 ```
@@ -889,98 +1199,128 @@ The browser may hide unavailable controls. The bridge remains the enforcement bo
 
 Model, effort, terminal, file, approval, interrupt, stop, clear-context, workspace, subagent, and resource controls remain separately gated. An upstream control is technical availability, not authorization.
 
-## 19. Evidence and observability
+## 22. Evidence and observability
 
 Every run records safe references for:
 
 - Agent Profile version and digest.
+- discriminated agent-source ref and bundle digest when applicable.
 - harness catalog ref and trust classification.
-- harness and upstream agent identity.
-- credential binding set.
-- Provider Profile refs and generations.
+- exact harness implementation and vendor runtime identities.
+- resolved Skill snapshot and delivery refs.
+- credential-binding-set id, version, and digest.
+- Provider Profile refs, lease refs, and acquired generations.
 - materializer refs and attestations.
 - Host Class and immutable image digest.
+- exact-host harness attestation.
 - launch policy and compiled policy ref.
-- execution plan ref.
-- capability decision.
-- model-option attestation.
-- host, runner, session, and chat binding identity.
+- model configuration digest and model-option attestation.
+- execution realizer ref and support-combination key.
+- execution-plan and runtime-binding refs.
+- class-admission and exact-host capability decisions.
+- host, runner, session, and chat-binding identity.
 - workspace resolution.
 - capture and repository evidence.
 - checkpoint and continuation lineage.
 - cleanup claims and results.
 
-Logs and metrics use bounded reason codes and low-cardinality labels. Secret values, raw provider payloads, terminal transcripts, and unbounded diagnostics remain artifact-backed and redacted.
+Logs and metrics use bounded reason codes and low-cardinality labels. Secret values, raw provider payloads, terminal transcripts, Skill bodies, and unbounded diagnostics remain artifact-backed and redacted.
 
 Objective terminal evidence remains required. Process exit, wrapper completion, assistant prose, or a mutable filesystem path is not completion.
 
-## 20. Cleanup and janitor authority
+## 23. Cleanup and janitor authority
 
 Every materializer returns a non-secret cleanup ref. Every host realization returns host cleanup authority. Cleanup is revision and generation fenced.
 
-On-demand cleanup removes only plan-owned resources. Static connected-host cleanup drains plan-owned sessions and temporary state without deleting unrelated host authentication.
+On-demand cleanup removes only plan-owned and binding-owned resources. Static connected-host cleanup drains plan-owned sessions and temporary state without deleting unrelated host authentication.
 
 Provider Profile leases release only after:
 
-- the harness process no longer consumes the credential.
+- the harness process no longer consumes the acquired credential generation.
 - materializer cleanup is complete or durably delegated to the janitor.
 - host cleanup is complete or durably delegated.
 - terminal evidence records the cleanup state.
 
 A cancellation or ambiguous provider outcome retains enough durable authority for retry or janitor reconciliation. It does not release credentials while a consumer may still be alive.
 
-## 21. Support classification
+## 24. Support classification and identity
 
-MoonMind reports one support classification for each exact combination.
+MoonMind reports one support classification for each exact `supportCombinationKey`.
 
-### 21.1 Fully managed
+### 24.1 Support key
+
+The normalized support-key payload includes:
+
+```yaml
+omnigentServerBuildRef: ...
+omnigentHostBuildRef: ...
+harnessImplementationRef: ...
+vendorRuntimeRefs: []
+agentSourceRef: ...
+materializerRefs: []
+providerCompatibilityClass: ...
+hostClassRef: ...
+architecture: linux/amd64
+launchPolicyRef: ...
+modelConfigDigest: sha256:...
+executionRealizerRef: generic-omnigent-host@1
+requiredCapabilitiesDigest: sha256:...
+```
+
+The key is the digest of canonical payload bytes. Account-specific secret identity is not part of support evidence, but the Provider Profile compatibility class and credential strategy are.
+
+### 24.2 Fully managed
 
 - approved on-demand or managed host.
 - MoonMind-managed credential materialization.
 - unattended launch.
-- live model validation when applicable.
+- exact-host and exact-model validation.
 - interruption and capture.
 - cleanup and janitor evidence.
 - checkpoint and recovery coverage required by the selected capabilities.
 
-### 21.2 Connected host
+### 24.3 Connected host
 
 - approved static host.
 - host-owned authentication or device-bound setup.
-- MoonMind can select, lease, and drain the host.
+- MoonMind can select, lease, attest, and drain the host.
 - workflow launch is unattended after operator setup.
 
-### 21.3 Experimental
+### 24.4 Experimental
 
 - trusted and launchable.
 - bounded smoke validation passes.
-- one or more support rows lack protected evidence.
+- one or more support rows for the exact key lack protected evidence.
 
-### 21.4 Discovered only
+### 24.5 Discovered only
 
 - present in the catalog.
-- no approved materializer, Host Class, or policy combination.
+- no approved materializer, Host Class, policy, model, or realizer combination.
 - visible with actionable setup guidance.
 - not launchable.
 
-### 21.5 Quarantined
+### 24.6 Quarantined
 
 - plugin or package is not approved.
 - receives no provider credentials, workspace mutation authority, or workflow execution authority.
 
-## 22. Conformance
+## 25. Conformance
 
-### 22.1 Generic contract suite
+### 25.1 Generic contract suite
 
 Every supported combination proves:
 
 - catalog identity and freshness.
-- trust decision.
-- Agent Profile and bundle identity.
+- exact harness implementation trust.
+- discriminated Agent Profile source and bundle identity.
+- resolved Skill immutability and delivery.
+- binding-set version and digest.
 - materializer secret containment.
-- Provider Profile capacity and cooldown.
-- exact host readiness.
-- model validation.
+- Provider Profile capacity, acquired generation, rotation fencing, and cooldown.
+- Host Class admission.
+- exact-host implementation, vendor runtime, capability, mount, and network attestation.
+- exact normalized model configuration and model-option behavior.
+- exact execution realizer.
 - session creation and idempotent first message.
 - stream and terminal evidence.
 - requested control capabilities.
@@ -991,12 +1331,12 @@ Every supported combination proves:
 - checkpoint behavior required by the profile.
 - raw-channel secret scans.
 
-### 22.2 Harness-specific evidence
+### 25.2 Harness-specific evidence
 
 Harness-specific tests prove claims that cannot be inferred from the generic contract, including:
 
 - vendor login and refresh behavior.
-- exact model-option behavior.
+- exact model-option behavior for each qualified model configuration.
 - native terminal takeover.
 - elicitation behavior.
 - fork-history semantics.
@@ -1004,68 +1344,73 @@ Harness-specific tests prove claims that cannot be inferred from the generic con
 - interruption behavior.
 - subagent behavior.
 
-### 22.3 Codex regression requirement
+### 25.3 Realizer-specific evidence
+
+A realizer proves that it correctly enforces the same plan and runtime-binding contracts. Evidence gathered through one realizer does not qualify another realizer unless the support matrix explicitly defines and proves a shared observation boundary.
+
+### 25.4 Codex regression requirement
 
 The current Codex conformance and support matrices remain required while Codex uses either the current or generic realizer.
 
 A generic refactor is not allowed to reduce:
 
-- OAuth exclusivity.
+- OAuth exclusivity and generation fencing.
 - exact host binding.
 - workspace isolation.
-- mounted Skill and tool projection.
+- mounted resolved Skill and tool projection.
 - restricted egress.
 - capture.
 - repository publication.
 - checkpoint evidence.
 - cancellation.
 - cleanup.
-- replay and historical read compatibility.
+- replay and historical-read compatibility.
 - rollback behavior.
 
-## 23. Product experience
+## 26. Product experience
 
-### 23.1 Settings
+### 26.1 Settings
 
 Settings exposes:
 
 - Omnigent endpoint and version.
-- discovered harnesses.
+- discovered harnesses and exact implementation identities.
 - trust and support classification.
 - capability declarations.
 - setup steps.
 - compatible Host Classes.
+- exact connected-host attestations when applicable.
 - compatible Provider Profiles.
-- credential binding sets.
-- model options.
-- validation and smoke status.
-- active lease and cooldown state.
+- versioned credential-binding sets.
+- model options and model configuration digest.
+- resolved validation and smoke status.
+- active lease, acquired generation, and cooldown state.
 
-The normal view shows only essential setup. Advanced host, policy, and materializer details use progressive disclosure.
+The normal view shows only essential setup. Advanced host, policy, realizer, materializer, and attestation details use progressive disclosure.
 
-### 23.2 Workflow Create
+### 26.2 Workflow Create
 
 The normal selection is:
 
 ```text
 Execution provider: Omnigent
 Agent Profile: <profile>
-Provider account: <compatible Provider Profile>
+Provider account: <compatible Provider Profile or binding set>
 Model: <profile default or explicit selection>
 Host policy: <default compatible policy>
 ```
 
-Raw harness selection may be exposed as an advanced Agent Profile authoring option. Raw host ids, Docker volumes, credential files, and environment variables are never authoring controls.
+Raw harness selection may be exposed as an advanced Agent Profile authoring option. Raw host ids, Docker volumes, credential files, credential generations, and environment variables are never authoring controls.
 
-### 23.3 Default behavior
+### 26.3 Default behavior
 
 Omnigent may become the default execution provider before every harness is fully managed. The default Agent Profile may remain the proven Codex profile while additional harnesses progress through support classifications.
 
-A new harness becoming available does not change existing workflow defaults.
+A new harness, model, Host Class, or realizer becoming available does not change existing workflow defaults or historical plans.
 
-## 24. Codex continuity and preservation contract
+## 27. Codex continuity and preservation contract
 
-### 24.1 Existing assets remain authoritative
+### 27.1 Existing assets remain authoritative
 
 The current Codex lane maps into the generic design as follows:
 
@@ -1073,25 +1418,31 @@ The current Codex lane maps into the generic design as follows:
 | --- | --- |
 | `external/omnigent` | Stable top-level execution identity |
 | `codex-native-ui` | Upstream agent identity |
-| `codex-native` | Harness catalog identity |
+| `codex-native` plus pinned Omnigent build | Harness implementation identity |
 | Codex OpenAI OAuth Provider Profile | Provider account and capacity authority |
-| `codex_auth_volume` and generation | `codex-oauth-home@1` materializer state |
+| `codex_auth_volume` and acquired generation | `codex-oauth-home@1` runtime-binding state |
 | `omnigent-host-codex` Compose service | Existing static Host Class realization |
 | Current on-demand Codex container path | Existing on-demand Host Class realization |
 | `codex-on-demand@1` and `codex-static@1` | Existing launch policy versions |
 | `profile_bound_execution.py` | Initial registered execution realizer |
+| mounted Skill/tool projection | Existing resolved-Skill delivery realization |
 | bridge, checkpoint, publication, cleanup, and janitor code | Shared lifecycle implementation |
-| Codex support and cutover matrices | Required support evidence |
+| Codex support and cutover matrices | Required support evidence for each realizer |
 
-### 24.2 No big-bang dependency
+### 27.2 No big-bang dependency
 
 The generic catalog and planner may be introduced while Codex still uses `codex-profile-bound@1`.
 
-A representative Codex plan is:
+A representative Codex plan payload is:
 
 ```yaml
 harnessId: codex-native
-agentId: codex-native-ui
+harnessImplementationRef: omnigent-harness-implementation:sha256:...
+agentSource:
+  kind: upstream
+  upstreamId: codex-native-ui
+  upstreamVersion: "<version>"
+credentialBindingSetRef: omnigent-credential-bindings:codex-openai-oauth@1#sha256:...
 credentialBindings:
   primary-model:
     providerProfileRef: codex_openai_oauth
@@ -1099,40 +1450,63 @@ credentialBindings:
 hostClassRef: omnigent-codex-current@1
 launchPolicyRef: codex-on-demand@1
 executionRealizerRef: codex-profile-bound@1
+model:
+  qualifiedId: gpt-...
+  modelConfigDigest: sha256:...
+resolvedSkills:
+  resolvedSkillSetRef: artifact:...
+  resolvedSkillSetDigest: sha256:...
+  skillDeliveryRef: skill-delivery:sha256:...
 ```
 
-The realizer delegates to the existing coordinator and scripts. New harnesses may use `generic-omnigent-host@1` at the same time.
+The acquired OAuth generation remains in the post-lease runtime binding, matching the current Codex authority model.
 
-This coexistence is deterministic planning, not runtime fallback accumulation.
+The realizer delegates to the existing coordinator and scripts. New harnesses may use `generic-omnigent-host@1` at the same time. This coexistence is deterministic planning, not runtime fallback accumulation.
 
-### 24.3 Stable persisted identity
+### 27.3 Stable persisted identity
 
-Existing Codex workflow snapshots, Agent Profile versions, Provider Profile ids, policy refs, bridge records, checkpoint refs, and Temporal histories remain readable and replayable.
+Existing Codex workflow snapshots, Agent Profile versions, Provider Profile ids, policy refs, bridge records, checkpoint refs, Skill refs, and Temporal histories remain readable and replayable.
 
 New generic fields are additive or compiled from existing immutable snapshots. Historical records are not rewritten to claim that they used a generic realizer.
 
-### 24.4 Parity before reassignment
+### 27.4 Parity before reassignment
 
-Codex may move from `codex-profile-bound@1` to a generic realizer only when the generic realizer proves the existing Codex support matrix for the same host modes, images, architectures, profile versions, policy versions, and lifecycle requirements.
+Codex may move from `codex-profile-bound@1` to a generic realizer only when the generic realizer proves the existing Codex support matrix for the same:
+
+- server and host image digests.
+- architectures.
+- harness and CLI versions.
+- Agent Profile and source versions.
+- Provider Profile and materializer classes.
+- model configuration digest.
+- Skill delivery behavior.
+- policy versions.
+- lifecycle requirements.
+
+Because the realizer is part of `supportCombinationKey`, evidence for `codex-profile-bound@1` never automatically qualifies `generic-omnigent-host@1`.
 
 A reassignment changes only new plans. Existing plans retain their realizer ref.
 
-### 24.5 Rollback
+### 27.5 Rollback
 
-Rollback changes the selected realizer for future eligible Codex plans. It does not mutate existing session, plan, checkpoint, or support evidence.
+Rollback changes the selected realizer for future eligible Codex plans. It does not mutate existing session, plan, runtime-binding, checkpoint, or support evidence.
 
 The current Codex lane remains available until its existing cutover and retirement contracts permit removal.
 
-## 25. OpenCode Go example
+## 28. OpenCode Go example
 
 OpenCode Go is one composition of the generic system:
 
 ```yaml
 agentProfile:
   source:
+    kind: upstream
     upstreamId: opencode-native-ui
+    upstreamVersion: "<version>"
+    upstreamSnapshotDigest: sha256:...
   harness:
     id: opencode-native
+    implementationRef: omnigent-harness-implementation:sha256:...
   credentialSlots:
     - id: primary-model
       acceptedProviderIds:
@@ -1146,51 +1520,62 @@ providerProfile:
     api_key: secret://...
 
 credentialBindingSet:
-  primary-model:
-    providerProfileRef: opencode-go-default
-    materializerRef: opencode-auth-json@1
+  bindingSetId: opencode-go-primary
+  version: 3
+  digest: sha256:...
+  bindings:
+    primary-model:
+      providerProfileRef: opencode-go-default
+      materializerRef: opencode-auth-json@1
+
+model:
+  qualifiedId: opencode/<go-model>
+  modelConfigDigest: sha256:...
 
 hostClassRef: omnigent-native-standard@3
 launchPolicyRef: omnigent-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 ```
 
-The OpenCode materializer writes a protected, plan-owned auth file, validates the live model catalog, and removes its state before Provider Profile lease release.
+The execution plan selects the Provider Profile but not its generation. After lease acquisition, the runtime binding records the exact OpenCode Go credential generation.
 
-This addition requires no new top-level agent, Temporal workflow, or harness-named branch in the lifecycle coordinator.
+The OpenCode materializer writes a protected, binding-owned auth file. The exact host must attest the pinned OpenCode harness implementation and CLI build. Live model validation proves the selected Go model before session creation. Cleanup removes materializer state before Provider Profile lease release.
 
-## 26. Extension boundary
+This addition requires no new top-level agent, Temporal workflow, or harness-named branch in the generic lifecycle coordinator.
 
-### 26.1 Upstream harness metadata
+## 29. Extension boundary
 
-MoonMind consumes upstream capability and setup metadata. When upstream metadata is insufficient for automatic credentials or host selection, MoonMind uses an approved companion descriptor keyed by canonical harness id and package version.
+### 29.1 Upstream harness metadata
+
+MoonMind consumes upstream capability and setup metadata. When upstream metadata is insufficient for credential, runtime-build, or host selection, MoonMind uses an approved companion descriptor keyed by canonical harness implementation identity.
 
 The companion descriptor may declare:
 
 - credential slots.
 - accepted materializer classes.
 - host features.
-- required binaries and services.
+- required binaries, services, versions, and digest rules.
 - mutable state paths.
 - validation probes.
 - known conformance limitations.
 
 It cannot declare secret values, arbitrary mounts, Docker authority, or policy exceptions.
 
-### 26.2 Community plugins
+### 29.2 Community plugins
 
 A community plugin is launchable only when:
 
-- its package and version are approved.
+- its package, version, entry point, and digest are approved.
 - its catalog contribution is stable and conflict-free.
 - a compatible Host Class pins the plugin artifact.
+- the exact selected host attests that same plugin artifact.
 - every credential slot uses an approved materializer.
 - its required capabilities can be enforced.
-- its support classification permits the requested workflow.
+- its support classification permits the requested model and realizer combination.
 
 An unapproved plugin remains visible as quarantined.
 
-## 27. Failure taxonomy
+## 30. Failure taxonomy
 
 The platform uses typed low-cardinality failures, including:
 
@@ -1199,76 +1584,109 @@ OMNIGENT_HARNESS_CATALOG_UNAVAILABLE
 OMNIGENT_HARNESS_CATALOG_STALE
 OMNIGENT_HARNESS_UNKNOWN
 OMNIGENT_HARNESS_UNTRUSTED
+OMNIGENT_HARNESS_BUILD_MISMATCH
+OMNIGENT_VENDOR_RUNTIME_MISMATCH
 OMNIGENT_AGENT_IDENTITY_UNAVAILABLE
+OMNIGENT_AGENT_BUNDLE_IDENTITY_CONFLICT
+OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE
+OMNIGENT_SKILL_DELIVERY_MISMATCH
 OMNIGENT_CAPABILITY_REQUIRED_UNSUPPORTED
 OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN
+OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH
+OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT
 OMNIGENT_CREDENTIAL_SLOT_UNBOUND
 OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE
+OMNIGENT_CREDENTIAL_GENERATION_FENCED
 OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE
 OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED
 OMNIGENT_HOST_CLASS_UNAVAILABLE
 OMNIGENT_HOST_HARNESS_NOT_READY
 OMNIGENT_MODEL_UNAVAILABLE
+OMNIGENT_MODEL_CONFIG_UNSUPPORTED
 OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE
 OMNIGENT_EXECUTION_PLAN_CONFLICT
+OMNIGENT_EXECUTION_PLAN_DIGEST_MISMATCH
 OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE
+OMNIGENT_RUNTIME_BINDING_CONFLICT
 OMNIGENT_CLEANUP_DEFERRED
 ```
 
 Diagnostics name the failed boundary and an actionable remediation. They do not parse vendor log text as authority.
 
-## 28. Rejected alternatives
+## 31. Rejected alternatives
 
-### 28.1 One MoonMind runtime per harness
+### 31.1 One MoonMind runtime per harness
 
 Rejected because it duplicates selection, credentials, host lifecycle, recovery, and evidence code and makes Omnigent a transport detail rather than the primary harness provider.
 
-### 28.2 Big-bang replacement of the Codex lane
+### 31.2 Big-bang replacement of the Codex lane
 
 Rejected because the existing Codex path contains substantial verified authority and recovery behavior. Replacing it before generic parity would increase risk and delay use of new harnesses.
 
-### 28.3 One universal host image
+### 31.3 Exact-host claims during pre-host planning
+
+Rejected because an on-demand exact host does not exist yet. Host Class evidence admits the class. A fenced post-realization verifier admits the exact host.
+
+### 31.4 Pre-lease credential generation in the plan
+
+Rejected because rotation can occur before lease acquisition. The plan selects the Provider Profile. The runtime binding records the acquired generation.
+
+### 31.5 One universal host image
 
 Rejected because harness dependencies, release cadence, size, authentication, and architecture support differ. Host Classes provide bounded composition.
 
-### 28.4 Trust upstream declarations alone
+### 31.6 Trust upstream declarations alone
 
-Rejected because capability declarations do not prove MoonMind policy enforcement, cleanup, secret containment, or live behavior.
+Rejected because capability declarations do not prove exact-host implementation, MoonMind policy enforcement, cleanup, secret containment, or live behavior.
 
-### 28.5 Workflow-time software installation
+### 31.7 Workflow-time software installation
 
 Rejected for supported production execution because mutable installation breaks image authority, reproducibility, egress policy, and conformance evidence.
 
-### 28.6 Silent fallback to another harness
+### 31.8 Silent fallback to another harness or realizer
 
 Rejected because it changes credentials, billing, model behavior, continuation semantics, and evidence authority.
 
-## 29. Acceptance criteria
+### 31.9 Self-referential plan hashes
+
+Rejected because an object cannot contain the digest of its complete own bytes without a special exclusion rule. The plan envelope stores the payload digest outside the payload.
+
+## 32. Acceptance criteria
 
 The design is realized when:
 
 1. MoonMind projects the selected Omnigent endpoint's harness catalog without a Codex-only allowlist.
-2. Every catalog row has a trust and support classification.
-3. Agent Profiles pin a canonical harness and catalog snapshot.
-4. Required and preferred capabilities are negotiated before lease acquisition.
-5. Provider Profiles remain the single account-capacity and cooldown authority.
-6. Credential materializers are versioned, allowlisted, secret-safe, and cleanup-aware.
-7. Host Classes are immutable and live host readiness is checked for the exact harness.
-8. Launch policies no longer require harness-named runtime branches.
-9. Every run persists one secret-free execution plan.
-10. The fenced Omnigent control plane owns the session and side-effect journal.
-11. Adding an approved harness does not require a new branch in the generic lifecycle coordinator.
-12. Unknown community harnesses receive no credentials or workflow authority.
-13. Existing Codex workflows continue to run through the current realizer without reduced behavior.
-14. Existing Codex histories, checkpoints, and evidence remain readable.
-15. The generic realizer can run at least one non-Codex own-auth harness and one different integration class.
-16. OpenCode Go can run through `opencode-native` with managed credential materialization.
-17. Cancellation, cleanup, and janitor recovery are proven for generic hosts.
-18. Codex moves to the generic realizer only after the existing Codex support matrix passes for that realizer.
-19. Omnigent can be the preselected execution provider while Codex remains the default proven Agent Profile.
-20. Direct runtimes remain available only according to their existing rollback and retirement contracts.
+2. Every catalog row has an exact implementation identity, trust state, and support classification.
+3. Agent Profiles use a discriminated upstream or bundle-backed source.
+4. Bundle-backed plans carry the artifact digest, import receipt, imported identity, and imported content digest.
+5. Agent Profiles pin a canonical harness implementation and catalog snapshot.
+6. Agent Profile Skill intent resolves to immutable Skill and delivery refs before plan commitment.
+7. Credential-binding-set refs include stable id, immutable version, and digest.
+8. Plans select Provider Profiles and materializers without pre-lease credential generations.
+9. Runtime bindings record the exact acquired generations after lease acquisition.
+10. Required and preferred class capabilities are negotiated before lease acquisition.
+11. On-demand hosts are admitted by Host Class evidence, not fictional exact-host readiness.
+12. Every exact host attests the selected harness implementation, vendor runtime, network, mounts, Skills, and required capabilities before runner or session creation.
+13. Provider Profiles remain the single account-capacity and cooldown authority.
+14. Credential materializers are versioned, allowlisted, secret-safe, generation-aware, and cleanup-aware.
+15. Host Classes are immutable and never replace exact-host proof.
+16. Launch policies no longer require harness-named runtime branches.
+17. Every run persists one canonical secret-free plan payload and a non-self-referential envelope ref.
+18. Every realized run persists a separate fenced runtime binding.
+19. Support identity includes exact model configuration and execution realizer version.
+20. The fenced Omnigent control plane owns the session and side-effect journal.
+21. Adding an approved harness does not require a new branch in the generic lifecycle coordinator.
+22. Unknown community harnesses receive no credentials or workflow authority.
+23. Existing Codex workflows continue through the current realizer without reduced behavior.
+24. Existing Codex histories, checkpoints, Skills, and evidence remain readable.
+25. The generic realizer can run at least one non-Codex own-auth harness and one different integration class.
+26. OpenCode Go can run through `opencode-native` with managed credential materialization and exact-host build attestation.
+27. Cancellation, credential rotation, cleanup, and janitor recovery are proven for generic hosts.
+28. Codex moves to the generic realizer only after the existing Codex support matrix passes for that exact realizer and model configuration.
+29. Omnigent can be the preselected execution provider while Codex remains the default proven Agent Profile.
+30. Direct runtimes remain available only according to their existing rollback and retirement contracts.
 
-## 30. Document authority and future promotion
+## 33. Document authority and future promotion
 
 This design owns the target generic harness-platform model.
 
