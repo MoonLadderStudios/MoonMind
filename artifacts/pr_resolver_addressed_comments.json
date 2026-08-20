@@ -155,6 +155,11 @@
     "rationale": "Support classification now requires has_experimental_evidence for experimental, otherwise discovered_only."
   },
   {
+    "id": 3824599640,
+    "disposition": "addressed",
+    "rationale": "Removed unused top-level hashlib import; now imported locally where used for support key generation."
+  },
+  {
     "id": 4968365371,
     "disposition": "addressed",
     "rationale": "Fixed conflict: merged main ledger entries with harness platform entries."

@@ -20,7 +20,6 @@ Lifecycle ordering preserved (19 steps 1-13).
 
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import Any
 
@@ -320,9 +319,10 @@ def compile_execution_plan(
     # Full agent source identity (not just ID) to differentiate bundles with same ID but different version/content
     agent_source_full = profile.source.model_dump(by_alias=True, mode="json")
     # Use full source digest for support key to differentiate bundles
+    import hashlib as _hashlib
     import json as _json
     agent_source_ref = _json.dumps(agent_source_full, sort_keys=True, separators=(",", ":"))
-    agent_source_ref = "agent-source:sha256:" + hashlib.sha256(agent_source_ref.encode()).hexdigest()
+    agent_source_ref = "agent-source:sha256:" + _hashlib.sha256(agent_source_ref.encode()).hexdigest()
 
     support_payload = SupportKeyPayload.model_validate(
         {
