@@ -32,6 +32,7 @@ LLM_TASK_QUEUE = "mm.activity.llm"
 SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
+AGENT_RUNTIME_CONTROL_TASK_QUEUE = "mm.activity.agent_runtime.control"
 DEPLOYMENT_TASK_QUEUE = "mm.activity.deployment"
 
 
@@ -341,6 +342,18 @@ def build_default_activity_catalog(
     cfg = temporal_settings or settings.temporal
     workflow_task_queue = get_workflow_task_queue(cfg)
     workflow_poll_task_queues = get_workflow_poll_task_queues(cfg)
+    agent_runtime_control_task_queue = str(
+        cfg.activity_agent_runtime_control_task_queue or ""
+    ).strip()
+    if not agent_runtime_control_task_queue:
+        raise TemporalActivityCatalogError(
+            "agent runtime control task queue must not be empty"
+        )
+    if agent_runtime_control_task_queue == cfg.activity_agent_runtime_task_queue:
+        raise TemporalActivityCatalogError(
+            "agent runtime control task queue must be isolated from long-lived "
+            "agent runtime activities"
+        )
 
     # See docs/Temporal/ErrorTaxonomy.md
     NON_RETRYABLE_ERRORS = (
@@ -1422,7 +1435,7 @@ def build_default_activity_catalog(
             activity_type="agent_runtime.evaluate_terminal_evidence",
             family="agent_runtime",
             capability_class="agent_runtime",
-            task_queue=cfg.activity_agent_runtime_task_queue,
+            task_queue=agent_runtime_control_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(60, 180),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=30),
@@ -1672,7 +1685,10 @@ def build_default_activity_catalog(
         ),
         TemporalWorkerFleet(
             fleet=AGENT_RUNTIME_FLEET,
-            task_queues=(cfg.activity_agent_runtime_task_queue,),
+            task_queues=(
+                cfg.activity_agent_runtime_task_queue,
+                agent_runtime_control_task_queue,
+            ),
             capabilities=("agent_runtime", "docker_workload"),
             privileges=(
                 "isolated_process_execution",

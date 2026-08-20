@@ -32,6 +32,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH,
     RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
+    RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH,
     RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH,
     RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH,
     RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH,
@@ -46,6 +47,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
     RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH,
+    RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
     RUN_STEP_EXECUTION_NAMING_PATCH,
@@ -207,6 +209,91 @@ def test_agent_request_propagates_required_capabilities_with_replay_gate() -> No
     assert current.parameters["repository"] == "MoonLadderStudios/MoonMind"
     assert "requiredCapabilities" not in replaying.parameters
     assert "repository" not in replaying.parameters
+
+
+def test_agent_request_merges_resolved_skill_capabilities_with_replay_gate() -> None:
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:resolved-capabilities",
+        run_id="run-resolved-capabilities",
+        parent=None,
+    )
+    wf = MoonMindRunWorkflow()
+    wf._record_resolved_selected_skill(
+        resolved={
+            "skills": [
+                {
+                    "skillName": "batch-dependabot-resolver",
+                    "provenance": {"sourceKind": "built_in"},
+                    "requiredCapabilities": ["gh", "execution.fanout"],
+                }
+            ]
+        },
+        selected_skill="batch-dependabot-resolver",
+        node_id="node-1",
+        terminal_contract_enabled=False,
+    )
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: patch_id
+            in {
+                RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH,
+                RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH,
+                RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH,
+            },
+        ),
+    ):
+        current = wf._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "omnigent"},
+                "selectedSkill": "batch-dependabot-resolver",
+            },
+            node_id="node-1",
+            tool_name="omnigent",
+            workflow_parameters={"requiredCapabilities": ["git", "GH"]},
+        )
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
+            ),
+        ),
+    ):
+        replaying = wf._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "omnigent"},
+                "selectedSkill": "batch-dependabot-resolver",
+            },
+            node_id="node-1",
+            tool_name="omnigent",
+            workflow_parameters={"requiredCapabilities": ["git"]},
+        )
+
+    assert current.parameters["requiredCapabilities"] == [
+        "git",
+        "gh",
+        "execution.fanout",
+    ]
+    assert current.step_execution is not None
+    assert current.step_execution.skill_source_policy["executionFanout"] == {
+        "authorized": True,
+        "selectedSkill": "batch-dependabot-resolver",
+        "sourceKind": "built_in",
+        "reasonCode": "trusted_resolved_skill_requirement",
+    }
+    assert replaying.parameters["requiredCapabilities"] == ["git"]
 
 
 def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:
@@ -3546,6 +3633,62 @@ class TestFetchProfileSnapshots(unittest.TestCase):
 
             # Should NOT be set when no data was fetched
             self.assertFalse(hasattr(wf, "_profile_snapshots"))
+
+        asyncio.run(run_test())
+
+    def test_fetch_profile_snapshots_preserves_non_launch_ready_identity(self) -> None:
+        """Explicit profiles remain known even when manager routing excludes them."""
+        import asyncio
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        from temporalio.common import RetryPolicy
+
+        wf = MoonMindRunWorkflow()
+        wf._execute_kwargs_for_route = lambda route: {
+            "task_queue": "mm.activity.artifacts",
+            "start_to_close_timeout": timedelta(seconds=60),
+            "schedule_to_close_timeout": timedelta(seconds=120),
+            "retry_policy": RetryPolicy(maximum_attempts=1),
+        }
+
+        async def run_test() -> None:
+            async def mock_execute_activity(
+                activity_name: str, *args: object, **kwargs: object
+            ) -> object:
+                runtime_id = args[0].get("runtime_id") if args else None
+                if (
+                    activity_name == "provider_profile.list"
+                    and runtime_id == "codex_cli"
+                ):
+                    return {
+                        "profiles": [],
+                        "profile_statuses": [
+                            {
+                                "profile_id": "codex-disabled",
+                                "runtime_id": "codex_cli",
+                                "enabled": False,
+                                "launch_ready": False,
+                                "auth_state": "validation_failed",
+                                "disabled_reason": "auth_invalid",
+                            }
+                        ],
+                    }
+                return {"profiles": [], "profile_statuses": []}
+
+            with patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                side_effect=mock_execute_activity,
+            ):
+                await wf._fetch_profile_snapshots()
+
+            self.assertIn("codex-disabled", wf._profile_snapshots)
+            with self.assertRaisesRegex(ValueError, "not launch-ready"):
+                wf._validated_execution_profile_ref(
+                    "codex-disabled",
+                    agent_id="codex_cli",
+                    source_label="Inherited",
+                )
 
         asyncio.run(run_test())
 

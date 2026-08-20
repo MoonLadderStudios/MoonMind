@@ -732,6 +732,13 @@ RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
 RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH = (
     "run-execution-fanout-authorization-v1"
 )
+# Resolved Skill metadata is the launch-time capability authority.  Plans may
+# have been compiled from an older registry projection, so merge the immutable
+# resolved snapshot's requirements into the AgentRun request before dispatch.
+# The Activity payload changes and therefore requires a replay gate.
+RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH = (
+    "run-resolved-skill-required-capabilities-v1"
+)
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
@@ -1552,6 +1559,9 @@ class MoonMindRunWorkflow:
         self._native_skill_binding_by_step: dict[str, dict[str, Any]] = {}
         self._execution_fanout_authorization_by_step: dict[
             str, dict[str, Any]
+        ] = {}
+        self._resolved_skill_required_capabilities_by_step: dict[
+            str, tuple[str, ...]
         ] = {}
         self._resolved_skill_terminal_contract_by_step: dict[
             str, dict[str, Any]
@@ -11174,7 +11184,15 @@ class MoonMindRunWorkflow:
                     **kwargs,
                 )
                 if isinstance(result, dict):
-                    for profile in result.get("profiles", []):
+                    # ``profiles`` remains the manager's launch-ready routing
+                    # set.  ``profile_statuses`` retains compact identity and
+                    # readiness evidence for explicitly selected profiles, so
+                    # a disabled profile is reported as not launch-ready rather
+                    # than incorrectly reported as unknown.
+                    for profile in (
+                        *result.get("profile_statuses", []),
+                        *result.get("profiles", []),
+                    ):
                         if isinstance(profile, dict):
                             pid = str(profile.get("profile_id", "")).strip()
                             if pid:
@@ -18735,6 +18753,9 @@ class MoonMindRunWorkflow:
             resolved,
             normalized_skill,
         )
+        self._resolved_skill_required_capabilities_by_step[node_id] = (
+            self._resolved_skill_required_capabilities(selected_entry)
+        )
         self._execution_fanout_authorization_by_step[node_id] = (
             self._resolved_skill_execution_fanout_authorization(
                 selected_entry,
@@ -18878,6 +18899,29 @@ class MoonMindRunWorkflow:
                 else "resolved_skill_policy_denied"
             ),
         }
+
+    @staticmethod
+    def _resolved_skill_required_capabilities(
+        resolved_entry: Any,
+    ) -> tuple[str, ...]:
+        if isinstance(resolved_entry, WorkflowMapping):
+            required = resolved_entry.get(
+                "required_capabilities",
+                resolved_entry.get("requiredCapabilities", ()),
+            )
+        else:
+            required = getattr(resolved_entry, "required_capabilities", ())
+        if not isinstance(required, Iterable) or isinstance(required, (str, bytes)):
+            return ()
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in required:
+            capability = str(value or "").strip().lower()
+            if not capability or capability in seen:
+                continue
+            seen.add(capability)
+            normalized.append(capability)
+        return tuple(normalized)
 
     @staticmethod
     def _resolved_skill_terminal_contract(
@@ -19336,6 +19380,25 @@ class MoonMindRunWorkflow:
                     "assessmentVerdict": "FULLY_IMPLEMENTED",
                     "assessmentArtifactRef": assessment_artifact_ref,
                 }
+        if self._workflow_patch_enabled(
+            RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH
+        ):
+            resolved_capabilities = (
+                self._resolved_skill_required_capabilities_by_step.get(node_id, ())
+            )
+            if resolved_capabilities:
+                authored_capabilities = parameters.get("requiredCapabilities", [])
+                if not isinstance(authored_capabilities, list):
+                    raise ValueError("requiredCapabilities must be a list")
+                merged_capabilities: list[str] = []
+                seen_capabilities: set[str] = set()
+                for value in (*authored_capabilities, *resolved_capabilities):
+                    capability = str(value or "").strip().lower()
+                    if not capability or capability in seen_capabilities:
+                        continue
+                    seen_capabilities.add(capability)
+                    merged_capabilities.append(capability)
+                parameters["requiredCapabilities"] = merged_capabilities
         if self._workflow_patch_enabled(
             RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
         ):

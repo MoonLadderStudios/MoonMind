@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from temporalio import activity
 
+from moonmind.config.settings import TemporalSettings
 from moonmind.workflows.skills.skill_plan_contracts import parse_skill_definition
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_FLEET,
@@ -18,6 +19,7 @@ from moonmind.workflows.temporal.activity_catalog import (
     SANDBOX_FLEET,
     SANDBOX_TASK_QUEUE,
     AGENT_RUNTIME_FLEET,
+    AGENT_RUNTIME_CONTROL_TASK_QUEUE,
     AGENT_RUNTIME_TASK_QUEUE,
     TemporalActivityCatalogError,
     build_default_activity_catalog,
@@ -134,6 +136,16 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
     assert "docker_workload" in fleets[AGENT_RUNTIME_FLEET].capabilities
 
 
+def test_agent_runtime_control_queue_must_be_isolated() -> None:
+    temporal_settings = TemporalSettings(
+        activity_agent_runtime_task_queue="shared-agent-runtime",
+        activity_agent_runtime_control_task_queue="shared-agent-runtime",
+    )
+
+    with pytest.raises(TemporalActivityCatalogError, match="must be isolated"):
+        build_default_activity_catalog(temporal_settings)
+
+
 def test_default_catalog_matches_runtime_binding_inventory() -> None:
     """Every concrete handler must be routable, and every route executable."""
     catalog = build_default_activity_catalog()
@@ -166,7 +178,14 @@ def test_terminal_evidence_evaluation_routes_to_agent_runtime_fleet() -> None:
     )
 
     assert route.fleet == AGENT_RUNTIME_FLEET
-    assert route.task_queue == AGENT_RUNTIME_TASK_QUEUE
+    assert route.task_queue == AGENT_RUNTIME_CONTROL_TASK_QUEUE
+    fleet = {
+        item.fleet: item for item in build_default_activity_catalog().fleets
+    }[AGENT_RUNTIME_FLEET]
+    assert fleet.task_queues == (
+        AGENT_RUNTIME_TASK_QUEUE,
+        AGENT_RUNTIME_CONTROL_TASK_QUEUE,
+    )
 
 
 def test_plan_generate_timeout_budget_allows_retry_after_attempt_timeout():
