@@ -7564,7 +7564,7 @@ export interface components {
              * Runtimeid
              * @enum {string}
              */
-            runtimeId: "codex_cli" | "claude_code";
+            runtimeId: "codex_cli" | "claude_code" | "opencode";
             /**
              * Busy
              * @default false
@@ -9130,7 +9130,7 @@ export interface components {
              * Runtimeid
              * @enum {string}
              */
-            runtimeId: "codex_cli" | "claude_code";
+            runtimeId: "codex_cli" | "claude_code" | "opencode";
             /** Gatereasons */
             gateReasons: components["schemas"]["GateReason"][];
         };
