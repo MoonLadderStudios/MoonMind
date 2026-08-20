@@ -320,7 +320,7 @@ def compile_execution_plan(
     # Full agent source identity (not just ID) to differentiate bundles with same ID but different version/content
     agent_source_full = profile.source.model_dump(by_alias=True, mode="json")
     # Use full source digest for support key to differentiate bundles
-    import hashlib, json as _json
+    import json as _json
     agent_source_ref = _json.dumps(agent_source_full, sort_keys=True, separators=(",", ":"))
     agent_source_ref = "agent-source:sha256:" + hashlib.sha256(agent_source_ref.encode()).hexdigest()
 

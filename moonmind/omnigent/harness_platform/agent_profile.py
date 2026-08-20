@@ -16,9 +16,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from moonmind.omnigent.harness_platform.failures import (
-    HarnessPlatformFailure,
-)
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")

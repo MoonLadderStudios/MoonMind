@@ -6,8 +6,6 @@ Exact-host validation: class-decision ∩ attestation ∩ mounts ∩ model ∩ s
 
 from __future__ import annotations
 
-from typing import Any
-
 from pydantic import BaseModel, ConfigDict, Field
 
 from moonmind.omnigent.harness_platform.failures import (

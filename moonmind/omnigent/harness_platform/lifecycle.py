@@ -11,7 +11,6 @@ Lifecycle order 1-35 must be preserved; retry reuses same plan/binding/generatio
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
