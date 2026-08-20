@@ -2064,6 +2064,27 @@ class FeatureFlagsSettings(BaseSettings):
             "OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS",
         ),
     )
+    omnigent_session_supervisor_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ENABLED",
+            "OMNIGENT_SESSION_SUPERVISOR_ENABLED",
+        ),
+    )
+    omnigent_session_supervisor_shadow: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_SHADOW",
+            "OMNIGENT_SESSION_SUPERVISOR_SHADOW",
+        ),
+    )
+    omnigent_session_supervisor_allowed_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_OWNER_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_OWNER_IDS",
+        ),
+    )
     omnigent_session_supervisor_allowed_execution_profile_refs: str = Field(
         "",
         validation_alias=AliasChoices(
@@ -2076,6 +2097,27 @@ class FeatureFlagsSettings(BaseSettings):
         validation_alias=AliasChoices(
             "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION",
             "OMNIGENT_SESSION_SUPERVISOR_GENERATION",
+        ),
+    )
+    omnigent_session_supervisor_allowed_launch_policy_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_LAUNCH_POLICY_REFS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_LAUNCH_POLICY_REFS",
+        ),
+    )
+    omnigent_session_supervisor_allowed_provider_profile_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_PROVIDER_PROFILE_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_PROVIDER_PROFILE_IDS",
+        ),
+    )
+    omnigent_session_supervisor_rollback_mode: str = Field(
+        "none",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
+            "OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
         ),
     )
     live_logs_session_timeline_rollout: Literal[
