@@ -2235,9 +2235,13 @@ async def test_nested_yield_continuation_replays_through_production_agent_run_ro
         ),
     )
 
-    # Every terminal-contract continuation activity crosses the production
-    # managed agent-runtime route, never a per-test task queue.
-    assert routed_queues == {"mm.activity.agent_runtime"}
+    # Continuation work stays on the primary runtime queue while terminal
+    # evaluation uses the isolated control lane. Both are production queues
+    # polled by the same agent-runtime fleet, never per-test task queues.
+    assert routed_queues == {
+        settings.temporal.activity_agent_runtime_task_queue,
+        settings.temporal.activity_agent_runtime_control_task_queue,
+    }
     expected_turns = 1 if recover else expected["continuationCount"]
     assert len(turns) == expected_turns
     assert {

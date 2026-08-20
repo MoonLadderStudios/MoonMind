@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
@@ -22,6 +25,37 @@ def _load_module() -> dict[str, Any]:
             / "batch_dependabot_resolver.py"
         )
     )
+
+
+def _helper_path() -> Path:
+    return (
+        Path(__file__).resolve().parents[2]
+        / ".agents"
+        / "skills"
+        / "batch-dependabot-resolver"
+        / "bin"
+        / "batch_dependabot_resolver.py"
+    )
+
+
+def test_packaged_helper_starts_without_importing_moonmind(
+    tmp_path: Path,
+) -> None:
+    helper_path = _helper_path()
+    helper_source = helper_path.read_text(encoding="utf-8")
+    assert "from moonmind" not in helper_source
+    assert "import moonmind" not in helper_source
+    result = subprocess.run(
+        [sys.executable, str(helper_path), "--help"],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": ""},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "--repo" in result.stdout
 
 
 def _dependabot_pr(**overrides: Any) -> dict[str, Any]:
@@ -683,6 +717,49 @@ def test_resolve_runtime_selection_prefers_explicit(tmp_path: Path) -> None:
         _args(task_context_path=str(task_context), runtime_mode="gemini")
     )
     assert runtime.mode == "gemini"
+
+
+def test_execution_fanout_token_prefers_lease_owned_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    token_file = tmp_path / "execution-fanout"
+    token_file.write_text("scoped-capability\n", encoding="utf-8")
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE", str(token_file)
+    )
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", "broader-environment-value"
+    )
+
+    assert module["_read_execution_fanout_token"]() == "scoped-capability"
+
+
+def test_execution_fanout_token_file_fails_closed_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    monkeypatch.setenv(
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE",
+        str(tmp_path / "missing-capability"),
+    )
+
+    with pytest.raises(RuntimeError, match="capability file is unavailable"):
+        module["_read_execution_fanout_token"]()
+
+
+def test_default_artifacts_dir_ignores_missing_parent_task_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_module()
+    workspace = tmp_path / "workspaces" / "run"
+    workspace.mkdir(parents=True)
+    monkeypatch.chdir(workspace)
+    monkeypatch.delenv("MOONMIND_SESSION_ARTIFACT_SPOOL_PATH", raising=False)
+    monkeypatch.delenv("MOONMIND_TASK_CONTEXT_PATH", raising=False)
+    monkeypatch.delenv("TASK_CONTEXT_PATH", raising=False)
+
+    assert module["_resolve_artifacts_dir"]("artifacts") == Path("artifacts")
 
 
 # ---------------------------------------------------------------------------

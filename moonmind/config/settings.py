@@ -120,6 +120,10 @@ class TemporalSettings(BaseSettings):
         "mm.activity.agent_runtime",
         validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE",
     )
+    activity_agent_runtime_control_task_queue: str = Field(
+        "mm.activity.agent_runtime.control",
+        validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE",
+    )
     activity_deployment_task_queue: str = Field(
         "mm.activity.deployment",
         validation_alias="TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE",
