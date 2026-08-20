@@ -29,7 +29,10 @@ from moonmind.omnigent.control_plane import (
     TURN_STATE_TERMINAL,
     CommandIdempotencyConflictError,
     ConflictingSessionAuthorityError,
+    FencingConflictError,
+    FencingScope,
     OmnigentControlPlaneStore,
+    RevisionConflictError,
     TerminalSessionOverwriteError,
     TurnIdempotencyConflictError,
     UnknownSchemaVersionError,
@@ -404,6 +407,208 @@ async def test_terminal_session_allows_cleanup_and_archive_transitions(store) ->
                 cleanup_state="purged",
                 observed_state="running",
             )
+
+
+@pytest.mark.asyncio
+async def test_supervisor_runtime_authority_bind_is_fenced_and_idempotent(store) -> None:
+    """MoonLadderStudios/MoonMind#3705 receipts survive Activity retries."""
+
+    async with store.transaction() as repos:
+        created = await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
+        )
+        bound = await repos.sessions.bind_runtime_authority(
+            "s1",
+            expected_revision=created.revision,
+            expected_fencing_generation=created.fencing_generation,
+            host_binding_ref="binding-1",
+            host_lease_ref="lease-1",
+            metadata_patch={"endpointRef": "endpoint-1"},
+        )
+        replayed = await repos.sessions.bind_runtime_authority(
+            "s1",
+            expected_revision=created.revision,
+            expected_fencing_generation=created.fencing_generation,
+            host_binding_ref="binding-1",
+            host_lease_ref="lease-1",
+            metadata_patch={"endpointRef": "endpoint-1"},
+        )
+    assert replayed == bound
+
+    with pytest.raises(RevisionConflictError):
+        async with store.transaction() as repos:
+            await repos.sessions.bind_runtime_authority(
+                "s1",
+                expected_revision=created.revision,
+                expected_fencing_generation=created.fencing_generation,
+                metadata_patch={"differentReceipt": "artifact-2"},
+            )
+
+
+@pytest.mark.asyncio
+async def test_supervisor_terminal_evidence_is_immutable(store) -> None:
+    """MoonLadderStudios/MoonMind#3705 keeps historical reads authoritative."""
+
+    async with store.transaction() as repos:
+        created = await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
+        )
+        terminal = await repos.sessions.mark_terminal(
+            "s1",
+            "completed",
+            expected_revision=created.revision,
+            expected_fencing_generation=created.fencing_generation,
+        )
+        attached = await repos.sessions.attach_terminal_evidence(
+            "s1",
+            terminal_evidence_ref="artifact-1",
+            expected_revision=terminal.revision,
+            expected_fencing_generation=terminal.fencing_generation,
+        )
+        replayed = await repos.sessions.attach_terminal_evidence(
+            "s1",
+            terminal_evidence_ref="artifact-1",
+            expected_revision=terminal.revision,
+            expected_fencing_generation=terminal.fencing_generation,
+        )
+    assert attached == replayed
+
+    with pytest.raises(TerminalSessionOverwriteError):
+        async with store.transaction() as repos:
+            await repos.sessions.attach_terminal_evidence(
+                "s1",
+                terminal_evidence_ref="artifact-2",
+                expected_revision=attached.revision,
+                expected_fencing_generation=terminal.fencing_generation,
+            )
+
+    async with store.transaction() as repos:
+        second = await repos.sessions.create(
+            session_id="s2", moonmind_workflow_id="wf-2", provider="codex"
+        )
+        second_terminal = await repos.sessions.mark_terminal(
+            "s2",
+            "completed",
+            expected_revision=second.revision,
+            expected_fencing_generation=second.fencing_generation,
+        )
+        await repos.sessions.update_lifecycle(
+            "s2",
+            expected_revision=second_terminal.revision,
+            expected_fencing_generation=second_terminal.fencing_generation,
+            cleanup_state="provider_stopped",
+        )
+    with pytest.raises(RevisionConflictError):
+        async with store.transaction() as repos:
+            await repos.sessions.attach_terminal_evidence(
+                "s2",
+                terminal_evidence_ref="artifact-stale",
+                expected_revision=second_terminal.revision,
+                expected_fencing_generation=second_terminal.fencing_generation,
+            )
+
+
+@pytest.mark.asyncio
+async def test_supervisor_provider_attachment_rejects_delayed_authority(store) -> None:
+    """MoonLadderStudios/MoonMind#3705 fences delayed provider receipts."""
+
+    async with store.transaction() as repos:
+        created = await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
+        )
+        attached = await repos.sessions.attach_provider_session(
+            "s1",
+            "provider-session-1",
+            expected_revision=created.revision,
+            expected_fencing_generation=created.fencing_generation,
+        )
+        replayed = await repos.sessions.attach_provider_session(
+            "s1",
+            "provider-session-1",
+            expected_revision=created.revision,
+            expected_fencing_generation=created.fencing_generation,
+        )
+    assert attached == replayed
+    assert attached.revision == created.revision + 1
+
+    async with store.transaction() as repos:
+        second = await repos.sessions.create(
+            session_id="s2", moonmind_workflow_id="wf-2", provider="codex"
+        )
+        advanced = await repos.sessions.update_lifecycle(
+            "s2",
+            expected_revision=second.revision,
+            expected_fencing_generation=second.fencing_generation,
+            observed_state="launching",
+        )
+    assert advanced.revision == second.revision + 1
+    with pytest.raises(RevisionConflictError):
+        async with store.transaction() as repos:
+            await repos.sessions.attach_provider_session(
+                "s2",
+                "provider-session-2",
+                expected_revision=second.revision,
+                expected_fencing_generation=second.fencing_generation,
+            )
+
+    async with store.transaction() as repos:
+        third = await repos.sessions.create(
+            session_id="s3", moonmind_workflow_id="wf-3", provider="codex"
+        )
+        await repos.sessions.acquire_fencing_generation(
+            "s3",
+            FencingScope.SESSION_SUPERVISOR,
+            expected_revision=third.revision,
+        )
+    with pytest.raises(FencingConflictError):
+        async with store.transaction() as repos:
+            await repos.sessions.attach_provider_session(
+                "s3",
+                "provider-session-3",
+                expected_revision=third.revision,
+                expected_fencing_generation=third.fencing_generation,
+            )
+
+
+@pytest.mark.asyncio
+async def test_turn_writes_require_active_supervisor_generation(store) -> None:
+    """#3705 Activities must present the session fence, not the turn's old one."""
+
+    async with store.transaction() as repos:
+        created = await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
+        )
+        turn = await repos.turn_attempts.create(
+            turn_attempt_id="t1",
+            session_id="s1",
+            idempotency_key="turn-1",
+        )
+        fenced = await repos.sessions.acquire_fencing_generation(
+            "s1",
+            FencingScope.SESSION_SUPERVISOR,
+            expected_revision=created.revision,
+        )
+
+    assert turn.fencing_generation == 0
+    assert fenced.fencing_generation == 1
+    with pytest.raises(FencingConflictError):
+        async with store.transaction() as repos:
+            await repos.turn_attempts.advance_state(
+                "t1",
+                "accepted",
+                expected_revision=turn.revision,
+                expected_fencing_generation=turn.fencing_generation,
+            )
+
+    async with store.transaction() as repos:
+        accepted = await repos.turn_attempts.advance_state(
+            "t1",
+            "accepted",
+            expected_revision=turn.revision,
+            expected_fencing_generation=fenced.fencing_generation,
+        )
+    assert accepted.state == "accepted"
+    assert accepted.fencing_generation == fenced.fencing_generation
 
 
 @pytest.mark.asyncio

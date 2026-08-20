@@ -168,6 +168,10 @@ def test_ambiguous_submission_never_reissues(make_intent, make_durable, now):
     )
     assert first.kind == DecisionKind.SUBMIT_TURN
     submit_command_id = first.command.command_id
+    exact_replay = reconcile(
+        intent=intent, durable=durable, observations=ObservationSet(), now=now
+    )
+    assert exact_replay.command.command_id == submit_command_id
 
     # Executor issued the command but delivery is ambiguous.
     durable = _advance(durable, first, confirm_submit=False)
@@ -181,16 +185,29 @@ def test_ambiguous_submission_never_reissues(make_intent, make_durable, now):
         assert again.kind == DecisionKind.AWAIT_OBSERVATION
         assert again.command is None
 
-    # A retry of the same attempt reuses the identical command identity, so the
-    # executor dedups it (at-most-once logical submission, invariant 7).
-    replay = reconcile(
+
+
+def test_command_identity_changes_when_revision_authority_advances(
+    make_intent, make_durable, now
+):
+    """MoonLadderStudios/MoonMind#3705 never revives a stale pending command."""
+
+    intent = make_intent()
+    first = reconcile(
         intent=intent,
-        durable=durable.model_copy(update={"submission": SubmissionState.NOT_SUBMITTED}),
+        durable=make_durable(revision=7),
         observations=ObservationSet(),
         now=now,
     )
-    assert replay.kind == DecisionKind.SUBMIT_TURN
-    assert replay.command.command_id == submit_command_id
+    advanced = reconcile(
+        intent=intent,
+        durable=make_durable(revision=8),
+        observations=ObservationSet(),
+        now=now,
+    )
+
+    assert first.kind == advanced.kind == DecisionKind.ENSURE_PROFILE_LEASE
+    assert first.command.command_id != advanced.command.command_id
 
 
 def test_no_premature_lease_release(make_intent, make_durable, now):

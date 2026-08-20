@@ -161,15 +161,20 @@ def _command_id(durable: DurableSessionState, kind: DecisionKind) -> str:
 
     ``submit_turn`` is scoped by the current attempt so re-running the reducer on
     an unchanged durable state yields the identical command id (at-most-once
-    submission, invariant 7). Other commands are scoped by session + fencing
-    generation + kind, which is stable until the durable state advances.
+    submission, invariant 7). Every command also includes the observed revision:
+    if an observation or competing writer advances canonical authority between
+    decision persistence and claim, reconciliation produces a new command rather
+    than reviving the stale revision's pending command.
     """
 
     if kind == DecisionKind.SUBMIT_TURN:
         token = durable.attempt_id or "unknown_attempt"
     else:
         token = kind.value
-    return f"{durable.session_id}:g{durable.fencing_generation}:{token}"
+    return (
+        f"{durable.session_id}:g{durable.fencing_generation}:"
+        f"r{durable.revision}:{token}"
+    )
 
 
 def _decision(
