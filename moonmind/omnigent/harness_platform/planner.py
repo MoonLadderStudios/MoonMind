@@ -244,8 +244,10 @@ def compile_execution_plan(
             get_materializer(ref)
             # materializers don't directly expose capability booleans; assume compatible if allowlisted
             materializer_caps[ref] = True
-        except Exception:
-            pass
+        except Exception as exc:
+            # Materializer not found is handled as incompatible during admission; keep empty for now
+            _ = exc
+            continue
     bridge_caps = bridge_capabilities or {}
     policy_caps = list(launch_policy.controlCapabilities)
 

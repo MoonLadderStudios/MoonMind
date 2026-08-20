@@ -25,7 +25,6 @@ from moonmind.omnigent.harness_platform.catalog import (
     TrustState,
     assert_catalog_fresh,
     classify_harness_trust,
-    compute_catalog_ref,
     create_catalog_snapshot,
     is_launchable_trust,
 )
@@ -36,7 +35,6 @@ from moonmind.omnigent.harness_platform.credential_bindings import (
     parse_binding_set_ref,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
-    OmnigentExecutionPlanPayload,
     compute_model_config_digest,
     compute_plan_ref,
     create_execution_plan_envelope,
@@ -44,7 +42,6 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 )
 from moonmind.omnigent.harness_platform.extension import (
     CompanionDescriptor,
-    register_companion_descriptor,
     validate_community_plugin_launchable,
 )
 from moonmind.omnigent.harness_platform.failures import (
@@ -63,7 +60,6 @@ from moonmind.omnigent.harness_platform.lifecycle import (
 from moonmind.omnigent.harness_platform.materializers import (
     get_materializer,
     materialize_credential,
-    validate_binding_materializer,
 )
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.runtime_binding import (
@@ -78,7 +74,6 @@ from moonmind.omnigent.harness_platform.support import (
     SupportClassification,
     SupportKeyPayload,
     classify_support,
-    compute_required_capabilities_digest,
     compute_support_combination_key,
 )
 
