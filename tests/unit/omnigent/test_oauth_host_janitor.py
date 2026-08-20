@@ -634,6 +634,90 @@ async def test_current_restricted_lease_without_cleanup_authority_fails_closed()
 
 
 @pytest.mark.asyncio
+async def test_credential_validator_without_egress_authority_releases_capacity() -> None:
+    lease = _lease(heartbeat_age=121)
+    lease.lease_purpose = "credential_validation"
+    lease.omnigent_session_id = None
+    lease.omnigent_host_id = None
+    lease.effective_launch_snapshot = {
+        "enforcedEgress": True,
+        "egressCleanupAuthorityRequired": True,
+    }
+    repository = _Repository(lease)
+    runtime = _Runtime(repository.order)
+    lease_client = _LeaseClient(repository.order)
+
+    class RunStore:
+        async def get_egress_cleanup_authority(self, **_kwargs):
+            return None
+
+        async def record_terminal_cleanup(self, **_kwargs):
+            return None
+
+    await OmnigentOAuthHostJanitor(
+        repository=repository,
+        runtime=runtime,
+        client=_Client(),
+        run_store=RunStore(),
+        lease_client=lease_client,
+    ).run_action(
+        action_kind="host_lease.reconcile_stale",
+        profile_id="profile-1",
+        host_lease_ref="lease-1",
+        expected_host_state="ready",
+        request_id="credential-validation-recovery",
+    )
+
+    assert runtime.stop_kwargs[0].get("effective_launch") is None
+    assert repository.order == [
+        "cleanup_claimed",
+        "host_stopped",
+        "lease_released",
+        "provider_released",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_credential_validator_with_bridge_session_requires_cleanup_authority() -> None:
+    lease = _lease(heartbeat_age=121)
+    lease.lease_purpose = "credential_validation"
+    lease.omnigent_session_id = None
+    lease.omnigent_host_id = None
+    lease.bridge_session_id = "bridge-1"
+    lease.effective_launch_snapshot = {
+        "enforcedEgress": True,
+        "egressCleanupAuthorityRequired": True,
+    }
+    repository = _Repository(lease)
+    runtime = _Runtime(repository.order)
+
+    class RunStore:
+        async def get_egress_cleanup_authority(self, **_kwargs):
+            return None
+
+        async def record_terminal_cleanup(self, **_kwargs):
+            return None
+
+    with pytest.raises(ValueError, match="cleanup authority is unavailable"):
+        await OmnigentOAuthHostJanitor(
+            repository=repository,
+            runtime=runtime,
+            client=_Client(),
+            run_store=RunStore(),
+            lease_client=_LeaseClient(repository.order),
+        ).run_action(
+            action_kind="host_lease.reconcile_stale",
+            profile_id="profile-1",
+            host_lease_ref="lease-1",
+            expected_host_state="ready",
+            request_id="credential-validation-bridge-recovery",
+        )
+
+    assert runtime.stopped == 0
+    assert repository.stopped == []
+
+
+@pytest.mark.asyncio
 async def test_forced_profile_drain_stops_idle_static_host_without_lease() -> None:
     repository = _Repository(_lease())
 

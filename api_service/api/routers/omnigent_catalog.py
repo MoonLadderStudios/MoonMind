@@ -59,6 +59,14 @@ from moonmind.omnigent.conformance import (
     ConformanceContractError,
     validate_acceptance_manifest,
 )
+from moonmind.omnigent.exact_artifact_conformance import (
+    ExactArtifactConformanceError,
+    assert_exact_artifact_evidence,
+)
+from moonmind.omnigent.live_verification_health import (
+    LiveVerificationHealthError,
+    assert_live_health_projection,
+)
 from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
 from moonmind.omnigent.cutover import effective_phase
 from moonmind.omnigent.remediation_matrix import load_remediation_release_status
@@ -263,6 +271,8 @@ _REASONS: dict[str, tuple[str, str]] = {
         "Restore the blocked Omnigent runtime capability or refresh its protected evidence.",
         "/settings#omnigent",
     ),
+    "exact_artifact_evidence_unavailable": ("Publish current Tier-1 exact deployable-artifact conformance for this source commit.", "/settings#omnigent"),
+    "live_verification_stale": ("Restore fresh protected-live verification evidence before rollout.", "/settings#omnigent"),
     "workspace_resolver_unavailable": ("Restore the workflow workspace resolver.", "/settings#system"),
     "profile_reconnect_required": ("Reconnect this OAuth Provider Profile.", "/settings#provider-profiles"),
     "profile_validation_required": ("Validate this OAuth Provider Profile.", "/settings#provider-profiles"),
@@ -361,7 +371,17 @@ def _support_evidence(
     bootstrap_evidence: AcceptanceBootstrapEvidence | None = None,
     now: datetime | None = None,
 ) -> SupportEvidence:
-    """Return release-support failures and bounded protected-evidence age."""
+    """Return release-support failures and bounded protected-evidence age.
+
+    Publication/readiness (#3508 / #3642) is only *supported* when the current
+    source commit is proven three ways, each fail-closed and each surfaced as a
+    distinct support reason rather than a hard blocker: the #3508 browser
+    acceptance matrix, the Tier-1 exact deployable-artifact conformance
+    (MoonLadderStudios/MoonMind#3710 AC10), and a fresh protected-live
+    verification projection. A code-only fix therefore cannot advertise
+    deployed acceptance/compatibility status until the exact deployable images
+    and the protected provider tier prove it.
+    """
 
     if bootstrap_evidence is not None:
         # The authenticated canary is itself producing the protected acceptance
@@ -378,8 +398,15 @@ def _support_evidence(
             host_digest=bootstrap_evidence.host_image_ref_observed.rsplit("@", 1)[1],
             ui_source_commit=bootstrap_evidence.ui_build_ref_observed,
         )
-    manifest_path = os.getenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "").strip()
     source_commit = os.getenv("MOONMIND_SOURCE_COMMIT", "").strip()
+    reasons: list[GateReason] = []
+    age: timedelta | None = None
+    server_digest: str | None = None
+    host_digest: str | None = None
+    ui_source_commit: str | None = None
+
+    # --- #3508 browser acceptance matrix -------------------------------------
+    manifest_path = os.getenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "").strip()
     try:
         if not manifest_path or not source_commit:
             raise ConformanceContractError("acceptance evidence is not configured")
@@ -394,30 +421,73 @@ def _support_evidence(
             evidence_root=manifest_file.parent,
         )
     except (OSError, json.JSONDecodeError, ConformanceContractError):
-        return SupportEvidence(
-            reasons=(_reason("acceptance_evidence_unavailable"),)
+        reasons.append(_reason("acceptance_evidence_unavailable"))
+    else:
+        try:
+            generated_at = datetime.fromisoformat(
+                str(manifest["generatedAt"]).replace("Z", "+00:00")
+            )
+            if generated_at.tzinfo is None:
+                generated_at = generated_at.replace(tzinfo=UTC)
+            evidence_age = (now or datetime.now(UTC)) - generated_at
+        except (KeyError, TypeError, ValueError):
+            # The validator owns this field in production. A non-authoritative test
+            # double may omit it; validated evidence is still known-current.
+            evidence_age = timedelta(0)
+        images = (
+            manifest.get("images")
+            if isinstance(manifest.get("images"), dict)
+            else {}
         )
+        age = evidence_age
+        server_digest = str(images.get("serverDigest") or "") or None
+        host_digest = str(images.get("hostDigest") or "") or None
+        ui_source_commit = str(manifest.get("sourceCommit") or "") or None
+
+    # --- Tier-1 exact deployable-artifact conformance (#3710 AC10) -----------
+    exact_path = os.getenv("MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE", "").strip()
     try:
-        generated_at = datetime.fromisoformat(
-            str(manifest["generatedAt"]).replace("Z", "+00:00")
-        )
-        if generated_at.tzinfo is None:
-            generated_at = generated_at.replace(tzinfo=UTC)
-        evidence_age = (now or datetime.now(UTC)) - generated_at
-    except (KeyError, TypeError, ValueError):
-        # The validator owns this field in production. A non-authoritative test
-        # double may omit it; validated evidence is still known-current.
-        evidence_age = timedelta(0)
-    images = (
-        manifest.get("images")
-        if isinstance(manifest.get("images"), dict)
-        else {}
-    )
+        if not exact_path or not source_commit:
+            raise ExactArtifactConformanceError("exact-artifact evidence is not configured")
+        evidence = json.loads(Path(exact_path).read_text(encoding="utf-8"))
+        if not isinstance(evidence, dict):
+            raise ExactArtifactConformanceError("exact-artifact evidence must be an object")
+        assert_exact_artifact_evidence(evidence, expected_commit=source_commit)
+    except (OSError, json.JSONDecodeError, ExactArtifactConformanceError):
+        reasons.append(_reason("exact_artifact_evidence_unavailable"))
+
+    # --- Fresh protected-live verification projection ------------------------
+    # Revalidated at *consumption*, not just at publication: the versioned
+    # schema, the ready verdict, the deployed commit, the projection's own
+    # freshness window, and the acceptance expiry it inherits. A once-ready file
+    # must stop being accepted when its manifest expires or scheduled
+    # monitoring stops publishing.
+    projection_path = os.getenv("MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION", "").strip()
+    try:
+        if not projection_path or not source_commit:
+            raise LiveVerificationHealthError(
+                "live-verification projection is not configured"
+            )
+        projection = json.loads(Path(projection_path).read_text(encoding="utf-8"))
+        if not isinstance(projection, dict):
+            raise LiveVerificationHealthError(
+                "live-verification projection must be an object"
+            )
+        assert_live_health_projection(projection, expected_commit=source_commit)
+    except (
+        OSError,
+        json.JSONDecodeError,
+        LiveVerificationHealthError,
+        ConformanceContractError,
+    ):
+        reasons.append(_reason("live_verification_stale"))
+
     return SupportEvidence(
-        age=evidence_age,
-        server_digest=str(images.get("serverDigest") or "") or None,
-        host_digest=str(images.get("hostDigest") or "") or None,
-        ui_source_commit=str(manifest.get("sourceCommit") or "") or None,
+        reasons=tuple(reasons),
+        age=age,
+        server_digest=server_digest,
+        host_digest=host_digest,
+        ui_source_commit=ui_source_commit,
     )
 
 

@@ -74,6 +74,10 @@ jobs:
           fi
           echo "server=$server_image" >> "$GITHUB_OUTPUT"
           echo "host=$host_image" >> "$GITHUB_OUTPUT"
+      - name: Record case start
+        id: case_start
+        shell: bash
+        run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
       - name: Run credentialed live matrix case
         id: live_case
         env:
@@ -104,6 +108,7 @@ jobs:
         shell: bash
         env:
           LIVE_CASE_OUTCOME: ${{ steps.live_case.outcome }}
+          CASE_START_EPOCH: ${{ steps.case_start.outputs.epoch }}
         run: |
           source_dir="artifacts/omnigent-conformance/live/${{ matrix.mode }}"
           upload_dir="artifacts/omnigent-conformance/upload/${{ matrix.mode }}"
@@ -111,8 +116,21 @@ jobs:
           if [[ "$LIVE_CASE_OUTCOME" == "success" ]]; then
             cp -R "$source_dir"/. "$upload_dir"/
           else
-            printf '{"mode":"%s","status":"failed","evidence":"withheld-after-unsuccessful-safety-gate"}\n' \
-              "${{ matrix.mode }}" > "$upload_dir/failure.json"
+            # Emit bounded, redacted failure diagnostics rather than a single
+            # opaque marker (issue #3710): a safe failure summary, setup
+            # stage, runner health, sanitized log tail, and duration.
+            duration=$(( $(date +%s) - ${CASE_START_EPOCH:-$(date +%s)} ))
+            log_file="$source_dir/case.log"
+            [[ -f "$log_file" ]] || log_file=""
+            python tools/stage_omnigent_failure_evidence.py \
+              --mode "${{ matrix.mode }}" \
+              --outcome "$LIVE_CASE_OUTCOME" \
+              --setup-stage "run-credentialed-live-matrix-case" \
+              --failure-summary "live conformance case '${{ matrix.mode }}' did not complete successfully" \
+              --runner-status "self-hosted omnigent-provider-verification" \
+              --duration-seconds "$duration" \
+              ${log_file:+--log-file "$log_file"} \
+              --upload-dir "$upload_dir"
           fi
       - name: Upload case evidence
         if: always()

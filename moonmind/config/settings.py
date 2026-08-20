@@ -120,6 +120,10 @@ class TemporalSettings(BaseSettings):
         "mm.activity.agent_runtime",
         validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE",
     )
+    activity_agent_runtime_control_task_queue: str = Field(
+        "mm.activity.agent_runtime.control",
+        validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE",
+    )
     activity_deployment_task_queue: str = Field(
         "mm.activity.deployment",
         validation_alias="TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE",
@@ -2038,6 +2042,40 @@ class FeatureFlagsSettings(BaseSettings):
         validation_alias=AliasChoices(
             "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_GENERATION",
             "CONTROL_STOP_CONTINUATION_GENERATION",
+        ),
+    )
+    omnigent_session_supervisor_admission_mode: Literal[
+        "disabled", "canary", "enabled"
+    ] = Field(
+        "enabled",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE",
+            "OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE",
+        ),
+        description=(
+            "Controls only admission of new profile-bound Omnigent session "
+            "supervisors; admitted histories remain operational."
+        ),
+    )
+    omnigent_session_supervisor_canary_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS",
+        ),
+    )
+    omnigent_session_supervisor_allowed_execution_profile_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
+        ),
+    )
+    omnigent_session_supervisor_generation: str = Field(
+        "omnigent-session-v1",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION",
+            "OMNIGENT_SESSION_SUPERVISOR_GENERATION",
         ),
     )
     live_logs_session_timeline_rollout: Literal[

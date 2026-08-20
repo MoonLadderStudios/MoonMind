@@ -13,8 +13,8 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
 
 from __future__ import annotations
 
-import logging
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
@@ -111,14 +111,15 @@ async def oauth_session_revalidate_bound_host(
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+    from moonmind.omnigent.oauth_hosts import (
+        HostPreflightFailure,
+        OmnigentOAuthHostError,
+        OmnigentOAuthHostRepository,
+    )
     from moonmind.omnigent.settings import (
         resolved_api_token,
         resolved_proxy_forward_headers,
         resolved_server_url,
-    )
-    from moonmind.repositories.lore_runtime import (
-        build_lore_repository_adapter_from_environment,
     )
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
@@ -148,6 +149,7 @@ async def oauth_session_revalidate_bound_host(
             expected_status="allocating",
             new_status="starting",
         )
+    credential_validation_failed = False
     try:
         async with httpx.AsyncClient() as http_client:
             client = OmnigentHttpClient(
@@ -156,65 +158,94 @@ async def oauth_session_revalidate_bound_host(
                 client=http_client,
                 upstream_header_allowlist=resolved_proxy_forward_headers(),
             )
-            runtime = OmnigentOAuthHostRuntime(
-                client=client,
-                lore_repository_adapter=build_lore_repository_adapter_from_environment(),
-            )
-            preflight = await runtime.prepare_host(
-                binding=binding,
-                host_lease=lease,
-                workspace_key=f"oauth-revalidate:{session_id}",
-            )
-            if lease.status == "starting":
-                lease = await repository.transition_host_lease(
-                    lease.lease_id,
-                    expected_status="starting",
-                    new_status="ready",
-                    fields={"omnigent_host_id": preflight["hostId"]},
+            runtime = OmnigentOAuthHostRuntime(client=client)
+            preflight_error: BaseException | None = None
+            preflight: dict[str, Any] | None = None
+            try:
+                preflight = await runtime.validate_credential_mount(
+                    binding=binding,
+                    host_lease=lease,
+                    effective_launch=(
+                        lease.effective_launch_snapshot
+                        or binding.effective_launch_snapshot
+                    ),
                 )
-            if binding.host_launch_profile_ref:
-                await runtime.stop_host(binding=binding, host_lease=lease)
-            await repository.mark_host_lease_stopped(lease.lease_id)
-    except Exception:
-        async with get_async_session_context() as db:
-            from sqlalchemy.future import select
-            from api_service.db.models import (
-                ManagedAgentProviderProfile,
-                ProviderProfileAuthState,
-                ProviderProfileDisabledReason,
-            )
+            except (Exception, asyncio.CancelledError) as exc:
+                preflight_error = exc
+                credential_validation_failed = (
+                    isinstance(exc, OmnigentOAuthHostError)
+                    and exc.code == HostPreflightFailure.LOGIN_STATUS_FAILED.value
+                )
 
-            profile = (
-                await db.execute(
-                    select(ManagedAgentProviderProfile).where(
-                        ManagedAgentProviderProfile.profile_id == profile_id
+            cleanup_error: BaseException | None = None
+            try:
+                cleanup = await runtime.stop_host(binding=binding, host_lease=lease)
+                if cleanup.get("cleanupResult") not in {
+                    "succeeded",
+                    "drained_owned_static_host",
+                }:
+                    raise OmnigentOAuthHostError(
+                        "OAuth credential validator cleanup was not proven",
+                        code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
                     )
-                )
-            ).scalar_one_or_none()
-            if profile is not None:
-                profile.enabled = False
-                profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
-                profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
-                behavior = dict(profile.command_behavior or {})
-                behavior["auth_readiness"] = {
-                    "launch_ready": False,
-                    "failure_reason": "bound_host_preflight_failed",
-                }
-                profile.command_behavior = behavior
-                await db.commit()
-                from api_service.services.provider_profile_service import (
-                    sync_provider_profile_manager,
+            except (Exception, asyncio.CancelledError) as exc:
+                cleanup_error = exc
+            if cleanup_error is not None:
+                if preflight_error is not None:
+                    raise cleanup_error from preflight_error
+                raise cleanup_error
+            await repository.mark_host_lease_stopped(lease.lease_id)
+            if preflight_error is not None:
+                raise preflight_error
+    except (Exception, asyncio.CancelledError):
+        # Destination binding, Docker, cleanup, and egress failures do not prove
+        # that the credential is invalid.  Revoking the Provider Profile for
+        # those substrate failures converts a retryable host problem into a
+        # persistent credential outage for every later scheduled run.  Only the
+        # typed credential-only login check owns auth-readiness mutation.
+        if credential_validation_failed:
+            async with get_async_session_context() as db:
+                from sqlalchemy.future import select
+                from api_service.db.models import (
+                    ManagedAgentProviderProfile,
+                    ProviderProfileAuthState,
+                    ProviderProfileDisabledReason,
                 )
 
-                await sync_provider_profile_manager(
-                    session=db, runtime_id=profile.runtime_id
-                )
+                profile = (
+                    await db.execute(
+                        select(ManagedAgentProviderProfile).where(
+                            ManagedAgentProviderProfile.profile_id == profile_id
+                        )
+                    )
+                ).scalar_one_or_none()
+                if profile is not None:
+                    profile.enabled = False
+                    profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
+                    profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
+                    behavior = dict(profile.command_behavior or {})
+                    behavior["auth_readiness"] = {
+                        "connected": False,
+                        "launch_ready": False,
+                        "failure_reason": "credential_login_status_failed",
+                    }
+                    profile.command_behavior = behavior
+                    await db.commit()
+                    from api_service.services.provider_profile_service import (
+                        sync_provider_profile_manager,
+                    )
+
+                    await sync_provider_profile_manager(
+                        session=db, runtime_id=profile.runtime_id
+                    )
         raise
+    if preflight is None:
+        raise RuntimeError("OAuth credential preflight produced no result")
     return {
         "profile_id": profile_id,
         "status": "ready",
         "credential_generation": lease.credential_generation,
-        "host_id": preflight["hostId"],
+        "validation_mode": preflight["validationMode"],
     }
 
 

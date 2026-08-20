@@ -28,10 +28,65 @@ BROWSER_EVIDENCE_VERSION = "moonmind.omnigent.live-evidence/v1"
 SUPPORTED_FIXTURE_VERSION = "moonmind.omnigent.fixture/v1"
 
 _DIGEST_REF = re.compile(r"^.+@sha256:[0-9a-f]{64}$")
-_SECRET = re.compile(
-    r"(?:ghp_|github_pat_|AIza|ATATT|AKIA|-----BEGIN [A-Z ]*PRIVATE KEY-----|"
-    r"(?i:token|password|authorization)\s*[:=]\s*[^\s,;]+)"
+
+# Header and assignment names whose *entire* value is session-bearing.  Matching
+# only up to the first separator would leave the credential itself in redacted
+# output (``Authorization: Bearer <token>`` keeping ``<token>``), so every
+# alternative below consumes the whole value: to the end of the line for
+# key/value forms, and through the credential body for well-known token shapes.
+SESSION_BEARING_KEYS = (
+    "authorization",
+    "proxy-authorization",
+    "www-authenticate",
+    "cookie",
+    "set-cookie",
+    "x-api-key",
+    "x-auth-token",
+    "token",
+    "password",
 )
+_SESSION_KEY_ALTERNATION = "|".join(re.escape(key) for key in SESSION_BEARING_KEYS)
+
+# Canonical secret matcher shared by evidence validation and redaction.  Every
+# alternative spans the material that must never be retained, so
+# ``SECRET_PATTERN.sub`` is a complete redaction and not a prefix strip.
+SECRET_PATTERN = re.compile(
+    # Well-known credential prefixes, including their token body.
+    r"ghp_[A-Za-z0-9_]*"
+    r"|github_pat_[A-Za-z0-9_]*"
+    r"|AIza[A-Za-z0-9_\-]*"
+    r"|ATATT[A-Za-z0-9_\-=+/]*"
+    r"|AKIA[A-Z0-9]*"
+    # Private keys, through the closing armor when it is present.
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----)?"
+    # Compact JWTs / session assertions, wherever they appear.
+    r"|eyJ[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]{6,}\.[A-Za-z0-9_\-]*"
+    # A bare scheme credential with no header name (``Bearer <token>``). The
+    # lookahead requires token-shaped material so ordinary prose such as
+    # "basic authentication" is not mistaken for a credential.
+    r"|(?i:bearer|basic)\s+(?=[A-Za-z0-9._~+/=\-]*[0-9._~+/=])[A-Za-z0-9._~+/=\-]{12,}"
+    # Session-bearing header / assignment values, through end of line.
+    rf"|(?i:{_SESSION_KEY_ALTERNATION})\s*[:=]\s*[^\r\n]+"
+)
+_SECRET = SECRET_PATTERN
+
+# Mapping keys that carry a credential regardless of the value's shape.
+_SECRET_KEYS = frozenset(SESSION_BEARING_KEYS)
+
+_REDACTION_PLACEHOLDER = "[redacted]"
+
+
+def redact_secrets(text: str, *, placeholder: str = _REDACTION_PLACEHOLDER) -> str:
+    """Replace every secret-like span in ``text`` with ``placeholder``.
+
+    This is the canonical redaction used before retained evidence is published.
+    Because :data:`SECRET_PATTERN` spans the complete credential (the whole
+    header value, the whole token body, the whole private-key block), redacted
+    output passes :func:`assert_secret_free` instead of keeping the credential
+    after a stripped key name.
+    """
+
+    return SECRET_PATTERN.sub(placeholder, text)
 REQUIRED_EVIDENCE_CHANNELS = (
     "logs",
     "temporalHistory",
@@ -318,7 +373,7 @@ def _resolve_acceptance_json(ref: str, evidence_root: Path) -> dict[str, Any]:
 def assert_secret_free(evidence: Any) -> None:
     if isinstance(evidence, Mapping):
         for key, value in evidence.items():
-            if str(key).strip().lower() in {"token", "password", "authorization"}:
+            if str(key).strip().lower() in _SECRET_KEYS:
                 raise ConformanceContractError("secret-like material detected in evidence")
             assert_secret_free(value)
         return

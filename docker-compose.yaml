@@ -57,9 +57,13 @@ services:
       # Native Omnigent Workflow Chat UI is served through MoonMind-scoped routes
       # (MoonLadderStudios/MoonMind#3638): the browser reaches the native UI at
       # /omnigent-ui/workflow-chat/{chatBindingId} on the MoonMind origin, never
-      # the upstream server directly. Enabled by default; the version is pinned to
-      # the upstream build MoonMind is verified against and must pass conformance
-      # before an operator advances it.
+      # the upstream server directly. Enabled by default. The compatibility
+      # version is derived from the same immutable server image evidence the
+      # execution catalog already requires (OMNIGENT_IMAGE_REF digest), so
+      # pinning the image is the only step needed to serve native chat. A
+      # mutable tag stays unverified and the gate fails closed
+      # (MoonLadderStudios/MoonMind#3685). OMNIGENT_NATIVE_UI_VERSION is the
+      # explicit override an operator sets after a new build passes conformance.
       - OMNIGENT_NATIVE_UI_ENABLED=${OMNIGENT_NATIVE_UI_ENABLED:-true}
       - OMNIGENT_NATIVE_UI_VERSION=${OMNIGENT_NATIVE_UI_VERSION:-}
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
@@ -72,6 +76,15 @@ services:
       - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
       - MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF=${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-/workspace/cutover/remediation-release.json}
+      # Release-support evidence the catalog reads for the deployed commit
+      # (MoonLadderStudios/MoonMind#3710). These default to the durable
+      # evidence directory mounted below, so `tools/materialize_omnigent_evidence.py`
+      # is the only step an operator runs to make the deployed catalog report
+      # real acceptance, exact-artifact, and protected-live status. No env
+      # configuration is required for the default deployment path.
+      - MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST=${MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST:-/workspace/omnigent-evidence/acceptance-manifest.json}
+      - MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE=${MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE:-/workspace/omnigent-evidence/exact-artifact-projection.json}
+      - MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION=${MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION:-/workspace/omnigent-evidence/live-health-projection.json}
       # The API needs DOCKER_HOST only for its remaining direct Docker paths
       # (terminal exec, OAuth auth-runner teardown). SYSTEM_DOCKER_HOST is a
       # trusted-worker-only backend selector and is not read by the API service.
@@ -110,6 +123,10 @@ services:
       - ./.agents:/app/.agents:ro
       - ./deploy/state:/workspace/deployment_state:ro
       - ${MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR:-./var/cutover}:/workspace/cutover:ro
+      # Durable release-support evidence for the deployed commit, materialized by
+      # tools/materialize_omnigent_evidence.py. Read-only: the API consumes
+      # published evidence and never produces it.
+      - ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}:/workspace/omnigent-evidence:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets
       # Live retrieval capability authority, accounting, and bounded evidence.
@@ -591,6 +608,7 @@ services:
       - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
       - TEMPORAL_WORKER_FLEET=agent_runtime
       - TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE:-mm.activity.agent_runtime}
+      - TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE=${TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE:-mm.activity.agent_runtime.control}
       - TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY=${TEMPORAL_AGENT_RUNTIME_WORKER_CONCURRENCY:-4}
       - MOONMIND_URL=${MOONMIND_URL:-http://api:8000}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}

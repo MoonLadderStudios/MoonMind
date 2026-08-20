@@ -66,6 +66,7 @@ Current core workflow types:
 - `MoonMind.ManifestIngest`
 - `MoonMind.ProviderProfileManager`
 - `MoonMind.AgentRun`
+- `MoonMind.OmnigentSession`
 - `MoonMind.AgentSession`
 - `MoonMind.ManagedSessionReconcile`
 - `MoonMind.OAuthSession`
@@ -116,6 +117,7 @@ Rules:
 | `MoonMind.ManifestIngest` | Ingest a manifest artifact, validate, compile to a plan/graph, orchestrate execution, aggregate results | manifest artifact ref, policy params | aggregated outputs, per-node results | seconds → hours |
 | `MoonMind.ProviderProfileManager` | Coordinate provider-profile slot assignment, release, cooldowns, and reconciliation for managed runtimes | runtime/profile coordination inputs | slot assignment, lease state transitions | minutes → long-lived |
 | `MoonMind.AgentRun` | Own the durable lifecycle of one true managed or external agent execution | `AgentExecutionRequest`, refs, runtime metadata | canonical agent result, artifacts, lifecycle outcome | seconds → hours |
+| `MoonMind.OmnigentSession` | Own one canonical profile-bound Omnigent session, reconcile bounded provider observations and fenced commands, then harvest, clean up, and release leases | immutable owner identities, compiled-intent ref and digest, frozen feature/compatibility versions | compact canonical agent result and durable evidence refs | minutes → hours |
 | `MoonMind.AgentSession` | Own one workflow-scoped managed runtime session container, including launch, turn routing, clear/reset epoch changes, status, summary refs, and teardown | `ManagedSessionWorkflowInput` for the live session-capable runtime (`codex_cli`) | session handle/state, continuity refs, control/reset refs | minutes → hours |
 | `MoonMind.ManagedSessionReconcile` | Periodically reconcile managed-session supervision records and container state outside any one workflow step | reconciliation policy and runtime scope | reconciliation summary and cleanup actions | seconds → minutes per run |
 | `MoonMind.OAuthSession` | Manage browser-initiated OAuth or terminal-auth session lifecycle for managed runtimes | session config, runtime/provider context | auth/session status, profile registration side effects | minutes |
@@ -583,7 +585,28 @@ Key notes:
 * external runs may use polling or streaming-gateway orchestration branches
 * workflow code should receive canonical runtime contracts from activities, not provider-native dicts
 
-## 11.4 `MoonMind.AgentSession` lifecycle
+## 11.4 `MoonMind.OmnigentSession` lifecycle
+
+One newly admitted profile-bound Omnigent execution is a deterministic child of
+`MoonMind.AgentRun`. It repeatedly loads canonical state and observation
+frontiers, persists the pure reconciler decision, executes its bounded fenced
+command, and waits for either a safe wake signal or the next authoritative
+snapshot deadline. Terminal evidence is harvested before provider and host
+cleanup, and Provider Profile capacity is released last. Continue-As-New keeps
+the workflow ID while carrying only compact immutable authority and frontier
+summaries; provider payloads, credentials, transcripts, and mutable host paths
+remain outside workflow history.
+
+A separately patched, bounded admission decision freezes the feature
+generation for each new session and supports enabled, exact-owner canary, and
+disabled-new-selection modes without changing ownership of admitted histories.
+Exhausted phases persist typed terminal evidence and continue through the
+reconciler's ordered cleanup. Exhausted cleanup preserves the primary result,
+publishes `cleanup_incomplete` evidence, and leaves an unclaimed durable cleanup
+authority record for the designated janitor instead of releasing profile
+capacity or hiding unfinished work.
+
+## 11.5 `MoonMind.AgentSession` lifecycle
 
 ```mermaid
 stateDiagram-v2
@@ -609,7 +632,7 @@ Key notes:
 * clear/reset creates a new `session_epoch` and publishes explicit continuity artifacts
 * additional runtime adoption should use the neutral managed-session contract rather than making runtime-specific types the public surface
 
-## 11.5 `MoonMind.ManagedSessionReconcile` lifecycle
+## 11.6 `MoonMind.ManagedSessionReconcile` lifecycle
 
 This workflow is a bounded support workflow for managed-session supervision.
 
@@ -622,7 +645,7 @@ Representative lifecycle concerns:
 
 It is not a user workflow and should not appear as a normal user workflow execution.
 
-## 11.6 `MoonMind.ProviderProfileManager` lifecycle
+## 11.7 `MoonMind.ProviderProfileManager` lifecycle
 
 This workflow is long-lived and coordination-oriented.
 
@@ -637,7 +660,7 @@ Representative lifecycle concerns:
 
 Its UI-facing state should stay compact; it is primarily an internal coordination workflow.
 
-## 11.7 `MoonMind.OAuthSession` lifecycle
+## 11.8 `MoonMind.OAuthSession` lifecycle
 
 Representative lifecycle:
 
@@ -674,7 +697,7 @@ This document is “done” when:
 4. Update and Signal names and payload shapes are finalized
 5. Continue-As-New triggers are defined
 6. cancellation semantics are unambiguous
-7. `MoonMind.AgentRun`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, and `MoonMind.ProviderProfileManager` are reflected as first-class workflow types
+7. `MoonMind.AgentRun`, `MoonMind.OmnigentSession`, `MoonMind.AgentSession`, `MoonMind.ManagedSessionReconcile`, and `MoonMind.ProviderProfileManager` are reflected as first-class workflow types
 8. canonical runtime contract boundaries are reflected in workflow expectations
 
 ---

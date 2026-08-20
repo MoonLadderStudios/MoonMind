@@ -1,6 +1,13 @@
 # syntax=docker/dockerfile:1.4
 ARG CODEX_CLI_VERSION=latest
-ARG CLAUDE_CLI_VERSION=latest
+# Pin the Claude CLI instead of tracking the mutable ``latest`` tag. Upstream
+# publishes the launcher wrapper and its platform-native packages separately, so
+# ``latest`` can point at a wrapper whose matching native package is not
+# published yet (2.1.237 required @anthropic-ai/claude-code-linux-x64@2.1.237,
+# which does not exist). npm then omits the unresolvable optional dependency and
+# the launcher aborts with "claude native binary not installed", breaking every
+# image build until upstream catches up. Bump this deliberately.
+ARG CLAUDE_CLI_VERSION=2.1.236
 # Build the shared runtime image with Codex/Claude CLIs by default so the API
 # and Temporal workers can run from the same image tag. Disable selectively in
 # test-only or constrained builds.

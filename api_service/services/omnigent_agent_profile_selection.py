@@ -160,7 +160,8 @@ async def resolve_agent_profile_snapshot(
     selection: Mapping[str, Any],
     consumer_type: str,
     consumer_id: str,
-    user: User,
+    user: User | None,
+    replace_existing_usage: bool = False,
 ) -> dict[str, Any]:
     """Validate, persist, and return one launch-authoritative profile snapshot.
 
@@ -171,7 +172,10 @@ async def resolve_agent_profile_snapshot(
     if not profile_id:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "agentProfile.profileId is required")
     profile = await session.get(OmnigentAgentProfile, profile_id)
-    if profile is None or (profile.visibility == "private" and profile.owner_id != user.id):
+    if profile is None or (
+        profile.visibility == "private"
+        and (user is None or profile.owner_id != user.id)
+    ):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "agent profile not found")
     if profile.state != "active":
         raise HTTPException(status.HTTP_409_CONFLICT, "agent profile is not active")
@@ -312,32 +316,52 @@ async def resolve_agent_profile_snapshot(
         "upstreamSnapshot": upstream_snapshot,
         "validationResult": version.validation_result,
     }
-    session.add(OmnigentAgentProfileUsage(
-        consumer_type=consumer_type,
-        consumer_id=consumer_id,
-        profile_id=profile_id,
-        version=version.version,
-        digest=version.digest,
-        effective_snapshot=snapshot,
-    ))
+    if replace_existing_usage:
+        usage = await session.scalar(
+            select(OmnigentAgentProfileUsage).where(
+                OmnigentAgentProfileUsage.consumer_type == consumer_type,
+                OmnigentAgentProfileUsage.consumer_id == consumer_id,
+            )
+        )
+        if usage is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "managed Agent Profile usage is unavailable for replacement",
+            )
+        usage.profile_id = profile_id
+        usage.version = version.version
+        usage.digest = version.digest
+        usage.effective_snapshot = snapshot
+    else:
+        session.add(OmnigentAgentProfileUsage(
+            consumer_type=consumer_type,
+            consumer_id=consumer_id,
+            profile_id=profile_id,
+            version=version.version,
+            digest=version.digest,
+            effective_snapshot=snapshot,
+        ))
     await session.flush()
     return snapshot
 
 
-async def refresh_managed_bootstrap_snapshot_for_rerun(
+async def refresh_managed_bootstrap_snapshot(
     session: AsyncSession,
     *,
     parameters: Mapping[str, Any],
+    consumer_type: str,
     consumer_id: str,
-    user: User,
+    user: User | None,
+    replace_existing_usage: bool = False,
 ) -> dict[str, Any]:
-    """Refresh product-managed launch authority while preserving run intent.
+    """Refresh product-managed launch authority while preserving consumer intent.
 
-    Exact reruns retain authored task inputs and operator-owned immutable profile
-    selections. The deployment-managed bootstrap profile is different: its
-    active version advances when MoonMind moves a built-in launch policy, so a
-    rerun must re-resolve that trusted snapshot rather than replaying an
-    authority version that the durable host binding no longer selects.
+    Operator-owned immutable profile selections are retained. The
+    deployment-managed bootstrap profile is different: its active version
+    advances when MoonMind moves a built-in launch policy, so long-lived
+    consumers such as reruns and recurring schedules must re-resolve that
+    trusted snapshot rather than replaying authority that the durable host
+    binding no longer selects.
     """
 
     from api_service.services.omnigent_agent_bootstrap_service import (
@@ -374,6 +398,24 @@ async def refresh_managed_bootstrap_snapshot_for_rerun(
             status.HTTP_409_CONFLICT,
             "managed bootstrap snapshot lineage does not match durable state",
         )
+    if replace_existing_usage:
+        existing_usage = await session.scalar(
+            select(OmnigentAgentProfileUsage).where(
+                OmnigentAgentProfileUsage.consumer_type == consumer_type,
+                OmnigentAgentProfileUsage.consumer_id == consumer_id,
+            )
+        )
+        if (
+            existing_usage is None
+            or existing_usage.profile_id != BOOTSTRAP_PROFILE_ID
+            or existing_usage.version != previous_version_number
+            or existing_usage.digest != previous_digest
+            or existing_usage.effective_snapshot != dict(previous)
+        ):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "managed bootstrap snapshot usage does not match durable state",
+            )
 
     selection: dict[str, Any] = {
         "profileId": BOOTSTRAP_PROFILE_ID,
@@ -411,9 +453,10 @@ async def refresh_managed_bootstrap_snapshot_for_rerun(
     refreshed = await resolve_agent_profile_snapshot(
         session,
         selection=selection,
-        consumer_type="workflow",
+        consumer_type=consumer_type,
         consumer_id=consumer_id,
         user=user,
+        replace_existing_usage=replace_existing_usage,
     )
     return compile_agent_profile_snapshot_parameters(
         compiled,
@@ -423,6 +466,6 @@ async def refresh_managed_bootstrap_snapshot_for_rerun(
 
 __all__ = [
     "compile_agent_profile_snapshot_parameters",
-    "refresh_managed_bootstrap_snapshot_for_rerun",
+    "refresh_managed_bootstrap_snapshot",
     "resolve_agent_profile_snapshot",
 ]

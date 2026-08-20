@@ -1420,6 +1420,16 @@ async def test_provider_profile_list_returns_enabled_profiles(tmp_path: Path):
         assert profiles[0]["enabled"] is True
         assert profiles[0]["auth_state"] == "connected"
         assert profiles[0]["max_parallel_runs"] == 1
+        assert {status["profile_id"] for status in result["profile_statuses"]} == {
+            "gprofile-1",
+            "gprofile-disabled",
+        }
+        disabled_status = next(
+            status
+            for status in result["profile_statuses"]
+            if status["profile_id"] == "gprofile-disabled"
+        )
+        assert disabled_status["launch_ready"] is False
 
 async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
@@ -1438,7 +1448,7 @@ async def test_provider_profile_list_returns_empty_for_unknown_runtime(tmp_path:
         finally:
             _db_base_mod.get_async_session_context = orig
 
-        assert result == {"profiles": []}
+        assert result == {"profiles": [], "profile_statuses": []}
 
 async def test_provider_profile_list_filters_by_runtime_id(tmp_path: Path):
     async with _in_memory_db(tmp_path) as session_factory:
@@ -1560,6 +1570,14 @@ async def test_provider_profile_list_filters_to_launch_ready_profiles(
         assert [profile["profile_id"] for profile in result["profiles"]] == [
             "ready-secret"
         ]
+        assert {
+            status["profile_id"] for status in result["profile_statuses"]
+        } == {
+            "ready-secret",
+            "disabled-setup-stub",
+            "connected-secret-without-binding",
+            "connected-oauth-without-volume",
+        }
 
 
 async def test_provider_profile_list_includes_unavailable_profiles_with_leases(

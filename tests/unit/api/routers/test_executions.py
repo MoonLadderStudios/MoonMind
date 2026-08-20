@@ -16452,7 +16452,24 @@ def _install_fake_store(monkeypatch, resolution=None, error=None):
     )
 
 
+def _declare_verified_immutable_server_image(monkeypatch) -> None:
+    """Serve as a deployment with verified immutable image evidence.
+
+    MoonLadderStudios/MoonMind#3685: the chat-binding projection only publishes
+    scoped navigation targets when the native-UI compatibility gate is ready,
+    and that version derives from the deployment's declared immutable Omnigent
+    server image. A mutable tag reports unknown and drops ``chatUrl``.
+    """
+
+    monkeypatch.delenv("OMNIGENT_NATIVE_UI_VERSION", raising=False)
+    monkeypatch.setenv(
+        "OMNIGENT_IMAGE_REF",
+        "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "d" * 64,
+    )
+
+
 def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
+    _declare_verified_immutable_server_image(monkeypatch)
     resolution = ChatBindingResolution(
         state="available",
         read_only=False,
@@ -16485,6 +16502,7 @@ def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
 
 
 def test_chat_binding_terminal_is_read_only(monkeypatch) -> None:
+    _declare_verified_immutable_server_image(monkeypatch)
     resolution = ChatBindingResolution(
         state="ended",
         read_only=True,

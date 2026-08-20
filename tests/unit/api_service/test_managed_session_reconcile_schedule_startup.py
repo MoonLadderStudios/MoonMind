@@ -78,6 +78,36 @@ async def test_api_startup_bootstrap_uses_only_local_image_evidence(
 
 
 @pytest.mark.asyncio
+async def test_bootstrap_reconciliation_refreshes_recurring_schedule_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    async def policies(*, refresh_images: bool) -> bool:
+        calls.append(f"policies:{refresh_images}")
+        return True
+
+    async def agent() -> bool:
+        calls.append("agent")
+        return True
+
+    async def schedules() -> bool:
+        calls.append("schedules")
+        return True
+
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_policies", policies)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_agent_profile", agent)
+    monkeypatch.setattr(
+        api_main,
+        "_sync_managed_bootstrap_recurring_schedules",
+        schedules,
+    )
+
+    assert await api_main._reconcile_omnigent_bootstrap_once(refresh_images=True)
+    assert calls == ["policies:True", "agent", "schedules"]
+
+
+@pytest.mark.asyncio
 async def test_mm870_api_startup_ensures_managed_session_reconcile_schedule(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
