@@ -219,20 +219,39 @@ def test_live_conformance_evidence_requests_reconcile_at_exact_deadline():
 
 
 def test_missing_live_conformance_evidence_after_admission_requests_reconcile():
+    # Missing evidence alone is not actionable until the protected
+    # evidence is durably persisted at admission. Only staleness or an
+    # explicit runner failure should trigger reconciliation.
     signals = SessionSignals(
         last_event_at=NOW,
         last_snapshot_at=NOW,
         admitted=True,
         conformance_evidence_at=None,
+        conformance_runner_available=None,
     )
 
     findings = detect_stuck_state(
         session=_session(), signals=signals, now=NOW, policy=POLICY
     )
 
+    assert StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE not in _reasons(findings)
+
+    # Explicit runner failure remains actionable
+    signals_runner_down = SessionSignals(
+        last_event_at=NOW,
+        last_snapshot_at=NOW,
+        admitted=True,
+        conformance_evidence_at=None,
+        conformance_runner_available=False,
+    )
+
+    findings_runner_down = detect_stuck_state(
+        session=_session(), signals=signals_runner_down, now=NOW, policy=POLICY
+    )
+
     conformance = [
         finding
-        for finding in findings
+        for finding in findings_runner_down
         if finding.reason is StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE
     ]
     assert conformance and conformance[0].action is ResponseAction.RECONCILE

@@ -441,15 +441,9 @@ class StuckStateReconciliationService:
     ) -> StuckStateSweepResult:
         observed_now = now or datetime.now(UTC)
         result = StuckStateSweepResult()
-        # Rotate the bounded batch across sweeps so the same oldest rows do
-        # not permanently monopolize the schedule when the eligible population
-        # exceeds the batch limit.
-        rotation_offset = int(observed_now.timestamp()) % 100
         async with self._session_factory() as db:
             repos = ControlPlaneRepositories.bind(db)
-            candidates = await repos.sessions.list_reconciliation_candidates(
-                limit=limit, offset=rotation_offset
-            )
+            candidates = await repos.sessions.list_reconciliation_candidates(limit=limit)
         for candidate in candidates:
             result.scanned += 1
             try:

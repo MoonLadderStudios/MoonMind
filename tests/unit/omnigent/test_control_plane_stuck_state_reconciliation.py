@@ -726,13 +726,22 @@ async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
         async with store.transaction() as repos:
             session = await repos.sessions.get(session_id)
             assert session is not None
+            from moonmind.omnigent.control_plane.records import compute_digest
+
+            frontier = compute_digest(
+                {
+                    "providerEventCursor": session.provider_event_cursor,
+                    "snapshotFrontier": session.snapshot_frontier,
+                    "revision": session.revision,
+                }
+            )
             for ordinal in range(3):
                 await repos.decisions.append(
                     decision_id=f"no-progress-{ordinal}-{reason.value}",
                     session_id=session_id,
                     decision_code="await_observation",
                     expected_revision=session.revision,
-                    observation_frontier_digest="unchanged-frontier",
+                    observation_frontier_digest=frontier,
                 )
     elif reason is StuckStateReason.HOST_LEASE_WITHOUT_SESSION_AUTHORITY:
         await append_snapshot(
