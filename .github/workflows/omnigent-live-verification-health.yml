@@ -1,0 +1,64 @@
+name: Provider / Omnigent Live Verification Health
+
+# Lightweight, credential-free observability for the protected Omnigent
+# provider-verification tier (MoonLadderStudios/MoonMind#3710).  It reads only
+# non-secret runner / workflow-run / acceptance-evidence status and fails
+# readiness closed when the protected tier is queued, offline, stale,
+# incomplete, or missing a successful canary for the deployed commit and
+# required image digests.  It never consumes provider credentials.
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      protected_tier_required:
+        description: "Whether protected-live evidence is required by policy"
+        required: false
+        default: "true"
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: omnigent-live-verification-health
+  cancel-in-progress: true
+
+jobs:
+  health:
+    name: Project protected-live readiness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Assemble non-secret status document
+        id: status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOYED_COMMIT: ${{ github.sha }}
+          REQUIRED_SERVER_DIGEST: ${{ vars.OMNIGENT_ACCEPTANCE_SERVER_DIGEST }}
+          REQUIRED_HOST_DIGEST: ${{ vars.OMNIGENT_ACCEPTANCE_HOST_DIGEST }}
+          PROTECTED_TIER_REQUIRED: ${{ inputs.protected_tier_required || 'true' }}
+        run: |
+          python tools/assemble_omnigent_live_status.py \
+            --repository "${{ github.repository }}" \
+            --output status.json
+      - name: Fail readiness closed on unhealthy protected tier
+        run: |
+          python tools/omnigent_live_verification_health.py \
+            --status status.json \
+            --output artifacts/omnigent-live-health/projection.json
+      - name: Upload readiness projection
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-live-health-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-live-health/projection.json
+          if-no-files-found: warn
+          retention-days: 14

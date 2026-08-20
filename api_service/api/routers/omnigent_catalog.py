@@ -52,6 +52,14 @@ from moonmind.omnigent.conformance import (
     ConformanceContractError,
     validate_acceptance_manifest,
 )
+from moonmind.omnigent.exact_artifact_conformance import (
+    ExactArtifactConformanceError,
+    assert_exact_artifact_evidence,
+)
+from moonmind.omnigent.live_verification_health import (
+    LiveVerificationHealthError,
+    assert_live_health_projection,
+)
 from moonmind.omnigent.settings import build_omnigent_gate, resolved_server_url
 from moonmind.omnigent.cutover import effective_phase
 from moonmind.omnigent.remediation_matrix import load_remediation_release_status
@@ -175,6 +183,8 @@ _REASONS: dict[str, tuple[str, str]] = {
     "immutable_image_unavailable": ("Retry stock Omnigent image acquisition or configure explicit server and host image digests.", "/settings#omnigent"),
     "network_policy_unavailable": ("Configure the required enforced egress policy.", "/settings#omnigent"),
     "acceptance_evidence_unavailable": ("Publish a current #3508 browser acceptance matrix for this source commit.", "/settings#omnigent"),
+    "exact_artifact_evidence_unavailable": ("Publish current Tier-1 exact deployable-artifact conformance for this source commit.", "/settings#omnigent"),
+    "live_verification_stale": ("Restore fresh protected-live verification evidence before rollout.", "/settings#omnigent"),
     "workspace_resolver_unavailable": ("Restore the workflow workspace resolver.", "/settings#system"),
     "profile_reconnect_required": ("Reconnect this OAuth Provider Profile.", "/settings#provider-profiles"),
     "profile_validation_required": ("Validate this OAuth Provider Profile.", "/settings#provider-profiles"),
@@ -216,12 +226,25 @@ def _deployment_reasons(config: Any, bridge: dict[str, Any]) -> list[GateReason]
 
 
 def _support_reasons(*, acceptance_canary: bool = False) -> list[GateReason]:
-    """Return release-support evidence without withholding launch authority."""
+    """Return release-support evidence without withholding launch authority.
+
+    Publication/readiness (#3508 / #3642) is only *supported* when the current
+    source commit is proven three ways, each fail-closed and each surfaced as a
+    distinct support reason rather than a hard blocker: the #3508 browser
+    acceptance matrix, the Tier-1 exact deployable-artifact conformance
+    (MoonLadderStudios/MoonMind#3710 AC10), and a fresh protected-live
+    verification projection.  A code-only fix therefore cannot advertise
+    deployed acceptance/compatibility status until the exact deployable images
+    and the protected provider tier prove it.
+    """
 
     if acceptance_canary:
         return []
-    manifest_path = os.getenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "").strip()
     source_commit = os.getenv("MOONMIND_SOURCE_COMMIT", "").strip()
+    reasons: list[GateReason] = []
+
+    # --- #3508 browser acceptance matrix -------------------------------------
+    manifest_path = os.getenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "").strip()
     try:
         if not manifest_path or not source_commit:
             raise ConformanceContractError("acceptance evidence is not configured")
@@ -236,8 +259,47 @@ def _support_reasons(*, acceptance_canary: bool = False) -> list[GateReason]:
             evidence_root=manifest_file.parent,
         )
     except (OSError, json.JSONDecodeError, ConformanceContractError):
-        return [_reason("acceptance_evidence_unavailable")]
-    return []
+        reasons.append(_reason("acceptance_evidence_unavailable"))
+
+    # --- Tier-1 exact deployable-artifact conformance (#3710 AC10) -----------
+    exact_path = os.getenv("MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE", "").strip()
+    try:
+        if not exact_path or not source_commit:
+            raise ExactArtifactConformanceError("exact-artifact evidence is not configured")
+        evidence = json.loads(Path(exact_path).read_text(encoding="utf-8"))
+        if not isinstance(evidence, dict):
+            raise ExactArtifactConformanceError("exact-artifact evidence must be an object")
+        assert_exact_artifact_evidence(evidence, expected_commit=source_commit)
+    except (OSError, json.JSONDecodeError, ExactArtifactConformanceError):
+        reasons.append(_reason("exact_artifact_evidence_unavailable"))
+
+    # --- Fresh protected-live verification projection ------------------------
+    # Revalidated at *consumption*, not just at publication: the versioned
+    # schema, the ready verdict, the deployed commit, the projection's own
+    # freshness window, and the acceptance expiry it inherits. A once-ready file
+    # must stop being accepted when its manifest expires or scheduled
+    # monitoring stops publishing.
+    projection_path = os.getenv("MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION", "").strip()
+    try:
+        if not projection_path or not source_commit:
+            raise LiveVerificationHealthError(
+                "live-verification projection is not configured"
+            )
+        projection = json.loads(Path(projection_path).read_text(encoding="utf-8"))
+        if not isinstance(projection, dict):
+            raise LiveVerificationHealthError(
+                "live-verification projection must be an object"
+            )
+        assert_live_health_projection(projection, expected_commit=source_commit)
+    except (
+        OSError,
+        json.JSONDecodeError,
+        LiveVerificationHealthError,
+        ConformanceContractError,
+    ):
+        reasons.append(_reason("live_verification_stale"))
+
+    return reasons
 
 
 @dataclass(frozen=True, slots=True)

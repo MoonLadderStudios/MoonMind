@@ -84,7 +84,13 @@ def test_live_conformance_always_uploads_case_evidence() -> None:
         step for step in steps if step.get("name") == "Stage secret-safe case evidence"
     )
     assert 'if [[ "$LIVE_CASE_OUTCOME" == "success" ]]' in stage["run"]
-    assert "withheld-after-unsuccessful-safety-gate" in stage["run"]
+    # A failed case must emit bounded, redacted diagnostics (issue #3710) and
+    # must never fall back to a single opaque "withheld" marker.
+    assert "withheld" not in stage["run"]
+    assert "tools/stage_omnigent_failure_evidence.py" in stage["run"]
+    assert "--setup-stage" in stage["run"]
+    assert "--duration-seconds" in stage["run"]
+    assert "--runner-status" in stage["run"]
     assert upload["if"] == "always()"
     assert "github.run_attempt" in upload["with"]["name"]
     assert upload["with"]["path"].endswith("upload/${{ matrix.mode }}")
