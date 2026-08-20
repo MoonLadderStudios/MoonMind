@@ -26,6 +26,7 @@ from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows.agent_run import (
     CODEX_TURN_RUNTIME_SELECTION_PATCH_ID,
     MoonMindAgentRun,
+    TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID,
 )
 from moonmind.workflows.temporal.workflows.merge_gate import build_resolver_run_request
 
@@ -59,6 +60,48 @@ def _configure_workflow_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         "now",
         lambda: datetime.now(timezone.utc),
     )
+
+
+@pytest.mark.parametrize("control_queue_patch_enabled", [False, True])
+async def test_terminal_evidence_queue_preserves_replay_route(
+    monkeypatch: pytest.MonkeyPatch,
+    control_queue_patch_enabled: bool,
+) -> None:
+    _configure_workflow_runtime(monkeypatch)
+    monkeypatch.setattr(
+        agent_run_module.workflow,
+        "patched",
+        lambda patch_id: (
+            control_queue_patch_enabled
+            if patch_id == TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID
+            else True
+        ),
+    )
+    captured: dict[str, Any] = {}
+
+    async def fake_execute_typed_activity(
+        activity_name: str, args: object, **kwargs: Any
+    ) -> object:
+        captured.update(kwargs)
+        return {"activityName": activity_name, "args": args}
+
+    monkeypatch.setattr(
+        agent_run_module,
+        "execute_typed_activity",
+        fake_execute_typed_activity,
+    )
+
+    await MoonMindAgentRun()._execute_routed_activity(
+        "agent_runtime.evaluate_terminal_evidence",
+        {"candidate": "result"},
+    )
+
+    expected_queue = (
+        agent_run_module.settings.temporal.activity_agent_runtime_control_task_queue
+        if control_queue_patch_enabled
+        else agent_run_module.settings.temporal.activity_agent_runtime_task_queue
+    )
+    assert captured["task_queue"] == expected_queue
 
 def _managed_session_request(
     *,

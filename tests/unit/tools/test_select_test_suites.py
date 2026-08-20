@@ -1,9 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tools import select_test_suites
-from tools.select_test_suites import select_suites
+from tools.select_test_suites import (
+    OMNIGENT_CONTRACT_GATE_KEYS,
+    is_exact_artifact_owned,
+    is_omnigent_contract_owned,
+    select_suites,
+)
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _outputs(paths: list[str], **kwargs) -> dict[str, str]:
@@ -26,6 +35,7 @@ def test_docs_only_change_does_not_select_heavy_backend_suites(
         "temporal_boundary": "false",
         "integration_ci": "false",
         "reliability_journey": "false",
+        "exact_artifact": "false",
         "full_backend": "false",
         "frontend_static": "false",
         "frontend_browser_chromium": "false",
@@ -295,3 +305,165 @@ def test_cumulative_remediation_boundaries_select_reliability_journey(
 
     assert outputs["unit_fast"] == "true"
     assert outputs["reliability_journey"] == "true"
+
+
+# --- Omnigent contract-owner inventory (MoonLadderStudios/MoonMind#3710) ---
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        # Core Omnigent runtime.
+        "moonmind/omnigent/execute.py",
+        "moonmind/omnigent/conformance.py",
+        # Omnigent Temporal adapters, activities, and workflows.
+        "moonmind/workflows/adapters/omnigent_agent_adapter.py",
+        "moonmind/workflows/temporal/activities/omnigent_activities.py",
+        "moonmind/workflows/temporal/workflows/omnigent_oauth_host_janitor.py",
+        # Omnigent runtime schemas / compiled-intent contracts.
+        "moonmind/schemas/workspace_intent.py",
+        # Omnigent API and native-UI routers.
+        "api_service/api/routers/omnigent_bridge.py",
+        "api_service/api/routers/omnigent_native_ui.py",
+        "api_service/services/omnigent_hosts.py",
+        # Omnigent compatibility, conformance, and fault fixtures/tooling.
+        "tools/run_omnigent_live_conformance.py",
+        "tools/build_omnigent_conformance_report.py",
+        "tests/integration/omnigent/test_embedded_recovery.py",
+        "tests/unit/omnigent/test_conformance.py",
+    ],
+)
+def test_omnigent_owned_change_selects_the_complete_contract_gate(
+    changed_path: str,
+) -> None:
+    assert is_omnigent_contract_owned(changed_path), changed_path
+    outputs = _outputs([changed_path])
+
+    for key in OMNIGENT_CONTRACT_GATE_KEYS:
+        assert outputs[key] == "true", (changed_path, key)
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "frontend/src/features/workflow-native-chat/useWorkflowChatBinding.ts",
+        "frontend/src/entrypoints/WorkflowChatNative.tsx",
+        "frontend/src/entrypoints/workflow-detail.tsx",
+        "frontend/src/lib/workflowDetailRoutes.ts",
+    ],
+)
+def test_omnigent_frontend_integration_selects_gate_and_browser(
+    changed_path: str,
+) -> None:
+    assert is_omnigent_contract_owned(changed_path), changed_path
+    outputs = _outputs([changed_path])
+
+    for key in OMNIGENT_CONTRACT_GATE_KEYS:
+        assert outputs[key] == "true", (changed_path, key)
+    # Native-UI / facade behavior must additionally exercise the compiled
+    # production browser suite.
+    assert outputs["frontend_static"] == "true"
+    assert outputs["frontend_browser_chromium"] == "true"
+
+
+def test_omnigent_native_ui_facade_backend_change_selects_browser() -> None:
+    outputs = _outputs(["api_service/api/routers/omnigent_native_ui.py"])
+
+    assert outputs["frontend_browser_chromium"] == "true"
+
+
+def test_omnigent_core_backend_change_does_not_require_browser() -> None:
+    # A non-facade backend Omnigent change selects the full backend contract
+    # gate but should not unnecessarily pull in the browser suite.
+    outputs = _outputs(["moonmind/omnigent/policies.py"])
+
+    for key in OMNIGENT_CONTRACT_GATE_KEYS:
+        assert outputs[key] == "true", key
+    assert outputs["frontend_browser_chromium"] == "false"
+
+
+def test_non_omnigent_paths_are_not_contract_owned() -> None:
+    for path in (
+        "api_service/api/routers/workflow_console.py",
+        "api_service/services/execution_service.py",
+        "moonmind/workflows/temporal/workflows/run.py",
+        "docs/Development/PreCommitWorkflow.md",
+        "frontend/src/components/Workflow.tsx",
+    ):
+        assert not is_omnigent_contract_owned(path), path
+
+
+def test_docs_only_change_never_selects_omnigent_gate() -> None:
+    outputs = _outputs(["docs/Omnigent/Overview.md"])
+
+    for key in OMNIGENT_CONTRACT_GATE_KEYS:
+        assert outputs[key] == "false", key
+
+
+# --- Tier-1 exact deployable-artifact gate (MoonLadderStudios/MoonMind#3710) ---
+
+
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        # Dependency and lockfile changes must always select the gate.
+        "package-lock.json",
+        "package.json",
+        "poetry.lock",
+        "pyproject.toml",
+        # Dockerfiles, Compose, startup scripts, and runtime entrypoints.
+        "api_service/Dockerfile",
+        "docker-compose.test.yaml",
+        "docker-compose.yaml",
+        # The production API command installed as the image CMD.
+        "api_service/entrypoint.sh",
+        "api_service/docker/moonmind-docker-wrapper.sh",
+        "tools/start-worker.sh",
+        # The exact-artifact gate implementation itself.
+        "moonmind/omnigent/exact_artifact_conformance.py",
+        "tools/omnigent_exact_artifact_probe.py",
+        "tools/run_omnigent_exact_artifact_conformance.py",
+    ],
+)
+def test_deployable_artifact_change_selects_exact_artifact(changed_path: str) -> None:
+    # Every parametrized path is a real repository path, so a typo cannot mask a
+    # missing inventory entry (the ``api_service/docker/entrypoint.sh`` gap).
+    assert (REPO_ROOT / changed_path).exists(), changed_path
+    assert is_exact_artifact_owned(changed_path), changed_path
+    assert _outputs([changed_path])["exact_artifact"] == "true", changed_path
+
+
+@pytest.mark.parametrize(
+    "inventory_name",
+    ["EXACT_ARTIFACT_EXACT", "OMNIGENT_CONTRACT_EXACT", "OMNIGENT_FACADE_EXACT"],
+)
+def test_exact_path_inventories_reference_real_repository_paths(
+    inventory_name: str,
+) -> None:
+    """An exact-path inventory entry that does not exist owns nothing.
+
+    Prefix and glob rules may legitimately anticipate future files, but an
+    exact path is only useful if it is the path the repository actually uses.
+    """
+    inventory = getattr(select_test_suites, inventory_name)
+    missing = sorted(path for path in inventory if not (REPO_ROOT / path).exists())
+    assert not missing, f"{inventory_name} references nonexistent paths: {missing}"
+
+
+def test_omnigent_owned_change_selects_exact_artifact() -> None:
+    outputs = _outputs(["moonmind/omnigent/policies.py"])
+    assert outputs["exact_artifact"] == "true"
+
+
+def test_non_deployable_backend_change_does_not_select_exact_artifact() -> None:
+    for path in (
+        "api_service/services/execution_service.py",
+        "api_service/api/routers/workflow_console.py",
+    ):
+        outputs = _outputs([path])
+        assert outputs["exact_artifact"] == "false", path
+
+
+def test_docs_only_change_does_not_select_exact_artifact() -> None:
+    assert _outputs(["docs/Omnigent/Overview.md"])["exact_artifact"] == "false"
+    assert not is_exact_artifact_owned("docs/Omnigent/Overview.md")
