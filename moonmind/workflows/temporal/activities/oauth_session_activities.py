@@ -13,8 +13,8 @@ Provides the activities invoked by the ``MoonMind.OAuthSession`` workflow:
 
 from __future__ import annotations
 
-import logging
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import UUID
@@ -111,14 +111,14 @@ async def oauth_session_revalidate_bound_host(
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+    from moonmind.omnigent.oauth_hosts import (
+        OmnigentOAuthHostError,
+        OmnigentOAuthHostRepository,
+    )
     from moonmind.omnigent.settings import (
         resolved_api_token,
         resolved_proxy_forward_headers,
         resolved_server_url,
-    )
-    from moonmind.repositories.lore_runtime import (
-        build_lore_repository_adapter_from_environment,
     )
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
@@ -156,26 +156,42 @@ async def oauth_session_revalidate_bound_host(
                 client=http_client,
                 upstream_header_allowlist=resolved_proxy_forward_headers(),
             )
-            runtime = OmnigentOAuthHostRuntime(
-                client=client,
-                lore_repository_adapter=build_lore_repository_adapter_from_environment(),
-            )
-            preflight = await runtime.prepare_host(
-                binding=binding,
-                host_lease=lease,
-                workspace_key=f"oauth-revalidate:{session_id}",
-            )
-            if lease.status == "starting":
-                lease = await repository.transition_host_lease(
-                    lease.lease_id,
-                    expected_status="starting",
-                    new_status="ready",
-                    fields={"omnigent_host_id": preflight["hostId"]},
+            runtime = OmnigentOAuthHostRuntime(client=client)
+            preflight_error: BaseException | None = None
+            preflight: dict[str, Any] | None = None
+            try:
+                preflight = await runtime.validate_credential_mount(
+                    binding=binding,
+                    host_lease=lease,
+                    effective_launch=(
+                        lease.effective_launch_snapshot
+                        or binding.effective_launch_snapshot
+                    ),
                 )
-            if binding.host_launch_profile_ref:
-                await runtime.stop_host(binding=binding, host_lease=lease)
+            except (Exception, asyncio.CancelledError) as exc:
+                preflight_error = exc
+
+            cleanup_error: BaseException | None = None
+            try:
+                cleanup = await runtime.stop_host(binding=binding, host_lease=lease)
+                if cleanup.get("cleanupResult") not in {
+                    "succeeded",
+                    "drained_owned_static_host",
+                }:
+                    raise OmnigentOAuthHostError(
+                        "OAuth credential validator cleanup was not proven",
+                        code="OMNIGENT_HOST_CLEANUP_INCOMPLETE",
+                    )
+            except (Exception, asyncio.CancelledError) as exc:
+                cleanup_error = exc
+            if cleanup_error is not None:
+                if preflight_error is not None:
+                    raise cleanup_error from preflight_error
+                raise cleanup_error
             await repository.mark_host_lease_stopped(lease.lease_id)
-    except Exception:
+            if preflight_error is not None:
+                raise preflight_error
+    except (Exception, asyncio.CancelledError):
         async with get_async_session_context() as db:
             from sqlalchemy.future import select
             from api_service.db.models import (
@@ -210,11 +226,13 @@ async def oauth_session_revalidate_bound_host(
                     session=db, runtime_id=profile.runtime_id
                 )
         raise
+    if preflight is None:
+        raise RuntimeError("OAuth credential preflight produced no result")
     return {
         "profile_id": profile_id,
         "status": "ready",
         "credential_generation": lease.credential_generation,
-        "host_id": preflight["hostId"],
+        "validation_mode": preflight["validationMode"],
     }
 
 

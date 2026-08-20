@@ -409,6 +409,7 @@ class OmnigentOAuthHostRepository:
                 container_name=(
                     deterministic_host_container_name(lease_id)
                     if locked_binding.host_launch_profile_ref
+                    or lease_purpose == "credential_validation"
                     else None
                 ),
                 status="allocating",
