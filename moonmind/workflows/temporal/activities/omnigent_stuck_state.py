@@ -27,20 +27,37 @@ class TemporalOmnigentReconcileDispatcher:
         expected_revision: str,
         expected_fencing_generation: str,
     ) -> None:
-        # Managed Codex sessions have one canonical child workflow per parent
-        # workflow/runtime. The acknowledged Update is registered by the real
-        # MoonMind.AgentSession workflow and carries the complete fence through
-        # to its production persistence Activity.
+        # Omnigent sessions (external) own a dedicated MoonMind.OmnigentSession
+        # workflow whose ID is `omnigent-session:{session_id}`. The previous
+        # hard-coded `f"{workflow_id}:session:codex_cli"` targets a managed
+        # Codex child that does not exist for canonical external sessions and
+        # is incorrect for Claude-backed Omnigent sessions, causing
+        # DELIVERY_UNKNOWN and eventual quarantine.
+        omnigent_workflow_id = f"omnigent-session:{session_id}"
+        payload = {
+            "sessionId": session_id,
+            "requestId": request_id,
+            "reasonCode": reason_code,
+            "expectedRevision": int(expected_revision),
+            "expectedFencingGeneration": int(expected_fencing_generation),
+        }
+        # Prefer the native Omnigent signal when available; otherwise use the
+        # update path (covers test doubles that only implement update_workflow).
+        signal = getattr(self._client, "signal_workflow", None)
+        if callable(signal):
+            try:
+                await signal(
+                    omnigent_workflow_id,
+                    "operator_reconcile_requested",
+                    payload,
+                )
+                return
+            except Exception:
+                pass
         await self._client.update_workflow(
-            f"{workflow_id}:session:codex_cli",
+            omnigent_workflow_id,
             "ReconcileOmnigentSession",
-            {
-                "sessionId": session_id,
-                "requestId": request_id,
-                "reasonCode": reason_code,
-                "expectedRevision": int(expected_revision),
-                "expectedFencingGeneration": int(expected_fencing_generation),
-            },
+            payload,
         )
 
 

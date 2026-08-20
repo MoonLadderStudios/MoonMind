@@ -1215,13 +1215,22 @@ async def get_omnigent_codex_catalog_readiness(
             )
         )
     )
+    # Provider observations are appended at the snapshot/event boundary.
+    # Until that durable wiring is complete, a normal catalog request
+    # derives readiness exclusively from observations that have no
+    # production writer (the bridge only emits spans). The protected
+    # canary header can make its own request pass but is not persisted,
+    # so after the canary finishes normal users remain blocked. For now,
+    # treat missing observations as not-yet-observed rather than as a
+    # hard admission blocker; the support gate still surfaces missing
+    # protected evidence.
     snapshot_ready = bool(
-        snapshot_age is not None
-        and timedelta(0) <= snapshot_age <= timedelta(minutes=10)
+        snapshot_age is None
+        or timedelta(0) <= snapshot_age <= timedelta(minutes=10)
     )
     event_transport_ready = bool(
-        event_age is not None
-        and timedelta(0) <= event_age <= timedelta(minutes=10)
+        event_age is None
+        or timedelta(0) <= event_age <= timedelta(minutes=10)
     )
     admission = evaluate_admission_readiness(
         ReadinessInputs(

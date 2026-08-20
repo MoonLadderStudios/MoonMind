@@ -90,11 +90,12 @@ async def get_session_timeline(
         session_id, observation_types=_EVENT_OBSERVATION_TYPES
     )
     active_command = await repos.commands.active_for_session(session_id)
-    latest_decision = (
-        await repos.decisions.get(session.last_decision_ref)
-        if session.last_decision_ref is not None
-        else await repos.decisions.latest_for_session(session_id)
-    )
+    # The session pointer is updated only during quarantine; stuck-state
+    # decisions are appended without advancing it, so prefer the journal's
+    # latest entry to avoid showing a stale decision.
+    latest_decision = await repos.decisions.latest_for_session(session_id)
+    if latest_decision is None and session.last_decision_ref is not None:
+        latest_decision = await repos.decisions.get(session.last_decision_ref)
     cleanup = await repos.cleanup.get(session_id)
     telemetry = TelemetrySettings.from_env()
     encoded_session_id = quote(session_id, safe="")
@@ -136,11 +137,10 @@ async def _diagnostic_redirect(
         raise HTTPException(404, "Session not found")
     telemetry = TelemetrySettings.from_env()
     if kind == "trace":
-        decision = (
-            await repos.decisions.get(session.last_decision_ref)
-            if session.last_decision_ref is not None
-            else await repos.decisions.latest_for_session(session_id)
-        )
+        # Prefer the newest journal entry; the session pointer lags.
+        decision = await repos.decisions.latest_for_session(session_id)
+        if decision is None and session.last_decision_ref is not None:
+            decision = await repos.decisions.get(session.last_decision_ref)
         trace_id = (
             safe_timeline_ref(decision.trace_ref)
             if decision is not None

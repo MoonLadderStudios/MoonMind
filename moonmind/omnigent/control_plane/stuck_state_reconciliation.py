@@ -439,9 +439,15 @@ class StuckStateReconciliationService:
     ) -> StuckStateSweepResult:
         observed_now = now or datetime.now(UTC)
         result = StuckStateSweepResult()
+        # Rotate the bounded batch across sweeps so the same oldest rows do
+        # not permanently monopolize the schedule when the eligible population
+        # exceeds the batch limit.
+        rotation_offset = int(observed_now.timestamp()) % 100
         async with self._session_factory() as db:
             repos = ControlPlaneRepositories.bind(db)
-            candidates = await repos.sessions.list_reconciliation_candidates(limit=limit)
+            candidates = await repos.sessions.list_reconciliation_candidates(
+                limit=limit, offset=rotation_offset
+            )
         for candidate in candidates:
             result.scanned += 1
             try:
@@ -621,6 +627,16 @@ class StuckStateReconciliationService:
                     else 0,
                 },
             )
+            # The production decision writer must supply a frontier digest
+            # derived from the latest provider event and snapshot. Without it,
+            # _consecutive_no_progress treats equal frontier values at the same
+            # revision as no progress and can manufacture quarantine.
+            frontier_payload = {
+                "providerEventCursor": current.provider_event_cursor,
+                "snapshotFrontier": current.snapshot_frontier,
+                "revision": current.revision,
+            }
+            observation_frontier_digest = compute_digest(frontier_payload)
             await repos.decisions.append(
                 decision_id=decision_id,
                 session_id=session.session_id,
@@ -631,6 +647,7 @@ class StuckStateReconciliationService:
                 resulting_command_id=resulting_command_id,
                 next_deadline=session.next_reconciliation_deadline,
                 diagnostics_ref=diagnostics_ref,
+                observation_frontier_digest=observation_frontier_digest,
             )
             await db.commit()
             return True, existing is None

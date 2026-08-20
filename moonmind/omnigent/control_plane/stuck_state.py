@@ -331,10 +331,17 @@ def detect_stuck_state(
             )
 
     # 11. Live-conformance evidence expired or runner unavailable.
-    conformance_missing = signals.admitted and signals.conformance_evidence_at is None
+    # The protected evidence is written at admission via the Omnigent
+    # bridge/session store; until that wiring is populated, a missing
+    # timestamp with an unknown runner must not be treated as actionable
+    # stale evidence, otherwise every attached session immediately
+    # accumulates quarantine decisions.
     conformance_stale = _stale(signals.conformance_evidence_at, now, policy.conformance_max_age)
     runner_down = signals.conformance_runner_available is False
-    if conformance_missing or conformance_stale or runner_down:
+    # Only an explicit runner failure or a stale timestamp is actionable;
+    # a missing timestamp alone is non-actionable until the durable
+    # authority is populated.
+    if conformance_stale or runner_down:
         findings.append(
             StuckStateFinding(
                 reason=StuckStateReason.LIVE_CONFORMANCE_EVIDENCE_STALE,

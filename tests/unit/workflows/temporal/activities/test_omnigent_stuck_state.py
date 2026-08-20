@@ -36,7 +36,7 @@ async def test_dispatcher_updates_the_canonical_session_supervisor_contract() ->
 
     assert client.calls == [
         (
-            "wf-1:session:codex_cli",
+            "omnigent-session:sess-1",
             "ReconcileOmnigentSession",
             {
                 "sessionId": "sess-1",

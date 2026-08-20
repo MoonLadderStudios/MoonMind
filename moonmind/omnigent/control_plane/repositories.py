@@ -377,16 +377,21 @@ class SessionRepository(_RepositoryBase):
         return _session_record(row) if row is not None else None
 
     async def list_reconciliation_candidates(
-        self, *, limit: int = 100
+        self, *, limit: int = 100, offset: int = 0
     ) -> list[SessionRecord]:
         """Return a bounded batch whose lifecycle may still require convergence.
 
         Quarantined sessions remain readable but interactive mutation is disabled,
         so the operational stuck-state sweep must not repeatedly act on them.
         Terminal sessions stay eligible until cleanup is durably complete.
+
+        A bounded ``offset`` rotates the stable ordering so a large eligible
+        population does not permanently monopolize the first ``limit`` rows when
+        healthy active rows never advance ``updated_at``.
         """
 
         bounded_limit = max(1, min(int(limit), 500))
+        bounded_offset = max(0, min(int(offset), 10_000))
         stmt = (
             select(OmnigentSession)
             .where(
@@ -398,6 +403,7 @@ class SessionRepository(_RepositoryBase):
                 ),
             )
             .order_by(OmnigentSession.updated_at, OmnigentSession.session_id)
+            .offset(bounded_offset)
             .limit(bounded_limit)
         )
         rows = (await self._session.execute(stmt)).scalars().all()
@@ -834,6 +840,52 @@ class SessionRepository(_RepositoryBase):
             row.provider_profile_generation = (row.provider_profile_generation or 0) + 1
         elif scope is FencingScope.HOST_LEASE:
             row.host_lease_generation = (row.host_lease_generation or 0) + 1
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _session_record(row)
+
+    async def recover_from_quarantine(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+    ) -> SessionRecord:
+        """Restore a quarantined session to live under current fencing.
+
+        Quarantine is an operator-visible parked state, not a terminal
+        deletion. After the underlying provider, lease, or evidence
+        problem is repaired, an authorized operator may restore
+        interaction by revalidating the repaired authority and resetting
+        ``historical_read_state`` to ``live``. The recovery is fenced
+        against the session-supervisor generation so a stale operator
+        cannot resurrect a session that a newer supervisor has moved.
+        """
+
+        row = await self._load(session_id, for_update=True)
+        if row is None:
+            raise ConflictingSessionAuthorityError(
+                f"Unknown canonical session {session_id!r}"
+            )
+        if row.historical_read_state != "quarantined":
+            return _session_record(row)
+        conflict = self._check_session_fence(
+            row,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            expected_provider_profile_generation=None,
+            expected_host_lease_generation=None,
+        )
+        if conflict is ControlPlaneOutcome.FENCING_CONFLICT:
+            raise FencingConflictError(
+                f"Session {session_id!r} supervisor fence changed; refusing quarantine recovery"
+            )
+        if conflict is ControlPlaneOutcome.REVISION_CONFLICT:
+            raise RevisionConflictError(
+                f"Session {session_id!r} revision changed; refusing quarantine recovery"
+            )
+        row.historical_read_state = "live"
         row.revision = row.revision + 1
         await self._session.flush()
         await self._session.refresh(row)
