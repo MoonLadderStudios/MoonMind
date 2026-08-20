@@ -680,8 +680,10 @@ One durable owner performs the full lifecycle:
    Execution and Agent Run identities, and persist them before dispatch;
 3. compile the canonical profile-bound `external/omnigent` execution request
    with the wire decision `checkpointRecovery.recoveryAction = branch_required`
-   and dispatch the ordinary `MoonMind.AgentRun` path; the Omnigent Activity
-   maps that decision to the coordinator's `branch_from_checkpoint` method;
+   and dispatch the ordinary `MoonMind.AgentRun` path; the deterministic
+   `MoonMind.OmnigentSession` child resolves that immutable intent and maps the
+   decision to bounded profile, host, provider-session, turn, evidence, and
+   cleanup activities;
 4. harvest terminal, workspace, checkpoint, output, publication, diagnostics,
    capture, and cleanup evidence; then release host and Provider Profile
    authority in the normal release-last order; and
@@ -1119,9 +1121,12 @@ Terminal publication does not need a full branch-turn context bundle. It uses th
 
 ## 12. Omnigent integration
 
-### 12.1 v1 branch mode: fresh Omnigent session from checkpoint
+### 12.1 Fresh Omnigent session from checkpoint
 
-Omnigent v1 uses the streaming-gateway activity shape. It returns a terminal `AgentRunResult` and does not expose non-terminal provider states to MoonMind as branchable Temporal state. Therefore the safe v1 Checkpoint Branch mode is:
+Checkpoint Branch always creates fresh canonical Omnigent session authority.
+The durable session supervisor exposes reconciliation progress to Temporal but
+does not transfer mutable source-session authority to the branch. Therefore the
+safe Checkpoint Branch mode is:
 
 ```text
 fresh_omnigent_session_from_checkpoint
