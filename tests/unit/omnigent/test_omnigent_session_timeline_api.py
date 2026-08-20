@@ -131,7 +131,15 @@ class _FakeRepos:
 def _build_app(session_record, user):
     app = FastAPI()
     app.include_router(timeline_api.router)
+    # Support both Depends(get_current_user) and Depends(get_current_user())
+    # by overriding the factory and the cached inner dependency.
     app.dependency_overrides[get_current_user] = lambda: user
+
+    try:
+        inner = get_current_user()
+        app.dependency_overrides[inner] = lambda: user
+    except Exception:
+        pass
     app.dependency_overrides[get_async_session] = lambda: iter([object()])
     return app
 
