@@ -74,14 +74,14 @@ def _metric_increment(name: str, **labels: str) -> None:
     try:
         control_plane_metrics.increment(name, **labels)
     except Exception:
-        pass
+        pass  # Telemetry failures are auxiliary; ignore outside lifecycle
 
 
 def _metric_observe(name: str, value: float) -> None:
     try:
         control_plane_metrics.observe(name, max(0.0, value))
     except Exception:
-        pass
+        pass  # Telemetry failures are auxiliary; ignore outside lifecycle
 
 
 class OmnigentBridgeError(RuntimeError):

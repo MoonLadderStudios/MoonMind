@@ -63,7 +63,7 @@ def _require_diagnostic_read(user: User) -> None:
 @router.get("/{session_id}/timeline")
 async def get_session_timeline(
     session_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user()),
     db: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Return the machine-readable operator timeline for one canonical session."""
@@ -161,7 +161,7 @@ async def _diagnostic_redirect(
 @router.get("/{session_id}/trace")
 async def get_session_trace_link(
     session_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user()),
     db: AsyncSession = Depends(get_async_session),
 ) -> RedirectResponse:
     return await _diagnostic_redirect(
@@ -172,7 +172,7 @@ async def get_session_trace_link(
 @router.get("/{session_id}/logs")
 async def get_session_log_link(
     session_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user()),
     db: AsyncSession = Depends(get_async_session),
 ) -> RedirectResponse:
     return await _diagnostic_redirect(
@@ -183,7 +183,7 @@ async def get_session_log_link(
 @router.get("/{session_id}/stuck-state")
 async def get_session_stuck_state(
     session_id: str,
-    user: User = Depends(get_current_user),
+    user: User = Depends(get_current_user()),
     db: AsyncSession = Depends(get_async_session),
 ) -> dict:
     """Return bounded stuck-state findings and the safe automated response.

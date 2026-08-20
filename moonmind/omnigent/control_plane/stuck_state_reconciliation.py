@@ -74,14 +74,14 @@ def _increment_metric(name: str, **labels: str) -> None:
     try:
         metrics.increment(name, **labels)
     except Exception:
-        pass
+        pass  # Telemetry failures must not affect lifecycle authority
 
 
 def _observe_metric(name: str, value: float, **labels: str) -> None:
     try:
         metrics.observe(name, max(0.0, value), **labels)
     except Exception:
-        pass
+        pass  # Telemetry failures must not affect lifecycle authority
 
 
 def _elapsed_seconds(now: datetime, reference: datetime) -> float:
@@ -104,7 +104,7 @@ class ReconcileDispatcher(Protocol):
         reason_code: str,
         expected_revision: str,
         expected_fencing_generation: str,
-    ) -> None: ...
+    ) -> None: ...  # Protocol stub
 
 
 class DiagnosticPublisher(Protocol):
@@ -116,7 +116,7 @@ class DiagnosticPublisher(Protocol):
         session: SessionRecord,
         decision_id: str,
         payload: dict[str, object],
-    ) -> str: ...
+    ) -> str: ...  # Protocol stub
 
 
 @dataclass(frozen=True)

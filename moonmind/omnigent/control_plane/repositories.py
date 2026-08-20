@@ -961,7 +961,7 @@ class SessionRepository(_RepositoryBase):
                     max(0.0, (datetime.now(UTC) - observed).total_seconds()),
                 )
             except Exception:
-                pass
+                pass  # Telemetry failures must not affect lifecycle authority
         return _session_record(row)
 
     async def attach_terminal_evidence(
@@ -1343,7 +1343,7 @@ class ObservationRepository(_RepositoryBase):
             try:
                 metrics.increment(metrics.UNKNOWN_SCHEMA_VALUE)
             except Exception:
-                pass
+                pass  # Telemetry failures must not affect lifecycle authority
         with spans.omnigent_span(
             span_name,
             observation_source=source,

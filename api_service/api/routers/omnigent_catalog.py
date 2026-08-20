@@ -677,6 +677,7 @@ async def _live_deployment_readiness() -> LiveDeploymentReadiness:
             and str(payload.get("registryFingerprint") or "").strip()
         )
     except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+        # Readiness is fail-closed; malformed or unavailable worker metadata must not advertise launch authority.
         pass
     immutable_worker_build = bool(
         agent_build_ready
@@ -1270,7 +1271,7 @@ async def get_omnigent_codex_catalog_readiness(
                 max(0.0, protected_evidence_age.total_seconds()),
             )
         except Exception:
-            pass
+            pass  # Telemetry failures must not affect lifecycle authority
     if not admission.admit_new:
         gate = _reason("omnigent_admission_readiness_failed")
         profile_views = [
