@@ -102,6 +102,20 @@ class OmnigentOAuthHostJanitor:
             isinstance(launch, dict)
             and launch.get("egressCleanupAuthorityRequired") is True
         )
+        credential_only_preflight = bool(
+            getattr(lease, "lease_purpose", None) == "credential_validation"
+            and not getattr(lease, "omnigent_host_id", None)
+            and not getattr(lease, "omnigent_session_id", None)
+            and not getattr(lease, "bridge_session_id", None)
+        )
+        if authority is None and credential_only_preflight:
+            # Credential validators are launched with ``--network none`` and
+            # never cross the restricted-egress attachment boundary.  Their
+            # lease still carries the selected launch snapshot for image and
+            # credential-generation authority, so inspecting only
+            # ``enforcedEgress`` would incorrectly demand evidence that cannot
+            # exist and strand Provider Profile capacity forever after a crash.
+            return None
         if authority is None and requires_authority and authority_required:
             raise ValueError(
                 "restricted-egress host cleanup authority is unavailable"
