@@ -661,6 +661,14 @@ async def _release_leases(_payload: dict[str, Any]) -> dict[str, Any]:
     return {"outcome": "applied"}
 
 
+@activity.defn(name="omnigent.heartbeat_host_lease")
+async def _heartbeat_host_lease(_payload: dict[str, Any]) -> dict[str, Any]:
+    CALLS.append("heartbeat_host_lease")
+    return {
+        "hostLeaseHeartbeat": "renewed" if STATE["host"] else "not_attached"
+    }
+
+
 @activity.defn(name="omnigent.read_event_batch")
 async def _read_event_batch(_payload: dict[str, Any]) -> dict[str, Any]:
     CALLS.append("read_event_batch")
@@ -763,6 +771,7 @@ def _direct_session_activities() -> list[Any]:
         _stop_provider,
         _stop_host,
         _release_leases,
+        _heartbeat_host_lease,
         _read_event_batch,
         _observe_snapshot,
     ]
@@ -854,6 +863,7 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
                     _stop_provider,
                     _stop_host,
                     _release_leases,
+                    _heartbeat_host_lease,
                     _read_event_batch,
                     _observe_snapshot,
                     _publish_artifacts,
@@ -1026,6 +1036,7 @@ async def test_continue_as_new_preserves_active_provider_session(
                     _stop_provider,
                     _stop_host,
                     _release_leases,
+                    _heartbeat_host_lease,
                     _read_event_batch,
                     _observe_snapshot,
                 ],
@@ -1676,6 +1687,7 @@ async def test_agent_run_cancellation_preserves_session_cleanup_owner(
                         _stop_provider,
                         _stop_host,
                         _release_leases,
+                        _heartbeat_host_lease,
                         _read_event_batch,
                         _observe_snapshot,
                         _publish_artifacts,

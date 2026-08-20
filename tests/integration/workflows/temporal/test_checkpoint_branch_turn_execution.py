@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from temporalio import activity, workflow
 from temporalio.client import WorkflowFailureError
+from temporalio.common import RetryPolicy
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import WorkflowEnvironment
 from temporalio.worker import Replayer, UnsandboxedWorkflowRunner, Worker
@@ -244,6 +245,15 @@ class _FakeOmnigentSession:
             task_queue=AGENT_RUNTIME_TASK_QUEUE,
             start_to_close_timeout=timedelta(hours=1),
             heartbeat_timeout=timedelta(seconds=120),
+            # Mirror the bounded retry budget the real provider-execution
+            # boundary carries (`integration.omnigent.profile_bound_execute`).
+            # Without it this stand-in inherits Temporal's unlimited default and
+            # an always-failing handoff never exhausts its retries, so the
+            # worker-failure matrix can never reach a durable terminal.
+            retry_policy=RetryPolicy(
+                maximum_attempts=2,
+                maximum_interval=timedelta(seconds=1),
+            ),
             cancellation_type=ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
         )
         return await self._activity_handle
