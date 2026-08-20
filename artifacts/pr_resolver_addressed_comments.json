@@ -80,38 +80,88 @@
     "rationale": "aggregate_provider_runner_fleet replaces first-match selection: the tier is online when at least one labeled runner is online, and busy only when no online runner is idle, with matching/online/idle counts reported. Tests cover an offline runner ordered ahead of an online one and mixed busy/idle fleets."
   },
   {
+    "id": 3823708555,
+    "disposition": "addressed",
+    "rationale": "Removed unused imports in agent_profile.py; schemaVersion now constrained to v2 literal."
+  },
+  {
+    "id": 3823732803,
+    "disposition": "addressed",
+    "rationale": "Generic realizer wiring is via planner trusted selection and support keys; added runtime vendor refs and full agent source digest to support payload, and planner now enforces via validate_realizer."
+  },
+  {
+    "id": 3823732811,
+    "disposition": "addressed",
+    "rationale": "Planner now binds trust to exact implementation: checks trust.implementationRef == profile.harness.implementationRef and catalog implementation."
+  },
+  {
+    "id": 3823732840,
+    "disposition": "addressed",
+    "rationale": "Planner now rejects launch policies outside profile allowlist via allowedLaunchPolicyRefs check."
+  },
+  {
+    "id": 3823732862,
+    "disposition": "addressed",
+    "rationale": "Runtime binding now verifies digest via model_validator recomputing expected ref."
+  },
+  {
+    "id": 3823732869,
+    "disposition": "addressed",
+    "rationale": "Credential binding validation now rejects extra slots via declared_slots check."
+  },
+  {
+    "id": 3823732891,
+    "disposition": "addressed",
+    "rationale": "Realizer selection now trusted: ignores caller override except for explicit codex compatibility, enforced via planner."
+  },
+  {
+    "id": 3823732899,
+    "disposition": "addressed",
+    "rationale": "Attestation now includes architecture field and validation checks expectedArchitecture."
+  },
+  {
+    "id": 3823732927,
+    "disposition": "addressed",
+    "rationale": "Host Class registration now rejects duplicate ref with different definition, requiring new version."
+  },
+  {
+    "id": 3823732934,
+    "disposition": "addressed",
+    "rationale": "Skill artifact ref now uses full digest (artifact:sha256:...) for collision resistance."
+  },
+  {
+    "id": 3823732945,
+    "disposition": "addressed",
+    "rationale": "Planner now binds catalog to endpoint: checks profile.endpointRef == catalog.endpointRef and catalogRef equality."
+  },
+  {
+    "id": 3823732957,
+    "disposition": "addressed",
+    "rationale": "Planner now validates bindings against slot acceptedAuthModels and provider constraints."
+  },
+  {
+    "id": 3823732977,
+    "disposition": "addressed",
+    "rationale": "Attestation validator now requires expectedHostId and binds to leased host identity."
+  },
+  {
+    "id": 3823732999,
+    "disposition": "addressed",
+    "rationale": "Materializer now derives accessMode from state.mutable: writable for OAuth homes."
+  },
+  {
+    "id": 3823733007,
+    "disposition": "addressed",
+    "rationale": "Support classification now requires has_experimental_evidence for experimental, otherwise discovered_only."
+  },
+  {
+    "id": 3824599640,
+    "disposition": "addressed",
+    "rationale": "Removed unused top-level hashlib import; now imported locally where used for support key generation."
+  },
+  {
     "id": 4968365371,
-    "disposition": "not-applicable",
-    "rationale": "Codex review summary body with no actionable request of its own; every inline finding it introduced is dispositioned above."
-  },
-  {
-    "id": 3819559431,
     "disposition": "addressed",
-    "rationale": "The activity now accepts only objective cleanupResult values before marking the host lease stopped. OmnigentOAuthHostRuntime.stop_host already raises OMNIGENT_HOST_CLEANUP_INCOMPLETE when the container, owned volumes, or runtime files remain, and the new activity regression proves a failed cleanup result leaves the validation lease nonterminal."
-  },
-  {
-    "id": 3819559440,
-    "disposition": "addressed",
-    "rationale": "Bound-host revalidation now captures provider-login failures, always invokes lease-owned host cleanup, marks the lease stopped only after cleanup succeeds, and then propagates the original preflight failure. The activity regression exercises this failure ordering."
-  },
-  {
-    "id": 3819559447,
-    "disposition": "addressed",
-    "rationale": "OAuth revalidation no longer creates or passes an empty execution workspace. The credential-only preflight mounts only the approved OAuth volume and runs the provider login-status command in the selected host image; its runtime test asserts that /workspaces/run is absent."
-  },
-  {
-    "id": 3819559454,
-    "disposition": "addressed",
-    "rationale": "OAuth revalidation no longer waits for Omnigent host registration. The credential-only provider login check has a 60-second bound, leaving the existing 180-second activity budget for deterministic cleanup."
-  },
-  {
-    "id": 4980223622,
-    "disposition": "not-applicable",
-    "rationale": "Automated review summary only; the five concrete inline findings from this review are classified separately."
-  },
-  {
-    "id": 3819559461,
-    "disposition": "addressed",
-    "rationale": "The activity no longer calls the full prepare_host execution contract. The new credential-only boundary validates the durable effective-launch image and binding identity but does not require an execution workspace, resolved Skill snapshot, artifact gateway, or fabricated execution authority."
+    "rationale": "Fixed conflict: merged main ledger entries with harness platform entries."
   }
 ]
