@@ -139,7 +139,7 @@ def _build_app(session_record, user):
         inner = get_current_user()
         app.dependency_overrides[inner] = lambda: user
     except Exception:
-        pass
+        pass  # get_current_user may fail when auth settings are not configured in test
     app.dependency_overrides[get_async_session] = lambda: iter([object()])
     return app
 
