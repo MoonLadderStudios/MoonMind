@@ -14,7 +14,6 @@ validate_opencode_exact_host_preflight have non-test callers).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
