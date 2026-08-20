@@ -18,7 +18,10 @@ from moonmind.omnigent.reconciler import (
     DurableSessionState,
     ObservationSet,
     ProviderSessionObservation,
+    ProviderStatusClass,
     SubmissionState,
+    TerminalOutcome,
+    classify_provider_status,
 )
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.schemas.omnigent_session_models import (
@@ -38,6 +41,7 @@ from moonmind.workflows.temporal.workflow_registry import workflow_fleet_workflo
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.omnigent_session import (
     BOUNDED_COMMAND_ACTIVITIES,
+    MAX_PENDING_SIGNAL_INTENTS,
     MoonMindOmnigentSessionWorkflow,
     canonical_omnigent_session_id,
     omnigent_session_workflow_id,
@@ -285,6 +289,15 @@ async def test_snapshot_requires_stable_marked_turn_before_idle_terminal(
             return list(prior_observations)
 
         async def append(self, **kwargs: object) -> object:
+            # The real repository is idempotent on (session, dedup key); a fake
+            # that always appends cannot catch an identity collision.
+            identity = (kwargs["session_id"], kwargs["deduplication_key"])
+            for existing in writes:
+                if (
+                    existing["session_id"],
+                    existing["deduplication_key"],
+                ) == identity:
+                    return SimpleNamespace(**existing)
             writes.append(dict(kwargs))
             return SimpleNamespace(**kwargs)
 
@@ -357,6 +370,17 @@ async def test_snapshot_requires_stable_marked_turn_before_idle_terminal(
     await omnigent_session_activities.omnigent_observe_snapshot_activity(request)
     second_index = dict(writes[-1]["bounded_index"])
     assert second_index["providerTurn"]["turnComplete"] is True
+    # The confirming read repeats the identical provider snapshot, so it must
+    # still persist as its own row instead of deduplicating against the pending
+    # observation and losing the completion evidence.
+    assert len(writes) == 2
+    assert writes[0]["source_digest"] == writes[1]["source_digest"]
+    assert writes[0]["deduplication_key"] != writes[1]["deduplication_key"]
+    assert writes[0]["observation_id"] != writes[1]["observation_id"]
+
+    # A retry of that same confirming read is still deduplicated.
+    await omnigent_session_activities.omnigent_observe_snapshot_activity(request)
+    assert len(writes) == 2
 
     session.cleanup_state = "host_stopped"
     client_state["available"] = False
@@ -594,6 +618,8 @@ async def test_timeout_reconciles_authoritative_snapshot_before_terminal_intent(
                 "phase": "turn_in_flight",
                 "timeoutAt": (now - timedelta(seconds=1)).isoformat(),
             }
+        if activity_name == "omnigent.heartbeat_host_lease":
+            return {"hostLeaseHeartbeat": "renewed"}
         if activity_name == "omnigent.read_event_batch":
             return {"observationCount": 0}
         if activity_name == "omnigent.observe_snapshot":
@@ -617,8 +643,9 @@ async def test_timeout_reconciles_authoritative_snapshot_before_terminal_intent(
         with pytest.raises(StopAfterTerminalDecision):
             await supervisor.run(_workflow_input())
 
-    assert calls[:4] == [
+    assert calls[:5] == [
         "omnigent.load_reconciliation_inputs",
+        "omnigent.heartbeat_host_lease",
         "omnigent.read_event_batch",
         "omnigent.observe_snapshot",
         "omnigent.load_reconciliation_inputs",
@@ -639,6 +666,7 @@ async def test_unavailable_snapshot_does_not_satisfy_timeout_reconciliation() ->
     )
     supervisor._execute_activity = AsyncMock(
         side_effect=(
+            {"hostLeaseHeartbeat": "renewed"},
             {"observationCount": 0, "readStatus": "unavailable"},
             {
                 "observationCount": 0,
@@ -664,3 +692,421 @@ def test_agent_run_patch_preserves_legacy_replay_and_selects_new_supervisor() ->
     assert '"cancel_or_interrupt_requested"' in source
     assert "OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID" in source
     assert '"integration.omnigent.profile_bound_execute"' in source
+
+
+# ---------------------------------------------------------------------------
+# Codex review follow-ups on MoonLadderStudios/MoonMind#3742
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("terminal_state", "expected"),
+    [
+        ("completed", TerminalOutcome.SUCCESS),
+        ("success", TerminalOutcome.SUCCESS),
+        ("failed", TerminalOutcome.FAILURE),
+        # A timeout is a system failure, not a user cancellation. Classifying it
+        # as cancelled makes a later `failed` provider snapshot look like a
+        # contradictory terminal and quarantines an already timed-out session.
+        ("timed_out", TerminalOutcome.FAILURE),
+        ("timeout", TerminalOutcome.FAILURE),
+        ("delivery_unknown", TerminalOutcome.FAILURE),
+        ("canceled", TerminalOutcome.CANCELLED),
+        ("cancelled", TerminalOutcome.CANCELLED),
+    ],
+)
+def test_durable_terminal_outcome_matches_reducer_classification(
+    terminal_state: str, expected: TerminalOutcome
+) -> None:
+    assert (
+        omnigent_session_activities._durable_terminal_outcome(
+            terminal_state, TerminalOutcome, classify_provider_status
+        )
+        is expected
+    )
+    if terminal_state in {"timed_out", "timeout", "failed"}:
+        assert (
+            classify_provider_status(terminal_state)
+            is ProviderStatusClass.TERMINAL_FAILURE
+        )
+
+
+def test_durable_terminal_outcome_is_none_without_terminal_state() -> None:
+    for empty in (None, "", "   "):
+        assert (
+            omnigent_session_activities._durable_terminal_outcome(
+                empty, TerminalOutcome, classify_provider_status
+            )
+            is None
+        )
+
+
+def _signal(request_id: str, **updates: object) -> OmnigentSessionSignal:
+    payload: dict[str, object] = {"requestId": request_id}
+    payload.update(updates)
+    return OmnigentSessionSignal.model_validate(payload)
+
+
+def test_full_signal_backlog_never_throws_from_a_signal_handler() -> None:
+    """Raising here would fail the workflow task and replay the same signal."""
+
+    supervisor = MoonMindOmnigentSessionWorkflow()
+    supervisor._initialize(_workflow_input())
+    for index in range(MAX_PENDING_SIGNAL_INTENTS):
+        supervisor._queue_signal_intent(
+            "approval_or_intervention_changed", _signal(f"req-{index}")
+        )
+    assert len(supervisor._pending_signal_intents) == MAX_PENDING_SIGNAL_INTENTS
+
+    # An overflowing non-recovery intent is counted, not raised.
+    supervisor._queue_signal_intent(
+        "approval_or_intervention_changed", _signal("req-overflow")
+    )
+    assert supervisor._dropped_signal_intents == 1
+    assert len(supervisor._pending_signal_intents) == MAX_PENDING_SIGNAL_INTENTS
+
+    # Cancellation and cleanup are the intents needed to recover a wedged
+    # session, so they are still admitted past the bound.
+    supervisor.cancel_or_interrupt_requested(_signal("cancel-1"))
+    supervisor.cleanup_requested(_signal("cleanup-1"))
+    queued_kinds = [
+        item["kind"] for item in supervisor._pending_signal_intents
+    ]
+    assert "cancel_or_interrupt_requested" in queued_kinds
+    assert "cleanup_requested" in queued_kinds
+    assert supervisor._cancel_requested is True
+    assert supervisor._cleanup_requested is True
+
+    # A second cancel does not grow the backlog without bound either.
+    supervisor.cancel_or_interrupt_requested(_signal("cancel-2"))
+    assert queued_kinds.count("cancel_or_interrupt_requested") == 1
+    assert supervisor.get_state()["droppedIntentCount"] == 2
+
+
+def test_repeated_signal_request_id_is_deduplicated_not_requeued() -> None:
+    supervisor = MoonMindOmnigentSessionWorkflow()
+    supervisor._initialize(_workflow_input())
+    supervisor.cancel_or_interrupt_requested(_signal("cancel-1"))
+    supervisor.cancel_or_interrupt_requested(_signal("cancel-1"))
+    assert len(supervisor._pending_signal_intents) == 1
+    assert supervisor._dropped_signal_intents == 0
+    # A distinct request id is still real new intent.
+    supervisor.cleanup_requested(_signal("cleanup-1"))
+    assert len(supervisor._pending_signal_intents) == 2
+
+
+@pytest.mark.asyncio
+async def test_poll_cycle_renews_host_lease_before_observing() -> None:
+    supervisor = MoonMindOmnigentSessionWorkflow()
+    supervisor._initialize(_workflow_input())
+    durable = DurableSessionState(
+        sessionId="oms_123",
+        revision=1,
+        ownerToken="owner",
+        fencingGeneration=1,
+    )
+    calls: list[str] = []
+
+    async def execute(activity_name: str, _payload: object) -> object:
+        calls.append(activity_name)
+        if activity_name == "omnigent.heartbeat_host_lease":
+            return {"hostLeaseHeartbeat": "renewed"}
+        return {"observationCount": 0}
+
+    supervisor._execute_activity = execute  # type: ignore[method-assign]
+    assert await supervisor._observe_after_wait(durable) is True
+    assert calls == [
+        "omnigent.heartbeat_host_lease",
+        "omnigent.read_event_batch",
+        "omnigent.observe_snapshot",
+    ]
+    assert supervisor.get_state()["hostLeaseHeartbeat"] == "renewed"
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_activity_renews_only_a_renewable_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lease owned by cleanup is reported, not renewed out from under it."""
+
+    import moonmind.omnigent.control_plane as control_plane_module
+    import moonmind.omnigent.oauth_hosts as oauth_hosts_module
+
+    session = SimpleNamespace(
+        session_id="oms_123",
+        host_lease_ref="host-lease-1",
+        cleanup_state="pending",
+    )
+    lease_state = {"status": "assigned", "cleanupClaimed": False}
+    heartbeats: list[str] = []
+
+    class FakeSessions:
+        async def get(self, _session_id: str) -> object:
+            return session
+
+    class FakeStore:
+        @asynccontextmanager
+        async def transaction(self):
+            yield SimpleNamespace(sessions=FakeSessions())
+
+    class FakeHosts:
+        def __init__(self, _session_factory: object) -> None:
+            pass
+
+        async def get_host_lease(self, lease_id: str) -> object:
+            if lease_state["status"] == "missing":
+                return None
+            return SimpleNamespace(
+                lease_id=lease_id, status=lease_state["status"]
+            )
+
+        async def heartbeat_host_lease(self, lease_id: str) -> object:
+            if lease_state["cleanupClaimed"]:
+                raise oauth_hosts_module.OmnigentOAuthHostError(
+                    "host lease cleanup is owned by the janitor",
+                    code=oauth_hosts_module.HOST_CLEANUP_CLAIMED_ERROR_CODE,
+                )
+            heartbeats.append(lease_id)
+            return SimpleNamespace(lease_id=lease_id, status="assigned")
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "OmnigentControlPlaneStore",
+        lambda _session_maker: FakeStore(),
+    )
+    monkeypatch.setattr(
+        oauth_hosts_module, "OmnigentOAuthHostRepository", FakeHosts
+    )
+    request = {
+        "sessionId": "oms_123",
+        "compiledExecutionIntentRef": "art_intent_123",
+        "compiledExecutionIntentDigest": "sha256:" + "a" * 64,
+        "expectedRevision": 7,
+        "fencingGeneration": 1,
+    }
+    heartbeat = omnigent_session_activities.omnigent_heartbeat_host_lease_activity
+
+    assert (await heartbeat(request))["hostLeaseHeartbeat"] == "renewed"
+    assert heartbeats == ["host-lease-1"]
+
+    # `draining` is owned by whoever won the cleanup fence.
+    lease_state["status"] = "draining"
+    assert (await heartbeat(request))["hostLeaseHeartbeat"] == "not_renewable"
+
+    # Read as renewable, then drained before the heartbeat CAS landed.
+    lease_state["status"] = "assigned"
+    lease_state["cleanupClaimed"] = True
+    assert (await heartbeat(request))["hostLeaseHeartbeat"] == "cleanup_claimed"
+
+    lease_state["cleanupClaimed"] = False
+    lease_state["status"] = "missing"
+    assert (await heartbeat(request))["hostLeaseHeartbeat"] == "missing"
+
+    lease_state["status"] = "assigned"
+    session.host_lease_ref = None
+    assert (await heartbeat(request))["hostLeaseHeartbeat"] == "not_attached"
+    assert heartbeats == ["host-lease-1"]
+
+
+@pytest.mark.asyncio
+async def test_stop_host_does_not_run_cleanup_it_did_not_win(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two cleanup owners must not delete the same host concurrently."""
+
+    import moonmind.omnigent.control_plane as control_plane_module
+    import moonmind.omnigent.oauth_hosts as oauth_hosts_module
+
+    session = SimpleNamespace(
+        session_id="oms_123",
+        host_lease_ref="host-lease-1",
+        cleanup_state="host_stopped",
+        metadata={},
+        revision=7,
+        fencing_generation=1,
+    )
+    claims: list[dict[str, object]] = []
+
+    class FakeSessions:
+        async def get(self, _session_id: str) -> object:
+            return session
+
+    class FakeStore:
+        @asynccontextmanager
+        async def transaction(self):
+            yield SimpleNamespace(sessions=FakeSessions())
+
+    class FakeHosts:
+        def __init__(self, _session_factory: object) -> None:
+            pass
+
+        async def get_host_lease(self, lease_id: str) -> object:
+            return SimpleNamespace(
+                lease_id=lease_id,
+                status="draining",
+                last_heartbeat_at=datetime.now(UTC),
+                binding_ref="binding-1",
+            )
+
+        async def claim_host_lease_cleanup(self, lease_id: str, **kwargs: object):
+            claims.append({"leaseId": lease_id, **kwargs})
+            return None
+
+        async def validate_binding(self, _binding_ref: str) -> object:
+            raise AssertionError("cleanup ran without winning the fence")
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "OmnigentControlPlaneStore",
+        lambda _session_maker: FakeStore(),
+    )
+    monkeypatch.setattr(
+        oauth_hosts_module, "OmnigentOAuthHostRepository", FakeHosts
+    )
+
+    async def fake_claim(_request: object) -> tuple[object, bool]:
+        return SimpleNamespace(status="claimed"), True
+
+    async def fake_settle(_request: object, **_kwargs: object) -> dict[str, object]:
+        return {"commandId": "cmd-1", "outcome": "settled"}
+
+    monkeypatch.setattr(
+        omnigent_session_activities, "_claim_command", fake_claim
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities, "_settle_command", fake_settle
+    )
+
+    result = await omnigent_session_activities.omnigent_stop_host_activity(
+        {
+            "sessionId": "oms_123",
+            "compiledExecutionIntentRef": "art_intent_123",
+            "compiledExecutionIntentDigest": "sha256:" + "a" * 64,
+            "expectedRevision": 7,
+            "fencingGeneration": 1,
+            "commandId": "cmd-1",
+        }
+    )
+
+    assert result["outcome"] == "settled"
+    # The fence was attempted with the observed status *and* heartbeat, so a
+    # lease heartbeated since the read cannot hand authority to a second owner.
+    assert len(claims) == 3
+    assert claims[0]["expected_status"] == "draining"
+    assert "expected_last_heartbeat_at" in claims[0]
+
+
+@pytest.mark.asyncio
+async def test_profile_lease_request_carries_owning_workflow_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An activity-owned grant is rejected without `metadata.workflowId`."""
+
+    from moonmind.workflows.temporal.workflows.provider_profile_manager import (
+        MoonMindProviderProfileManagerWorkflow,
+    )
+
+    import moonmind.omnigent.control_plane as control_plane_module
+    import moonmind.provider_profiles.lease_client as lease_client_module
+
+    session = SimpleNamespace(
+        session_id="oms_123",
+        revision=7,
+        provider_profile_generation=3,
+        step_execution_id="step-1",
+    )
+    captured: dict[str, object] = {}
+
+    class FakeSessions:
+        async def get(self, _session_id: str) -> object:
+            return session
+
+        async def bind_runtime_authority(self, _session_id: str, **_kwargs: object):
+            return session
+
+    class FakeStore:
+        @asynccontextmanager
+        async def transaction(self):
+            yield SimpleNamespace(sessions=FakeSessions())
+
+    class FakeLeaseClient:
+        def __init__(self, _adapter: object) -> None:
+            pass
+
+        async def acquire_execution_lease(self, **kwargs: object) -> object:
+            captured.update(kwargs)
+            return SimpleNamespace(
+                lease_id="profile-lease-1", owner_id=kwargs["owner_id"]
+            )
+
+    class FakeDbSession:
+        async def get(self, _model: object, _profile_id: str) -> object:
+            return SimpleNamespace(
+                enabled=True,
+                auth_state="connected",
+                runtime_id="codex_cli",
+                credential_generation=4,
+            )
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+    async def fake_intent(_request: object) -> object:
+        return SimpleNamespace(
+            execution_profile_ref="omnigent-codex", idempotency_key="idem-1"
+        )
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "OmnigentControlPlaneStore",
+        lambda _session_maker: FakeStore(),
+    )
+    monkeypatch.setattr(
+        lease_client_module, "ProviderProfileLeaseClient", FakeLeaseClient
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities, "_load_intent_request", fake_intent
+    )
+
+    async def fake_claim(_request: object) -> tuple[object, bool]:
+        return SimpleNamespace(status="claimed"), True
+
+    async def fake_settle(_request: object, **_kwargs: object) -> dict[str, object]:
+        return {"commandId": "cmd-1"}
+
+    monkeypatch.setattr(
+        omnigent_session_activities, "_claim_command", fake_claim
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities, "_settle_command", fake_settle
+    )
+    monkeypatch.setattr(
+        "api_service.db.base.async_session_maker",
+        lambda: FakeDbSession(),
+        raising=False,
+    )
+
+    await omnigent_session_activities.omnigent_ensure_provider_profile_lease_activity(
+        {
+            "sessionId": "oms_123",
+            "compiledExecutionIntentRef": "art_intent_123",
+            "compiledExecutionIntentDigest": "sha256:" + "a" * 64,
+            "expectedRevision": 7,
+            "fencingGeneration": 1,
+            "commandId": "cmd-1",
+        }
+    )
+
+    metadata = dict(captured["metadata"])  # type: ignore[arg-type]
+    assert metadata["workflowId"] == omnigent_session_workflow_id("oms_123")
+    assert metadata["stepExecutionId"] == "step-1"
+    assert metadata["ownerIsWorkflow"] is False
+    # The manager's allowlist is what makes a session-only key unusable here.
+    safe = MoonMindProviderProfileManagerWorkflow._safe_lease_metadata(
+        {"metadata": metadata}
+    )
+    assert safe["workflowId"] == omnigent_session_workflow_id("oms_123")
+    assert "canonicalSessionId" not in safe

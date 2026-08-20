@@ -54,6 +54,10 @@ from moonmind.workflows.temporal.activity_catalog import (
     build_default_activity_catalog,
     get_workflow_task_queue,
 )
+from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
+from moonmind.workflows.temporal.workflows import (
+    omnigent_session as session_module,
+)
 from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 from moonmind.workflows.temporal.workflows.omnigent_session import (
     MoonMindOmnigentSessionWorkflow,
@@ -974,8 +978,6 @@ async def test_continue_as_new_preserves_active_provider_session(
 ) -> None:
     """History rollover reloads one active provider session without redispatch."""
 
-    import moonmind.workflows.temporal.workflows.omnigent_session as session_module
-
     _reset_state()
     # Four launch decisions establish an active provider turn. Roll over on the
     # first await-observation decision, then converge from durable fake state.
@@ -1441,8 +1443,6 @@ async def test_pre_supervisor_agent_run_history_replays_on_legacy_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An AgentRun history without the admission patch never starts a child."""
-
-    import moonmind.workflows.temporal.workflows.agent_run as agent_run_module
 
     _reset_state()
     original_patched = agent_run_module.workflow.patched

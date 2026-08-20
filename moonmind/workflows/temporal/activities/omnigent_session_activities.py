@@ -384,6 +384,32 @@ def _observation_payload(
     return merged, frontier
 
 
+def _durable_terminal_outcome(
+    terminal_state: Any, terminal_outcome_enum: Any, classify: Any
+) -> Any:
+    """Map a durable terminal state onto the reducer's own classification.
+
+    The reducer already owns terminal vocabulary: a timeout is a *failure*, and
+    cancellation is reserved for explicit cancel states. Re-deriving that here
+    instead of keeping a second status list is what keeps a later ``failed``
+    provider snapshot from looking like a contradictory terminal on an already
+    timed-out session and quarantining it mid-cleanup.
+    """
+
+    normalized = str(terminal_state or "").strip().lower()
+    if not normalized:
+        return None
+    status_class = classify(normalized)
+    if status_class.value == "terminal_success" or normalized in {
+        "success",
+        "complete",
+    }:
+        return terminal_outcome_enum.SUCCESS
+    if status_class.value == "terminal_cancelled":
+        return terminal_outcome_enum.CANCELLED
+    return terminal_outcome_enum.FAILURE
+
+
 async def omnigent_load_reconciliation_inputs_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -398,6 +424,7 @@ async def omnigent_load_reconciliation_inputs_activity(
         PriorDecisionSummary,
         SubmissionState,
         TerminalOutcome,
+        classify_provider_status,
         current_phase,
     )
 
@@ -466,15 +493,9 @@ async def omnigent_load_reconciliation_inputs_activity(
                 atRevision=last_decision.expected_revision or session.revision,
             )
 
-    terminal_outcome = None
-    if session.terminal_state:
-        normalized_terminal = session.terminal_state.lower()
-        if normalized_terminal in {"success", "completed", "complete"}:
-            terminal_outcome = TerminalOutcome.SUCCESS
-        elif normalized_terminal in {"cancelled", "canceled", "timed_out"}:
-            terminal_outcome = TerminalOutcome.CANCELLED
-        else:
-            terminal_outcome = TerminalOutcome.FAILURE
+    terminal_outcome = _durable_terminal_outcome(
+        session.terminal_state, TerminalOutcome, classify_provider_status
+    )
     profile_held = bool(
         session.provider_profile_id
         and session.metadata.get("providerLeaseRef")
@@ -667,6 +688,32 @@ async def omnigent_persist_decision_activity(
                 retry_policy={"maxAttempts": 3},
             )
     return {"decisionId": decision_id, "commandId": command_id}
+
+
+async def _claim_host_cleanup_authority(hosts: Any, host_lease_ref: str) -> Any:
+    """Fence host cleanup, or return ``None`` when another owner won it.
+
+    ``claim_host_lease_cleanup`` compare-and-swaps on the observed status *and*
+    heartbeat, so a lease heartbeated (or already drained) since it was read does
+    not hand cleanup authority to a second owner. A lost race is retried against
+    freshly reloaded evidence rather than executed from the stale read.
+    """
+
+    from moonmind.omnigent.oauth_hosts import CLEANUP_CLAIMABLE_HOST_STATES
+
+    for _attempt in range(3):
+        current = await hosts.get_host_lease(host_lease_ref)
+        if current is None or current.status not in CLEANUP_CLAIMABLE_HOST_STATES:
+            return None
+        claimed = await hosts.claim_host_lease_cleanup(
+            current.lease_id,
+            expected_status=current.status,
+            expected_last_heartbeat_at=current.last_heartbeat_at,
+            ttl_seconds=90,
+        )
+        if claimed is not None:
+            return claimed
+    return None
 
 
 async def _claim_command(request: OmnigentSessionActivityRequest) -> tuple[Any, bool]:
@@ -925,6 +972,9 @@ async def omnigent_ensure_provider_profile_lease_activity(
         deterministic_lease_owner_id,
     )
     from moonmind.workflows.temporal.client import TemporalClientAdapter
+    from moonmind.workflows.temporal.workflows.omnigent_session import (
+        omnigent_session_workflow_id,
+    )
 
     request = OmnigentSessionActivityRequest.model_validate(payload)
     command, should_execute = await _claim_command(request)
@@ -963,7 +1013,19 @@ async def omnigent_ensure_provider_profile_lease_activity(
         profile_id=profile_id,
         owner_id=owner_id,
         purpose=CredentialLeasePurpose.EXECUTION_OMNIGENT,
-        metadata={"canonicalSessionId": request.session_id},
+        # This runs in an Activity, so the manager records an activity-owned
+        # grant and verifies the owning workflow is still running. Its metadata
+        # allowlist keeps only these safe owner identities, so the durable
+        # supervisor workflow ID must be sent explicitly; a session-scoped key
+        # alone is dropped and the grant fails as owner-missing.
+        metadata={
+            "workflowId": omnigent_session_workflow_id(request.session_id),
+            "stepExecutionId": (
+                session_authority.step_execution_id or request.session_id
+            ),
+            "idempotencyKey": agent_request.idempotency_key,
+            "ownerIsWorkflow": False,
+        },
     )
     async with store.transaction() as repos:
         updated = await repos.sessions.bind_runtime_authority(
@@ -1572,6 +1634,62 @@ async def omnigent_submit_turn_activity(payload: Mapping[str, Any]) -> dict[str,
     return await _settle_command(request)
 
 
+async def omnigent_heartbeat_host_lease_activity(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Renew the session's durable host lease for one supervisor poll cycle.
+
+    The lease TTL is long, but the janitor reclaims an assigned host after 90
+    seconds without a heartbeat, so a normal turn longer than that would have its
+    host stopped underneath the supervisor. The supervisor calls this every poll
+    cycle (at most ``SNAPSHOT_INTERVAL_SECONDS`` apart) to hold the same renewal
+    cadence the legacy coordinator maintained.
+
+    This is a renewal, not authority: when the lease is gone, terminal, or
+    already claimed for cleanup by another owner, report that outcome so the
+    reconciler acts on durable evidence instead of failing the session.
+    """
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.oauth_hosts import (
+        HEARTBEAT_HOST_STATES,
+        HOST_CLEANUP_CLAIMED_ERROR_CODE,
+        OmnigentOAuthHostError,
+        OmnigentOAuthHostRepository,
+    )
+
+    request = OmnigentSessionActivityRequest.model_validate(payload)
+    store = OmnigentControlPlaneStore(async_session_maker)
+    async with store.transaction() as repos:
+        session = await repos.sessions.get(request.session_id)
+    if session is None:
+        raise KeyError(request.session_id)
+    if not session.host_lease_ref:
+        return {"hostLeaseHeartbeat": "not_attached"}
+    if session.cleanup_state == "leases_released":
+        return {"hostLeaseHeartbeat": "released"}
+    hosts = OmnigentOAuthHostRepository(async_session_maker)
+    lease = await hosts.get_host_lease(session.host_lease_ref)
+    if lease is None:
+        return {"hostLeaseHeartbeat": "missing"}
+    if lease.status not in HEARTBEAT_HOST_STATES:
+        # Draining, stopped, or failed leases are owned by cleanup, not by
+        # renewal. Renewing here would fight the owner that won the fence.
+        return {"hostLeaseHeartbeat": "not_renewable", "status": lease.status}
+    try:
+        renewed = await hosts.heartbeat_host_lease(lease.lease_id)
+    except OmnigentOAuthHostError as exc:
+        if getattr(exc, "code", None) == HOST_CLEANUP_CLAIMED_ERROR_CODE:
+            return {"hostLeaseHeartbeat": "cleanup_claimed"}
+        raise
+    return {
+        "hostLeaseHeartbeat": "renewed",
+        "status": renewed.status,
+        "hostLeaseRef": renewed.lease_id,
+    }
+
+
 async def omnigent_read_event_batch_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1916,20 +2034,32 @@ async def omnigent_observe_snapshot_activity(
             "rawStatus": effective_status,
             "outcome": outcome,
         }
+    # A quiet period is confirmed by observing the *same* provider snapshot
+    # twice, so the digest alone cannot identify the observation: the confirming
+    # read would dedup against the earlier pending one and its
+    # providerTurn.turnComplete would never persist, leaving reconciliation to
+    # poll forever on the original idle snapshot. Discriminate on the turn
+    # confirmation the observation actually carries, which still collapses
+    # retries of the same read because a retry recomputes the same marker.
+    turn_confirmation = (
+        f"turn:{session.active_turn_attempt_id}:complete"
+        if turn_complete or correlated_failure
+        else "turn:pending"
+    )
     async with store.transaction() as repos:
         await repos.observations.append(
             observation_id=(
                 "oob_"
                 + uuid5(
                     NAMESPACE_URL,
-                    f"{request.session_id}:snapshot:{digest}",
+                    f"{request.session_id}:snapshot:{digest}:{turn_confirmation}",
                 ).hex
             ),
             session_id=request.session_id,
             observation_type="provider_snapshot",
             source="provider_authoritative_snapshot",
             observed_at=observed_at,
-            deduplication_key=f"provider-snapshot:{digest}",
+            deduplication_key=f"provider-snapshot:{digest}:{turn_confirmation}",
             source_digest=digest,
             bounded_index=bounded,
         )
@@ -2547,7 +2677,10 @@ async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, A
     from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
     from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
+    from moonmind.omnigent.oauth_hosts import (
+        CLEANUP_CLAIMABLE_HOST_STATES,
+        OmnigentOAuthHostRepository,
+    )
 
     request = OmnigentSessionActivityRequest.model_validate(payload)
     command, should_execute = await _claim_command(request)
@@ -2562,13 +2695,15 @@ async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, A
     cleanup_evidence: Mapping[str, Any] = {}
     if session.host_lease_ref:
         lease = await hosts.get_host_lease(session.host_lease_ref)
+        if lease is not None and lease.status in CLEANUP_CLAIMABLE_HOST_STATES:
+            # Cleanup must be fenced, not assumed. The janitor or another
+            # recovery owner may already have claimed this lease by draining it;
+            # stopping the host anyway would let two owners delete resources and
+            # release credential capacity concurrently. Win the same
+            # compare-and-swap the legacy coordinator uses, or leave the host to
+            # whoever did win cleanup authority.
+            lease = await _claim_host_cleanup_authority(hosts, lease.lease_id)
         if lease is not None:
-            if lease.status == "assigned":
-                lease = await hosts.transition_host_lease(
-                    lease.lease_id,
-                    expected_status="assigned",
-                    new_status="draining",
-                )
             binding = await hosts.validate_binding(lease.binding_ref)
             agent_request = await _load_intent_request(request)
             http_client, client = await _omnigent_client_context()
@@ -2687,6 +2822,7 @@ __all__ = [
     "omnigent_ensure_host_activity",
     "omnigent_ensure_provider_session_activity",
     "omnigent_submit_turn_activity",
+    "omnigent_heartbeat_host_lease_activity",
     "omnigent_read_event_batch_activity",
     "omnigent_observe_snapshot_activity",
     "omnigent_record_terminal_activity",

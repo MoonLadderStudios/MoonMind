@@ -1058,6 +1058,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "omnigent_ensure_provider_session",
     ),
     "omnigent.submit_turn": ("agent_runtime", "omnigent_submit_turn"),
+    "omnigent.heartbeat_host_lease": (
+        "agent_runtime",
+        "omnigent_heartbeat_host_lease",
+    ),
     "omnigent.read_event_batch": ("agent_runtime", "omnigent_read_event_batch"),
     "omnigent.observe_snapshot": ("agent_runtime", "omnigent_observe_snapshot"),
     "omnigent.harvest_evidence": ("agent_runtime", "omnigent_harvest_evidence"),
@@ -7527,6 +7531,16 @@ class TemporalAgentRuntimeActivities:
         return await self._run_omnigent_session_activity(
             "omnigent_submit_turn_activity",
             "omnigent.submit_turn",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_heartbeat_host_lease(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_heartbeat_host_lease_activity",
+            "omnigent.heartbeat_host_lease",
             request,
             **kwargs,
         )

@@ -58,6 +58,9 @@ CONTINUE_AS_NEW_HISTORY_LENGTH_THRESHOLD = 2_000
 CONTINUE_AS_NEW_SESSION_AGE_SECONDS = 86_400
 CONTINUE_AS_NEW_TURN_ATTEMPT_THRESHOLD = 20
 MAX_PENDING_SIGNAL_INTENTS = 100
+# The janitor reclaims an assigned host this long after its last heartbeat,
+# independently of the much longer lease expiry.
+HOST_LEASE_HEARTBEAT_TIMEOUT_SECONDS = 90
 
 # A reconciler decision may authorize several independently retryable cleanup or
 # publication phases, but never more than this fixed, bounded sequence.
@@ -173,6 +176,8 @@ class MoonMindOmnigentSessionWorkflow:
         self._wake_sequence = 0
         self._last_consumed_wake_sequence = 0
         self._pending_signal_intents: list[dict[str, Any]] = []
+        self._dropped_signal_intents = 0
+        self._host_lease_heartbeat: str | None = None
         self._cancel_requested = False
         self._cleanup_requested = False
         self._phase = "initializing"
@@ -466,10 +471,33 @@ class MoonMindOmnigentSessionWorkflow:
             fencingGeneration=int(loaded.get("fencingGeneration") or 0),
         )
 
+    async def _heartbeat_host_lease(self, durable: DurableSessionState) -> None:
+        """Hold the durable host lease for one more poll cycle.
+
+        The janitor reclaims an assigned host
+        ``HOST_LEASE_HEARTBEAT_TIMEOUT_SECONDS`` after its last heartbeat, which
+        is shorter than a normal turn, so renewal has to happen on every cycle
+        and not only at launch. Renewal is not authority: a lease already owned by
+        another cleanup owner is recorded and left to the reconciler rather than
+        failing the session here.
+        """
+
+        request = self._base_activity_request(durable).model_dump(
+            mode="json", by_alias=True, exclude_none=True
+        )
+        result = await self._execute_activity(
+            "omnigent.heartbeat_host_lease", request
+        )
+        if isinstance(result, Mapping):
+            self._host_lease_heartbeat = str(
+                result.get("hostLeaseHeartbeat") or ""
+            ) or None
+
     async def _observe_after_wait(self, durable: DurableSessionState) -> bool:
         request = self._base_activity_request(durable).model_dump(
             mode="json", by_alias=True, exclude_none=True
         )
+        await self._heartbeat_host_lease(durable)
         batch = await self._execute_activity("omnigent.read_event_batch", request)
         snapshot = await self._execute_activity("omnigent.observe_snapshot", request)
         for result in (batch, snapshot):
@@ -510,6 +538,9 @@ class MoonMindOmnigentSessionWorkflow:
                 timeout=timedelta(seconds=wait_seconds),
             )
         except (asyncio.TimeoutError, TimeoutError):
+            # Timing out is the normal path: no wake signal arrived before the
+            # snapshot deadline, so fall through and let the caller take the
+            # next scheduled provider snapshot.
             pass
 
     def _should_continue_as_new(self) -> bool:
@@ -859,16 +890,42 @@ class MoonMindOmnigentSessionWorkflow:
         self._wake_sequence += 1
 
     def _queue_signal_intent(self, kind: str, payload: OmnigentSessionSignal) -> None:
+        intent = {
+            "kind": kind,
+            "payload": payload.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            ),
+        }
+        # Raising from a signal handler fails the workflow task, and replay
+        # re-delivers the same signal against the same full queue, so the
+        # supervisor could never drain it again. Deduplicate by request id
+        # instead, then record bounded overflow rather than throwing.
+        request_id = str(payload.request_id or "").strip()
+        if request_id:
+            for queued in self._pending_signal_intents:
+                if queued.get("kind") == kind and str(
+                    (queued.get("payload") or {}).get("requestId") or ""
+                ) == request_id:
+                    self._wake()
+                    return
         if len(self._pending_signal_intents) >= MAX_PENDING_SIGNAL_INTENTS:
-            raise ValueError("Omnigent session signal backlog is full")
-        self._pending_signal_intents.append(
-            {
-                "kind": kind,
-                "payload": payload.model_dump(
-                    mode="json", by_alias=True, exclude_none=True
-                ),
+            # Cancellation and cleanup are the intents needed to recover a
+            # wedged session, so admit one of each past the bound; anything
+            # else is counted as dropped and left for the operator-visible
+            # overflow signal instead of failing the workflow task.
+            recovery_kind = kind in {
+                "cancel_or_interrupt_requested",
+                "cleanup_requested",
             }
-        )
+            already_queued = any(
+                queued.get("kind") == kind
+                for queued in self._pending_signal_intents
+            )
+            if not recovery_kind or already_queued:
+                self._dropped_signal_intents += 1
+                self._wake()
+                return
+        self._pending_signal_intents.append(intent)
         self._wake()
 
     @workflow.signal(name="provider_observation_available")
@@ -938,6 +995,8 @@ class MoonMindOmnigentSessionWorkflow:
             "timeoutSnapshotObserved": self._timeout_snapshot_observed,
             "timeoutSnapshotAttemptCount": self._timeout_snapshot_attempt_count,
             "pendingIntentCount": len(self._pending_signal_intents),
+            "droppedIntentCount": self._dropped_signal_intents,
+            "hostLeaseHeartbeat": self._host_lease_heartbeat,
             "terminalStatus": self._terminal_status,
             "terminalResultRef": self._terminal_result_ref,
             "cleanupEvidenceRef": self._cleanup_evidence_ref,
@@ -946,6 +1005,7 @@ class MoonMindOmnigentSessionWorkflow:
 
 __all__ = [
     "WORKFLOW_TYPE",
+    "HOST_LEASE_HEARTBEAT_TIMEOUT_SECONDS",
     "BOUNDED_COMMAND_ACTIVITIES",
     "MoonMindOmnigentSessionWorkflow",
     "canonical_omnigent_session_id",
