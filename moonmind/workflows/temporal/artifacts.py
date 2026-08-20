@@ -3679,10 +3679,23 @@ class TemporalArtifactActivities:
             )
 
         profiles = []
+        profile_statuses = []
         for row in rows:
             launch_ready = provider_profile_launch_ready(
                 row,
                 managed_secret_statuses=managed_secret_statuses,
+            )
+            profile_statuses.append(
+                {
+                    "profile_id": row.profile_id,
+                    "runtime_id": row.runtime_id,
+                    "enabled": row.enabled,
+                    "launch_ready": launch_ready,
+                    "auth_state": row.auth_state.value if row.auth_state else None,
+                    "disabled_reason": (
+                        row.disabled_reason.value if row.disabled_reason else None
+                    ),
+                }
             )
             if not launch_ready and row.profile_id not in leased_profile_ids:
                 continue
@@ -3758,7 +3771,7 @@ class TemporalArtifactActivities:
                 }
             )
 
-        return {"profiles": profiles}
+        return {"profiles": profiles, "profile_statuses": profile_statuses}
 
     async def provider_profile_ensure_manager(
         self,

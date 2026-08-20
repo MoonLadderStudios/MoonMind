@@ -1,0 +1,86 @@
+"""Typed failure taxonomy for Omnigent Harness Platform.
+
+Section 30 of the design enumerates low-cardinality codes. Each code maps to
+an actionable remediation. Diagnostics never parse vendor log text as authority.
+"""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+
+class HarnessPlatformFailure(StrEnum):
+    OMNIGENT_HARNESS_CATALOG_UNAVAILABLE = "OMNIGENT_HARNESS_CATALOG_UNAVAILABLE"
+    OMNIGENT_HARNESS_CATALOG_STALE = "OMNIGENT_HARNESS_CATALOG_STALE"
+    OMNIGENT_HARNESS_UNKNOWN = "OMNIGENT_HARNESS_UNKNOWN"
+    OMNIGENT_HARNESS_UNTRUSTED = "OMNIGENT_HARNESS_UNTRUSTED"
+    OMNIGENT_HARNESS_BUILD_MISMATCH = "OMNIGENT_HARNESS_BUILD_MISMATCH"
+    OMNIGENT_VENDOR_RUNTIME_MISMATCH = "OMNIGENT_VENDOR_RUNTIME_MISMATCH"
+    OMNIGENT_AGENT_IDENTITY_UNAVAILABLE = "OMNIGENT_AGENT_IDENTITY_UNAVAILABLE"
+    OMNIGENT_AGENT_BUNDLE_IDENTITY_CONFLICT = "OMNIGENT_AGENT_BUNDLE_IDENTITY_CONFLICT"
+    OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE = "OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE"
+    OMNIGENT_SKILL_DELIVERY_MISMATCH = "OMNIGENT_SKILL_DELIVERY_MISMATCH"
+    OMNIGENT_CAPABILITY_REQUIRED_UNSUPPORTED = "OMNIGENT_CAPABILITY_REQUIRED_UNSUPPORTED"
+    OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN = "OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN"
+    OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH = "OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH"
+    OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT = "OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT"
+    OMNIGENT_CREDENTIAL_SLOT_UNBOUND = "OMNIGENT_CREDENTIAL_SLOT_UNBOUND"
+    OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE = "OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE"
+    OMNIGENT_CREDENTIAL_GENERATION_FENCED = "OMNIGENT_CREDENTIAL_GENERATION_FENCED"
+    OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE = "OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE"
+    OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED = "OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED"
+    OMNIGENT_HOST_CLASS_UNAVAILABLE = "OMNIGENT_HOST_CLASS_UNAVAILABLE"
+    OMNIGENT_HOST_HARNESS_NOT_READY = "OMNIGENT_HOST_HARNESS_NOT_READY"
+    OMNIGENT_MODEL_UNAVAILABLE = "OMNIGENT_MODEL_UNAVAILABLE"
+    OMNIGENT_MODEL_CONFIG_UNSUPPORTED = "OMNIGENT_MODEL_CONFIG_UNSUPPORTED"
+    OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE = "OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE"
+    OMNIGENT_EXECUTION_PLAN_CONFLICT = "OMNIGENT_EXECUTION_PLAN_CONFLICT"
+    OMNIGENT_EXECUTION_PLAN_DIGEST_MISMATCH = "OMNIGENT_EXECUTION_PLAN_DIGEST_MISMATCH"
+    OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE = "OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE"
+    OMNIGENT_RUNTIME_BINDING_CONFLICT = "OMNIGENT_RUNTIME_BINDING_CONFLICT"
+    OMNIGENT_CLEANUP_DEFERRED = "OMNIGENT_CLEANUP_DEFERRED"
+
+
+class HarnessPlatformError(RuntimeError):
+    """Typed platform error carrying a failure code and safe remediation."""
+
+    def __init__(self, message: str, *, code: HarnessPlatformFailure | str) -> None:
+        super().__init__(message)
+        self.code = str(code)
+
+
+_FAILURE_REMEDIATION: dict[str, str] = {
+    HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE: "retry_catalog_sync",
+    HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_STALE: "refresh_catalog_snapshot",
+    HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN: "select_known_harness",
+    HarnessPlatformFailure.OMNIGENT_HARNESS_UNTRUSTED: "approve_harness_implementation",
+    HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH: "align_host_build",
+    HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH: "align_vendor_runtime",
+    HarnessPlatformFailure.OMNIGENT_AGENT_IDENTITY_UNAVAILABLE: "select_valid_agent_source",
+    HarnessPlatformFailure.OMNIGENT_AGENT_BUNDLE_IDENTITY_CONFLICT: "resolve_bundle_conflict",
+    HarnessPlatformFailure.OMNIGENT_SKILL_SNAPSHOT_UNAVAILABLE: "resolve_skill_snapshot",
+    HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH: "repair_skill_delivery",
+    HarnessPlatformFailure.OMNIGENT_CAPABILITY_REQUIRED_UNSUPPORTED: "select_compatible_capability",
+    HarnessPlatformFailure.OMNIGENT_CAPABILITY_REQUIRED_UNKNOWN: "declare_capability",
+    HarnessPlatformFailure.OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH: "remediate_host_capability",
+    HarnessPlatformFailure.OMNIGENT_CREDENTIAL_BINDING_SET_CONFLICT: "resolve_binding_set_version",
+    HarnessPlatformFailure.OMNIGENT_CREDENTIAL_SLOT_UNBOUND: "bind_required_slot",
+    HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE: "select_compatible_provider",
+    HarnessPlatformFailure.OMNIGENT_CREDENTIAL_GENERATION_FENCED: "reconcile_generation_fence",
+    HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZER_UNAVAILABLE: "register_materializer",
+    HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED: "retry_materialization",
+    HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE: "select_available_host_class",
+    HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY: "provision_host_harness",
+    HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE: "select_available_model",
+    HarnessPlatformFailure.OMNIGENT_MODEL_CONFIG_UNSUPPORTED: "normalize_model_config",
+    HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE: "select_compatible_policy",
+    HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT: "resolve_plan_conflict",
+    HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_DIGEST_MISMATCH: "recompute_plan_digest",
+    HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE: "select_available_realizer",
+    HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT: "reconcile_runtime_binding",
+    HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED: "delegate_to_janitor",
+}
+
+
+def remediation_for(code: HarnessPlatformFailure | str) -> str:
+    return _FAILURE_REMEDIATION.get(str(code), "contact_administrator")

@@ -112,6 +112,7 @@ async def oauth_session_revalidate_bound_host(
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import (
+        HostPreflightFailure,
         OmnigentOAuthHostError,
         OmnigentOAuthHostRepository,
     )
@@ -148,6 +149,7 @@ async def oauth_session_revalidate_bound_host(
             expected_status="allocating",
             new_status="starting",
         )
+    credential_validation_failed = False
     try:
         async with httpx.AsyncClient() as http_client:
             client = OmnigentHttpClient(
@@ -170,6 +172,10 @@ async def oauth_session_revalidate_bound_host(
                 )
             except (Exception, asyncio.CancelledError) as exc:
                 preflight_error = exc
+                credential_validation_failed = (
+                    isinstance(exc, OmnigentOAuthHostError)
+                    and exc.code == HostPreflightFailure.LOGIN_STATUS_FAILED.value
+                )
 
             cleanup_error: BaseException | None = None
             try:
@@ -192,39 +198,46 @@ async def oauth_session_revalidate_bound_host(
             if preflight_error is not None:
                 raise preflight_error
     except (Exception, asyncio.CancelledError):
-        async with get_async_session_context() as db:
-            from sqlalchemy.future import select
-            from api_service.db.models import (
-                ManagedAgentProviderProfile,
-                ProviderProfileAuthState,
-                ProviderProfileDisabledReason,
-            )
+        # Destination binding, Docker, cleanup, and egress failures do not prove
+        # that the credential is invalid.  Revoking the Provider Profile for
+        # those substrate failures converts a retryable host problem into a
+        # persistent credential outage for every later scheduled run.  Only the
+        # typed credential-only login check owns auth-readiness mutation.
+        if credential_validation_failed:
+            async with get_async_session_context() as db:
+                from sqlalchemy.future import select
+                from api_service.db.models import (
+                    ManagedAgentProviderProfile,
+                    ProviderProfileAuthState,
+                    ProviderProfileDisabledReason,
+                )
 
-            profile = (
-                await db.execute(
-                    select(ManagedAgentProviderProfile).where(
-                        ManagedAgentProviderProfile.profile_id == profile_id
+                profile = (
+                    await db.execute(
+                        select(ManagedAgentProviderProfile).where(
+                            ManagedAgentProviderProfile.profile_id == profile_id
+                        )
                     )
-                )
-            ).scalar_one_or_none()
-            if profile is not None:
-                profile.enabled = False
-                profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
-                profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
-                behavior = dict(profile.command_behavior or {})
-                behavior["auth_readiness"] = {
-                    "launch_ready": False,
-                    "failure_reason": "bound_host_preflight_failed",
-                }
-                profile.command_behavior = behavior
-                await db.commit()
-                from api_service.services.provider_profile_service import (
-                    sync_provider_profile_manager,
-                )
+                ).scalar_one_or_none()
+                if profile is not None:
+                    profile.enabled = False
+                    profile.auth_state = ProviderProfileAuthState.VALIDATION_FAILED
+                    profile.disabled_reason = ProviderProfileDisabledReason.AUTH_INVALID
+                    behavior = dict(profile.command_behavior or {})
+                    behavior["auth_readiness"] = {
+                        "connected": False,
+                        "launch_ready": False,
+                        "failure_reason": "credential_login_status_failed",
+                    }
+                    profile.command_behavior = behavior
+                    await db.commit()
+                    from api_service.services.provider_profile_service import (
+                        sync_provider_profile_manager,
+                    )
 
-                await sync_provider_profile_manager(
-                    session=db, runtime_id=profile.runtime_id
-                )
+                    await sync_provider_profile_manager(
+                        session=db, runtime_id=profile.runtime_id
+                    )
         raise
     if preflight is None:
         raise RuntimeError("OAuth credential preflight produced no result")

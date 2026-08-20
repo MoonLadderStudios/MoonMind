@@ -118,6 +118,9 @@ RESOLVED_RUNTIME_DISPATCH_PATCH_ID = "agent-run-resolved-runtime-dispatch-v1"
 PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID = (
     "agent-run-parent-execution-artifact-handoff-v1"
 )
+TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID = (
+    "agent-run-terminal-evidence-control-queue-v1"
+)
 _MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
 _MAX_MANAGED_PROCESS_LOSS_RECOVERIES = 1
 _RETRYABLE_TERMINAL_CONTRACT_FAILURE_CODES = frozenset(
@@ -537,6 +540,15 @@ async def external_adapter_execution_style(agent_id: str) -> str:
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
     @staticmethod
+    def _workflow_patch_enabled(patch_id: str) -> bool:
+        try:
+            return bool(workflow.patched(patch_id))
+        except Exception as exc:
+            if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                return False
+            raise
+
+    @staticmethod
     def _workflow_child_task_queue() -> str:
         if workflow.patched(AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
             return settings.temporal.user_workflow_v2_task_queue
@@ -740,6 +752,17 @@ class MoonMindAgentRun:
         """Execute an activity using the module-level catalog for routing."""
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_name)
         kwargs = self._execute_kwargs_for_route(route)
+        if (
+            activity_name == "agent_runtime.evaluate_terminal_evidence"
+            and not self._workflow_patch_enabled(
+                TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID
+            )
+        ):
+            # Preserve the exact command emitted by histories created before
+            # terminal evaluation moved to its starvation-resistant control
+            # lane. New histories record the patch marker and use the catalog's
+            # isolated queue; old histories replay against the former queue.
+            kwargs["task_queue"] = settings.temporal.activity_agent_runtime_task_queue
         kwargs.update(overrides)
         kwargs.setdefault(
             "summary",
