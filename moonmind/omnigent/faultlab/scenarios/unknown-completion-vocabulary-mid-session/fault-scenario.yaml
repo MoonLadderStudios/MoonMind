@@ -1,0 +1,30 @@
+desiredCancel: false
+groundTruthTerminal: success
+invariant: compatibility_safety
+maxTurnAttempts: 3
+recoveryRound: 4
+requiresCleanup: true
+requiresHost: true
+requiresProfileLease: true
+scenarioId: unknown-completion-vocabulary-mid-session
+schemaVersion: moonmind.omnigent-fault-scenario/v1
+seed: 3683
+sourceRef: '#3683'
+steps:
+- disconnect: false
+  duplicate: false
+  emit: []
+  'on': submit_turn
+  reorder: false
+  response: success
+  sideEffect: accepted
+- disconnect: false
+  duplicate: false
+  emit: []
+  'on': observe_snapshot
+  reorder: false
+  response: unknown_schema
+  return:
+    sessionState: frobnicate
+    unfinishedToolCalls: 0
+  sideEffect: none

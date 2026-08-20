@@ -26,7 +26,10 @@ def policy_document() -> dict:
                  "hostImageRef": "images/host@sha256:" + "2" * 64},
         "resources": {"cpuMillis": 2000, "memoryMiB": 4096, "processes": 256,
                       "timeoutSeconds": 5400, "temporaryStorageMiB": 256, "concurrency": 1},
-        "network": {"attachmentRef": "local-network", "egressProfileRef": "egress-default"},
+        "network": {
+            "attachmentRef": "control-plane-network",
+            "egressProfileRef": "egress-default",
+        },
         "workspace": {"allowedClasses": ["workflow"], "repositoryMutation": True,
                       "mountClasses": ["workspace", "oauth_home"], "runtimeUid": 1000, "runtimeGid": 1000},
         "providerProfile": {"compatibleProviders": ["codex"], "queueWhenBusy": True},

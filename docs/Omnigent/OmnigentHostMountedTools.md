@@ -1,8 +1,10 @@
 # Omnigent Host Mounted Runtime Tools
 
+**Document Class:** Canonical declarative
+**Viewpoint:** System / Feature Design View
 **Status:** Desired-state design  
 **Owners:** MoonMind Platform  
-**Last updated:** 2026-07-17
+**Last updated:** 2026-08-18
 
 **Implementation tracking:** rollout notes, spikes, migration checklists, and temporary handoffs belong under `docs/tmp/` or in issue/PR tracking. This document defines the durable target-state contract.
 
@@ -357,6 +359,27 @@ Mutation-capable workflows must also verify that the selected GitHub credential 
 If `gh` is missing, unauthenticated, or unauthorized for the target repository, MoonMind blocks before creating the Omnigent session and returns an actionable capability diagnostic.
 
 A host may contain `gh` even when a run does not require it. Mere executable presence does not cause MoonMind to inject GitHub credentials or imply permission to perform GitHub mutations.
+
+### 8.4 MoonMind runtime capabilities
+
+MoonMind-internal runtime capabilities are distinct from mounted CLIs. The
+transport route may exist for every compatible host, but the runtime adapter
+materializes operation-specific authority only when normalized
+`requiredCapabilities` and policy demand it.
+
+For `execution.fanout`, the bearer is stored in a lease-owned read-only file
+under `/opt/moonmind/capabilities`. The login-shell profile exports only
+`MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE`; it never contains the bearer
+value. The portable queue helper reads that file and fails closed when the
+selector exists but the file is missing or empty. This preserves unchanged
+upstream host images and avoids a token broker, sidecar, broad API token, or
+operator-managed permission switch.
+
+The container-job bearer uses the same lease-owned file pattern. Both the
+projected dependency-free `moonmind` CLI and the shared Python CLI prefer
+`MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE`, fail closed when its selected file
+is missing or empty, and use the legacy inline value only when no selector is
+present. Same-lease retries atomically refresh file contents before launch.
 
 ---
 

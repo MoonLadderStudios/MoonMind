@@ -16,7 +16,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    networks: [local-network]
+    networks: [control-plane-network]
     restart: unless-stopped
 
   api:
@@ -57,9 +57,13 @@ services:
       # Native Omnigent Workflow Chat UI is served through MoonMind-scoped routes
       # (MoonLadderStudios/MoonMind#3638): the browser reaches the native UI at
       # /omnigent-ui/workflow-chat/{chatBindingId} on the MoonMind origin, never
-      # the upstream server directly. Enabled by default; the version is pinned to
-      # the upstream build MoonMind is verified against and must pass conformance
-      # before an operator advances it.
+      # the upstream server directly. Enabled by default. The compatibility
+      # version is derived from the same immutable server image evidence the
+      # execution catalog already requires (OMNIGENT_IMAGE_REF digest), so
+      # pinning the image is the only step needed to serve native chat. A
+      # mutable tag stays unverified and the gate fails closed
+      # (MoonLadderStudios/MoonMind#3685). OMNIGENT_NATIVE_UI_VERSION is the
+      # explicit override an operator sets after a new build passes conformance.
       - OMNIGENT_NATIVE_UI_ENABLED=${OMNIGENT_NATIVE_UI_ENABLED:-true}
       - OMNIGENT_NATIVE_UI_VERSION=${OMNIGENT_NATIVE_UI_VERSION:-}
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
@@ -72,10 +76,20 @@ services:
       - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
       - MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF=${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-/workspace/cutover/remediation-release.json}
+      # Release-support evidence the catalog reads for the deployed commit
+      # (MoonLadderStudios/MoonMind#3710). These default to the durable
+      # evidence directory mounted below, so `tools/materialize_omnigent_evidence.py`
+      # is the only step an operator runs to make the deployed catalog report
+      # real acceptance, exact-artifact, and protected-live status. No env
+      # configuration is required for the default deployment path.
+      - MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST=${MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST:-/workspace/omnigent-evidence/acceptance-manifest.json}
+      - MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE=${MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE:-/workspace/omnigent-evidence/exact-artifact-projection.json}
+      - MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION=${MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION:-/workspace/omnigent-evidence/live-health-projection.json}
       # The API needs DOCKER_HOST only for its remaining direct Docker paths
       # (terminal exec, OAuth auth-runner teardown). SYSTEM_DOCKER_HOST is a
       # trusted-worker-only backend selector and is not read by the API service.
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_CONTROL_PLANE_NETWORK=${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
       - MOONMIND_DEPLOYMENT_PROJECT_NAME=${MOONMIND_DEPLOYMENT_PROJECT_NAME:-moonmind}
       - MOONMIND_OAUTH_RUNNER_IMAGE=${MOONMIND_OAUTH_RUNNER_IMAGE:-${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}}
       - MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION=${MOONMIND_ALLOW_LOCAL_ENCRYPTION_KEY_GENERATION:-1}
@@ -109,6 +123,10 @@ services:
       - ./.agents:/app/.agents:ro
       - ./deploy/state:/workspace/deployment_state:ro
       - ${MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR:-./var/cutover}:/workspace/cutover:ro
+      # Durable release-support evidence for the deployed commit, materialized by
+      # tools/materialize_omnigent_evidence.py. Read-only: the API consumes
+      # published evidence and never produces it.
+      - ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}:/workspace/omnigent-evidence:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets
       # Live retrieval capability authority, accounting, and bounded evidence.
@@ -119,7 +137,7 @@ services:
       - workflow_workspaces:/work/runs:ro
     command: sh /app/api_service/entrypoint.sh
     networks:
-      - local-network
+      - control-plane-network
       - docker-proxy-network
     healthcheck:
       test: [
@@ -163,7 +181,7 @@ services:
     expose:
       - "5432"
     networks:
-      local-network:
+      control-plane-network:
         aliases:
           - moonmind-api-db
           - temporal-db
@@ -201,7 +219,7 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      local-network:
+      control-plane-network:
         aliases:
           - temporal-internal
       sandbox-egress-network:
@@ -228,7 +246,7 @@ services:
     volumes:
       - minio-data:/data
     networks:
-      local-network:
+      control-plane-network:
         aliases:
           - moonmind-temporal-artifacts-s3
       sandbox-egress-network:
@@ -253,7 +271,7 @@ services:
       temporal:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
 
   temporal-visibility-rehearsal:
@@ -279,7 +297,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
 
   temporal-admin-tools:
@@ -294,7 +312,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-ui:
@@ -310,7 +328,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-workflow:
@@ -375,7 +393,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-artifacts:
@@ -431,7 +449,7 @@ services:
       minio:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-llm:
@@ -489,7 +507,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   temporal-worker-sandbox:
@@ -617,6 +635,7 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_CONTROL_PLANE_NETWORK=${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
       - MOONMIND_CONTAINER_BACKEND_ENABLED=${MOONMIND_CONTAINER_BACKEND_ENABLED:-true}
       - MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB=${MOONMIND_CONTAINER_BACKEND_MAX_ACTIVE_MEMORY_MIB:-}
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
@@ -713,7 +732,7 @@ services:
       docker-proxy:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
       - docker-proxy-network
     restart: unless-stopped
 
@@ -739,6 +758,7 @@ services:
       - TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY=${TEMPORAL_ARTIFACT_S3_SECRET_ACCESS_KEY:-minioadmin}
       - SYSTEM_DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
       - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+      - MOONMIND_CONTROL_PLANE_NETWORK=${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
       - MOONMIND_DEPLOYMENT_PROJECT_DIR=${MOONMIND_DEPLOYMENT_PROJECT_DIR:-}
       - MOONMIND_DEPLOYMENT_COMPOSE_FILE=${MOONMIND_DEPLOYMENT_COMPOSE_FILE:-}
       - MOONMIND_DEPLOYMENT_LOCAL_PROJECT_DIR=/workspace/host_project
@@ -783,7 +803,7 @@ services:
       docker-proxy:
         condition: service_started
     networks:
-      - local-network
+      - control-plane-network
       - docker-proxy-network
     restart: unless-stopped
 
@@ -843,7 +863,7 @@ services:
       temporal-namespace-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   qdrant:
@@ -854,7 +874,7 @@ services:
     volumes:
       - qdrant-storage:/qdrant/storage
     networks:
-      - local-network
+      - control-plane-network
 
   omnigent-tools-init:
     image: ${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}
@@ -900,7 +920,7 @@ services:
       omnigent-tools-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
     restart: unless-stopped
 
   omnigent-host-claude:
@@ -1140,7 +1160,7 @@ services:
       - ./init_db:/app/init_db
     command: sh /app/init_db/init_db_entrypoint.sh
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
     depends_on:
       postgres:
@@ -1190,7 +1210,7 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - local-network
+      - control-plane-network
     restart: "no"
 
   omnigent:
@@ -1243,7 +1263,7 @@ services:
       omnigent-db-init:
         condition: service_completed_successfully
     networks:
-      - local-network
+      - control-plane-network
       - omnigent-egress-network
     restart: unless-stopped
 
@@ -1312,7 +1332,7 @@ services:
       - "3128"
       - "3129"
     networks:
-      local-network: {}
+      control-plane-network: {}
       sandbox-egress-network: {}
       restricted-egress-network: {}
       omnigent-egress-network:
@@ -1356,8 +1376,8 @@ volumes:
   omnigent-data:
 
 networks:
-  local-network:
-    external: true
+  control-plane-network:
+    name: ${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}
   docker-proxy-network:
     name: ${MOONMIND_DOCKER_PROXY_NETWORK:-moonmind_docker-proxy-network}
     internal: true

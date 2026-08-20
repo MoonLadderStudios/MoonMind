@@ -1,0 +1,8 @@
+{
+  "invariant": "a recurring schedule using the deployment-managed bootstrap profile advances to the active immutable launch policy before its next Temporal occurrence",
+  "refreshedProfileVersion": 3,
+  "refreshedLaunchPolicyRef": "codex-on-demand@4",
+  "definitionVersion": 2,
+  "usageMode": "replace_existing_schedule_authority",
+  "temporalActionUpdated": true
+}

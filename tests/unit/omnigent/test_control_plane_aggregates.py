@@ -997,3 +997,94 @@ async def test_chat_binding_resolution_uses_canonical_aggregate(session_factory)
     assert session.provider_session_ref == "psess-1"
     # Historical evidence remains readable after provider resources are gone.
     assert observations[0].bounded_index["external_state_ref"] == "art://state-1"
+
+
+@pytest.mark.asyncio
+async def test_bounded_diagnostic_queries(store) -> None:
+    """Bounded latest/active/count queries backing the operator session-timeline
+    endpoints return the freshest/active row and a count without materializing the
+    full append-only history (#3708)."""
+    from datetime import timedelta
+
+    from moonmind.omnigent.control_plane import ControlPlaneOutcome
+
+    base = datetime(2026, 8, 18, 12, 0, 0, tzinfo=UTC)
+    async with store.transaction() as repos:
+        await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
+        )
+        await repos.turn_attempts.create(
+            turn_attempt_id="t1", session_id="s1", idempotency_key="idem-1"
+        )
+        await repos.turn_attempts.create(
+            turn_attempt_id="t2", session_id="s1", idempotency_key="idem-2"
+        )
+        # Two event observations and one snapshot; latest_for_session must return
+        # the newest row of the requested channel.
+        await repos.observations.append(
+            observation_id="o1", session_id="s1", observation_type="event",
+            source="provider", observed_at=base, deduplication_key="d1",
+        )
+        await repos.observations.append(
+            observation_id="o2", session_id="s1", observation_type="event",
+            source="provider", observed_at=base + timedelta(minutes=5), deduplication_key="d2",
+        )
+        await repos.observations.append(
+            observation_id="o3", session_id="s1", observation_type="snapshot",
+            source="provider", observed_at=base + timedelta(minutes=1), deduplication_key="d3",
+        )
+        # Two active commands: a claimed one and a delivery-unknown one.
+        await repos.commands.record(
+            command_id="c1", session_id="s1", command_type="ensure_host",
+            idempotency_key="cmd-1", payload_digest="pd1", fencing_generation=0,
+        )
+        await repos.commands.claim_command(
+            "c1", owner_class="session_supervisor", claim_token="worker-a"
+        )
+        await repos.commands.record(
+            command_id="c2", session_id="s1", command_type="submit_turn",
+            idempotency_key="cmd-2", payload_digest="pd2", fencing_generation=0,
+        )
+        await repos.commands.claim_command(
+            "c2", owner_class="session_supervisor", claim_token="worker-b"
+        )
+        await repos.commands.record_command_delivery(
+            "c2", owner_class="session_supervisor", claim_token="worker-b",
+            outcome=ControlPlaneOutcome.DELIVERY_UNKNOWN, provider_receipt_id="rcpt-1",
+        )
+        # Decisions under two reason codes.
+        await repos.decisions.append(
+            decision_id="dec-1", session_id="s1", decision_code="await_observation",
+            reason_code="awaiting_provider",
+        )
+        await repos.decisions.append(
+            decision_id="dec-2", session_id="s1", decision_code="quarantine_ambiguous_state",
+            reason_code="moonmind_active_no_recent_evidence",
+        )
+        await repos.decisions.append(
+            decision_id="dec-3", session_id="s1", decision_code="quarantine_ambiguous_state",
+            reason_code="moonmind_active_no_recent_evidence",
+        )
+
+    async with store.transaction() as repos:
+        latest_event = await repos.observations.latest_for_session(
+            "s1", observation_types=("event", "event_frontier", "event_batch")
+        )
+        latest_snapshot = await repos.observations.latest_for_session(
+            "s1", observation_types=("snapshot", "provider_snapshot")
+        )
+        turn_count = await repos.turn_attempts.count_for_session("s1")
+        active_command = await repos.commands.active_for_session("s1")
+        latest_decision = await repos.decisions.latest_for_session("s1")
+        no_progress = await repos.decisions.count_for_session_reason(
+            "s1", "moonmind_active_no_recent_evidence"
+        )
+
+    assert latest_event.observation_id == "o2"  # newest event, not o1
+    assert latest_snapshot.observation_id == "o3"
+    assert turn_count == 2
+    # Delivery-ambiguity outranks a merely claimed command.
+    assert active_command.command_id == "c2"
+    assert active_command.status == "delivery_unknown"
+    assert latest_decision.decision_id == "dec-3"
+    assert no_progress == 2

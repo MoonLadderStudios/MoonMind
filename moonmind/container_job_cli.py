@@ -141,6 +141,21 @@ def _mcp_endpoint(source: Mapping[str, str]) -> str:
 
 
 def _mcp_bearer_token(source: Mapping[str, str]) -> str | None:
+    selector = str(
+        source.get("MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE") or ""
+    ).strip()
+    if selector:
+        try:
+            value = Path(selector).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise ContainerJobCliError(
+                "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE is unavailable"
+            ) from exc
+        if not value:
+            raise ContainerJobCliError(
+                "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE is empty"
+            )
+        return value
     return (
         str(source.get("MOONMIND_CONTAINER_JOBS_BEARER_TOKEN") or "").strip()
         or None

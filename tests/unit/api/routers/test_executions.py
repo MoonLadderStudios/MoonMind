@@ -120,6 +120,26 @@ from moonmind.workflows.executions.control_stop_continuation import (
 _TARGET_SEARCH_ATTRIBUTE_TYPE = int(IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD_LIST)
 
 
+def test_deployment_skill_requirements_merge_into_canonical_capabilities() -> None:
+    assert executions_module._merge_deployment_skill_required_capabilities(
+        ["Git", "execution.fanout"],
+        {
+            "batch-skill": {
+                "required_capabilities": ["execution.fanout", "GH"]
+            },
+            "step-skill": {"required_capabilities": ["docker"]},
+        },
+    ) == ["git", "execution.fanout", "gh", "docker"]
+
+
+def test_deployment_skill_requirements_reject_malformed_trusted_metadata() -> None:
+    with pytest.raises(HTTPException, match="must be a JSON array of strings"):
+        executions_module._merge_deployment_skill_required_capabilities(
+            [],
+            {"batch-skill": {"required_capabilities": "execution.fanout"}},
+        )
+
+
 class _ScalarRows:
     def __init__(self, rows: list[object]) -> None:
         self._rows = rows
@@ -16432,7 +16452,24 @@ def _install_fake_store(monkeypatch, resolution=None, error=None):
     )
 
 
+def _declare_verified_immutable_server_image(monkeypatch) -> None:
+    """Serve as a deployment with verified immutable image evidence.
+
+    MoonLadderStudios/MoonMind#3685: the chat-binding projection only publishes
+    scoped navigation targets when the native-UI compatibility gate is ready,
+    and that version derives from the deployment's declared immutable Omnigent
+    server image. A mutable tag reports unknown and drops ``chatUrl``.
+    """
+
+    monkeypatch.delenv("OMNIGENT_NATIVE_UI_VERSION", raising=False)
+    monkeypatch.setenv(
+        "OMNIGENT_IMAGE_REF",
+        "ghcr.io/omnigent-ai/omnigent-server@sha256:" + "d" * 64,
+    )
+
+
 def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
+    _declare_verified_immutable_server_image(monkeypatch)
     resolution = ChatBindingResolution(
         state="available",
         read_only=False,
@@ -16465,6 +16502,7 @@ def test_chat_binding_available_is_browser_safe(monkeypatch) -> None:
 
 
 def test_chat_binding_terminal_is_read_only(monkeypatch) -> None:
+    _declare_verified_immutable_server_image(monkeypatch)
     resolution = ChatBindingResolution(
         state="ended",
         read_only=True,

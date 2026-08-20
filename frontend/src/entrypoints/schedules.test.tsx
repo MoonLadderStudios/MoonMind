@@ -162,6 +162,7 @@ describe("SchedulesPage", () => {
         items: [
           {
             id: "schedule-1",
+            version: 1,
             name: "Daily repository sweep",
             enabled: true,
             cron: "0 9 * * *",
@@ -187,6 +188,7 @@ describe("SchedulesPage", () => {
           },
           {
             id: "schedule-2",
+            version: 1,
             name: "Sparse schedule",
             enabled: false,
             cron: "15 * * * *",
@@ -200,6 +202,7 @@ describe("SchedulesPage", () => {
           },
           {
             id: "schedule-3",
+            version: 1,
             name: "Failing schedule",
             enabled: true,
             cron: "30 4 * * 1",
@@ -280,6 +283,7 @@ describe("SchedulesPage", () => {
         items: [
           {
             id: "schedule-error",
+            version: 1,
             name: "Error carrying schedule",
             enabled: true,
             cron: "0 12 * * *",
@@ -343,6 +347,7 @@ describe("SchedulesPage", () => {
       items: [
         {
           id: "schedule-1",
+          version: 1,
           name: "Daily repository sweep",
           enabled: true,
           cron: "0 9 * * *",
@@ -408,6 +413,7 @@ describe("SchedulesPage", () => {
       items: [
         {
           id: "schedule-1",
+          version: 1,
           name: "Daily repository sweep",
           enabled: true,
           cron: "0 9 * * *",
@@ -459,6 +465,7 @@ describe("SchedulesPage", () => {
       items: [
         {
           id: "schedule-1",
+          version: 1,
           name: "Daily repository sweep",
           enabled: true,
           cron: "0 9 * * *",
@@ -735,6 +742,7 @@ describe("SchedulesPage", () => {
           items: url.includes("cursor=cursor-2") ? [] : [
             {
               id: "schedule-page-1",
+              version: 1,
               name: "Page one schedule",
               enabled: true,
               cron: "0 9 * * *",
@@ -1084,6 +1092,7 @@ describe("SchedulesPage", () => {
       expect(updateCall).toBeDefined();
       expect(JSON.parse(String(updateCall?.[1]?.body || "{}"))).toEqual({
         name: "Nightly detail sweep updated",
+        version: 1,
       });
     });
     expect(screen.getAllByText("schedule-alpha").length).toBeGreaterThanOrEqual(1);
@@ -1107,6 +1116,7 @@ describe("SchedulesPage", () => {
       expect(updateCall).toBeDefined();
       expect(JSON.parse(String(updateCall?.[1]?.body || "{}"))).toEqual({
         description: "",
+        version: 1,
       });
     });
   });
@@ -1166,6 +1176,7 @@ describe("SchedulesPage", () => {
             branch: "release",
           },
         },
+        version: 1,
       });
     });
   });
@@ -1418,6 +1429,10 @@ describe("SchedulesPage", () => {
         && JSON.parse(String(init?.body || "{}")).enabled === false
       ));
       expect(pauseCall).toBeDefined();
+      expect(JSON.parse(String(pauseCall?.[1]?.body || "{}"))).toEqual({
+        enabled: false,
+        version: 1,
+      });
     });
   });
 
@@ -1436,6 +1451,10 @@ describe("SchedulesPage", () => {
         && JSON.parse(String(init?.body || "{}")).enabled === true
       ));
       expect(resumeCall).toBeDefined();
+      expect(JSON.parse(String(resumeCall?.[1]?.body || "{}"))).toEqual({
+        enabled: true,
+        version: 1,
+      });
     });
   });
 });

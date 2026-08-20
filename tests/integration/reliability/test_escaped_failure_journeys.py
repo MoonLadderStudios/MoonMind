@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import UUID
 
 import httpx
 import pytest
@@ -22,11 +23,21 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from temporalio import activity
 from temporalio.testing import ActivityEnvironment
 
-from api_service.db.models import Base, OmnigentPolicy, OmnigentPolicyVersion
+from api_service.db.models import (
+    Base,
+    OmnigentAgentProfile,
+    OmnigentAgentProfileVersion,
+    OmnigentPolicy,
+    OmnigentPolicyVersion,
+    RecurringWorkflowDefinition,
+    RecurringWorkflowScheduleType,
+    RecurringWorkflowScopeType,
+)
 from api_service.services.omnigent_policies import (
     bootstrap_document,
     seed_bootstrap_policies,
 )
+from api_service.services.recurring_workflows_service import RecurringWorkflowsService
 from moonmind.config.settings import settings
 from moonmind.omnigent import oauth_host_runtime as oauth_host_runtime_module
 from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
@@ -113,6 +124,9 @@ from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.workspace_locators import (
     SandboxWorkspaceRecord,
     SandboxWorkspaceRecordStore,
+)
+from moonmind.workflows.temporal.schedule_mapping import (
+    make_scheduled_workflow_id_base,
 )
 from moonmind.workflows.temporal.workflows import agent_run as agent_run_module
 from moonmind.workflows.temporal.workflows import (
@@ -962,6 +976,163 @@ async def test_pr_resolver_child_compiles_bindable_stock_agent_identity(
     )
     assert target.agent_id == expected["resolvedAgentId"]
     assert target.agent_name == expected["resolvedAgentName"]
+
+
+async def test_recurring_managed_bootstrap_policy_cutover_refreshes_temporal_action(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay the stale schedule action that conflicted with its host binding."""
+
+    replay_id = "recurring-managed-bootstrap-policy-cutover"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    definition_id = UUID(manifest["definitionId"])
+    old_snapshot = manifest["storedSnapshot"]
+    active_snapshot = manifest["activeSnapshot"]
+
+    async def refresh_snapshot(
+        session,
+        *,
+        parameters,
+        consumer_type,
+        consumer_id,
+        user,
+        replace_existing_usage,
+    ):
+        assert consumer_type == "schedule"
+        assert consumer_id == str(definition_id)
+        assert replace_existing_usage is True
+        return {
+            **dict(parameters),
+            "agentProfile": {
+                "profileId": active_snapshot["profileId"],
+                "version": active_snapshot["version"],
+                "digest": active_snapshot["digest"],
+            },
+            "agentProfileSnapshot": active_snapshot,
+            "omnigent": {
+                "executionTargetRef": active_snapshot["executionProfileRef"],
+                "launchPolicyRef": active_snapshot["launchPolicyRef"],
+            },
+        }
+
+    monkeypatch.setattr(
+        "api_service.services.recurring_workflows_service."
+        "refresh_managed_bootstrap_snapshot",
+        refresh_snapshot,
+    )
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'replay.db'}")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with session_factory() as session:
+            definition = RecurringWorkflowDefinition(
+                id=definition_id,
+                name="Daily Dependabot Resolver",
+                enabled=True,
+                schedule_type=RecurringWorkflowScheduleType.CRON,
+                cron="0 13 * * *",
+                timezone="UTC",
+                temporal_schedule_id=f"mm-schedule:{definition_id}",
+                owner_user_id=UUID("00000000-0000-0000-0000-000000000000"),
+                scope_type=RecurringWorkflowScopeType.PERSONAL,
+                target={
+                    "workflowType": "MoonMind.UserWorkflow",
+                    "initialParameters": {
+                        "targetRuntime": "omnigent",
+                        "agentProfile": {
+                            "profileId": old_snapshot["profileId"],
+                            "version": old_snapshot["version"],
+                            "digest": old_snapshot["digest"],
+                        },
+                        "agentProfileSnapshot": old_snapshot,
+                        "omnigent": {
+                            "executionTargetRef": old_snapshot[
+                                "executionProfileRef"
+                            ],
+                            "launchPolicyRef": old_snapshot["launchPolicyRef"],
+                        },
+                    },
+                    "agentProfile": {
+                        "profileId": old_snapshot["profileId"],
+                        "version": old_snapshot["version"],
+                        "digest": old_snapshot["digest"],
+                    },
+                    "agentProfileSnapshot": old_snapshot,
+                },
+                policy={},
+                version=1,
+            )
+            session.add_all(
+                [
+                    definition,
+                    OmnigentAgentProfile(
+                        profile_id=active_snapshot["profileId"],
+                        display_name="Codex via Omnigent",
+                        visibility="workspace",
+                        state="active",
+                        active_version=active_snapshot["version"],
+                        default_for_runtime=True,
+                    ),
+                    OmnigentAgentProfileVersion(
+                        profile_id=active_snapshot["profileId"],
+                        version=active_snapshot["version"],
+                        digest=active_snapshot["digest"],
+                        document={},
+                        validation_result={"ready": True},
+                    ),
+                ]
+            )
+            await session.commit()
+
+            update_schedule = AsyncMock()
+            adapter = SimpleNamespace(
+                resolve_workflow_task_queue=lambda _workflow: "mm.workflow.user.v2",
+                describe_schedule=AsyncMock(),
+                update_schedule=update_schedule,
+            )
+            service = RecurringWorkflowsService(
+                session,
+                temporal_client_adapter=adapter,
+            )
+            old_workflow_type, old_workflow_input = (
+                service._workflow_bundle_for_definition(definition)
+            )
+            adapter.describe_schedule.return_value = SimpleNamespace(
+                schedule=SimpleNamespace(
+                    action=SimpleNamespace(
+                        workflow=old_workflow_type,
+                        id=make_scheduled_workflow_id_base(definition_id),
+                        args=[old_workflow_input],
+                        task_queue="mm.workflow.user.v2",
+                    )
+                )
+            )
+
+            assert await service.refresh_managed_bootstrap_schedules() == 1
+            await session.refresh(definition)
+
+            assert definition.version == expected["definitionVersion"]
+            assert definition.target["agentProfile"]["version"] == expected[
+                "refreshedProfileVersion"
+            ]
+            assert definition.target["initialParameters"]["omnigent"][
+                "launchPolicyRef"
+            ] == expected["refreshedLaunchPolicyRef"]
+            assert (
+                manifest["durableHostBinding"]["launchPolicyRef"]
+                == expected["refreshedLaunchPolicyRef"]
+            )
+            assert update_schedule.await_count == 1
+            update_input = update_schedule.await_args.kwargs["workflow_input"]
+            assert update_input["initial_parameters"]["omnigent"][
+                "launchPolicyRef"
+            ] == expected["refreshedLaunchPolicyRef"]
+    finally:
+        await engine.dispose()
 
 
 async def test_runtime_switch_rebinds_managed_session_authority_before_activity() -> (
@@ -3446,6 +3617,7 @@ async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment
         current_workflow_id=manifest["incidentWorkflowId"],
         current_step_execution_id=manifest["stepExecutionId"],
         timeout_seconds=3600,
+        required_capabilities=manifest["requiredCapabilities"],
     )
     runtime_scripts = runtime._prepare_runtime_scripts(
         manifest["incidentWorkflowId"],
@@ -3461,8 +3633,13 @@ async def test_omnigent_codex_tool_shell_receives_moonmind_execution_environment
     assert f"'{manifest['moonmindUrl']}'" in profile
     assert f"'{manifest['incidentWorkflowId']}'" in profile
     for secret_name in expected["excludedSecretNames"]:
-        assert secret_name not in profile
+        assert f"export {secret_name}=" not in profile
         assert runtime_environment[secret_name] not in profile
+    capability_file = runtime_scripts / "capabilities" / "execution-fanout"
+    assert capability_file.read_text(encoding="utf-8").strip() == (
+        runtime_environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"]
+    )
+    assert "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN" not in runtime_environment
 
 
 async def test_omnigent_batch_fanout_crosses_only_scoped_execution_proxy_routes(

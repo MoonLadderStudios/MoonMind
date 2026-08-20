@@ -38,6 +38,32 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _container_jobs_bearer_token() -> str:
+    selector = str(
+        os.environ.get("MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE") or ""
+    ).strip()
+    if selector:
+        try:
+            value = Path(selector).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise CliError(
+                "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE is unavailable"
+            ) from exc
+        if not value:
+            raise CliError("MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE is empty")
+        return value
+    inline = str(
+        os.environ.get("MOONMIND_CONTAINER_JOBS_BEARER_TOKEN") or ""
+    ).strip()
+    if inline:
+        return inline
+    raise CliError(
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN or "
+        "MOONMIND_CONTAINER_JOBS_BEARER_TOKEN_FILE is required; run this "
+        "command inside a MoonMind managed workflow"
+    )
+
+
 def _workspace() -> dict[str, str]:
     kind = str(
         os.environ.get("MOONMIND_CONTAINER_JOBS_WORKSPACE_KIND")
@@ -94,9 +120,7 @@ def _call(tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
         data=json.dumps({"tool": tool, "arguments": arguments}).encode("utf-8"),
         headers={
             "Accept": "application/json",
-            "Authorization": (
-                "Bearer " + _required_env("MOONMIND_CONTAINER_JOBS_BEARER_TOKEN")
-            ),
+            "Authorization": "Bearer " + _container_jobs_bearer_token(),
             "Content-Type": "application/json",
         },
         method="POST",

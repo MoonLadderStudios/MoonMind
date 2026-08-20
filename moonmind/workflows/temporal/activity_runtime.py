@@ -144,6 +144,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
     extract_durable_retrieval_metadata,
+    resolve_execution_timeout_seconds,
 )
 from moonmind.schemas.workload_models import WorkloadResult, parse_workload_request
 from moonmind.workloads.tool_bridge import (
@@ -7991,11 +7992,14 @@ class TemporalAgentRuntimeActivities:
 
         # Start background supervision — hold a strong reference so the task
         # is not garbage-collected before it completes.
-        timeout_policy = getattr(request, "timeout_policy", None) or {}
-        timeout_seconds = (
-            timeout_policy.get("timeout_seconds", 3600)
-            if isinstance(timeout_policy, dict)
-            else getattr(timeout_policy, "timeout_seconds", 3600)
+        # Derive the supervisor deadline from the one shared execution-budget
+        # authority so it cannot diverge from the AgentRun workflow's budget
+        # (MoonLadderStudios/MoonMind#3685 review). The workflow publishes its
+        # effective budget into ``timeoutPolicy``; a direct launch without one
+        # falls back to the same kind-specific default the workflow would use.
+        timeout_seconds = resolve_execution_timeout_seconds(
+            agent_kind=str(getattr(request, "agent_kind", "managed") or "managed"),
+            timeout_policy=getattr(request, "timeout_policy", None),
         )
 
         async def _supervise_and_publish():

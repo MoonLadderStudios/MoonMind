@@ -82,23 +82,13 @@ cmd_sync() {
 cmd_login() {
   _require_docker
 
-  local NETWORK_NAME="${MOONMIND_DOCKER_NETWORK:-local-network}"
   local AUTH_SERVICE="${CLAUDE_AUTH_SERVICE:-temporal-worker-sandbox}"
   local AUTH_PROFILE="${CLAUDE_AUTH_PROFILE:-}"
   local CLAUDE_TERM="${TERM:-xterm-256color}"
 
-  if ! docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
-    docker network create "$NETWORK_NAME" >/dev/null
-  fi
-
   if ! [ -t 0 ] || ! [ -t 1 ]; then
     echo "Error: --login requires an interactive terminal." >&2
     exit 1
-  fi
-
-  local COMPOSE_NETWORK_ARGS=()
-  if docker compose run --help 2>/dev/null | grep -Eq '(^|[[:space:]])--network([[:space:]]|=|$)'; then
-    COMPOSE_NETWORK_ARGS+=(--network "$NETWORK_NAME")
   fi
 
   local COMPOSE_PROFILE_ARGS=()
@@ -115,7 +105,6 @@ cmd_login() {
     -e TERM="${CLAUDE_TERM}" \
     -e CLAUDE_HOME="${CLAUDE_HOME}" \
     -e CLAUDE_VOLUME_NAME="${CLAUDE_VOLUME_NAME}" \
-    ${COMPOSE_NETWORK_ARGS[@]+"${COMPOSE_NETWORK_ARGS[@]}"} \
     "$AUTH_SERVICE" \
     -lc 'unset ANTHROPIC_API_KEY CLAUDE_API_KEY; stty sane 2>/dev/null || true; mkdir -p "${CLAUDE_HOME:-/home/app/.claude}"; exec claude login'
 }

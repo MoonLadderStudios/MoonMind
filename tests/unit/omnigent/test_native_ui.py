@@ -110,6 +110,7 @@ def test_bootstrap_is_browser_safe_and_scoped() -> None:
 
     assert bootstrap["schemaVersion"] == NATIVE_UI_BOOTSTRAP_SCHEMA_VERSION
     assert bootstrap["chatBindingId"] == _BINDING
+    assert bootstrap["uiBase"] == scoped_ui_base(_BINDING)
     assert bootstrap["apiBase"] == scoped_api_base(_BINDING)
     assert bootstrap["wsBase"] == scoped_api_base(_BINDING)
     assert bootstrap["mode"] == "embedded"

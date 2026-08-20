@@ -160,6 +160,10 @@ def test_temporal_compose_topology_and_private_exposure():
     compose = _load_compose()
     services = compose["services"]
 
+    assert compose["networks"]["control-plane-network"] == {
+        "name": "${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}"
+    }
+
     # temporal-db is now a network alias on the postgres service, not its own service.
     assert "postgres" in services
     postgres_aliases = []
@@ -174,12 +178,12 @@ def test_temporal_compose_topology_and_private_exposure():
     temporal_service = services["temporal"]
     # Temporal now publishes port 7233 via ports (host-accessible for local dev).
     assert temporal_service.get("ports") == ["7233:7233"]
-    # Temporal sits on local-network with alias temporal-internal.
+    # Temporal sits on the control-plane network with alias temporal-internal.
     temporal_networks = temporal_service.get("networks", {})
     if isinstance(temporal_networks, dict):
-        assert "local-network" in temporal_networks
+        assert "control-plane-network" in temporal_networks
     elif isinstance(temporal_networks, list):
-        assert "local-network" in temporal_networks
+        assert "control-plane-network" in temporal_networks
 
 
 def test_omnigent_hosts_use_versioned_read_only_tool_bundle():
@@ -273,6 +277,28 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
         "${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-"
         "/workspace/cutover/remediation-release.json}"
     )
+    # Release-support evidence the Omnigent catalog reads must have a working
+    # default in the canonical deployment (MoonLadderStudios/MoonMind#3710):
+    # without one, every catalog response permanently reports the support
+    # failures even after both gates pass.
+    assert api_env["MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST"] == (
+        "${MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST:-"
+        "/workspace/omnigent-evidence/acceptance-manifest.json}"
+    )
+    assert api_env["MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE"] == (
+        "${MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE:-"
+        "/workspace/omnigent-evidence/exact-artifact-projection.json}"
+    )
+    assert api_env["MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION"] == (
+        "${MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION:-"
+        "/workspace/omnigent-evidence/live-health-projection.json}"
+    )
+    # ...and the directory those defaults point at must actually be mounted,
+    # read-only: the API consumes published evidence and never produces it.
+    assert (
+        "${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}"
+        ":/workspace/omnigent-evidence:ro"
+    ) in services["api"]["volumes"]
     for worker_name in (
         "temporal-worker-agent-runtime",
         "temporal-worker-integrations",
@@ -473,7 +499,7 @@ def test_sandbox_worker_compose_egress_is_restricted_for_mm_785():
 
     proxy_service = services["sandbox-egress-proxy"]
     assert _network_names(proxy_service) == {
-        "local-network",
+        "control-plane-network",
         "sandbox-egress-network",
         "restricted-egress-network",
         "omnigent-egress-network",
@@ -616,7 +642,7 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
         == "service_completed_successfully"
     )
     assert _network_names(server_service) == {
-        "local-network",
+        "control-plane-network",
         "omnigent-egress-network",
     }
 
@@ -628,7 +654,7 @@ def test_omnigent_host_profile_service_is_wired_for_mm_971():
     )
     assert host_service["entrypoint"] == ["/opt/moonmind/start-host-with-projections.sh"]
     assert host_service["depends_on"]["omnigent"]["condition"] == "service_started"
-    assert _network_names(host_service) == {"local-network"}
+    assert _network_names(host_service) == {"control-plane-network"}
 
     host_env = _env_map(host_service["environment"])
     assert host_env["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] == (
@@ -860,7 +886,7 @@ def test_omnigent_codex_host_profile_uses_only_canonical_oauth_credentials():
     ]
     # Restricted egress: the host attaches only to the internal enforcing
     # network (MoonLadderStudios/MoonMind#3516), never the routable
-    # local-network.
+    # control-plane network.
     assert _network_names(host_service) == {"omnigent-egress-network"}
     assert host_service["labels"]["moonmind.egress.profile"] == (
         "${OMNIGENT_EGRESS_PROFILE_REF:-unattested}"
@@ -1005,6 +1031,18 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
     assert worker_env["MOONMIND_CONTAINER_JOBS_ENABLED"] == (
         "${MOONMIND_CONTAINER_JOBS_ENABLED:-true}"
     )
+    assert worker_env["MOONMIND_CONTROL_PLANE_NETWORK"] == (
+        "${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}"
+    )
+    assert api_env["MOONMIND_CONTROL_PLANE_NETWORK"] == (
+        "${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}"
+    )
+    deployment_env = _env_map(
+        services["temporal-worker-deployment-control"]["environment"]
+    )
+    assert deployment_env["MOONMIND_CONTROL_PLANE_NETWORK"] == (
+        "${MOONMIND_CONTROL_PLANE_NETWORK:-moonmind_control-plane-network}"
+    )
     assert compose["volumes"]["agent_workspaces"]["name"] == (
         "${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}"
     )
@@ -1021,6 +1059,8 @@ def test_python_test_runtime_is_provisioned_on_demand_outside_compose_startup():
         (REPO_ROOT / "docker-compose.test.yaml").read_text(encoding="utf-8")
     )
     pytest_service = test_compose["services"]["pytest"]
+    assert "control-plane-network" in test_compose["networks"]
+    assert "local-network" not in test_compose["networks"]
     assert pytest_service["image"] == (
         "${MOONMIND_PYTHON_TEST_IMAGE:-moonmind-python-tests:local}"
     )
@@ -1040,7 +1080,7 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     init_service = services["omnigent-db-init"]
     assert init_service["restart"] == "no"
     assert init_service["depends_on"]["postgres"]["condition"] == "service_healthy"
-    assert _network_names(init_service) == {"local-network"}
+    assert _network_names(init_service) == {"control-plane-network"}
 
     init_env = _env_map(init_service["environment"])
     assert init_env["OMNIGENT_POSTGRES_USER"] == (
@@ -1069,7 +1109,7 @@ def test_omnigent_shared_postgres_compose_topology_for_mm_970():
     )
     assert omnigent_service["ports"] == ["${OMNIGENT_PORT:-8000}:8000"]
     assert _network_names(omnigent_service) == {
-        "local-network",
+        "control-plane-network",
         "omnigent-egress-network",
     }
     assert "omnigent-data:/data" in omnigent_service["volumes"]

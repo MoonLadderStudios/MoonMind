@@ -10,6 +10,7 @@ from pydantic import ValidationError
 from datetime import UTC, datetime
 
 from moonmind.security.egress import (
+    CONTROL_PLANE_NETWORK_REF,
     DEFAULT_EGRESS_PROFILE,
     EGRESS_CONFIG_DIGEST,
     EGRESS_NETWORK_REF,
@@ -221,7 +222,7 @@ async def test_attestation_proves_internal_ipv4_network_and_exact_gateway():
                         EGRESS_NETWORK_REF: {},
                         "moonmind_sandbox-egress-network": {},
                         OMNIGENT_EGRESS_NETWORK_REF: {},
-                        "local-network": {},
+                        CONTROL_PLANE_NETWORK_REF: {},
                     },
                     "image": "sha256:gateway-image",
                     "health": "healthy",
@@ -388,7 +389,7 @@ async def test_workload_attestation_rejects_bypass_or_unbound_authority(
                 EGRESS_NETWORK_REF: {},
                 "moonmind_sandbox-egress-network": {},
                 OMNIGENT_EGRESS_NETWORK_REF: {},
-                "local-network": {},
+                CONTROL_PLANE_NETWORK_REF: {},
             },
             "stale",
         ),
@@ -403,7 +404,7 @@ async def test_workload_attestation_rejects_bypass_or_unbound_authority(
                 EGRESS_NETWORK_REF: {},
                 "moonmind_sandbox-egress-network": {},
                 OMNIGENT_EGRESS_NETWORK_REF: {},
-                "local-network": {},
+                CONTROL_PLANE_NETWORK_REF: {},
                 "bypass": {},
             },
             "attachment",
@@ -458,7 +459,7 @@ async def test_attestation_rejects_unobserved_rules_or_unhealthy_gateway(
                         EGRESS_NETWORK_REF: {},
                         "moonmind_sandbox-egress-network": {},
                         OMNIGENT_EGRESS_NETWORK_REF: {},
-                        "local-network": {},
+                        CONTROL_PLANE_NETWORK_REF: {},
                     },
                     "image": "sha256:gateway-image",
                     "health": health,
@@ -526,6 +527,7 @@ def test_network_ref_resolves_configured_override(monkeypatch):
     monkeypatch.setenv("MOONMIND_RESTRICTED_EGRESS_NETWORK", "custom_restricted_net")
     monkeypatch.setenv("MOONMIND_SANDBOX_EGRESS_NETWORK", "custom_sandbox_net")
     monkeypatch.setenv("MOONMIND_OMNIGENT_EGRESS_NETWORK", "custom_omnigent_net")
+    monkeypatch.setenv("MOONMIND_CONTROL_PLANE_NETWORK", "custom_control_plane")
     try:
         reloaded = importlib.reload(egress_module)
         assert reloaded.EGRESS_NETWORK_REF == "custom_restricted_net"
@@ -536,6 +538,7 @@ def test_network_ref_resolves_configured_override(monkeypatch):
         assert "custom_restricted_net" in reloaded._EXPECTED_GATEWAY_NETWORKS
         assert "custom_sandbox_net" in reloaded._EXPECTED_GATEWAY_NETWORKS
         assert "custom_omnigent_net" in reloaded._EXPECTED_GATEWAY_NETWORKS
+        assert "custom_control_plane" in reloaded._EXPECTED_GATEWAY_NETWORKS
     finally:
         # Restore module-level defaults so later tests see the shipped values.
         monkeypatch.undo()

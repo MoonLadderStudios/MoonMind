@@ -1074,6 +1074,7 @@ async def test_run_once_passes_runtime_inheritance_args_to_batch_pr_resolver_ski
     processed = await worker.run_once()
 
     assert processed is True
+    assert queue.failed == []
     assert handler.calls == ["codex_skill:batch-pr-resolver:True"]
     payload = handler.skill_payloads[0]
     inputs = payload["inputs"]
@@ -7170,7 +7171,12 @@ async def test_config_from_env_uses_defaults(monkeypatch) -> None:
     assert config.legacy_job_types_enabled is True
     assert config.worker_runtime == "codex"
     assert config.allowed_types == ("task", "codex_exec", "codex_skill")
-    assert config.worker_capabilities == ("codex", "git", "gh")
+    assert config.worker_capabilities == (
+        "codex",
+        "git",
+        "gh",
+        "execution.fanout",
+    )
     assert config.docker_binary == "docker"
     assert config.container_workspace_volume is None
     assert config.container_default_timeout_seconds == 3600
@@ -7228,7 +7234,13 @@ async def test_config_from_env_runtime_mode_controls_default_capabilities(
     config = CodexWorkerConfig.from_env()
 
     assert config.worker_runtime == "universal"
-    assert config.worker_capabilities == ("codex", "claude", "git", "gh")
+    assert config.worker_capabilities == (
+        "codex",
+        "claude",
+        "git",
+        "gh",
+        "execution.fanout",
+    )
 
 async def test_config_from_env_rejects_jules_runtime_when_disabled(
     monkeypatch,

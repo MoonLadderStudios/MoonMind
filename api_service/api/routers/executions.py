@@ -81,7 +81,7 @@ from api_service.db.models import (
 from api_service.services.checkpoint_branches import prepare_checkpoint_branch_workspace
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
-    refresh_managed_bootstrap_snapshot_for_rerun,
+    refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
 )
 from api_service.services.control_stop_continuation import (
@@ -8599,6 +8599,36 @@ async def _enrich_deployment_skill_metadata(
     return metadata_by_skill
 
 
+def _merge_deployment_skill_required_capabilities(
+    required_capabilities: list[str],
+    metadata_by_skill: Mapping[str, Mapping[str, Any]],
+) -> list[str]:
+    """Flatten trusted deployment Skill requirements into the canonical plane."""
+
+    merged: list[str] = []
+    seen: set[str] = set()
+
+    def append(values: list[str]) -> None:
+        for value in values:
+            capability = value.strip().lower()
+            if capability and capability not in seen:
+                seen.add(capability)
+                merged.append(capability)
+
+    append(required_capabilities)
+    for skill_name in sorted(metadata_by_skill):
+        metadata = metadata_by_skill[skill_name]
+        append(
+            _coerce_string_list(
+                metadata.get("required_capabilities"),
+                field_name=(
+                    f"deployment skill '{skill_name}' metadata.required_capabilities"
+                ),
+            )
+        )
+    return merged
+
+
 async def _resolve_step_runtime_selections(
     *,
     steps: list[dict[str, Any]],
@@ -10743,6 +10773,10 @@ async def _create_execution_from_workflow_request(
         session=session,
         normalized_tool=normalized_tool,
         steps=normalized_steps,
+    )
+    required_capabilities = _merge_deployment_skill_required_capabilities(
+        required_capabilities,
+        deployment_skill_metadata,
     )
     publish_skill_id = _workflow_publish_skill_id(task_payload, normalized_tool)
     publish_skill_metadata = deployment_skill_metadata.get(
@@ -17653,9 +17687,10 @@ async def rerun_execution(
     # task dependency edges and recovery metadata from a prior execution.
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
     reserved_workflow_id = f"mm:{_uuid4()}"
-    initial_params = await refresh_managed_bootstrap_snapshot_for_rerun(
+    initial_params = await refresh_managed_bootstrap_snapshot(
         session,
         parameters=initial_params,
+        consumer_type="workflow",
         consumer_id=reserved_workflow_id,
         user=user,
     )

@@ -1,32 +1,117 @@
 [
   {
-    "id": 3807043073,
+    "id": 3810002054,
     "disposition": "addressed",
-    "rationale": "Heartbeat renewal now uses a conditional SQL update over heartbeat-owning states, making it mutually exclusive with the cleanup claim CAS."
+    "rationale": "Removed the unnecessary lambda wrapper in tools/omnigent_exact_artifact_probe.py; _probe_import already returns the callable."
   },
   {
-    "id": 3807043083,
+    "id": 3810002061,
     "disposition": "addressed",
-    "rationale": "Cleanup claims now renew expires_at for the bounded cleanup ownership window in the same atomic update."
+    "rationale": "Dropped the unused Iterable import from moonmind/omnigent/exact_artifact_conformance.py."
   },
   {
-    "id": 3807043091,
+    "id": 3810002064,
     "disposition": "addressed",
-    "rationale": "A typed cleanup-ownership loss now routes coordinator finalization to janitor-required waiting without host stop or Provider Profile release."
+    "rationale": "Dropped the unused Iterable import from moonmind/omnigent/live_verification_health.py."
   },
   {
-    "id": 3807043093,
+    "id": 3810006712,
     "disposition": "addressed",
-    "rationale": "Lease-scoped drain, stop, remove, eviction, and stale-reconciliation actions now share the atomic cleanup claim before side effects."
+    "rationale": "Probe assets now reach the deployable image through an explicit read-only /probe mount with PYTHONPATH=/app, so no test-only asset is baked into the production image and imports still resolve from the artifact under test. The browser controller's Playwright runtime is installed on the CI host and drives the container's hosted origin. Docker runs now use the locally resolvable sha256:<image id> content id, which fixes the 'pull access denied' failure the unpullable repo digest caused."
   },
   {
-    "id": 3807043100,
+    "id": 3810006715,
     "disposition": "addressed",
-    "rationale": "Orphan cleanup now reloads the host lease identified by the container label and leaves lease-owned containers to the fenced cleanup path."
+    "rationale": "The exact-artifact job now starts temporalio/auto-setup (the same image and configuration canonical Compose uses) on the job's PostgreSQL and waits for 127.0.0.1:7233; the worker probe requires an explicit --temporal-address and passes TEMPORAL_ADDRESS plus the POSTGRES_* settings the image actually reads."
   },
   {
-    "id": 4964716657,
+    "id": 3810006717,
+    "disposition": "addressed",
+    "rationale": "Each migration scenario now runs against its own freshly created database (reset_database drops and recreates moonmind_exact_artifact_clean / _prior), and the prior-schema case materializes the real revision preceding head via 'alembic show head' and then upgrades, instead of stamping base over an already-migrated schema."
+  },
+  {
+    "id": 3810006720,
+    "disposition": "addressed",
+    "rationale": "The fabricated booleans are gone: the fake-provider probe and the fakeProviderExecution gate section were removed rather than kept on an unrelated exit status. In their place the server probe performs a real bounded execution boundary it can observe -- docker restart of the deployable container against the schema it just migrated, requiring liveness again -- surfaced as the new required capability api_restart_against_existing_schema. Restart/terminal replay after fake-host removal is now explicitly documented as owned by the reliability-journey and embedded-recovery gates that actually exercise it, which the Omnigent contract gate selects on the same commit."
+  },
+  {
+    "id": 3810006726,
+    "disposition": "addressed",
+    "rationale": "assemble_omnigent_live_status now retrieves the acceptance manifest published by the newest passing live-conformance run (select_manifest_artifact + gh run download) before evaluation, with an explicit --manifest override; a genuine absence still yields None so the projection stays fail-closed."
+  },
+  {
+    "id": 3810006731,
+    "disposition": "addressed",
+    "rationale": "Added the canonical redact_secrets in moonmind/omnigent/conformance.py whose patterns span the complete credential -- the whole session-bearing header value to end of line, JWTs, cookies, bare Bearer/Basic credentials, and token bodies after known prefixes -- so redaction is no longer a header-name-only strip. Redaction runs before line truncation, assert_secret_free now also rejects the wider set of credential-bearing keys, and tests assert the published logTail passes an independent secret scan."
+  },
+  {
+    "id": 3810006732,
+    "disposition": "addressed",
+    "rationale": "Added the real production API command api_service/entrypoint.sh to EXACT_ARTIFACT_EXACT, replaced the nonexistent api_service/docker/entrypoint.sh in the selector test with real repository paths, and added a guard test asserting every exact-path inventory entry exists so a typo cannot mask a coverage gap again. Also removed the nonexistent uv.lock entry and the compose entries the globs already cover."
+  },
+  {
+    "id": 3810006739,
+    "disposition": "addressed",
+    "rationale": "Compose now bind-mounts ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence} read-only at /workspace/omnigent-evidence and defaults all three evidence refs to files inside it, so the default deployment consumes real evidence with no per-file configuration. tools/materialize_omnigent_evidence.py is the automatic materialization path: it copies the newest unexpired document published for the deployed commit into that directory, refusing evidence for another commit. Compose defaults and the mount are pinned by test_compose_foundation."
+  },
+  {
+    "id": 3810006744,
+    "disposition": "addressed",
+    "rationale": "Added assert_live_health_projection and used it at the catalog consumption boundary: it validates the versioned schema, the ready verdict, the deployed commit, the projection's own age against the hourly publication cadence, and the acceptance expiry it inherits. Tests cover expired acceptance windows, a stalled publisher, and a foreign schema."
+  },
+  {
+    "id": 3810006749,
+    "disposition": "addressed",
+    "rationale": "Both migration commands now pass the repository's explicit configuration (-c api_service/migrations/alembic.ini), matching the alembic-migration-gate invocation, and run with -w /app so script_location resolves."
+  },
+  {
+    "id": 3810006755,
+    "disposition": "addressed",
+    "rationale": "The server and UI probes share one container lifetime: _probe_server_and_ui starts the API container, probes routes, runs the browser capture against that live hosted origin, then performs the restart probe before teardown. A test asserts the capture happens between container start and removal, and that the UI signals fail closed when the API never starts."
+  },
+  {
+    "id": 3810006759,
+    "disposition": "addressed",
+    "rationale": "The hosted capture no longer counts any same-origin request. It now requires three concrete facts: a request under the image's compiled-bundle mount /static/workflow_console/dist/, a parseable #moonmind-ui-boot payload, and rendered content in #dashboard-app-root. A hermetic contract test pins each selector and the bundle prefix to the real template and static mount."
+  },
+  {
+    "id": 3810006765,
+    "disposition": "addressed",
+    "rationale": "aggregate_provider_runner_fleet replaces first-match selection: the tier is online when at least one labeled runner is online, and busy only when no online runner is idle, with matching/online/idle counts reported. Tests cover an offline runner ordered ahead of an online one and mixed busy/idle fleets."
+  },
+  {
+    "id": 4968365371,
     "disposition": "not-applicable",
-    "rationale": "Informational Codex review envelope; its five child threads contain the complete actionable feedback."
+    "rationale": "Codex review summary body with no actionable request of its own; every inline finding it introduced is dispositioned above."
+  },
+  {
+    "id": 3819559431,
+    "disposition": "addressed",
+    "rationale": "The activity now accepts only objective cleanupResult values before marking the host lease stopped. OmnigentOAuthHostRuntime.stop_host already raises OMNIGENT_HOST_CLEANUP_INCOMPLETE when the container, owned volumes, or runtime files remain, and the new activity regression proves a failed cleanup result leaves the validation lease nonterminal."
+  },
+  {
+    "id": 3819559440,
+    "disposition": "addressed",
+    "rationale": "Bound-host revalidation now captures provider-login failures, always invokes lease-owned host cleanup, marks the lease stopped only after cleanup succeeds, and then propagates the original preflight failure. The activity regression exercises this failure ordering."
+  },
+  {
+    "id": 3819559447,
+    "disposition": "addressed",
+    "rationale": "OAuth revalidation no longer creates or passes an empty execution workspace. The credential-only preflight mounts only the approved OAuth volume and runs the provider login-status command in the selected host image; its runtime test asserts that /workspaces/run is absent."
+  },
+  {
+    "id": 3819559454,
+    "disposition": "addressed",
+    "rationale": "OAuth revalidation no longer waits for Omnigent host registration. The credential-only provider login check has a 60-second bound, leaving the existing 180-second activity budget for deterministic cleanup."
+  },
+  {
+    "id": 4980223622,
+    "disposition": "not-applicable",
+    "rationale": "Automated review summary only; the five concrete inline findings from this review are classified separately."
+  },
+  {
+    "id": 3819559461,
+    "disposition": "addressed",
+    "rationale": "The activity no longer calls the full prepare_host execution contract. The new credential-only boundary validates the durable effective-launch image and binding identity but does not require an execution workspace, resolved Skill snapshot, artifact gateway, or fabricated execution authority."
   }
 ]

@@ -5,7 +5,6 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 $composeFile = Join-Path $repoRoot "docker-compose.test.yaml"
-$networkName = if ($env:MOONMIND_DOCKER_NETWORK) { $env:MOONMIND_DOCKER_NETWORK } else { "local-network" }
 $testComposeProjectName = if ($env:MOONMIND_TEST_COMPOSE_PROJECT_NAME) { $env:MOONMIND_TEST_COMPOSE_PROJECT_NAME } else { "moonmind-test" }
 
 if ($testComposeProjectName -notmatch '^moonmind-test(?:-[a-z0-9][a-z0-9_-]*)?$') {
@@ -45,13 +44,6 @@ if (-not (Test-Path $envFile)) {
         Write-Error "Error: missing $envFile and $envTemplate."
         exit 1
     }
-}
-
-# Ensure Docker network exists
-& docker network inspect $networkName 2>$null
-if ($LASTEXITCODE -ne 0) {
-    & docker network create $networkName | Out-Null
-    Write-Host "Created Docker network: $networkName" -ForegroundColor Cyan
 }
 
 # Helper: run docker compose command with proper argument handling
