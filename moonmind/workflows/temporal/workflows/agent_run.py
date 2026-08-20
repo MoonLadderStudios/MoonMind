@@ -21,6 +21,7 @@ with workflow.unsafe.imports_passed_through():
         AgentRunResult,
         AgentRunStatus as AgentRunStatusModel,
         ProfileSelector,
+        resolve_execution_timeout_seconds,
         _MAX_SUMMARY_CHARS,
     )
     from moonmind.schemas.managed_session_models import (
@@ -202,15 +203,6 @@ def _setdefault_compact_ref_metadata(
         metadata.setdefault(key, compact_value)
 
 
-# Default workflow-level execution timeouts
-# Increased from 3600 to 7200 for large implementations like
-# MoonLadderStudios/MoonMind#3685 which require extensive cross-system
-# changes (SPA bootstrap, canonical bindings, compatibility gate). The previous
-# 1-hour budget caused managed runs to exceed their execution budget with no
-# observable progress when the implementation step required >60m of reasoning
-# and file edits (see workflow mm:fe3bbb50-4ab2-4626-9b80-23dd6b5a5d80).
-DEFAULT_MANAGED_TIMEOUT_SECONDS = 7200      # 2 hours
-DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600    # 6 hours
 _CALLBACK_KEY_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
 
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
@@ -290,6 +282,13 @@ AGENT_RUN_MANAGED_NO_PROGRESS_RECONCILIATION_PATCH_ID = (
 )
 AGENT_RUN_MANAGED_NO_PROGRESS_CANCEL_FETCH_PATCH_ID = (
     "agent-run-managed-no-progress-cancel-fetch-v1"
+)
+# Publishes the workflow's effective execution budget into the launch request's
+# ``timeoutPolicy`` so the managed process supervisor enforces the same deadline
+# (MoonLadderStudios/MoonMind#3685 review). In-flight runs started before this
+# patch keep the launch payload they already dispatched.
+AGENT_RUN_SHARED_EXECUTION_BUDGET_PATCH_ID = (
+    "agent-run-shared-execution-budget-v1"
 )
 MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID = (
     "agent-run-managed-session-start-after-slot-v1"
@@ -4212,13 +4211,19 @@ class MoonMindAgentRun:
                 non_retryable=True,
             )
 
-        timeout_seconds = (
-            DEFAULT_EXTERNAL_TIMEOUT_SECONDS
-            if request.agent_kind == "external"
-            else DEFAULT_MANAGED_TIMEOUT_SECONDS
+        # One shared timeout authority for the run: the workflow execution budget
+        # and the managed process supervisor's kill deadline resolve from the
+        # same value, so an explicitly requested larger budget is honored at both
+        # boundaries instead of the process being killed at the launch default.
+        timeout_seconds = resolve_execution_timeout_seconds(
+            agent_kind=request.agent_kind,
+            timeout_policy=request.timeout_policy,
         )
-        if request.timeout_policy and "timeout_seconds" in request.timeout_policy:
-            timeout_seconds = request.timeout_policy["timeout_seconds"]
+        if workflow.patched(AGENT_RUN_SHARED_EXECUTION_BUDGET_PATCH_ID):
+            request.timeout_policy = {
+                **(request.timeout_policy or {}),
+                "timeout_seconds": timeout_seconds,
+            }
 
         # Loop for handling 429 cooldown & profile swaps safely within the timeout boundary
         overall_start = workflow.now()
