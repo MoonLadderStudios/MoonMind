@@ -2256,3 +2256,4 @@ from api_service.services.provider_profile_service import (
     sync_provider_profile_manager,
     update_oauth_command_behavior,
 )
+# trigger full CI for opencode generic host wiring
