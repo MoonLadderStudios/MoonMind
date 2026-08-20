@@ -450,9 +450,22 @@ class SessionRepository(_RepositoryBase):
         return _session_record(row)
 
     async def attach_provider_session(
-        self, session_id: str, provider_session_ref: str
+        self,
+        session_id: str,
+        provider_session_ref: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
     ) -> SessionRecord:
-        row = await self._load(session_id)
+        """Attach provider authority under the active supervisor fence.
+
+        Source: MoonLadderStudios/MoonMind#3705. Provider session creation is an
+        external side effect, so a delayed Activity result must not attach its
+        receipt after canonical revision or supervisor ownership has advanced.
+        An exact replay is safe and remains idempotent.
+        """
+
+        row = await self._load(session_id, for_update=True)
         if row is None:
             raise ConflictingSessionAuthorityError(
                 f"Unknown canonical session {session_id!r}"
@@ -465,7 +478,27 @@ class SessionRepository(_RepositoryBase):
                 f"Session {session_id!r} already attached to provider session "
                 f"{row.provider_session_ref!r}"
             )
+        if row.provider_session_ref == provider_session_ref:
+            return _session_record(row)
+        conflict = self._check_session_fence(
+            row,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            expected_provider_profile_generation=None,
+            expected_host_lease_generation=None,
+        )
+        if conflict is ControlPlaneOutcome.FENCING_CONFLICT:
+            raise FencingConflictError(
+                f"Session {session_id!r} supervisor fence changed before "
+                "provider attachment"
+            )
+        if conflict is ControlPlaneOutcome.REVISION_CONFLICT:
+            raise RevisionConflictError(
+                f"Session {session_id!r} revision changed before provider "
+                "attachment"
+            )
         row.provider_session_ref = provider_session_ref
+        row.revision = row.revision + 1
         try:
             async with self._session.begin_nested():
                 await self._session.flush()
@@ -474,6 +507,94 @@ class SessionRepository(_RepositoryBase):
                 "Refusing to attach provider session "
                 f"{provider_session_ref!r}: scope already owned"
             ) from exc
+        await self._session.refresh(row)
+        return _session_record(row)
+
+    async def bind_runtime_authority(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+        provider_profile_id: Any = _UNSET,
+        host_binding_ref: Any = _UNSET,
+        host_lease_ref: Any = _UNSET,
+        credential_generation: Any = _UNSET,
+        provider_profile_generation: Any = _UNSET,
+        host_lease_generation: Any = _UNSET,
+        metadata_patch: Optional[dict[str, Any]] = None,
+    ) -> SessionRecord:
+        """Bind safe runtime refs under the supervisor revision/fence.
+
+        Source: MoonLadderStudios/MoonMind#3705. Bounded side-effect Activities
+        persist their provider/profile/host receipts here before returning. An
+        exact replay is idempotent even when it presents the pre-write revision;
+        a different stale write still fails with the normal revision/fencing
+        outcome.
+        """
+
+        row = await self._load(session_id, for_update=True)
+        if row is None:
+            raise ConflictingSessionAuthorityError(
+                f"Unknown canonical session {session_id!r}"
+            )
+        provided = {
+            name: value
+            for name, value in (
+                ("provider_profile_id", provider_profile_id),
+                ("host_binding_ref", host_binding_ref),
+                ("host_lease_ref", host_lease_ref),
+                ("credential_generation", credential_generation),
+                ("provider_profile_generation", provider_profile_generation),
+                ("host_lease_generation", host_lease_generation),
+            )
+            if value is not _UNSET
+        }
+        metadata_patch = dict(metadata_patch or {})
+        already_applied = all(getattr(row, name) == value for name, value in provided.items())
+        if metadata_patch:
+            already_applied = already_applied and all(
+                (row.metadata_ or {}).get(key) == value
+                for key, value in metadata_patch.items()
+            )
+        if already_applied and (provided or metadata_patch):
+            return _session_record(row)
+        conflict = self._check_session_fence(
+            row,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            expected_provider_profile_generation=None,
+            expected_host_lease_generation=None,
+        )
+        if conflict is ControlPlaneOutcome.FENCING_CONFLICT:
+            raise FencingConflictError(
+                f"Session {session_id!r} supervisor fence changed"
+            )
+        if conflict is ControlPlaneOutcome.REVISION_CONFLICT:
+            raise RevisionConflictError(
+                f"Session {session_id!r} revision changed before authority bind"
+            )
+        for name, value in provided.items():
+            existing = getattr(row, name)
+            if existing is not None and value is not None and existing != value:
+                raise ConflictingSessionAuthorityError(
+                    f"Session {session_id!r} already binds {name}={existing!r}; "
+                    f"refusing {value!r}"
+                )
+            setattr(row, name, value)
+        if metadata_patch:
+            metadata = dict(row.metadata_ or {})
+            for key, value in metadata_patch.items():
+                existing = metadata.get(key)
+                if existing is not None and value is not None and existing != value:
+                    raise ConflictingSessionAuthorityError(
+                        f"Session {session_id!r} metadata {key!r} already has "
+                        "different immutable authority"
+                    )
+                metadata[key] = value
+            row.metadata_ = metadata
+        row.revision = row.revision + 1
+        await self._session.flush()
         await self._session.refresh(row)
         return _session_record(row)
 
@@ -793,6 +914,58 @@ class SessionRepository(_RepositoryBase):
         await self._session.refresh(row)
         return _session_record(row)
 
+    async def attach_terminal_evidence(
+        self,
+        session_id: str,
+        *,
+        terminal_evidence_ref: str,
+        expected_revision: int,
+        expected_fencing_generation: int,
+    ) -> SessionRecord:
+        """Attach immutable evidence under current revision and ownership."""
+
+        row = await self._load(session_id, for_update=True)
+        if row is None:
+            raise ConflictingSessionAuthorityError(
+                f"Unknown canonical session {session_id!r}"
+            )
+        if row.terminal_state is None:
+            raise TerminalSessionOverwriteError(
+                f"Session {session_id!r} is not terminal; evidence cannot attach"
+            )
+        if row.fencing_generation != expected_fencing_generation:
+            raise FencingConflictError(
+                f"Session {session_id!r} supervisor fence changed"
+            )
+        if row.terminal_evidence_ref is not None:
+            if row.terminal_evidence_ref == terminal_evidence_ref:
+                return _session_record(row)
+            raise TerminalSessionOverwriteError(
+                f"Session {session_id!r} already owns different terminal evidence"
+            )
+        conflict = self._check_session_fence(
+            row,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            expected_provider_profile_generation=None,
+            expected_host_lease_generation=None,
+        )
+        if conflict is ControlPlaneOutcome.FENCING_CONFLICT:
+            raise FencingConflictError(
+                f"Session {session_id!r} supervisor fence changed before "
+                "terminal evidence attachment"
+            )
+        if conflict is ControlPlaneOutcome.REVISION_CONFLICT:
+            raise RevisionConflictError(
+                f"Session {session_id!r} revision changed before terminal "
+                "evidence attachment"
+            )
+        row.terminal_evidence_ref = terminal_evidence_ref
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _session_record(row)
+
 
 # --- TurnAttemptRepository ---------------------------------------------------
 
@@ -864,13 +1037,34 @@ class TurnAttemptRepository(_RepositoryBase):
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         return _turn_record(row) if row is not None else None
 
-    async def list_for_session(self, session_id: str) -> list[TurnAttemptRecord]:
+    async def list_for_session(
+        self,
+        session_id: str,
+        *,
+        limit: Optional[int] = None,
+        latest: bool = False,
+    ) -> list[TurnAttemptRecord]:
+        order = (
+            (
+                OmnigentTurnAttempt.created_at.desc(),
+                OmnigentTurnAttempt.turn_attempt_id.desc(),
+            )
+            if latest
+            else (
+                OmnigentTurnAttempt.created_at,
+                OmnigentTurnAttempt.turn_attempt_id,
+            )
+        )
         stmt = (
             select(OmnigentTurnAttempt)
             .where(OmnigentTurnAttempt.session_id == session_id)
-            .order_by(OmnigentTurnAttempt.created_at, OmnigentTurnAttempt.turn_attempt_id)
+            .order_by(*order)
         )
+        if limit is not None:
+            stmt = stmt.limit(limit)
         rows = (await self._session.execute(stmt)).scalars().all()
+        if latest:
+            rows = list(reversed(rows))
         return [_turn_record(r) for r in rows]
 
     async def count_for_session(self, session_id: str) -> int:
@@ -1126,18 +1320,30 @@ class ObservationRepository(_RepositoryBase):
         *,
         observation_type: Optional[str] = None,
         limit: Optional[int] = None,
+        latest: bool = False,
     ) -> list[ObservationRecord]:
         stmt = select(OmnigentObservation).where(
             OmnigentObservation.session_id == session_id
         )
         if observation_type is not None:
             stmt = stmt.where(OmnigentObservation.observation_type == observation_type)
-        stmt = stmt.order_by(
-            OmnigentObservation.observed_at, OmnigentObservation.observation_id
+        order = (
+            (
+                OmnigentObservation.observed_at.desc(),
+                OmnigentObservation.observation_id.desc(),
+            )
+            if latest
+            else (
+                OmnigentObservation.observed_at,
+                OmnigentObservation.observation_id,
+            )
         )
+        stmt = stmt.order_by(*order)
         if limit is not None:
             stmt = stmt.limit(limit)
         rows = (await self._session.execute(stmt)).scalars().all()
+        if latest:
+            rows = list(reversed(rows))
         return [_observation_record(r) for r in rows]
 
     async def latest_for_session(
@@ -1279,20 +1485,40 @@ class CommandRepository(_RepositoryBase):
         row = (await self._session.execute(stmt)).scalar_one_or_none()
         return _command_record(row) if row is not None else None
 
-    async def list_for_session(self, session_id: str) -> list[CommandRecord]:
+    async def list_for_session(
+        self,
+        session_id: str,
+        *,
+        limit: Optional[int] = None,
+        latest: bool = False,
+    ) -> list[CommandRecord]:
         """Return this session's commands in creation order (read-only).
 
         Used by the operator session-timeline projection (#3708) to surface the
         active or delivery-unknown command; it never claims or mutates a command.
+        ``limit``/``latest`` bound the read to the most recent window while still
+        returning creation order.
         """
 
+        order = (
+            (
+                OmnigentCommand.created_at.desc(),
+                OmnigentCommand.command_id.desc(),
+            )
+            if latest
+            else (OmnigentCommand.created_at, OmnigentCommand.command_id)
+        )
         stmt = (
             select(OmnigentCommand)
             .where(OmnigentCommand.session_id == session_id)
-            .order_by(OmnigentCommand.created_at, OmnigentCommand.command_id)
+            .order_by(*order)
         )
+        if limit is not None:
+            stmt = stmt.limit(limit)
         rows = (await self._session.execute(stmt)).scalars().all()
-        return [_command_record(r) for r in rows]
+        if latest:
+            rows = list(reversed(rows))
+        return [_command_record(row) for row in rows]
 
     async def active_for_session(self, session_id: str) -> Optional[CommandRecord]:
         """Return the single active command, delivery-ambiguity taking precedence.
@@ -1486,6 +1712,74 @@ class CommandRepository(_RepositoryBase):
         await self._session.refresh(row)
         return CasResult(result_outcome, _command_record(row))
 
+    async def record_command_failure(
+        self,
+        command_id: str,
+        *,
+        owner_class: str,
+        claim_token: str,
+        result_ref: str,
+    ) -> CasResult:
+        """Park an exhausted command with durable, reference-only evidence.
+
+        A delivery-unknown command remains delivery-unknown so terminalization
+        cannot manufacture proof that the provider side effect did not occur.
+        Pending commands may be failed by the session supervisor because they
+        never crossed the claim boundary; claimed commands still require the
+        exact deterministic claimant token used by the bounded Activity.
+        """
+
+        row = await self._load_command_for_update(command_id)
+        if row.status == COMMAND_STATE_APPLIED:
+            return CasResult(
+                ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row)
+            )
+        if row.status == COMMAND_STATE_FAILED:
+            if row.result_ref not in {None, result_ref}:
+                return CasResult(
+                    ControlPlaneOutcome.IMMUTABLE_AUTHORITY_CONFLICT,
+                    _command_record(row),
+                )
+            if row.result_ref is None:
+                row.result_ref = result_ref
+                row.revision = row.revision + 1
+                await self._session.flush()
+                await self._session.refresh(row)
+            return CasResult(
+                ControlPlaneOutcome.ALREADY_APPLIED, _command_record(row)
+            )
+        if row.status == COMMAND_STATE_DELIVERY_UNKNOWN:
+            if row.result_ref is None:
+                row.result_ref = result_ref
+                row.revision = row.revision + 1
+                await self._session.flush()
+                await self._session.refresh(row)
+            return CasResult(
+                ControlPlaneOutcome.DELIVERY_UNKNOWN, _command_record(row)
+            )
+        if row.status == COMMAND_STATE_CLAIMED and (
+            row.owner_class != owner_class or row.claim_token != claim_token
+        ):
+            raise NotCommandOwnerError(
+                f"Command {command_id!r} is not claimed by this claimant"
+            )
+        if row.status == COMMAND_STATE_PENDING:
+            session_row = await self._session.get(OmnigentSession, row.session_id)
+            if (
+                session_row is not None
+                and row.fencing_generation != session_row.fencing_generation
+            ):
+                return CasResult(
+                    ControlPlaneOutcome.FENCING_CONFLICT, _command_record(row)
+                )
+        row.status = COMMAND_STATE_FAILED
+        row.delivery_ambiguous = False
+        row.result_ref = result_ref
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return CasResult(ControlPlaneOutcome.APPLIED, _command_record(row))
+
 
 # --- DecisionRepository ------------------------------------------------------
 
@@ -1530,16 +1824,38 @@ class DecisionRepository(_RepositoryBase):
         await self._session.refresh(row)
         return _decision_record(row)
 
-    async def list_for_session(self, session_id: str) -> list[DecisionRecord]:
-        stmt = (
-            select(OmnigentReconciliationDecision)
-            .where(OmnigentReconciliationDecision.session_id == session_id)
-            .order_by(
+    async def get(self, decision_id: str) -> Optional[DecisionRecord]:
+        row = await self._session.get(OmnigentReconciliationDecision, decision_id)
+        return _decision_record(row) if row is not None else None
+
+    async def list_for_session(
+        self,
+        session_id: str,
+        *,
+        limit: Optional[int] = None,
+        latest: bool = False,
+    ) -> list[DecisionRecord]:
+        order = (
+            (
+                OmnigentReconciliationDecision.created_at.desc(),
+                OmnigentReconciliationDecision.decision_id.desc(),
+            )
+            if latest
+            else (
                 OmnigentReconciliationDecision.created_at,
                 OmnigentReconciliationDecision.decision_id,
             )
         )
+        stmt = (
+            select(OmnigentReconciliationDecision)
+            .where(OmnigentReconciliationDecision.session_id == session_id)
+            .order_by(*order)
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
         rows = (await self._session.execute(stmt)).scalars().all()
+        if latest:
+            rows = list(reversed(rows))
         return [_decision_record(r) for r in rows]
 
     async def latest_for_session(self, session_id: str) -> Optional[DecisionRecord]:
@@ -1774,6 +2090,31 @@ class CleanupAuthorityRepository(_RepositoryBase):
         await self._session.flush()
         await self._session.refresh(row)
         return CasResult(ControlPlaneOutcome.APPLIED, _cleanup_record(row))
+
+    async def record_janitor_handoff(
+        self,
+        session_id: str,
+        *,
+        owner_class: str,
+    ) -> CleanupAuthorityRecord:
+        """Make exhausted cleanup discoverable without claiming janitor fences.
+
+        The evidence reference lives on the canonical session metadata. This
+        aggregate records the durable owner intent while remaining unclaimed,
+        so a real janitor can subsequently win the normal fenced claim.
+        """
+
+        row = await self._load_for_update(session_id)
+        if row.state != CLEANUP_STATE_UNCLAIMED:
+            return _cleanup_record(row)
+        if row.owner_class == owner_class and row.claim_token is None:
+            return _cleanup_record(row)
+        row.owner_class = owner_class
+        row.claim_token = None
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _cleanup_record(row)
 
     async def complete_cleanup(
         self,

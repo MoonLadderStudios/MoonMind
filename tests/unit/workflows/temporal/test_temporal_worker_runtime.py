@@ -4282,6 +4282,10 @@ async def test_main_async_workflow_fleet(
     from moonmind.workflows.temporal.workflows.omnigent_oauth_host_janitor import (
         MoonMindOmnigentOAuthHostJanitorWorkflow,
     )
+    from moonmind.workflows.temporal.workflows.omnigent_session import (
+        MoonMindOmnigentSessionWorkflow,
+    )
+
     assert kwargs["workflows"] == (
         MoonMindUserWorkflow,
         MoonMindContainerJobWorkflow,
@@ -4292,6 +4296,7 @@ async def test_main_async_workflow_fleet(
         MoonMindManagedSessionReconcileWorkflow,
         MoonMindManagedRuntimeWorkspaceCleanupWorkflow,
         MoonMindAgentRun,
+        MoonMindOmnigentSessionWorkflow,
         MoonMindCheckpointBranchTurnWorkflow,
         MoonMindOAuthSession,
         MoonMindOmnigentOAuthHostJanitorWorkflow,
