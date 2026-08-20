@@ -29,6 +29,7 @@ jobs:
       temporal_boundary: ${{ steps.select.outputs.temporal_boundary }}
       integration_ci: ${{ steps.select.outputs.integration_ci }}
       reliability_journey: ${{ steps.select.outputs.reliability_journey }}
+      exact_artifact: ${{ steps.select.outputs.exact_artifact }}
       full_backend: ${{ steps.select.outputs.full_backend }}
       frontend_static: ${{ steps.select.outputs.frontend_static }}
       frontend_browser_chromium: ${{ steps.select.outputs.frontend_browser_chromium }}
@@ -482,6 +483,191 @@ jobs:
           path: /tmp/pytest-reliability-journey
           if-no-files-found: error
 
+  omnigent-exact-artifact:
+    # Tier 1 (MoonLadderStudios/MoonMind#3710): the required, per-PR,
+    # NONCREDENTIALED exact deployable-artifact conformance gate.  It builds the
+    # exact deployable image and tests THAT IMMUTABLE ARTIFACT through its real
+    # entrypoints: the in-image capability probe, HTTP/SSE/WebSocket route
+    # handshakes, clean and materialized-prior-revision PostgreSQL migrations
+    # against separate databases, an entrypoint restart against the migrated
+    # schema, worker task-queue/readiness advertisement against a real Temporal
+    # server, and a browser capture proving the compiled native UI baked into
+    # the image renders from its hosted boot payload with no root /v1 traffic.
+    #
+    # Restart/terminal replay after a fake provider host is removed is NOT
+    # asserted here: this job runs no provider execution, and the
+    # reliability-journey / embedded-recovery gates own that boundary on the
+    # same commit.
+    #
+    # It uses no protected credentials and no self-hosted runner, so a Tier-2
+    # credentialed canary, Tier-3 post-deployment synthetic, or Tier-4
+    # scheduled-soak outage never flips this gate closed.  Runs on the standard
+    # Docker-enabled ubuntu-latest merge infrastructure.
+    needs: select-test-suites
+    if: needs.select-test-suites.outputs.exact_artifact == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16@sha256:6efd0df010dc3cb40d5e33e3ef84acecc5e73161bd3df06029ee8698e5e12c60
+        env:
+          POSTGRES_USER: moonmind
+          POSTGRES_PASSWORD: moonmind
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U moonmind"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: Initialize pinned Omnigent verifier source
+        run: git submodule update --init --depth 1 -- omnigent
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install driver dependencies via uv
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system -e .
+      - name: Set up Node for the hosted-UI capture
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+      - name: Install the browser controller's Playwright runtime
+        # The hosted-UI capture runs on the job host against the container's
+        # hosted origin, so Playwright belongs here and not in the deployable
+        # image.
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Build the exact deployable image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api_service/Dockerfile
+          load: true
+          tags: moonmind-exact-artifact:candidate
+          # A local single-arch image so its digest is the immutable artifact
+          # under test.
+      - name: Resolve the immutable image identity
+        id: digest
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The compiled UI is baked into the app image, and the worker runs
+          # from the same image with a different entrypoint, so all three
+          # deployable roles share one immutable digest.
+          #
+          # `ref` is the digest-pinned identity recorded in the evidence.
+          # `runnable` is the same content id in the form Docker can resolve
+          # locally: a locally loaded image has no registry repo digest, so
+          # `name@sha256:<id>` would send Docker to a registry and fail.
+          IMAGE_ID="$(docker image inspect moonmind-exact-artifact:candidate --format '{{ .Id }}')"
+          DIGEST="${IMAGE_ID#sha256:}"
+          echo "ref=moonmind-exact-artifact@sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+      - name: Start Temporal for the worker readiness probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The worker runtime connects to Temporal before it can advertise
+          # readiness, so a reachable server is a prerequisite of the probe and
+          # not an optional extra. This is the same image and configuration the
+          # canonical Compose deployment uses, on the job's PostgreSQL service,
+          # and it needs no credentials.
+          docker run -d --name exact-artifact-temporal --network host \
+            -e DB=postgres12 \
+            -e DB_PORT=5432 \
+            -e POSTGRES_SEEDS=127.0.0.1 \
+            -e POSTGRES_USER=moonmind \
+            -e POSTGRES_PWD=moonmind \
+            -e DBNAME=temporal \
+            -e VISIBILITY_DBNAME=temporal_visibility \
+            -e NUM_HISTORY_SHARDS=1 \
+            -e SKIP_ADD_CUSTOM_SEARCH_ATTRIBUTES=true \
+            -e BIND_ON_IP=0.0.0.0 \
+            -e DYNAMIC_CONFIG_FILE_PATH=/etc/temporal/dynamicconfig/development-sql.yaml \
+            -v "$PWD/services/temporal/dynamicconfig:/etc/temporal/dynamicconfig:ro" \
+            temporalio/auto-setup:1.29.1
+          for _ in $(seq 1 120); do
+            if python -c "import socket; socket.create_connection(('127.0.0.1', 7233), timeout=2).close()" 2>/dev/null; then
+              echo "temporal is accepting connections on 127.0.0.1:7233"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Temporal did not become reachable on 127.0.0.1:7233"
+          exit 1
+      - name: Show Temporal startup logs on failure
+        if: failure()
+        run: docker logs exact-artifact-temporal || true
+      - name: Gather exact-image runtime evidence
+        id: runtime
+        shell: bash
+        env:
+          # The postgres service publishes 5432 to the job host, and the probes
+          # run the exact image with --network host, so the container reaches
+          # PostgreSQL at 127.0.0.1. This is the admin URL: the probes create a
+          # dedicated database per migration scenario from it.
+          DATABASE_URL: postgresql://moonmind:moonmind@127.0.0.1:5432/postgres
+        run: |
+          set -euo pipefail
+          python tools/gather_exact_artifact_runtime_evidence.py \
+            --image "${{ steps.digest.outputs.runnable }}" \
+            --database-url "$DATABASE_URL" \
+            --temporal-address 127.0.0.1:7233 \
+            --output runtime-evidence.json
+      - name: Evaluate exact deployable-artifact conformance
+        shell: bash
+        run: |
+          set -euo pipefail
+          REF="${{ steps.digest.outputs.ref }}"
+          DIGEST="${{ steps.digest.outputs.digest }}"
+          printf '{"digests": {"server": "%s", "worker": "%s", "ui": "%s"}}\n' \
+            "$DIGEST" "$DIGEST" "$DIGEST" > compatibility-manifest.json
+          python tools/run_omnigent_exact_artifact_conformance.py \
+            --server-image "$REF" \
+            --worker-image "$REF" \
+            --ui-image "$REF" \
+            --runnable-image "${{ steps.digest.outputs.runnable }}" \
+            --source-commit "${{ github.event.pull_request.head.sha || github.sha }}" \
+            --runtime-evidence runtime-evidence.json \
+            --compatibility-manifest compatibility-manifest.json \
+            --output-dir artifacts/omnigent-exact-artifact
+      - name: Collect exact-artifact diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          mkdir -p artifacts/omnigent-exact-artifact
+          cp runtime-evidence.json artifacts/omnigent-exact-artifact/ 2>/dev/null || true
+          docker logs exact-artifact-temporal \
+            > artifacts/omnigent-exact-artifact/temporal.log 2>&1 || true
+      - name: Stop the Temporal server
+        if: always()
+        run: docker rm -f exact-artifact-temporal || true
+      - name: Upload exact-artifact evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: omnigent-exact-artifact-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/omnigent-exact-artifact
+          if-no-files-found: warn
+          retention-days: 14
+
   omnigent-fault-rotating-seeds:
     # AC8 (MoonLadderStudios/MoonMind#3709): the larger, rotating fault-lab seed
     # corpus. Required PR CI runs a fixed deterministic corpus
@@ -595,6 +781,7 @@ jobs:
       - temporal-boundary
       - integration-ci
       - reliability-journey-checkpoint-resume
+      - omnigent-exact-artifact
       - verify-test-shard-ownership
     if: always()
     runs-on: ubuntu-latest
@@ -664,6 +851,9 @@ jobs:
           require_selected "reliability-journey-checkpoint-resume" \
             "${{ needs.select-test-suites.outputs.reliability_journey }}" \
             "${{ needs.reliability-journey-checkpoint-resume.result }}"
+          require_selected "omnigent-exact-artifact" \
+            "${{ needs.select-test-suites.outputs.exact_artifact }}" \
+            "${{ needs.omnigent-exact-artifact.result }}"
           require_selected "verify-test-shard-ownership" \
             "${{ needs.select-test-suites.outputs.full_backend }}" \
             "${{ needs.verify-test-shard-ownership.result }}"

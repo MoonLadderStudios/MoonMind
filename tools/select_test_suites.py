@@ -21,6 +21,7 @@ OUTPUT_KEYS = (
     "temporal_boundary",
     "integration_ci",
     "reliability_journey",
+    "exact_artifact",
     "full_backend",
     "frontend_static",
     "frontend_browser_chromium",
@@ -156,6 +157,128 @@ RELIABILITY_JOURNEY_GLOBS = (
     "api_service/migrations/**/*checkpoint*",
 )
 
+# --- Omnigent contract-owner inventory (MoonLadderStudios/MoonMind#3710) ---
+#
+# A single, tested inventory of the paths that own the Omnigent production
+# contract.  A change to any owned path must select the *complete* Omnigent
+# contract gate (the cross-layer required jobs below) rather than only the
+# suite that happens to match the directly-changed file's directory.  This
+# closes the gap where API-component, Temporal-boundary, or integration jobs
+# were silently skipped by changed-file selection for an Omnigent change.
+#
+# Selection is based on contract ownership and dependency edges: the owned
+# entrypoints (core, Temporal, API, native-UI, compiled-intent schemas,
+# fixtures, and conformance tooling), plus the deployment/dependency edges
+# (Dockerfiles, Compose, startup scripts, dependency locks, and CI/selection
+# definitions) which are already routed to the full backend gate elsewhere in
+# this selector.
+OMNIGENT_CONTRACT_GATE_KEYS = (
+    "unit_fast",
+    "api_component",
+    "temporal_boundary",
+    "integration_ci",
+    "reliability_journey",
+    # An Omnigent-owned change ships in the deployable API/worker/UI images, so
+    # it must also exercise the Tier-1 exact deployable-artifact gate.
+    "exact_artifact",
+)
+
+OMNIGENT_CONTRACT_EXACT = {
+    # Omnigent runtime schemas / compiled-intent contracts.
+    "moonmind/schemas/workspace_intent.py",
+    # Omnigent Temporal activities and workflows.
+    "moonmind/workflows/temporal/activities/omnigent_activities.py",
+    # Frontend Workflow Detail / Workflow Chat integration entrypoints.
+    "frontend/src/entrypoints/WorkflowChatNative.tsx",
+    "frontend/src/entrypoints/WorkflowChatNative.test.tsx",
+    "frontend/src/entrypoints/workflow-detail.tsx",
+    "frontend/src/entrypoints/omnigent-inventory.tsx",
+    "frontend/src/lib/workflowDetailRoutes.ts",
+    "frontend/src/lib/workflowDetailRoutes.test.ts",
+    # Omnigent conformance / fault fixture tooling.
+    "tools/run_omnigent_browser_journey.mjs",
+}
+
+OMNIGENT_CONTRACT_PREFIXES = (
+    "moonmind/omnigent/",
+    "api_service/services/omnigent",
+    "api_service/api/routers/omnigent",
+    "tests/integration/omnigent/",
+    "tests/unit/omnigent/",
+    "frontend/src/features/workflow-native-chat/",
+)
+
+OMNIGENT_CONTRACT_GLOBS = (
+    "moonmind/workflows/adapters/omnigent_*",
+    "moonmind/workflows/temporal/workflows/omnigent_*",
+    "tools/run_omnigent_*",
+    "tools/build_omnigent_*",
+)
+
+# The subset of owned paths whose change can affect the compiled native UI or
+# facade behavior, which must additionally exercise the compiled production
+# browser suite (issue #3710 required PR gate item 7).
+OMNIGENT_FACADE_EXACT = {
+    "moonmind/omnigent/native_ui.py",
+    "moonmind/omnigent/native_ui_compat.py",
+    "moonmind/omnigent/workflow_chat_facade.py",
+    "moonmind/omnigent/native_outbound_scan.py",
+    "api_service/api/routers/omnigent_native_ui.py",
+    "api_service/api/routers/omnigent_catalog.py",
+    "frontend/src/entrypoints/WorkflowChatNative.tsx",
+    "frontend/src/entrypoints/WorkflowChatNative.test.tsx",
+    "frontend/src/entrypoints/workflow-detail.tsx",
+    "frontend/src/entrypoints/omnigent-inventory.tsx",
+    "frontend/src/lib/workflowDetailRoutes.ts",
+    "frontend/src/lib/workflowDetailRoutes.test.ts",
+}
+
+OMNIGENT_FACADE_PREFIXES = ("frontend/src/features/workflow-native-chat/",)
+
+# --- Tier-1 exact deployable-artifact gate (MoonLadderStudios/MoonMind#3710) ---
+#
+# The required, noncredentialed exact-artifact conformance gate builds or pulls
+# the exact deployable API/worker/UI images and tests them by immutable digest
+# through their real entrypoints.  A change to the *runtime capability surface*
+# of those images — dependency locks, Dockerfiles, Compose, startup scripts and
+# runtime entrypoints, or the exact-artifact gate tooling itself — must always
+# select this gate, because a source-level test passing does not prove the
+# deployed process retains a required runtime capability (see the missing
+# Uvicorn WebSocket implementation in #3697).
+EXACT_ARTIFACT_EXACT = {
+    # Dependency and lockfile changes must always select this gate.
+    "pyproject.toml",
+    "poetry.lock",
+    "package.json",
+    "package-lock.json",
+    # Startup scripts and runtime entrypoints.  ``api_service/entrypoint.sh``
+    # is the production API command installed as the image ``CMD``, so a change
+    # to how Uvicorn is launched must always select this gate.  Compose files
+    # are covered by the ``docker-compose*`` globs below.
+    ".env-template",
+    "api_service/entrypoint.sh",
+    "tools/start-worker.sh",
+    # The exact-artifact gate implementation itself.
+    "moonmind/omnigent/exact_artifact_conformance.py",
+    "tools/omnigent_exact_artifact_probe.py",
+    "tools/run_omnigent_exact_artifact_conformance.py",
+}
+
+EXACT_ARTIFACT_PREFIXES = (
+    "api_service/docker/",
+    "docker/",
+)
+
+EXACT_ARTIFACT_GLOBS = (
+    # Any Dockerfile at any depth, plus named *.Dockerfile variants.
+    "Dockerfile",
+    "*.Dockerfile",
+    "docker-compose*.yml",
+    "docker-compose*.yaml",
+    "tools/omnigent_exact_artifact_*",
+    "tools/run_omnigent_exact_artifact_*",
+)
+
 BACKEND_PREFIXES = (
     ".agents/skills/",
     "api_service/",
@@ -194,6 +317,7 @@ class SuiteSelection:
     temporal_boundary: bool = False
     integration_ci: bool = False
     reliability_journey: bool = False
+    exact_artifact: bool = False
     full_backend: bool = False
     frontend_static: bool = False
     frontend_browser_chromium: bool = False
@@ -257,6 +381,50 @@ def _is_backend_path(path: str) -> bool:
     )
 
 
+def is_omnigent_contract_owned(path: str) -> bool:
+    """Return whether a changed path owns the Omnigent production contract."""
+    return _matches(
+        path,
+        exact=OMNIGENT_CONTRACT_EXACT,
+        prefixes=OMNIGENT_CONTRACT_PREFIXES,
+        globs=OMNIGENT_CONTRACT_GLOBS,
+    )
+
+
+def is_exact_artifact_owned(path: str) -> bool:
+    """Return whether a change must select the Tier-1 exact-artifact gate."""
+    return _matches(
+        path,
+        exact=EXACT_ARTIFACT_EXACT,
+        prefixes=EXACT_ARTIFACT_PREFIXES,
+        globs=EXACT_ARTIFACT_GLOBS,
+    )
+
+
+def _is_omnigent_facade_path(path: str) -> bool:
+    """Return whether an owned path can affect the compiled native UI/facade."""
+    return _matches(
+        path,
+        exact=OMNIGENT_FACADE_EXACT,
+        prefixes=OMNIGENT_FACADE_PREFIXES,
+    )
+
+
+def _elevate_omnigent_contract_gate(
+    selection: SuiteSelection, omnigent_paths: Iterable[str]
+) -> SuiteSelection:
+    """Force the complete Omnigent contract gate for an owned change."""
+    updates = {key: True for key in OMNIGENT_CONTRACT_GATE_KEYS}
+    if any(_is_omnigent_facade_path(path) for path in omnigent_paths):
+        updates["frontend_static"] = True
+        updates["frontend_browser_chromium"] = True
+    merged = {
+        key: getattr(selection, key) or updates.get(key, False)
+        for key in selection.__dict__
+    }
+    return SuiteSelection(**merged)
+
+
 def _full_backend_selection() -> SuiteSelection:
     return SuiteSelection(
         unit_fast=True,
@@ -265,6 +433,7 @@ def _full_backend_selection() -> SuiteSelection:
         temporal_boundary=True,
         integration_ci=True,
         reliability_journey=True,
+        exact_artifact=True,
         full_backend=True,
     )
 
@@ -327,7 +496,7 @@ def select_suites(
     )
     full_frontend = any(path in {"package.json", "package-lock.json"} for path in paths)
 
-    return SuiteSelection(
+    selection = SuiteSelection(
         unit_fast=bool(backend_paths),
         unit_slow=any(
             _matches(path, prefixes=UNIT_SLOW_PREFIXES) for path in backend_paths
@@ -368,11 +537,21 @@ def select_suites(
             )
             for path in backend_paths
         ),
+        # Computed over every path (not just backend paths): dependency locks
+        # and frontend Dockerfiles are non-backend but still change the
+        # deployable image runtime surface.
+        exact_artifact=any(is_exact_artifact_owned(path) for path in paths),
         frontend_static=static or chromium,
         frontend_browser_chromium=chromium,
         frontend_browser_firefox=firefox,
         full_frontend=full_frontend,
     )
+
+    omnigent_paths = [path for path in paths if is_omnigent_contract_owned(path)]
+    if omnigent_paths:
+        selection = _elevate_omnigent_contract_gate(selection, omnigent_paths)
+
+    return selection
 
 
 def emit_outputs(selection: SuiteSelection) -> None:

@@ -76,6 +76,15 @@ services:
       - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
       - MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF=${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-/workspace/cutover/remediation-release.json}
+      # Release-support evidence the catalog reads for the deployed commit
+      # (MoonLadderStudios/MoonMind#3710). These default to the durable
+      # evidence directory mounted below, so `tools/materialize_omnigent_evidence.py`
+      # is the only step an operator runs to make the deployed catalog report
+      # real acceptance, exact-artifact, and protected-live status. No env
+      # configuration is required for the default deployment path.
+      - MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST=${MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST:-/workspace/omnigent-evidence/acceptance-manifest.json}
+      - MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE=${MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE:-/workspace/omnigent-evidence/exact-artifact-projection.json}
+      - MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION=${MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION:-/workspace/omnigent-evidence/live-health-projection.json}
       # The API needs DOCKER_HOST only for its remaining direct Docker paths
       # (terminal exec, OAuth auth-runner teardown). SYSTEM_DOCKER_HOST is a
       # trusted-worker-only backend selector and is not read by the API service.
@@ -114,6 +123,10 @@ services:
       - ./.agents:/app/.agents:ro
       - ./deploy/state:/workspace/deployment_state:ro
       - ${MOONMIND_CODEX_OMNIGENT_EVIDENCE_DIR:-./var/cutover}:/workspace/cutover:ro
+      # Durable release-support evidence for the deployed commit, materialized by
+      # tools/materialize_omnigent_evidence.py. Read-only: the API consumes
+      # published evidence and never produces it.
+      - ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}:/workspace/omnigent-evidence:ro
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets
       # Live retrieval capability authority, accounting, and bounded evidence.

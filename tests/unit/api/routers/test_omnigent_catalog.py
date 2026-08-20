@@ -1,5 +1,6 @@
 """MoonLadderStudios/MoonMind#3451 catalog boundary coverage."""
 
+import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -704,3 +705,196 @@ def test_catalog_denies_caller_without_provider_profile_permission(monkeypatch):
         monkeypatch, session=_Session([]), superuser=False
     )).get("/api/omnigent/codex-catalog-readiness")
     assert response.status_code == 403
+
+
+# --- Exact-artifact + freshness support gating (MoonLadderStudios/MoonMind#3710 AC10) -
+
+
+_EXACT_COMMIT = "abc123"
+
+
+def _write_exact_artifact_evidence(tmp_path, *, commit=_EXACT_COMMIT, verdict="passed"):
+    from moonmind.omnigent.exact_artifact_conformance import (
+        EXACT_ARTIFACT_CONFORMANCE_VERSION,
+    )
+
+    path = tmp_path / "exact-artifact.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": EXACT_ARTIFACT_CONFORMANCE_VERSION,
+                "sourceCommit": commit,
+                "verdict": verdict,
+                "failures": [] if verdict == "passed" else [{"code": "x", "detail": "y"}],
+                "images": {
+                    "server": "img@sha256:" + "a" * 64,
+                    "worker": "img@sha256:" + "b" * 64,
+                    "ui": "img@sha256:" + "c" * 64,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _write_live_projection(
+    tmp_path,
+    *,
+    commit=_EXACT_COMMIT,
+    ready=True,
+    generated_ago=timedelta(minutes=5),
+    expires_in=timedelta(days=20),
+    schema_version=None,
+    filename="live-projection.json",
+):
+    from moonmind.omnigent.live_verification_health import (
+        LIVE_VERIFICATION_HEALTH_VERSION,
+    )
+
+    now = datetime.now(UTC)
+    path = tmp_path / filename
+    path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": schema_version or LIVE_VERIFICATION_HEALTH_VERSION,
+                "rolloutReady": ready,
+                "deployedCommit": commit,
+                "generatedAt": (now - generated_ago).isoformat(),
+                "acceptanceExpiresAt": (now + expires_in).isoformat(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _configure_support_evidence(monkeypatch, tmp_path):
+    """Point every support-evidence env var at fresh, passing artifacts."""
+    monkeypatch.setattr(catalog, "validate_acceptance_manifest", lambda *a, **k: None)
+    acceptance = tmp_path / "acceptance.json"
+    acceptance.write_text("{}", encoding="utf-8")
+    monkeypatch.setenv("MOONMIND_SOURCE_COMMIT", _EXACT_COMMIT)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", str(acceptance))
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE",
+        str(_write_exact_artifact_evidence(tmp_path)),
+    )
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION",
+        str(_write_live_projection(tmp_path)),
+    )
+
+
+def test_support_reasons_clean_with_fresh_exact_artifact_and_live_evidence(
+    monkeypatch, tmp_path
+):
+    _configure_support_evidence(monkeypatch, tmp_path)
+    assert catalog._support_reasons() == []
+
+
+def test_support_reasons_flag_missing_exact_artifact_evidence(monkeypatch, tmp_path):
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.delenv("MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE", raising=False)
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "exact_artifact_evidence_unavailable" in codes
+    assert "acceptance_evidence_unavailable" not in codes
+
+
+def test_support_reasons_flag_failed_exact_artifact_verdict(monkeypatch, tmp_path):
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE",
+        str(_write_exact_artifact_evidence(tmp_path, verdict="failed")),
+    )
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "exact_artifact_evidence_unavailable" in codes
+
+
+def test_support_reasons_flag_exact_artifact_commit_mismatch(monkeypatch, tmp_path):
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE",
+        str(_write_exact_artifact_evidence(tmp_path, commit="different")),
+    )
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "exact_artifact_evidence_unavailable" in codes
+
+
+def test_support_reasons_flag_stale_live_verification(monkeypatch, tmp_path):
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION",
+        str(_write_live_projection(tmp_path, ready=False)),
+    )
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "live_verification_stale" in codes
+
+
+def test_support_reasons_flag_live_verification_commit_mismatch(monkeypatch, tmp_path):
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION",
+        str(_write_live_projection(tmp_path, commit="different")),
+    )
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "live_verification_stale" in codes
+
+
+def test_support_reasons_canary_bypasses_all_support_evidence(monkeypatch, tmp_path):
+    # An in-progress acceptance canary is exempt from support gating so it can
+    # produce the very evidence the gate consumes.
+    monkeypatch.delenv("MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE", raising=False)
+    monkeypatch.delenv("MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION", raising=False)
+    assert catalog._support_reasons(acceptance_canary=True) == []
+
+
+def test_support_reasons_flag_expired_acceptance_window(monkeypatch, tmp_path):
+    """A once-ready projection stops being accepted when its manifest expires."""
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION",
+        str(
+            _write_live_projection(
+                tmp_path,
+                expires_in=-timedelta(minutes=1),
+                filename="expired-projection.json",
+            )
+        ),
+    )
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "live_verification_stale" in codes
+
+
+def test_support_reasons_flag_projection_whose_publisher_stopped(monkeypatch, tmp_path):
+    """Scheduled monitoring stopping must not leave a stale ready verdict."""
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION",
+        str(
+            _write_live_projection(
+                tmp_path,
+                generated_ago=timedelta(days=2),
+                filename="stale-projection.json",
+            )
+        ),
+    )
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "live_verification_stale" in codes
+
+
+def test_support_reasons_flag_unversioned_projection(monkeypatch, tmp_path):
+    """An unversioned or foreign-schema document is not authoritative."""
+    _configure_support_evidence(monkeypatch, tmp_path)
+    monkeypatch.setenv(
+        "MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION",
+        str(
+            _write_live_projection(
+                tmp_path,
+                schema_version="something.else/v9",
+                filename="unversioned-projection.json",
+            )
+        ),
+    )
+    codes = {reason.code for reason in catalog._support_reasons()}
+    assert "live_verification_stale" in codes
