@@ -16,7 +16,7 @@ from api_service.db.models import (
 )
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
-    refresh_managed_bootstrap_snapshot_for_rerun,
+    refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
 )
 
@@ -55,6 +55,7 @@ class _Session:
             volume_mount_path="/root/.codex", secret_refs={},
             credential_bindings=[], command_behavior={"auth_readiness": {"launch_ready": True}},
         )
+        self.usage = None
         self.added = []
 
     async def get(self, model, key):
@@ -66,6 +67,8 @@ class _Session:
             return self.version
         if entity is ManagedAgentProviderProfile:
             return self.provider
+        if entity is OmnigentAgentProfileUsage:
+            return self.usage
         return None
 
     def add(self, value):
@@ -153,6 +156,34 @@ async def test_resolver_persists_exact_version_digest_and_effective_overrides():
     assert isinstance(usage, OmnigentAgentProfileUsage)
     assert usage.consumer_type == "checkpoint"
     assert usage.effective_snapshot == snapshot
+
+
+@pytest.mark.asyncio
+async def test_resolver_replaces_managed_schedule_usage_in_place():
+    session = _Session()
+    session.usage = SimpleNamespace(
+        profile_id="team-codex",
+        version=1,
+        digest="sha256:" + "1" * 64,
+        effective_snapshot={"version": 1},
+    )
+
+    snapshot = await resolve_agent_profile_snapshot(
+        session,
+        selection={
+            "profileId": "team-codex",
+            "providerProfileRef": "oauth-team",
+        },
+        consumer_type="schedule",
+        consumer_id="schedule-1",
+        user=None,
+        replace_existing_usage=True,
+    )
+
+    assert session.added == []
+    assert session.usage.version == 2
+    assert session.usage.digest == "sha256:" + "a" * 64
+    assert session.usage.effective_snapshot == snapshot
 
 
 @pytest.mark.asyncio
@@ -249,7 +280,15 @@ async def test_exact_rerun_refreshes_managed_bootstrap_authority(monkeypatch):
 
     captured = {}
 
-    async def _resolve(session, *, selection, consumer_type, consumer_id, user):
+    async def _resolve(
+        session,
+        *,
+        selection,
+        consumer_type,
+        consumer_id,
+        user,
+        replace_existing_usage=False,
+    ):
         captured.update(
             selection=selection,
             consumer_type=consumer_type,
@@ -278,7 +317,7 @@ async def test_exact_rerun_refreshes_managed_bootstrap_authority(monkeypatch):
         "resolve_agent_profile_snapshot",
         _resolve,
     )
-    refreshed = await refresh_managed_bootstrap_snapshot_for_rerun(
+    refreshed = await refresh_managed_bootstrap_snapshot(
         _RerunSession(),
         parameters={
             "instructions": "keep the same task",
@@ -301,6 +340,7 @@ async def test_exact_rerun_refreshes_managed_bootstrap_authority(monkeypatch):
                 "agent": {"agentId": "stale-agent-id"},
             },
         },
+        consumer_type="workflow",
         consumer_id="mm:rerun",
         user=SimpleNamespace(id=uuid4()),
     )
@@ -323,6 +363,82 @@ async def test_exact_rerun_refreshes_managed_bootstrap_authority(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_managed_schedule_refresh_requires_and_replaces_exact_usage(
+    monkeypatch,
+):
+    old_digest = "sha256:" + "1" * 64
+    previous = {
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": old_digest,
+        "providerProfileRef": "codex_openai_oauth",
+        "document": {"model": {}, "capture": {}, "rag": {}, "publish": {}},
+    }
+    previous_version = SimpleNamespace(
+        digest=old_digest,
+        document=previous["document"],
+    )
+    usage = SimpleNamespace(
+        profile_id="omnigent-bootstrap-default",
+        version=1,
+        digest=old_digest,
+        effective_snapshot=previous,
+    )
+
+    class _ScheduleSession:
+        async def scalar(self, statement):
+            entity = statement.column_descriptions[0].get("entity")
+            if entity is OmnigentAgentProfileVersion:
+                return previous_version
+            if entity is OmnigentAgentProfileUsage:
+                return usage
+            return None
+
+    async def _resolve(
+        session,
+        *,
+        selection,
+        consumer_type,
+        consumer_id,
+        user,
+        replace_existing_usage,
+    ):
+        assert consumer_type == "schedule"
+        assert consumer_id == "schedule-1"
+        assert replace_existing_usage is True
+        return {
+            **previous,
+            "version": 2,
+            "digest": "sha256:" + "2" * 64,
+            "executionProfileRef": "omnigent-codex@1",
+            "launchPolicyRef": "codex-on-demand@2",
+            "agentId": "codex-native-ui",
+            "document": {
+                **previous["document"],
+                "workspace": {},
+            },
+        }
+
+    monkeypatch.setattr(
+        "api_service.services.omnigent_agent_profile_selection."
+        "resolve_agent_profile_snapshot",
+        _resolve,
+    )
+
+    refreshed = await refresh_managed_bootstrap_snapshot(
+        _ScheduleSession(),
+        parameters={"agentProfileSnapshot": previous},
+        consumer_type="schedule",
+        consumer_id="schedule-1",
+        user=None,
+        replace_existing_usage=True,
+    )
+
+    assert refreshed["agentProfile"]["version"] == 2
+    assert refreshed["omnigent"]["launchPolicyRef"] == "codex-on-demand@2"
+
+
+@pytest.mark.asyncio
 async def test_exact_rerun_reconstructs_explicit_null_overrides(monkeypatch):
     old_digest = "sha256:" + "3" * 64
     previous_version = SimpleNamespace(
@@ -341,7 +457,15 @@ async def test_exact_rerun_reconstructs_explicit_null_overrides(monkeypatch):
 
     captured = {}
 
-    async def _resolve(session, *, selection, consumer_type, consumer_id, user):
+    async def _resolve(
+        session,
+        *,
+        selection,
+        consumer_type,
+        consumer_id,
+        user,
+        replace_existing_usage=False,
+    ):
         captured["selection"] = selection
         return {
             "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
@@ -367,7 +491,7 @@ async def test_exact_rerun_reconstructs_explicit_null_overrides(monkeypatch):
         _resolve,
     )
 
-    await refresh_managed_bootstrap_snapshot_for_rerun(
+    await refresh_managed_bootstrap_snapshot(
         _RerunSession(),
         parameters={
             "agentProfileSnapshot": {
@@ -385,6 +509,7 @@ async def test_exact_rerun_reconstructs_explicit_null_overrides(monkeypatch):
                 },
             }
         },
+        consumer_type="workflow",
         consumer_id="mm:rerun-null-overrides",
         user=SimpleNamespace(id=uuid4()),
     )
@@ -401,9 +526,10 @@ async def test_exact_rerun_preserves_operator_owned_profile_snapshot():
         "agentProfileSnapshot": {"profileId": "operator-profile"},
         "omnigent": {"launchPolicyRef": "operator-policy@7"},
     }
-    assert await refresh_managed_bootstrap_snapshot_for_rerun(
+    assert await refresh_managed_bootstrap_snapshot(
         SimpleNamespace(),
         parameters=parameters,
+        consumer_type="workflow",
         consumer_id="mm:rerun",
         user=SimpleNamespace(id=uuid4()),
     ) == parameters

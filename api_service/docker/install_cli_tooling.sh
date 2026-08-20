@@ -49,7 +49,12 @@ fi
 if [ "${INSTALL_CLAUDE_CLI}" != "true" ]; then
     echo "INSTALL_CLAUDE_CLI=${INSTALL_CLAUDE_CLI}; skipping Claude CLI install and using stub" >&2
     stub_claude
-elif ! npm install -g @anthropic-ai/claude-code@"${CLAUDE_CLI_VERSION}"; then
+# Upstream ships the launcher as a wrapper plus a platform-native optional
+# dependency materialized by a postinstall step. ``--include=optional`` keeps
+# that dependency in scope regardless of any inherited npm configuration; the
+# build's ``claude --version`` gate then fails fast if the launcher is still
+# unusable rather than shipping a silently broken CLI.
+elif ! npm install -g --include=optional @anthropic-ai/claude-code@"${CLAUDE_CLI_VERSION}"; then
     install_status=$?
     echo "Warning: Failed to install Claude CLI (exit ${install_status}); installing stub binary" >&2
     stub_claude

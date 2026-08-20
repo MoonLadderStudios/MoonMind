@@ -57,9 +57,13 @@ services:
       # Native Omnigent Workflow Chat UI is served through MoonMind-scoped routes
       # (MoonLadderStudios/MoonMind#3638): the browser reaches the native UI at
       # /omnigent-ui/workflow-chat/{chatBindingId} on the MoonMind origin, never
-      # the upstream server directly. Enabled by default; the version is pinned to
-      # the upstream build MoonMind is verified against and must pass conformance
-      # before an operator advances it.
+      # the upstream server directly. Enabled by default. The compatibility
+      # version is derived from the same immutable server image evidence the
+      # execution catalog already requires (OMNIGENT_IMAGE_REF digest), so
+      # pinning the image is the only step needed to serve native chat. A
+      # mutable tag stays unverified and the gate fails closed
+      # (MoonLadderStudios/MoonMind#3685). OMNIGENT_NATIVE_UI_VERSION is the
+      # explicit override an operator sets after a new build passes conformance.
       - OMNIGENT_NATIVE_UI_ENABLED=${OMNIGENT_NATIVE_UI_ENABLED:-true}
       - OMNIGENT_NATIVE_UI_VERSION=${OMNIGENT_NATIVE_UI_VERSION:-}
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}

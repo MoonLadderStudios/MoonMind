@@ -775,6 +775,7 @@ describe('Dashboard shared entry', () => {
           json: async () => ({
             items: [{
               id: 'schedule-one',
+              version: 1,
               name: 'Daily recurring scan',
               enabled: true,
               cron: '0 9 * * *',
@@ -792,6 +793,7 @@ describe('Dashboard shared entry', () => {
           ok: true,
           json: async () => ({
             id: 'schedule-one',
+            version: 1,
             name: 'Daily recurring scan',
             description: 'Runs every morning.',
             enabled: true,
@@ -855,6 +857,7 @@ describe('Dashboard shared entry', () => {
           json: async () => ({
             items: [{
               id: 'schedule-one',
+              version: 1,
               name: 'Daily recurring scan',
               enabled: true,
               cron: '0 9 * * *',
@@ -904,6 +907,7 @@ describe('Dashboard shared entry', () => {
           json: async () => ({
             items: [{
               id: 'schedule-one',
+              version: 1,
               name: 'Daily recurring scan',
               enabled: true,
               cron: '0 9 * * *',
@@ -921,6 +925,7 @@ describe('Dashboard shared entry', () => {
           ok: true,
           json: async () => ({
             id: 'schedule-one',
+            version: 1,
             name: 'Daily recurring scan',
             description: 'Runs every morning.',
             enabled: true,
@@ -1153,6 +1158,7 @@ describe('Dashboard shared entry', () => {
           json: async () => ({
             items: [{
               id: 'schedule-one',
+              version: 1,
               name: 'Daily recurring scan',
               enabled: true,
               cron: '0 9 * * *',
@@ -1170,6 +1176,7 @@ describe('Dashboard shared entry', () => {
           ok: true,
           json: async () => ({
             id: 'schedule-one',
+            version: 1,
             name: 'Daily recurring scan',
             description: 'Runs every morning.',
             enabled: true,
@@ -1222,6 +1229,7 @@ describe('Dashboard shared entry', () => {
           json: async () => ({
             items: [{
               id: 'schedule-one',
+              version: 1,
               name: 'Daily recurring scan',
               enabled: true,
               cron: '0 9 * * *',
@@ -1239,6 +1247,7 @@ describe('Dashboard shared entry', () => {
           ok: true,
           json: async () => ({
             id: 'schedule-one',
+            version: 1,
             name: 'Daily recurring scan',
             description: 'Runs every morning.',
             enabled: true,
@@ -1316,6 +1325,7 @@ describe('Dashboard shared entry', () => {
   // `hidden` on a direct `/schedules/{definitionId}` visit.
   const recurringScheduleRow = (id: string, name: string) => ({
     id,
+    version: 1,
     name,
     enabled: true,
     cron: '0 9 * * *',
