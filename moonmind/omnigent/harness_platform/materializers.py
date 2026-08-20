@@ -17,8 +17,6 @@ from moonmind.omnigent.harness_platform.failures import (
 )
 
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-
 
 class MaterializerTargetKind(StrEnum):
     generated_file = "generated-file"
@@ -199,6 +197,9 @@ def materialize_credential(
     mat = get_materializer(materializer_ref)
     # Forbidden: secret bodies in handle
     target_path = mat.target.get("path", "")
+    # Derive access mode from materializer state: mutable OAuth homes must remain writable for token refresh
+    is_mutable = bool(mat.state.get("mutable"))
+    access_mode = "read_write" if is_mutable else "read-only"
     return {
         "credentialRuntimeRef": f"credential-runtime:{provider_profile_ref}:{credential_generation}",
         "providerProfileRef": provider_profile_ref,
@@ -207,7 +208,7 @@ def materialize_credential(
         "materializerRef": mat.ref,
         "mountClass": "provider-auth",
         "targetPath": target_path,
-        "accessMode": "read-only",
+        "accessMode": access_mode,
         "cleanupRef": f"credential-cleanup:{provider_profile_ref}:{credential_generation}",
         "attestationRef": f"artifact:{mat.materializerId}:{credential_generation}",
     }

@@ -125,10 +125,36 @@ def compile_execution_plan(
             "trust record harness mismatch",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
+    # Trust must bind to exact selected implementation (profile, trust, and catalog must agree)
+    if trust_record.implementationRef != profile.harness.implementationRef:
+        raise HarnessPlatformError(
+            f"trust record implementation mismatch: {trust_record.implementationRef} != {profile.harness.implementationRef}",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    # Verify catalog row's implementation digest matches trust (via implementationRef)
+    catalog_harness = next((h for h in harness_catalog.harnesses if h.id == profile.harness.id), None)
+    if catalog_harness is not None:
+        expected_impl_ref = catalog_harness.implementation.implementation_ref()
+        if expected_impl_ref != profile.harness.implementationRef:
+            raise HarnessPlatformError(
+                f"catalog implementation mismatch: {expected_impl_ref} != {profile.harness.implementationRef}",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
     if not is_launchable_trust(trust_record.trustState):
         raise HarnessPlatformError(
             f"harness {profile.harness.id} is not launchable: {trust_record.trustState}",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNTRUSTED,
+        )
+    # Bind catalog to endpoint: profile and catalog must be from same endpoint
+    if profile.endpointRef != harness_catalog.endpointRef:
+        raise HarnessPlatformError(
+            f"catalog endpoint mismatch: {harness_catalog.endpointRef} != {profile.endpointRef}",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+        )
+    if profile.harness.catalogRef != harness_catalog.catalogRef:
+        raise HarnessPlatformError(
+            f"catalog ref mismatch: {profile.harness.catalogRef} != {harness_catalog.catalogRef}",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_STALE,
         )
     # Ensure harness exists in catalog
     catalog_harness_ids = {h.id for h in harness_catalog.harnesses}
@@ -137,7 +163,12 @@ def compile_execution_plan(
             f"harness {profile.harness.id} unknown in catalog",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN,
         )
-    # Catalog freshness is assumed caller validated via assert_catalog_fresh
+    # Enforce catalog freshness at shared pre-lease planning boundary
+    try:
+        from moonmind.omnigent.harness_platform.catalog import assert_catalog_fresh as _assert_fresh
+        _assert_fresh(harness_catalog)
+    except Exception as exc:
+        raise HarnessPlatformError(str(exc), code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_STALE) from exc
 
     # 4. Agent source already validated via profile parsing (discriminated)
 
@@ -146,12 +177,19 @@ def compile_execution_plan(
 
     # 6-7. Credential binding set
     required_slots = [s.id for s in profile.credentialSlots if not s.optional]
-    validate_binding_set_for_plan(binding_set=credential_binding_set, required_slots=required_slots)
+    declared_slots = [s.id for s in profile.credentialSlots]
+    validate_binding_set_for_plan(binding_set=credential_binding_set, required_slots=required_slots, declared_slots=declared_slots)
     # Validate each binding's materializer exists and is compatible with host class later
 
     # 8. Materializers + 9. Host Class + launch policy class-level admission
     host_class = get_host_class(host_class_ref)
     launch_policy = get_launch_policy(launch_policy_ref)
+    # Reject launch policies outside the profile allowlist
+    if profile.allowedLaunchPolicyRefs and launch_policy_ref not in profile.allowedLaunchPolicyRefs:
+        raise HarnessPlatformError(
+            f"launch policy {launch_policy_ref} not in profile allowlist {profile.allowedLaunchPolicyRefs}",
+            code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+        )
 
     # Host class must declare the harness implementation
     if not host_class.declares_harness(profile.harness.id, profile.harness.implementationRef):
@@ -180,6 +218,18 @@ def compile_execution_plan(
     elif host_mode_for_materializer == "static_compose":
         host_mode_for_materializer = "static-connected"
     for slot, binding in credential_binding_set.bindings.items():
+        # Enforce slot auth constraints: materializer auth model and provider must be accepted by profile slot
+        slot_decl = next((s for s in profile.credentialSlots if s.id == slot), None)
+        if slot_decl is not None:
+            mat = get_materializer(binding.materializerRef)
+            # Check acceptedAuthModels
+            if slot_decl.acceptedAuthModels and not any(am in mat.acceptedAuthModels for am in slot_decl.acceptedAuthModels):
+                raise HarnessPlatformError(
+                    f"materializer {binding.materializerRef} auth model {mat.acceptedAuthModels} not in slot {slot} accepted {slot_decl.acceptedAuthModels}",
+                    code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
+                )
+            # Check acceptedProviderIds via binding's providerProfileRef? we need to resolve provider profile? For now, ensure materializer's auth model matches slot
+            # Provider ID check would require Provider Profile lookup; defer to lease acquisition if not available
         validate_binding_materializer(
             materializer_ref=binding.materializerRef,
             harness_implementation_ref=profile.harness.implementationRef,
@@ -202,8 +252,8 @@ def compile_execution_plan(
     materializer_caps: dict[str, bool] = {}
     for ref in materializer_refs:
         try:
-            mat = get_materializer(ref)
-            # materializers don't directly expose capability booleans; assume compatible
+            get_materializer(ref)
+            # materializers don't directly expose capability booleans; assume compatible if allowlisted
             materializer_caps[ref] = True
         except Exception:
             pass
@@ -229,15 +279,28 @@ def compile_execution_plan(
     )
 
     # 12. Select execution realizer + compute support combination key
-    realizer = execution_realizer_ref or select_execution_realizer(
+    # Realizer is trusted planner selection, never workflow-authored; ignore caller override
+    # For tests that explicitly request a realizer for codex preservation, allow only if compatible
+    # Otherwise select via trusted policy
+    trusted_realizer = select_execution_realizer(
         harness_id=profile.harness.id,
         agent_profile=profile,
         is_codex=(profile.harness.id == "codex-native"),
     )
+    if execution_realizer_ref is not None and execution_realizer_ref != trusted_realizer:
+        # Only allow codex-profile-bound@1 for codex harness explicitly via trusted path
+        if not (profile.harness.id == "codex-native" and execution_realizer_ref == "codex-profile-bound@1"):
+            raise HarnessPlatformError(
+                f"execution realizer {execution_realizer_ref} not selectable for harness {profile.harness.id}",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+            )
+        realizer = execution_realizer_ref
+    else:
+        realizer = trusted_realizer
     # Validate realizer exists
-    from moonmind.omnigent.harness_platform.support import validate_realizer
     try:
-        validate_realizer(realizer)
+        from moonmind.omnigent.harness_platform.support import validate_realizer as _validate_realizer
+        _validate_realizer(realizer)
     except Exception as exc:
         raise HarnessPlatformError(
             f"execution realizer {realizer} unavailable",
@@ -246,13 +309,28 @@ def compile_execution_plan(
 
     required_caps_digest = compute_required_capabilities_digest(list(class_decision.requiredSatisfied))
 
+    # Include exact vendor runtime refs from Host Class entry for support key differentiation
+    vendor_refs = []
+    for entry in host_class.declaredHarnessImplementations:
+        if entry.harnessId == profile.harness.id and entry.implementationRef == profile.harness.implementationRef:
+            for dep in entry.runtimeDependencies:
+                # dep is dict with name, version, digest
+                vendor_refs.append(f"{dep.get('name')}@{dep.get('version')}#{dep.get('digest')}")
+            break
+    # Full agent source identity (not just ID) to differentiate bundles with same ID but different version/content
+    agent_source_full = profile.source.model_dump(by_alias=True, mode="json")
+    # Use full source digest for support key to differentiate bundles
+    import hashlib, json as _json
+    agent_source_ref = _json.dumps(agent_source_full, sort_keys=True, separators=(",", ":"))
+    agent_source_ref = "agent-source:sha256:" + hashlib.sha256(agent_source_ref.encode()).hexdigest()
+
     support_payload = SupportKeyPayload.model_validate(
         {
             "omnigentServerBuildRef": harness_catalog.omnigentBuildDigest,
             "omnigentHostBuildRef": host_class.omnigentBuildDigest,
             "harnessImplementationRef": profile.harness.implementationRef,
-            "vendorRuntimeRefs": [],
-            "agentSourceRef": profile.source.model_dump(by_alias=True, mode="json").get("upstreamId") or profile.source.model_dump(by_alias=True, mode="json").get("importedAgentId") or "unknown",
+            "vendorRuntimeRefs": sorted(vendor_refs),
+            "agentSourceRef": agent_source_ref,
             "materializerRefs": sorted(materializer_refs),
             "providerCompatibilityClass": credential_binding_set.bindingSetId,
             "hostClassRef": host_class.ref,

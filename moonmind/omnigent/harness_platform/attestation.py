@@ -56,6 +56,8 @@ class HostHarnessAttestation(BaseModel):
     runtimeDependencies: tuple[RuntimeDependency, ...] = Field(default_factory=tuple, alias="runtimeDependencies")
     configured: bool
     capabilities: dict[str, Any]
+    architecture: str | None = Field(default=None, alias="architecture")
+    attestationGeneration: int | None = Field(default=None, alias="attestationGeneration")
     observedAt: datetime = Field(alias="observedAt")
     attestationRef: str | None = Field(default=None, alias="attestationRef")
 
@@ -97,17 +99,28 @@ def validate_exact_host_attestation(
     expectedImplementation: dict[str, Any],
     requiredCapabilities: list[str],
     expectedArchitecture: str | None = None,
+    expectedHostId: str | None = None,
     max_age_seconds: int = 600,
     now: datetime | None = None,
     currentHostLeaseGeneration: int | None = None,
     attestationGeneration: int | None = None,
+    expectedVendorRuntimes: list[dict[str, Any]] | None = None,
 ) -> None:
+    # Use attestation's own generation if provided in object when caller didn't supply
+    if attestationGeneration is None and attestation.attestationGeneration is not None:
+        attestationGeneration = attestation.attestationGeneration
     now_ts = now or datetime.now(UTC)
     age = (now_ts - attestation.observedAt).total_seconds()
     if age < 0 or age > max_age_seconds:
         raise HarnessPlatformError(
             f"attestation stale or future: age {age:.0f}s",
             code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
+        )
+    # Bind attestation to expected host identity (lease-selected host)
+    if expectedHostId is not None and attestation.hostId != expectedHostId:
+        raise HarnessPlatformError(
+            f"attestation hostId mismatch: {attestation.hostId} != {expectedHostId}",
+            code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
         )
     if attestation.hostClassRef != expectedHostClassRef:
         raise HarnessPlatformError(
@@ -139,8 +152,17 @@ def validate_exact_host_attestation(
                 f"harness implementation {key} mismatch: {act_val} != {exp_val}",
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
-    # Vendor runtime
-    expected_runtimes = {d["name"]: d for d in expectedImplementation.get("runtimeDependencies", [])}
+    # Vendor runtime: prefer explicit HostClass-declared runtimes if supplied, else fallback to implementation
+    vendor_source = expectedVendorRuntimes if expectedVendorRuntimes is not None else expectedImplementation.get("runtimeDependencies", [])
+    expected_runtimes = {d["name"] if isinstance(d, dict) else getattr(d, "name", ""): d for d in vendor_source}
+    # Normalize expected dict values to dict
+    normalized_expected = {}
+    for name, dep in expected_runtimes.items():
+        if isinstance(dep, dict):
+            normalized_expected[name] = dep
+        else:
+            normalized_expected[name] = {"name": dep.name, "version": dep.version, "digest": dep.digest}
+    expected_runtimes = normalized_expected
     actual_runtimes = {d.name: d for d in attestation.runtimeDependencies}
     for name, exp_dep in expected_runtimes.items():
         actual = actual_runtimes.get(name)
@@ -166,13 +188,23 @@ def validate_exact_host_attestation(
                 f"required exact-host capability {cap} missing or not true",
                 code=HarnessPlatformFailure.OMNIGENT_EXACT_HOST_CAPABILITY_MISMATCH,
             )
-    # Fencing generation
-    if currentHostLeaseGeneration is not None and attestationGeneration is not None:
+    # Fencing generation: if lease generation is known, attestation must provide matching generation
+    if currentHostLeaseGeneration is not None:
+        if attestationGeneration is None:
+            raise HarnessPlatformError(
+                "attestation missing generation for fenced host lease",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
         if attestationGeneration != currentHostLeaseGeneration:
             raise HarnessPlatformError(
                 "attestation generation does not match host lease generation",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
+    if expectedArchitecture is not None and attestation.architecture is not None and attestation.architecture != expectedArchitecture:
+        raise HarnessPlatformError(
+            f"architecture mismatch: {attestation.architecture} != {expectedArchitecture}",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
     if not attestation.configured:
         raise HarnessPlatformError(
             "host not configured",

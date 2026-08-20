@@ -67,6 +67,20 @@ def validate_lifecycle_order(completed: list[str]) -> None:
     # Check given order is increasing in logical order
     last_pos = -1
     seen: set[str] = set()
+    mandatory_pre_session = {
+        "compile_execution_plan_envelope",
+        "acquire_provider_leases_deterministic",
+        "persist_runtime_binding_with_generations",
+        "resolve_host_binding_and_lease",
+        "materialize_workspace",
+        "materialize_credentials_with_generations",
+        "start_or_attach_host",
+        "exact_host_harness_attestation",
+        "validate_implementation_and_runtimes",
+        "validate_exact_host_capabilities_mounts_network_skills",
+        "resolve_and_attest_live_model_options",
+        "persist_runtime_binding_refs",
+    }
     for step in completed:
         if step not in pos:
             continue
@@ -77,9 +91,11 @@ def validate_lifecycle_order(completed: list[str]) -> None:
         # Lease must happen after plan commitment
         if step == "acquire_provider_leases_deterministic" and "compile_execution_plan_envelope" not in seen:
             raise ValueError("lease acquisition must happen after plan commitment")
-        # Session creation forbidden until exact-host attestation passes
-        if step == "create_or_reattach_session" and "exact_host_harness_attestation" not in seen:
-            raise ValueError("session creation forbidden until exact-host attestation passes")
+        # Session creation forbidden until all mandatory pre-session steps pass
+        if step == "create_or_reattach_session":
+            missing = mandatory_pre_session - seen
+            if missing:
+                raise ValueError(f"session creation forbidden until mandatory steps complete: {sorted(missing)}")
         last_pos = cur
         seen.add(step)
     # Ensure cleanup last: if release appears, it must be last in the completed list (ignoring unknown steps)

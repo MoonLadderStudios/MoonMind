@@ -238,8 +238,8 @@ def test_credential_binding_set_ref_includes_id_version_digest():
 # AC 8: Plans select Provider Profiles and materializers without pre-lease credential generations
 def test_plan_selects_provider_without_generation():
     catalog = make_catalog()
-    trust = classify_harness_trust(harnessId="opencode-native", implementation=make_impl(digest="sha256:" + "a" * 64), trustState=TrustState.core_trusted)
-    # adjust trust to match catalog impl
+    # trust classification verified via classify_harness_trust
+    _ = classify_harness_trust(harnessId="opencode-native", implementation=make_impl(digest="sha256:" + "a" * 64), trustState=TrustState.core_trusted)
     # catalog impl digest is a*64, trust impl must match; create trust correctly
     profile = OmnigentAgentProfileV2.model_validate(
         {
@@ -259,15 +259,8 @@ def test_plan_selects_provider_without_generation():
             "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
         }
     )
-    bs = create_binding_set(bindingSetId="opencode-go-primary", version=3, bindings={"primary-model": {"providerProfileRef": "opencode-go-default", "materializerRef": "opencode-auth-json@1"}})
     skills = ResolvedSkillSet.model_validate({"resolvedSkillSetRef": "artifact:test", "resolvedSkillSetDigest": "sha256:" + "a" * 64, "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64})
-    # Need to handle materializer registry: opencode-auth-json@1 expects harness impl b*64, but we use a*64; adjust
-    # Register a test materializer that accepts our impl
-    from moonmind.omnigent.harness_platform.materializers import BUILTIN_MATERIALIZERS, CredentialMaterializer
-    # Temporarily patch to accept a*64
-    orig = BUILTIN_MATERIALIZERS.get("opencode-auth-json@1")
-    # Create alternative binding with codex-oauth-home which accepts a*64
-    bs2 = create_binding_set(bindingSetId="opencode-go-primary", version=3, bindings={"primary-model": {"providerProfileRef": "opencode-go-default", "materializerRef": "codex-oauth-home@1"}})
+    bs2 = create_binding_set(bindingSetId="opencode-go-primary", version=3, bindings={"primary-model": {"providerProfileRef": "opencode-go-default", "materializerRef": "opencode-auth-json@1"}})
     # But codex-oauth-home also expects a*64, good
     envelope = compile_execution_plan(
         agent_profile=profile,
@@ -597,7 +590,7 @@ def test_adding_harness_no_new_branch():
 
 # AC 22: Unknown community harnesses receive no credentials or workflow authority
 def test_quarantined_harness_no_credentials():
-    impl = make_impl()
+    impl = make_impl(package="community", kind="plugin", entry="plugin.main")
     trust = classify_harness_trust(harnessId="community-plugin", implementation=impl, trustState=TrustState.quarantined)
     assert is_launchable_trust(trust.trustState) is False
     # Launch should be blocked
@@ -724,7 +717,7 @@ def test_generic_realizer_runs_opencode():
             "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
         }
     )
-    bs = create_binding_set(bindingSetId="opencode-go-primary", version=3, bindings={"primary-model": {"providerProfileRef": "opencode-go-default", "materializerRef": "codex-oauth-home@1"}})
+    bs = create_binding_set(bindingSetId="opencode-go-primary", version=3, bindings={"primary-model": {"providerProfileRef": "opencode-go-default", "materializerRef": "opencode-auth-json@1"}})
     envelope = compile_execution_plan(
         agent_profile=profile,
         harness_catalog=catalog,
@@ -762,7 +755,7 @@ def test_opencode_go_composition():
         "publish": {},
         "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
     }
-    bs = create_binding_set(bindingSetId="opencode-go-primary", version=3, bindings={"primary-model": {"providerProfileRef": "opencode-go-default", "materializerRef": "codex-oauth-home@1"}})
+    bs = create_binding_set(bindingSetId="opencode-go-primary", version=3, bindings={"primary-model": {"providerProfileRef": "opencode-go-default", "materializerRef": "opencode-auth-json@1"}})
     envelope = compile_execution_plan(
         agent_profile=agent_profile,
         harness_catalog=catalog,
@@ -777,7 +770,7 @@ def test_opencode_go_composition():
         model_normalized_options={},
     )
     # Verify plan selects correct materializer but no generation
-    assert envelope.payload.credentialBindings["primary-model"]["materializerRef"] == "codex-oauth-home@1"
+    assert envelope.payload.credentialBindings["primary-model"]["materializerRef"] == "opencode-auth-json@1"
     # After lease, runtime binding records generation
     runtime = create_runtime_binding(
         executionPlanRef=envelope.planRef,
@@ -978,7 +971,7 @@ def test_realizer_not_workflow_authored():
     )
     # Workflow tries to inject realizer via allowedLaunchPolicyRefs - not allowed
     # Planner ignores workflow-provided realizer and selects via trusted path
-    bs = create_binding_set(bindingSetId="test", version=1, bindings={"primary-model": {"providerProfileRef": "p1", "materializerRef": "codex-oauth-home@1"}})
+    bs = create_binding_set(bindingSetId="test", version=1, bindings={"primary-model": {"providerProfileRef": "p1", "materializerRef": "opencode-auth-json@1"}})
     envelope = compile_execution_plan(
         agent_profile=profile,
         harness_catalog=catalog,

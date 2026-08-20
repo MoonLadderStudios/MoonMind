@@ -82,6 +82,9 @@ def classify_support(
     if not launchable:
         return SupportClassification.discovered_only
     if not has_conformance_evidence:
+        if not has_experimental_evidence:
+            # No smoke evidence: remain discovered_only until bounded smoke passes
+            return SupportClassification.discovered_only
         return SupportClassification.experimental
     if is_static_connected and host_owned_auth:
         return SupportClassification.connected_host

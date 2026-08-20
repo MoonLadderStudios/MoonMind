@@ -62,10 +62,7 @@ class HostClass(BaseModel):
                 raise ValueError("implementationRef invalid")
         if not self.integrationModes:
             raise ValueError("integrationModes required")
-        required_features = {"workspaceBind", "restrictedEgress"}
-        missing = required_features - {k for k, v in self.features.items() if v}
-        # Not all host classes need every feature, but if required for policy it must be present
-        # We allow any host class definition; admission will check.
+        # Host classes may omit some features; admission via policy will enforce required ones.
         return self
 
     @property
@@ -87,6 +84,9 @@ HOST_CLASSES: dict[str, HostClass] = {}
 
 def register_host_class(data: dict[str, Any]) -> HostClass:
     hc = HostClass.model_validate(data)
+    existing = HOST_CLASSES.get(hc.ref)
+    if existing is not None and existing != hc:
+        raise ValueError(f"Host Class {hc.ref} already registered with different definition; new version required")
     HOST_CLASSES[hc.ref] = hc
     return hc
 
@@ -234,6 +234,9 @@ LAUNCH_POLICIES: dict[str, LaunchPolicy] = {}
 
 def register_launch_policy(data: dict[str, Any]) -> LaunchPolicy:
     lp = LaunchPolicy.model_validate(data)
+    existing = LAUNCH_POLICIES.get(lp.ref)
+    if existing is not None and existing != lp:
+        raise ValueError(f"Launch Policy {lp.ref} already registered with different definition; new version required")
     LAUNCH_POLICIES[lp.ref] = lp
     return lp
 

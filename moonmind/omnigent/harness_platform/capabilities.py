@@ -80,11 +80,18 @@ def compute_class_admission(
         catalog_ok = catalog_capabilities.get(cap)
         bridge_ok = bridge_capabilities.get(cap)
         materializer_ok = materializer_capabilities.get(cap, True)
-        policy_ok = cap in launch_policy_capabilities or True
+        # Launch-policy capabilities must positively include control-plane caps
+        policy_ok = True
+        if cap in {"interrupt", "terminate", "clear_context", "streaming"}:
+            policy_ok = cap in launch_policy_capabilities
+        elif cap in catalog_capabilities or cap in bridge_capabilities:
+            policy_ok = True
+        else:
+            policy_ok = True  # non-policy caps defer to other layers
 
         # If any layer explicitly says False or unsupported, then missing
         # catalog/bridge None means unknown already handled; False means unsupported
-        if catalog_ok is False or bridge_ok is False or host_ok is False or materializer_ok is False:
+        if catalog_ok is False or bridge_ok is False or host_ok is False or materializer_ok is False or policy_ok is False:
             missing.append(cap)
         elif catalog_ok is None and bridge_ok is None:
             # Unknown value remains unknown (not coerced)

@@ -49,9 +49,10 @@ def create_resolved_skillset(
     # Delivery ref is digest of normalized delivery metadata
     canonical = json.dumps(delivery_metadata, sort_keys=True, separators=(",", ":"), default=str)
     delivery_digest = hashlib.sha256(canonical.encode()).hexdigest()
+    # Use full content digest as artifact ref for collision resistance (full 64 hex, not 8)
     return ResolvedSkillSet.model_validate(
         {
-            "resolvedSkillSetRef": f"artifact:{digest[7:15]}",  # short artifact ref placeholder
+            "resolvedSkillSetRef": f"artifact:{digest}",
             "resolvedSkillSetDigest": digest,
             "skillDeliveryRef": f"skill-delivery:sha256:{delivery_digest}",
         }

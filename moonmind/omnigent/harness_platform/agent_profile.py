@@ -12,13 +12,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.omnigent.harness_platform.failures import (
-    HarnessPlatformError,
     HarnessPlatformFailure,
 )
 
@@ -115,7 +113,7 @@ class CredentialSlot(BaseModel):
 class OmnigentAgentProfileV2(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schemaVersion: str = Field("moonmind.omnigent-agent-profile.v2", alias="schemaVersion")
+    schemaVersion: str = Field("moonmind.omnigent-agent-profile.v2", alias="schemaVersion", pattern=r"^moonmind\.omnigent-agent-profile\.v2$")
     endpointRef: str = Field(alias="endpointRef")
     source: UpstreamSource | BundleSource = Field(discriminator="kind")
     harness: HarnessSelection
@@ -154,10 +152,37 @@ def decode_v1_profile_to_v2_inputs(v1: dict[str, Any]) -> dict[str, Any]:
     Historical and in-flight authority depends on this decoder.
     """
     endpointRef = str(v1.get("endpointRef") or v1.get("endpoint") or "default")
-    # Source mapping
+    # Source mapping: handle legacy v1 where source is nested without kind discriminator
     source: dict[str, Any]
-    if "source" in v1 and isinstance(v1["source"], dict) and "kind" in v1["source"]:
-        source = v1["source"]
+    if "source" in v1 and isinstance(v1["source"], dict):
+        src = v1["source"]
+        if "kind" in src:
+            source = src
+        elif "bundleArtifactRef" in src or "bundleDigest" in src or "importReceiptRef" in src:
+            # Legacy bundle shape nested under source without kind
+            source = {
+                "kind": "bundle",
+                "bundleArtifactRef": src.get("bundleArtifactRef") or "artifact:placeholder",
+                "bundleDigest": src.get("bundleDigest") or "sha256:" + "a" * 64,
+                "importReceiptRef": src.get("importReceiptRef") or "omnigent-agent-import:placeholder",
+                "importedAgentId": src.get("importedAgentId") or src.get("upstreamId") or "imported-agent",
+                "importedAgentVersion": src.get("importedAgentVersion") or src.get("upstreamVersion") or "0.0.0",
+                "importedContentDigest": src.get("importedContentDigest") or src.get("upstreamSnapshotDigest") or "sha256:" + "b" * 64,
+            }
+        elif "upstreamId" in src or "agentName" in src:
+            source = {
+                "kind": "upstream",
+                "upstreamId": src.get("upstreamId") or src.get("agentName") or "codex-native-ui",
+                "upstreamVersion": src.get("upstreamVersion") or "1.0.0",
+                "upstreamSnapshotDigest": src.get("upstreamSnapshotDigest") or "sha256:" + "c" * 64,
+            }
+        else:
+            source = {
+                "kind": "upstream",
+                "upstreamId": v1.get("upstreamId") or v1.get("agentName") or "codex-native-ui",
+                "upstreamVersion": v1.get("upstreamVersion") or "1.0.0",
+                "upstreamSnapshotDigest": v1.get("upstreamSnapshotDigest") or "sha256:" + "c" * 64,
+            }
     elif "bundleArtifactRef" in v1 or "bundle" in v1:
         bundle = v1.get("bundle") if isinstance(v1.get("bundle"), dict) else v1
         source = {

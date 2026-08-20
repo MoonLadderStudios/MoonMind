@@ -124,11 +124,20 @@ def validate_binding_set_for_plan(
     *,
     binding_set: CredentialBindingSet,
     required_slots: list[str],
+    declared_slots: list[str] | None = None,
 ) -> None:
     for slot in required_slots:
         if slot not in binding_set.bindings:
             raise HarnessPlatformError(
                 f"credential slot {slot} unbound",
+                code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_SLOT_UNBOUND,
+            )
+    # Reject bindings for undeclared slots (no extra privileged slots without profile authority)
+    if declared_slots is not None:
+        extra = set(binding_set.bindings.keys()) - set(declared_slots)
+        if extra:
+            raise HarnessPlatformError(
+                f"credential binding set contains undeclared slots: {sorted(extra)}",
                 code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_SLOT_UNBOUND,
             )
 

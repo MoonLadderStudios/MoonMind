@@ -6,15 +6,12 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity, TrustState
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError, HarnessPlatformFailure
-
-_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 class CompanionDescriptor(BaseModel):

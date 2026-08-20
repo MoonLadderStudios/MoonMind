@@ -62,6 +62,10 @@ class OmnigentRuntimeBinding(BaseModel):
         for slot, lease in self.providerLeases.items():
             if lease.credentialGeneration < 1:
                 raise ValueError(f"generation for {slot} must be >=1")
+        # Verify digest-addressed fencing: recompute ref from remaining fields
+        expected = compute_runtime_binding_ref(self)
+        if expected != self.runtimeBindingRef:
+            raise ValueError(f"runtimeBindingRef digest mismatch: expected {expected}")
         return self
 
 
