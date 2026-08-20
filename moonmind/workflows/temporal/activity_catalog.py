@@ -32,7 +32,6 @@ LLM_TASK_QUEUE = "mm.activity.llm"
 SANDBOX_TASK_QUEUE = "mm.activity.sandbox"
 INTEGRATIONS_TASK_QUEUE = "mm.activity.integrations"
 AGENT_RUNTIME_TASK_QUEUE = "mm.activity.agent_runtime"
-AGENT_RUNTIME_CONTROL_TASK_QUEUE = "mm.activity.agent_runtime.control"
 DEPLOYMENT_TASK_QUEUE = "mm.activity.deployment"
 
 

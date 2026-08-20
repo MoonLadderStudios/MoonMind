@@ -46,6 +46,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
     RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
+    RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH,
     RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH,
     RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
@@ -3591,6 +3592,11 @@ class TestFetchProfileSnapshots(unittest.TestCase):
             with patch(
                 "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
                 side_effect=mock_execute_activity,
+            ), patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id == RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH
+                ),
             ):
                 # Should not raise — best-effort fetch
                 await wf._fetch_profile_snapshots()
@@ -3598,6 +3604,21 @@ class TestFetchProfileSnapshots(unittest.TestCase):
             # codex_cli profiles are missing, but claude_code profiles should be there
             self.assertIn("claude_anthropic_sonnet", wf._profile_snapshots)
             self.assertNotIn("codex_openrouter_qwen36_plus", wf._profile_snapshots)
+            self.assertEqual(wf._profile_snapshot_runtime_ids, {"claude_code"})
+            self.assertEqual(
+                wf._validated_execution_profile_ref(
+                    "codex-profile-from-failed-fetch",
+                    agent_id="codex_cli",
+                    source_label="Inherited",
+                ),
+                "codex-profile-from-failed-fetch",
+            )
+            with self.assertRaisesRegex(ValueError, "not a known profile"):
+                wf._validated_execution_profile_ref(
+                    "claude-missing",
+                    agent_id="claude_code",
+                    source_label="Inherited",
+                )
 
         asyncio.run(run_test())
 

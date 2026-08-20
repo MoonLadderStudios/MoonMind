@@ -19,7 +19,6 @@ from moonmind.workflows.temporal.activity_catalog import (
     SANDBOX_FLEET,
     SANDBOX_TASK_QUEUE,
     AGENT_RUNTIME_FLEET,
-    AGENT_RUNTIME_CONTROL_TASK_QUEUE,
     AGENT_RUNTIME_TASK_QUEUE,
     TemporalActivityCatalogError,
     build_default_activity_catalog,
@@ -173,18 +172,21 @@ def test_default_catalog_matches_runtime_binding_inventory() -> None:
 
 
 def test_terminal_evidence_evaluation_routes_to_agent_runtime_fleet() -> None:
-    route = build_default_activity_catalog().resolve_activity(
+    temporal_settings = TemporalSettings()
+    catalog = build_default_activity_catalog(temporal_settings)
+    route = catalog.resolve_activity(
         "agent_runtime.evaluate_terminal_evidence"
     )
 
     assert route.fleet == AGENT_RUNTIME_FLEET
-    assert route.task_queue == AGENT_RUNTIME_CONTROL_TASK_QUEUE
-    fleet = {
-        item.fleet: item for item in build_default_activity_catalog().fleets
-    }[AGENT_RUNTIME_FLEET]
+    assert (
+        route.task_queue
+        == temporal_settings.activity_agent_runtime_control_task_queue
+    )
+    fleet = {item.fleet: item for item in catalog.fleets}[AGENT_RUNTIME_FLEET]
     assert fleet.task_queues == (
         AGENT_RUNTIME_TASK_QUEUE,
-        AGENT_RUNTIME_CONTROL_TASK_QUEUE,
+        temporal_settings.activity_agent_runtime_control_task_queue,
     )
 
 

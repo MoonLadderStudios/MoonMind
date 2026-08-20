@@ -739,6 +739,9 @@ RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH = (
 RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH = (
     "run-resolved-skill-required-capabilities-v1"
 )
+RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH = (
+    "run-profile-snapshot-runtime-authority-v1"
+)
 RUN_ALREADY_IMPLEMENTED_JIRA_COMPLETION_PATCH = (
     "run-already-implemented-jira-completion-v1"
 )
@@ -11167,6 +11170,10 @@ class MoonMindRunWorkflow:
         """
         snapshots: dict[str, dict[str, Any]] = {}
         has_data = False
+        successful_runtime_ids: set[str] = set()
+        runtime_scoped_authority = self._workflow_patch_enabled(
+            RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH
+        )
         profile_list_route = DEFAULT_ACTIVITY_CATALOG.resolve_activity("provider_profile.list")
         for runtime_id in _PROFILE_SYNC_RUNTIME_IDS:
             try:
@@ -11184,6 +11191,7 @@ class MoonMindRunWorkflow:
                     **kwargs,
                 )
                 if isinstance(result, dict):
+                    successful_runtime_ids.add(runtime_id)
                     # ``profiles`` remains the manager's launch-ready routing
                     # set.  ``profile_statuses`` retains compact identity and
                     # readiness evidence for explicitly selected profiles, so
@@ -11207,6 +11215,8 @@ class MoonMindRunWorkflow:
                 )
         if has_data:
             self._profile_snapshots = snapshots
+            if runtime_scoped_authority:
+                self._profile_snapshot_runtime_ids = successful_runtime_ids
 
     async def _compile_and_record_resilience_policy(
         self, *, parameters: Mapping[str, Any]
@@ -20648,6 +20658,20 @@ class MoonMindRunWorkflow:
         if profile_snapshots is None:
             return profile_id
         if profile_id not in profile_snapshots:
+            authoritative_runtime_ids = getattr(
+                self, "_profile_snapshot_runtime_ids", None
+            )
+            if isinstance(
+                authoritative_runtime_ids, (set, frozenset, list, tuple)
+            ):
+                child_runtime_id = self._managed_runtime_id(agent_id or "")
+                compatible_runtime_ids = {child_runtime_id}
+                if child_runtime_id == "omnigent":
+                    compatible_runtime_ids.add("codex_cli")
+                if compatible_runtime_ids.isdisjoint(
+                    str(item).strip() for item in authoritative_runtime_ids
+                ):
+                    return profile_id
             raise ValueError(
                 "%s execution_profile_ref '%s' is not a known profile for this "
                 "runtime." % (source_label, profile_id)

@@ -105,6 +105,9 @@ RESOLVED_RUNTIME_DISPATCH_PATCH_ID = "agent-run-resolved-runtime-dispatch-v1"
 PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID = (
     "agent-run-parent-execution-artifact-handoff-v1"
 )
+TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID = (
+    "agent-run-terminal-evidence-control-queue-v1"
+)
 _MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
 _MAX_MANAGED_PROCESS_LOSS_RECOVERIES = 1
 _RETRYABLE_TERMINAL_CONTRACT_FAILURE_CODES = frozenset(
@@ -697,6 +700,15 @@ class MoonMindAgentRun:
         """Execute an activity using the module-level catalog for routing."""
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_name)
         kwargs = self._execute_kwargs_for_route(route)
+        if (
+            activity_name == "agent_runtime.evaluate_terminal_evidence"
+            and not workflow.patched(TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID)
+        ):
+            # Preserve the exact command emitted by histories created before
+            # terminal evaluation moved to its starvation-resistant control
+            # lane. New histories record the patch marker and use the catalog's
+            # isolated queue; old histories replay against the former queue.
+            kwargs["task_queue"] = settings.temporal.activity_agent_runtime_task_queue
         kwargs.update(overrides)
         kwargs.setdefault(
             "summary",
