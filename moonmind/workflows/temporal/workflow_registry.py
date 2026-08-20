@@ -65,6 +65,10 @@ STATIC_WORKFLOW_REGISTRATIONS = (
         "MoonMindAgentRun",
     ),
     WorkflowRegistration(
+        "moonmind.workflows.temporal.workflows.omnigent_session",
+        "MoonMindOmnigentSessionWorkflow",
+    ),
+    WorkflowRegistration(
         "moonmind.workflows.temporal.workflows.checkpoint_branch_turn",
         "MoonMindCheckpointBranchTurnWorkflow",
     ),

@@ -2044,50 +2044,25 @@ class FeatureFlagsSettings(BaseSettings):
             "CONTROL_STOP_CONTINUATION_GENERATION",
         ),
     )
-    omnigent_session_supervisor_enabled: bool = Field(
-        False,
+    omnigent_session_supervisor_admission_mode: Literal[
+        "disabled", "canary", "enabled"
+    ] = Field(
+        "enabled",
         validation_alias=AliasChoices(
-            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ENABLED",
-            "OMNIGENT_SESSION_SUPERVISOR_ENABLED",
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE",
+            "OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE",
         ),
         description=(
-            "Enable new-session admission to the MoonMind.OmnigentSession "
-            "supervisor (issue #3712). Disabling blocks new admissions only; "
-            "replay, cancellation, cleanup, and read-only diagnostics for "
-            "already-admitted sessions are separate controls."
+            "Controls only admission of new profile-bound Omnigent session "
+            "supervisors; admitted histories remain operational."
         ),
     )
-    omnigent_session_supervisor_shadow: bool = Field(
-        False,
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_SHADOW",
-            "OMNIGENT_SESSION_SUPERVISOR_SHADOW",
-        ),
-        description=(
-            "Shadow mode: compute and record supervisor admission decisions "
-            "without issuing any provider, host, workspace, publication, "
-            "cleanup, or lease mutation."
-        ),
-    )
-    omnigent_session_supervisor_generation: str = Field(
-        "disabled",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION",
-            "OMNIGENT_SESSION_SUPERVISOR_GENERATION",
-        ),
-        description=(
-            "Frozen feature generation for supervisor admission. A blank or "
-            "'disabled' generation fails admission closed; an admitted workflow "
-            "keeps the generation recorded in its snapshot."
-        ),
-    )
-    omnigent_session_supervisor_allowed_owner_ids: str = Field(
+    omnigent_session_supervisor_canary_owner_ids: str = Field(
         "",
         validation_alias=AliasChoices(
-            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_OWNER_IDS",
-            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_OWNER_IDS",
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS",
         ),
-        description="Exact (non-substring) CSV owner-id canary allowlist.",
     )
     omnigent_session_supervisor_allowed_execution_profile_refs: str = Field(
         "",
@@ -2095,35 +2070,12 @@ class FeatureFlagsSettings(BaseSettings):
             "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
             "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
         ),
-        description="Exact (non-substring) CSV execution-profile-ref canary allowlist.",
     )
-    omnigent_session_supervisor_allowed_launch_policy_refs: str = Field(
-        "",
+    omnigent_session_supervisor_generation: str = Field(
+        "omnigent-session-v1",
         validation_alias=AliasChoices(
-            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_LAUNCH_POLICY_REFS",
-            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_LAUNCH_POLICY_REFS",
-        ),
-        description="Exact (non-substring) CSV launch-policy-ref canary allowlist.",
-    )
-    omnigent_session_supervisor_allowed_provider_profile_ids: str = Field(
-        "",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_PROVIDER_PROFILE_IDS",
-            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_PROVIDER_PROFILE_IDS",
-        ),
-        description="Exact (non-substring) CSV provider-profile-id canary allowlist.",
-    )
-    omnigent_session_supervisor_rollback_mode: str = Field(
-        "none",
-        validation_alias=AliasChoices(
-            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
-            "OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
-        ),
-        description=(
-            "Independently-supported supervisor rollback control: one of none, "
-            "disable_new_admission, disable_new_selection, chat_read_only, "
-            "revert_default_to_legacy, complete_stop. Never silently reroutes "
-            "an Omnigent request to direct Codex."
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION",
+            "OMNIGENT_SESSION_SUPERVISOR_GENERATION",
         ),
     )
     live_logs_session_timeline_rollout: Literal[

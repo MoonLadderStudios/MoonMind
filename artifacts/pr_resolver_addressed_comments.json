@@ -1,5 +1,55 @@
 [
   {
+    "id": 3810507762,
+    "disposition": "addressed",
+    "rationale": "tests/integration/workflows/temporal/test_omnigent_session_supervisor.py now imports the omnigent_session module once, via the module-alias `import from` form at the top of the file, and the function-local `import ... as session_module` was removed."
+  },
+  {
+    "id": 3810507774,
+    "disposition": "addressed",
+    "rationale": "Same fix for agent_run: one top-level `from ... import agent_run as agent_run_module`, function-local duplicate import removed."
+  },
+  {
+    "id": 3810507785,
+    "disposition": "addressed",
+    "rationale": "Added an explanatory comment on the `except (asyncio.TimeoutError, TimeoutError): pass` in _await_wake_or_snapshot_deadline: timing out is the normal no-wake path that falls through to the next scheduled snapshot."
+  },
+  {
+    "id": 3810534147,
+    "disposition": "addressed",
+    "rationale": "P1. Provider-snapshot observation identity now includes the turn confirmation marker, so the quiet-period confirming read persists its own row (with providerTurn.turnComplete) instead of deduplicating against the earlier pending observation, while retries of the same read still dedupe. Covered by test_snapshot_requires_stable_marked_turn_before_idle_terminal, whose fake now enforces the real (session, dedup key) idempotency contract."
+  },
+  {
+    "id": 3810534150,
+    "disposition": "addressed",
+    "rationale": "P2. Durable terminal mapping now derives from the reducer's own classify_provider_status via _durable_terminal_outcome, so timed_out/timeout classify as FAILURE and CANCELLED is reserved for explicit cancel states. Covered by test_durable_terminal_outcome_matches_reducer_classification."
+  },
+  {
+    "id": 3810534154,
+    "disposition": "addressed",
+    "rationale": "P1. Added the omnigent.heartbeat_host_lease activity (registered in the catalog, runtime map, and runtime wrapper) and the supervisor now renews the host lease every poll cycle before observing, keeping renewal inside the janitor's 90s heartbeat timeout. Non-renewable, cleanup-claimed, and missing leases are reported for reconciliation rather than failing the session. Covered by test_poll_cycle_renews_host_lease_before_observing and test_heartbeat_activity_renews_only_a_renewable_lease."
+  },
+  {
+    "id": 3810534159,
+    "disposition": "addressed",
+    "rationale": "P1. omnigent_stop_host_activity now claims cleanup authority via _claim_host_cleanup_authority (claim_host_lease_cleanup compare-and-swap on the observed status and heartbeat) and skips stop/delete entirely when another owner won the fence. Covered by test_stop_host_does_not_run_cleanup_it_did_not_win."
+  },
+  {
+    "id": 3810534164,
+    "disposition": "addressed",
+    "rationale": "P1. The profile lease request now sends workflowId (the supervisor's own durable workflow ID), stepExecutionId, idempotencyKey, and ownerIsWorkflow=False, all of which survive the manager's metadata allowlist, so acquire_slot_v2 can verify the owning workflow instead of raising ProviderProfileLeaseOwnerMissing. Covered by test_profile_lease_request_carries_owning_workflow_authority."
+  },
+  {
+    "id": 3810534166,
+    "disposition": "addressed",
+    "rationale": "P2. _queue_signal_intent no longer raises on a full backlog: it deduplicates by (kind, requestId), admits one cancellation and one cleanup intent past the bound so recovery intents are never lost, and otherwise counts a bounded droppedIntentCount exposed on the state query. Covered by test_full_signal_backlog_never_throws_from_a_signal_handler and test_repeated_signal_request_id_is_deduplicated_not_requeued."
+  },
+  {
+    "id": 4969010602,
+    "disposition": "not-applicable",
+    "rationale": "Codex review summary body with no specific requested change; its individual findings are tracked as the review comments above."
+  },
+  {
     "id": 3810002054,
     "disposition": "addressed",
     "rationale": "Removed the unnecessary lambda wrapper in tools/omnigent_exact_artifact_probe.py; _probe_import already returns the callable."
