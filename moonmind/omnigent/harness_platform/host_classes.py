@@ -394,7 +394,7 @@ def _try_register_opencode_host_class() -> HostClass | None:
 # Attempt registration at import; allow missing env (fail-closed later)
 try:
     _try_register_opencode_host_class()
-except Exception:
+except Exception:  # best-effort hermetic import, ignore
     pass
 
 
@@ -445,7 +445,7 @@ def _try_register_pi_host_class() -> HostClass | None:
 
 try:
     _try_register_pi_host_class()
-except Exception:
+except Exception:  # best-effort hermetic import, ignore
     pass
 
 register_host_class(

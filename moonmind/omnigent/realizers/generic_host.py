@@ -214,7 +214,7 @@ class GenericOmnigentHostRealizer:
         if self._host_runtime is not None and hasattr(self._host_runtime, "cleanup"):
             try:
                 await self._host_runtime.cleanup(plan_ref, runtime_binding_ref)  # type: ignore[attr-defined]
-            except Exception:
+            except Exception:  # best-effort cleanup, ignore
                 pass
         # 2. Clean up materialized credential state
         try:

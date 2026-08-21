@@ -176,7 +176,7 @@ class GenericOmnigentHostRuntime:
                         )
             except HarnessPlatformError:
                 raise
-            except Exception:
+            except Exception:  # best-effort, ignore
                 pass
 
         # Launch / attach – require real launcher in production (P1 3828196584)
