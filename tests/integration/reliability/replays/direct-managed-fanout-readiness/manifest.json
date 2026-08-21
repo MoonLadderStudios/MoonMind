@@ -1,0 +1,55 @@
+{
+  "incidentWorkflowId": "mm:91c47b8e-212a-48c8-a1a1-f7c0f08e707a",
+  "agentRunId": "agent-run-52691cce",
+  "logicalStepId": "tpl:batch-github-workflows:01:52691cce",
+  "targetRuntime": "claude_code",
+  "repository": "MoonLadderStudios/MoonMind",
+  "preparedCommitSha": "abcdef0123456789",
+  "terminalFailureCode": "REPOSITORY_CAPABILITY_UNKNOWN",
+  "failureShape": "the built-in batch-workflows Skill required execution.fanout, but direct managed repository readiness had no owner for that runtime capability and blocked before Claude launched",
+  "request": {
+    "agentKind": "managed",
+    "agentId": "claude_code",
+    "executionProfileRef": "claude_anthropic_oauth",
+    "correlationId": "replay-mm-91c47b8e",
+    "idempotencyKey": "mm:91c47b8e:agent-run-52691cce",
+    "workspaceSpec": {
+      "repository": "MoonLadderStudios/MoonMind",
+      "repositoryTarget": {
+        "provider": "git",
+        "connectionRef": "repository-connection:git-default",
+        "repository": {"name": "MoonLadderStudios/MoonMind"},
+        "branch": {"name": "main"}
+      }
+    },
+    "parameters": {
+      "publishMode": "none",
+      "requiredCapabilities": [
+        "claude_code",
+        "git",
+        "gh",
+        "execution.fanout"
+      ]
+    },
+    "skill": {
+      "name": "batch-workflows",
+      "requiredCapabilities": ["git", "gh", "execution.fanout"]
+    },
+    "stepExecution": {
+      "workflowId": "mm:91c47b8e-212a-48c8-a1a1-f7c0f08e707a",
+      "runId": "workflow-run-01a02308",
+      "logicalStepId": "tpl:batch-github-workflows:01:52691cce",
+      "executionOrdinal": 1,
+      "stepExecutionId": "mm:91c47b8e-212a-48c8-a1a1-f7c0f08e707a:workflow-run-01a02308:tpl:batch-github-workflows:01:52691cce:execution:1",
+      "runtimeContextPolicy": "fresh_agent_run",
+      "skillSourcePolicy": {
+        "executionFanout": {
+          "authorized": true,
+          "selectedSkill": "batch-workflows",
+          "sourceKind": "built_in",
+          "reasonCode": "trusted_resolved_skill_requirement"
+        }
+      }
+    }
+  }
+}
