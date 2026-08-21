@@ -41,13 +41,21 @@ from moonmind.omnigent.harness_platform.catalog import (
     HarnessCatalogSnapshot,
     HarnessImplementationIdentity,
     HarnessTrustRecord,
+    TrustState,
+    classify_harness_trust,
+    create_catalog_snapshot,
 )
-from moonmind.omnigent.harness_platform.credential_bindings import CredentialBindingSet
+from moonmind.omnigent.harness_platform.credential_bindings import (
+    CredentialBindingSet,
+    create_binding_set,
+)
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
     verify_execution_plan_envelope,
 )
 from moonmind.omnigent.harness_platform.host_classes import (
+    LaunchPolicy,
+    get_harness_implementation,
     get_host_class,
     get_opencode_host_class,
 )
@@ -62,6 +70,7 @@ from moonmind.omnigent.harness_platform.runtime_binding import (
     create_runtime_binding,
 )
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
 _GENERIC_REALIZER_REF = "generic-omnigent-host@1"
@@ -183,6 +192,11 @@ def compile_opencode_execution_plan(
     credential_binding_set: CredentialBindingSet,
     model_qualified_id: str,
     model_route_ref: str = "opencode-go",
+    launch_policy_ref: str = "omnigent-on-demand@1",
+    launch_policy: LaunchPolicy | None = None,
+    workspace_intent_ref: str = "workspace-intent:sha256:" + "a" * 64,
+    policy_snapshot_ref: str = "omnigent-policy:sha256:" + "b" * 64,
+    capture_policy_ref: str | None = None,
 ) -> Any:
     """Compile a secret-free execution plan for opencode-native via generic host.
 
@@ -197,12 +211,352 @@ def compile_opencode_execution_plan(
         resolved_skills=resolved_skills,
         credential_binding_set=credential_binding_set,
         host_class_ref=get_opencode_host_class().ref,  # omnigent-opencode@1
-        launch_policy_ref="omnigent-on-demand@1",
+        launch_policy_ref=launch_policy_ref,
+        launch_policy=launch_policy,
         model_qualified_id=model_qualified_id,
         model_effort=None,
         model_route_ref=model_route_ref,
         model_normalized_options={},
-        execution_realizer_ref="generic-omnigent-host@1",
+        workspace_intent_ref=workspace_intent_ref,
+        policy_snapshot_ref=policy_snapshot_ref,
+        capture_policy_ref=capture_policy_ref,
+    )
+
+
+def _canonical_digest(value: object) -> str:
+    body = json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(body).hexdigest()
+
+
+def _normalized_profile_value(profile: Mapping[str, Any] | object, name: str) -> Any:
+    if isinstance(profile, Mapping):
+        value = profile.get(name)
+    else:
+        value = getattr(profile, name, None)
+    return getattr(value, "value", value)
+
+
+def _launch_policy_from_persisted_snapshot(
+    policy_snapshot: Mapping[str, Any],
+) -> LaunchPolicy:
+    """Project persisted policy authority into the planner's typed contract."""
+
+    policy_ref = str(policy_snapshot.get("policyRef") or "").strip()
+    policy_id, separator, version_text = policy_ref.rpartition("@")
+    if not separator or not policy_id:
+        raise ValueError("persisted launch policy ref is invalid")
+    try:
+        version = int(version_text)
+    except ValueError as exc:
+        raise ValueError("persisted launch policy version is invalid") from exc
+    boundaries = policy_snapshot.get("boundaries")
+    if not isinstance(boundaries, Mapping):
+        raise ValueError("persisted launch policy boundaries are missing")
+    host = boundaries.get("host")
+    resources = boundaries.get("resources")
+    network = boundaries.get("network")
+    capture = boundaries.get("capture")
+    session = boundaries.get("session")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (host, resources, network, capture, session)
+    ):
+        raise ValueError("persisted launch policy boundary is malformed")
+    return LaunchPolicy.model_validate(
+        {
+            "policyId": policy_id,
+            "version": version,
+            "hostMode": host["mode"],
+            "hostClassSelector": {
+                "requiredFeatures": [
+                    "readOnlyRoot",
+                    "restrictedEgress",
+                    "workspaceBind",
+                ]
+            },
+            "isolation": {
+                "runDedicated": host["mode"] == "on_demand_docker"
+            },
+            "limits": {
+                key: resources[key]
+                for key in (
+                    "cpuMillis",
+                    "memoryMiB",
+                    "processes",
+                    "timeoutSeconds",
+                    "temporaryStorageMiB",
+                )
+            },
+            "network": {"egressPolicyRef": network["egressProfileRef"]},
+            "capture": dict(capture),
+            "cleanup": {
+                "mode": session["cleanup"],
+                "janitor": True,
+            },
+            "controlCapabilities": [
+                "interrupt",
+                "terminate",
+                "clear_context",
+            ],
+        }
+    )
+
+
+def compile_opencode_request_authority(
+    *,
+    request: AgentExecutionRequest,
+    policy_snapshot: Mapping[str, Any],
+    provider_profile: Mapping[str, Any] | object,
+    resolved_skillset: Mapping[str, Any] | None,
+    observed_at: datetime | None = None,
+) -> AgentExecutionRequest:
+    """Compile the atomic planner authority for a normal OpenCode request.
+
+    All selection inputs are trusted projections: the persisted policy, the
+    persisted Provider Profile, the immutable resolved-Skill artifact, and the
+    product-owned Host Class catalog. The request contributes intent only.
+    """
+
+    if request.omnigent_execution_plan is not None or (
+        request.omnigent_harness_implementation is not None
+    ):
+        raise ValueError("normal workflow requests must not author planner authority")
+
+    def reject_authored_realizer(value: object) -> None:
+        if isinstance(value, Mapping):
+            for key, nested in value.items():
+                if re.sub(r"[^a-z0-9]", "", str(key).lower()) == (
+                    "executionrealizerref"
+                ):
+                    raise ValueError("executionRealizerRef is trusted planner authority")
+                reject_authored_realizer(nested)
+        elif isinstance(value, (list, tuple)):
+            for nested in value:
+                reject_authored_realizer(nested)
+
+    reject_authored_realizer(request.parameters)
+    if request.agent_kind != "external" or request.agent_id.strip().lower() != (
+        "omnigent"
+    ):
+        raise ValueError("generic harness planning requires external/omnigent")
+    provider_profile_ref = str(request.execution_profile_ref or "").strip()
+    if not provider_profile_ref:
+        raise ValueError("generic harness planning requires a Provider Profile")
+
+    runtime_id = str(
+        _normalized_profile_value(provider_profile, "runtime_id") or ""
+    ).strip()
+    provider_id = str(
+        _normalized_profile_value(provider_profile, "provider_id") or ""
+    ).strip()
+    if runtime_id != "opencode" or provider_id not in {"opencode", "opencode-go"}:
+        raise ValueError("OpenCode planning requires an OpenCode Provider Profile")
+    credential_source = str(
+        _normalized_profile_value(provider_profile, "credential_source") or ""
+    ).strip()
+    materialization_mode = str(
+        _normalized_profile_value(
+            provider_profile,
+            "runtime_materialization_mode",
+        )
+        or ""
+    ).strip()
+    if credential_source and credential_source != "secret_ref":
+        raise ValueError("OpenCode planning requires secret-ref credential authority")
+    if materialization_mode and materialization_mode not in {
+        "composite",
+        "config_bundle",
+    }:
+        raise ValueError("OpenCode planning requires file-capable materialization")
+
+    boundaries = policy_snapshot.get("boundaries")
+    if not isinstance(boundaries, Mapping):
+        raise ValueError("persisted launch policy boundaries are missing")
+    execution = boundaries.get("execution")
+    endpoint = boundaries.get("endpoint")
+    host = boundaries.get("host")
+    capture = boundaries.get("capture")
+    if not all(
+        isinstance(value, Mapping)
+        for value in (execution, endpoint, host, capture)
+    ):
+        raise ValueError("persisted launch policy boundary is malformed")
+    if execution.get("profileRef") != "omnigent-opencode@1" or (
+        execution.get("harness") != "opencode-native"
+    ):
+        raise ValueError("persisted launch policy is not OpenCode authority")
+
+    host_class = get_opencode_host_class()
+    if str(host.get("hostImageRef") or "") != host_class.imageRef:
+        raise ValueError("persisted policy host image does not match the Host Class")
+    implementation = get_harness_implementation(
+        host_class_ref=host_class.ref,
+        harness_id="opencode-native",
+    )
+    catalog_source = {
+        "hostClass": host_class.model_dump(by_alias=True, mode="json"),
+        "implementation": implementation.model_dump(by_alias=True, mode="json"),
+    }
+    catalog = create_catalog_snapshot(
+        endpointRef=str(endpoint.get("ref") or "").strip(),
+        omnigentVersion=host_class.omnigentVersion,
+        omnigentBuildDigest=host_class.omnigentBuildDigest,
+        sourceDigest=_canonical_digest(catalog_source),
+        observedAt=observed_at or datetime.now(UTC),
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "aliases": [],
+                "label": "OpenCode native",
+                "implementation": implementation.model_dump(
+                    by_alias=True, mode="json"
+                ),
+                "runtimeRequirements": {
+                    "hostClassRef": host_class.ref,
+                },
+                "capabilities": {
+                    "integrationMode": "native-server",
+                    "authModel": "own-auth",
+                    "resume": "supported",
+                    "interrupt": True,
+                    "streaming": True,
+                },
+                "setupSteps": [],
+            }
+        ],
+    )
+    trust = classify_harness_trust(
+        harnessId="opencode-native",
+        implementation=implementation,
+        trustState=TrustState.core_trusted,
+        decidedBy="moonmind-pinned-host-catalog",
+        decidedAt=observed_at or datetime.now(UTC),
+    )
+
+    normalized_skills = dict(resolved_skillset or {})
+    skills_digest = _canonical_digest(normalized_skills)
+    resolved_ref = str(request.resolved_skillset_ref or "").strip()
+    if not resolved_ref:
+        resolved_ref = "artifact:empty-skillset"
+    delivery_ref = "skill-delivery:sha256:" + _canonical_digest(
+        {
+            "resolvedSkillsetRef": resolved_ref,
+            "resolvedSkillsetDigest": skills_digest,
+            "snapshotId": normalized_skills.get("snapshot_id")
+            or normalized_skills.get("snapshotId"),
+            "manifestRef": normalized_skills.get("manifest_ref")
+            or normalized_skills.get("manifestRef"),
+        }
+    ).removeprefix("sha256:")
+    skills = ResolvedSkillSet.model_validate(
+        {
+            "resolvedSkillSetRef": resolved_ref,
+            "resolvedSkillSetDigest": skills_digest,
+            "skillDeliveryRef": delivery_ref,
+        }
+    )
+    credential_bindings = create_binding_set(
+        bindingSetId="opencode-" + hashlib.sha256(
+            provider_profile_ref.encode("utf-8")
+        ).hexdigest()[:24],
+        version=1,
+        bindings={
+            "primary-model": {
+                "providerProfileRef": provider_profile_ref,
+                "materializerRef": "opencode-auth-json@1",
+            }
+        },
+    )
+    policy_ref = str(policy_snapshot.get("policyRef") or "").strip()
+    launch_policy = _launch_policy_from_persisted_snapshot(policy_snapshot)
+    source_authority = {
+        "execution": dict(execution),
+        "policyRef": policy_ref,
+        "providerRuntime": runtime_id,
+        "providerId": provider_id,
+    }
+    agent_profile = {
+        "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        "endpointRef": catalog.endpointRef,
+        "source": {
+            "kind": "upstream",
+            "upstreamId": str(execution["agentIdentities"][0]),
+            "upstreamVersion": host_class.omnigentVersion,
+            "upstreamSnapshotDigest": _canonical_digest(source_authority),
+        },
+        "harness": {
+            "id": "opencode-native",
+            "catalogRef": catalog.catalogRef,
+            "implementationRef": implementation.implementation_ref(),
+        },
+        "requirements": {
+            "harness": {"required": [], "preferred": []},
+            "moonmind": {"required": []},
+            "host": {"required": []},
+        },
+        "credentialSlots": [
+            {
+                "id": "primary-model",
+                "optional": False,
+                "acceptedAuthModels": ["own-auth"],
+                "acceptedProviderIds": [provider_id],
+            }
+        ],
+        "model": {},
+        "workspace": dict(request.workspace_spec or {}),
+        "skills": [],
+        "tools": [],
+        "capture": dict(capture),
+        "continuations": {},
+        "publish": {},
+        "allowedLaunchPolicyRefs": [policy_ref],
+    }
+    parameters = request.parameters if isinstance(request.parameters, Mapping) else {}
+    qualified_model = str(
+        parameters.get("model")
+        or _normalized_profile_value(provider_profile, "default_model")
+        or ""
+    ).strip()
+    if not qualified_model.startswith("opencode-go/"):
+        raise ValueError("OpenCode planning requires a qualified opencode-go model")
+    workspace_intent_ref = "workspace-intent:sha256:" + _canonical_digest(
+        {
+            "workspaceSpec": request.workspace_spec,
+            "remediationWorkspace": request.remediation_workspace,
+        }
+    ).removeprefix("sha256:")
+    plan = compile_opencode_execution_plan(
+        agent_profile=agent_profile,
+        harness_catalog=catalog,
+        trust_record=trust,
+        resolved_skills=skills,
+        credential_binding_set=credential_bindings,
+        model_qualified_id=qualified_model,
+        model_route_ref="opencode-go",
+        launch_policy_ref=policy_ref,
+        launch_policy=launch_policy,
+        workspace_intent_ref=workspace_intent_ref,
+        policy_snapshot_ref=str(policy_snapshot.get("snapshotRef") or ""),
+        capture_policy_ref=(
+            str(policy_snapshot.get("snapshotRef") or "")
+            if bool(capture.get("required"))
+            else None
+        ),
+    )
+    return request.model_copy(
+        update={
+            "omnigent_execution_plan": plan.model_dump(
+                by_alias=True, mode="json"
+            ),
+            "omnigent_harness_implementation": implementation.model_dump(
+                by_alias=True, mode="json"
+            ),
+        }
     )
 
 
@@ -706,6 +1060,7 @@ __all__ = [
     "StockHostCatalogEntry",
     "bind_generic_harness_attach_contract",
     "compile_opencode_execution_plan",
+    "compile_opencode_request_authority",
     "create_generic_harness_attach_contract",
     "create_generic_harness_attach_contract_from_execution_intent",
     "build_generic_harness_authority",

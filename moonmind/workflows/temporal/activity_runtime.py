@@ -1039,6 +1039,10 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
         "agent_runtime",
         "omnigent_evaluate_session_admission",
     ),
+    "omnigent.compile_execution_plan": (
+        "agent_runtime",
+        "omnigent_compile_execution_plan",
+    ),
     "omnigent.resolve_intent": ("agent_runtime", "omnigent_resolve_intent"),
     "omnigent.load_reconciliation_inputs": (
         "agent_runtime",
@@ -7463,6 +7467,16 @@ class TemporalAgentRuntimeActivities:
         return await self._run_omnigent_session_activity(
             "omnigent_resolve_intent_activity",
             "omnigent.resolve_intent",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_compile_execution_plan(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_compile_execution_plan_activity",
+            "omnigent.compile_execution_plan",
             request,
             **kwargs,
         )

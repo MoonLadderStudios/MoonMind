@@ -131,6 +131,7 @@ class HostClass(BaseModel):
 
 
 HOST_CLASSES: dict[str, HostClass] = {}
+HARNESS_IMPLEMENTATIONS: dict[str, "HarnessImplementationIdentity"] = {}
 
 
 def register_host_class(data: dict[str, Any]) -> HostClass:
@@ -146,7 +147,6 @@ def register_host_class(data: dict[str, Any]) -> HostClass:
 # Compute implementation refs deterministically from harness implementation identities
 # to align with catalog and planner expectations.
 def _impl_ref(package: str, version: str, digest: str, kind: str = "core", entry: str | None = None) -> str:
-    import hashlib, json
     payload = {
         "sourceKind": kind,
         "package": package,
@@ -156,7 +156,15 @@ def _impl_ref(package: str, version: str, digest: str, kind: str = "core", entry
     }
     # Use same canonical as HarnessImplementationIdentity
     from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
-    return HarnessImplementationIdentity.model_validate(payload).implementation_ref()
+    implementation = HarnessImplementationIdentity.model_validate(payload)
+    implementation_ref = implementation.implementation_ref()
+    existing = HARNESS_IMPLEMENTATIONS.get(implementation_ref)
+    if existing is not None and existing != implementation:
+        raise ValueError(
+            "harness implementation ref already registered with different identity"
+        )
+    HARNESS_IMPLEMENTATIONS[implementation_ref] = implementation
+    return implementation_ref
 
 register_host_class(
     {
@@ -271,6 +279,31 @@ def get_host_class(ref: str) -> HostClass:
             code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
         )
     return HOST_CLASSES[ref]
+
+
+def get_harness_implementation(
+    *, host_class_ref: str, harness_id: str
+) -> "HarnessImplementationIdentity":
+    """Resolve the exact identity pinned by one trusted Host Class entry."""
+
+    host_class = get_host_class(host_class_ref)
+    matches = [
+        entry
+        for entry in host_class.declaredHarnessImplementations
+        if entry.harnessId == harness_id
+    ]
+    if len(matches) != 1:
+        raise HarnessPlatformError(
+            f"host class {host_class.ref} does not pin exactly one {harness_id} implementation",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+        )
+    implementation = HARNESS_IMPLEMENTATIONS.get(matches[0].implementationRef)
+    if implementation is None:
+        raise HarnessPlatformError(
+            f"host class {host_class.ref} implementation identity is unavailable",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    return implementation
 
 
 # Launch Policies section 14

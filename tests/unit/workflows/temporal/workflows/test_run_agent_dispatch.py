@@ -42,6 +42,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+    RUN_OMNIGENT_GENERIC_HARNESS_PLANNER_PATCH,
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
     RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
@@ -56,6 +57,51 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH,
     MoonMindRunWorkflow,
 )
+
+
+@pytest.mark.asyncio
+async def test_generic_harness_planner_patch_preserves_pre_patch_request_shape() -> None:
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:pre-generic-planner",
+        run_id="run-pre-generic-planner",
+        parent=None,
+    )
+    execute_activity = AsyncMock()
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=info,
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda patch_id: (
+            patch_id == RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH
+            and patch_id != RUN_OMNIGENT_GENERIC_HARNESS_PLANNER_PATCH
+        ),
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+        new=execute_activity,
+    ):
+        request = await MoonMindRunWorkflow()._build_planned_agent_execution_request(
+            node_inputs={
+                "runtime": {
+                    "mode": "omnigent",
+                    "executionProfileRef": "opencode-provider",
+                },
+            },
+            node_id="opencode-step",
+            tool_name="omnigent",
+            workflow_parameters={
+                "model": "opencode-go/gpt-5",
+                "omnigent": {
+                    "executionTargetRef": "omnigent-opencode@1",
+                    "launchPolicyRef": "opencode-on-demand@1",
+                },
+            },
+        )
+
+    execute_activity.assert_not_awaited()
+    assert request.omnigent_execution_plan is None
+    assert request.omnigent_harness_implementation is None
 
 
 def test_auto_publish_compiles_execution_bound_terminal_contract() -> None:

@@ -450,6 +450,7 @@ def test_production_registry_and_catalog_include_supervisor_boundary() -> None:
 
     catalog = build_default_activity_catalog()
     required = {
+        "omnigent.compile_execution_plan",
         "omnigent.evaluate_session_admission",
         "omnigent.resolve_intent",
         "omnigent.load_reconciliation_inputs",

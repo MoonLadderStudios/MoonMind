@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -19,8 +19,13 @@ from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
     Base,
+    ManagedAgentProviderProfile,
     OmnigentBridgeSession,
+    OmnigentPolicy,
+    OmnigentPolicyVersion,
+    ProviderCredentialSource,
     ProviderProfileAuthState,
+    RuntimeMaterializationMode,
 )
 from api_service.services.omnigent_policies import bootstrap_document
 from moonmind.omnigent.bridge_store import (
@@ -34,6 +39,7 @@ from moonmind.omnigent.effective_capabilities import (
 from moonmind.omnigent.generic_opencode_runtime import (
     GenericHostRuntimeObservation,
     build_generic_harness_authority,
+    compile_opencode_request_authority,
 )
 from moonmind.omnigent.harness_platform.attestation import (
     HostHarnessAttestation,
@@ -56,7 +62,13 @@ from moonmind.omnigent.oauth_hosts import (
     OmnigentOAuthHostError,
     OmnigentOAuthHostRepository,
 )
-from moonmind.omnigent.policies import compile_policy_snapshot
+from moonmind.omnigent.policies import (
+    PolicyDocument,
+    PolicyState,
+    compile_policy_snapshot,
+    document_digest,
+    normalize_document,
+)
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
     compile_persisted_effective_launch_for_intent,
@@ -77,6 +89,11 @@ from moonmind.security.egress import (
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.activities import (
     omnigent_session_activities,
+)
+from moonmind.workflows.temporal.workflows.run import (
+    RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+    RUN_OMNIGENT_GENERIC_HARNESS_PLANNER_PATCH,
+    MoonMindRunWorkflow,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
@@ -303,6 +320,251 @@ def _production_launch_and_evidence(
         provider_profile_id="provider-1",
     )
     return policy, launch, evidence, request
+
+
+def _opencode_policy() -> dict:
+    host_class = get_host_class("omnigent-opencode@1")
+    document = bootstrap_document(
+        host_mode="on_demand_docker",
+        execution_profile_ref="omnigent-opencode@1",
+        server_image_ref="example.invalid/server@sha256:" + "1" * 64,
+        host_image_ref=host_class.imageRef,
+    ).model_dump(by_alias=True, mode="json")
+    document["execution"] = {
+        "profileRef": "omnigent-opencode@1",
+        "harness": "opencode-native",
+        "agentIdentities": ["opencode"],
+    }
+    document["providerProfile"] = {
+        "compatibleProviders": ["opencode-go"],
+        "queueWhenBusy": True,
+    }
+    return compile_policy_snapshot(
+        policy_id="opencode-on-demand",
+        version=1,
+        document=PolicyDocument.model_validate(document),
+        validation={"valid": True, "diagnostics": []},
+    )
+
+
+async def test_normal_workflow_compiler_projects_trusted_generic_plan_before_launch(
+) -> None:
+    """Start at normal request compilation; no test injects either plan field."""
+
+    policy = _opencode_policy()
+    provider = {
+        "runtime_id": "opencode",
+        "provider_id": "opencode-go",
+        "default_model": "opencode-go/gpt-5",
+        "credential_source": "secret_ref",
+        "runtime_materialization_mode": "config_bundle",
+    }
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:generic-planner",
+        run_id="run-generic-planner",
+        parent=None,
+    )
+    observed_requests: list[AgentExecutionRequest] = []
+
+    async def execute_planner(activity_name, activity_input, **_kwargs):
+        assert activity_name == "omnigent.compile_execution_plan"
+        base = AgentExecutionRequest.model_validate(activity_input["request"])
+        observed_requests.append(base)
+        assert base.omnigent_execution_plan is None
+        assert base.omnigent_harness_implementation is None
+        assert "executionRealizerRef" not in json.dumps(activity_input)
+        return compile_opencode_request_authority(
+            request=base,
+            policy_snapshot=policy,
+            provider_profile=provider,
+            resolved_skillset=None,
+            observed_at=datetime.now(UTC),
+        ).model_dump(by_alias=True, mode="json", exclude_none=True)
+
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=info,
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda patch_id: patch_id
+        in {
+            RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+            RUN_OMNIGENT_GENERIC_HARNESS_PLANNER_PATCH,
+        },
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+        side_effect=execute_planner,
+    ):
+        request = await MoonMindRunWorkflow()._build_planned_agent_execution_request(
+            node_inputs={
+                "runtime": {
+                    "mode": "omnigent",
+                    "executionProfileRef": "opencode-provider",
+                },
+            },
+            node_id="opencode-step",
+            tool_name="omnigent",
+            workflow_parameters={
+                "model": "opencode-go/gpt-5",
+                "omnigent": {
+                    "executionTargetRef": "omnigent-opencode@1",
+                    "launchPolicyRef": "opencode-on-demand@1",
+                },
+            },
+        )
+
+    assert len(observed_requests) == 1
+    assert request.omnigent_execution_plan is not None
+    assert request.omnigent_harness_implementation is not None
+    assert (
+        request.omnigent_execution_plan["payload"]["executionRealizerRef"]
+        == "generic-omnigent-host@1"
+    )
+    launch = compile_persisted_effective_launch_for_intent(
+        policy,
+        request=request,
+        provider_profile_id="opencode-provider",
+    )
+    assert launch["executionPlanRef"] == request.omnigent_execution_plan["planRef"]
+    assert launch["genericHarnessAttachContract"]["harnessImplementation"] == (
+        request.omnigent_harness_implementation
+    )
+
+
+async def test_planner_activity_resolves_persisted_authority_atomically(
+    tmp_path: Path,
+) -> None:
+    """Exercise the registered Activity implementation against real persistence."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/planner.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    policy = _opencode_policy()
+    document = PolicyDocument.model_validate(policy["boundaries"])
+    normalized_document = normalize_document(document)
+    async with factory() as session:
+        session.add(
+            ManagedAgentProviderProfile(
+                profile_id="opencode-provider",
+                runtime_id="opencode",
+                provider_id="opencode-go",
+                default_model="opencode-go/gpt-5",
+                credential_source=ProviderCredentialSource.SECRET_REF,
+                runtime_materialization_mode=RuntimeMaterializationMode.CONFIG_BUNDLE,
+                secret_refs={"opencode_api_key": "env://OPENCODE_API_KEY"},
+                max_parallel_runs=1,
+                enabled=True,
+                auth_state=ProviderProfileAuthState.CONNECTED,
+            )
+        )
+        session.add(
+            OmnigentPolicy(
+                policy_id="opencode-on-demand",
+                name="OpenCode on-demand",
+                visibility="deployment",
+                default_version=1,
+            )
+        )
+        session.add(
+            OmnigentPolicyVersion(
+                policy_id="opencode-on-demand",
+                version=1,
+                state=PolicyState.ACTIVE.value,
+                document_json=normalized_document,
+                digest=document_digest(document),
+                created_by="test-operator",
+                validation_json={"valid": True, "diagnostics": []},
+                compatibility_json={"compatible": True},
+                rollout_json={},
+            )
+        )
+        await session.commit()
+
+    base_request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="opencode-provider",
+        correlationId="generic-planner-activity",
+        idempotencyKey="generic-planner-activity:step",
+        parameters={
+            "model": "opencode-go/gpt-5",
+            "omnigent": {
+                "executionTargetRef": "omnigent-opencode@1",
+                "launchPolicyRef": "opencode-on-demand@1",
+            },
+        },
+    )
+    with patch("api_service.db.base.async_session_maker", factory):
+        result = await (
+            omnigent_session_activities.omnigent_compile_execution_plan_activity(
+                {
+                    "request": base_request.model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    )
+                }
+            )
+        )
+    await engine.dispose()
+
+    planned = AgentExecutionRequest.model_validate(result)
+    assert planned.omnigent_execution_plan is not None
+    assert planned.omnigent_harness_implementation is not None
+    assert planned.model_copy(
+        update={
+            "omnigent_execution_plan": None,
+            "omnigent_harness_implementation": None,
+        }
+    ) == base_request
+
+
+async def test_normal_workflow_planner_keeps_codex_request_unchanged() -> None:
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:codex-planner-preservation",
+        run_id="run-codex-planner-preservation",
+        parent=None,
+    )
+
+    async def preserve_codex(activity_name, activity_input, **_kwargs):
+        assert activity_name == "omnigent.compile_execution_plan"
+        return dict(activity_input["request"])
+
+    with patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.info",
+        return_value=info,
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda patch_id: patch_id
+        in {
+            RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+            RUN_OMNIGENT_GENERIC_HARNESS_PLANNER_PATCH,
+        },
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+        side_effect=preserve_codex,
+    ):
+        request = await MoonMindRunWorkflow()._build_planned_agent_execution_request(
+            node_inputs={
+                "runtime": {
+                    "mode": "omnigent",
+                    "executionProfileRef": "codex-provider",
+                },
+            },
+            node_id="codex-step",
+            tool_name="omnigent",
+            workflow_parameters={
+                "omnigent": {
+                    "executionTargetRef": "omnigent-codex@1",
+                    "launchPolicyRef": "codex-on-demand@1",
+                    "agent": {"harnessOverride": "codex-native"},
+                }
+            },
+        )
+
+    assert request.omnigent_execution_plan is None
+    assert request.omnigent_harness_implementation is None
 
 
 def _host_binding(launch: dict | None) -> OmnigentOAuthHostBinding:

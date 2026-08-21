@@ -723,6 +723,9 @@ RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH = (
 RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH = (
     "run-omnigent-agent-profile-snapshot-compiler-v1"
 )
+RUN_OMNIGENT_GENERIC_HARNESS_PLANNER_PATCH = (
+    "run-omnigent-generic-harness-planner-v1"
+)
 RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH = (
     "run-omnigent-stock-agent-identity-v1"
 )
@@ -11880,7 +11883,7 @@ class MoonMindRunWorkflow:
                                     ),
                                 )
                             )
-                            request = self._build_agent_execution_request(
+                            request = await self._build_planned_agent_execution_request(
                                 node_inputs=node_inputs,
                                 node_id=node_id,
                                 tool_name=tool_name,
@@ -14766,7 +14769,7 @@ class MoonMindRunWorkflow:
                     node_inputs=node_inputs,
                 ),
             )
-            request = self._build_agent_execution_request(
+            request = await self._build_planned_agent_execution_request(
                 node_inputs=dict(node_inputs),
                 node_id=node_id,
                 tool_name=tool_name,
@@ -20434,6 +20437,74 @@ class MoonMindRunWorkflow:
             callback_policy=node_inputs.get("callbackPolicy") or {},
             profile_selector=profile_selector,
         )
+
+    async def _build_planned_agent_execution_request(
+        self,
+        **request_kwargs: Any,
+    ) -> "AgentExecutionRequest":
+        """Build intent, then project trusted generic-harness authority atomically."""
+
+        request = self._build_agent_execution_request(**request_kwargs)
+        if not (
+            request.agent_kind == "external"
+            and request.agent_id.strip().lower() == "omnigent"
+            and self._workflow_patch_enabled(
+                RUN_OMNIGENT_GENERIC_HARNESS_PLANNER_PATCH
+            )
+        ):
+            return request
+        route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(
+            "omnigent.compile_execution_plan"
+        )
+        result = await execute_typed_activity(
+            "omnigent.compile_execution_plan",
+            {
+                "request": request.model_dump(
+                    by_alias=True,
+                    mode="json",
+                    exclude_none=True,
+                )
+            },
+            **self._execute_kwargs_for_route(route),
+        )
+        planned = (
+            result
+            if isinstance(result, AgentExecutionRequest)
+            else AgentExecutionRequest.model_validate(result)
+        )
+        base_without_authority = request.model_copy(
+            update={
+                "omnigent_execution_plan": None,
+                "omnigent_harness_implementation": None,
+            }
+        )
+        planned_without_authority = planned.model_copy(
+            update={
+                "omnigent_execution_plan": None,
+                "omnigent_harness_implementation": None,
+            }
+        )
+        if planned_without_authority != base_without_authority:
+            raise ValueError(
+                "Omnigent planner Activity changed request intent outside its "
+                "authority projection"
+            )
+        has_plan = planned.omnigent_execution_plan is not None
+        has_implementation = planned.omnigent_harness_implementation is not None
+        if has_plan != has_implementation:
+            raise ValueError(
+                "Omnigent planner Activity returned partial generic authority"
+            )
+        if has_plan:
+            plan_payload = planned.omnigent_execution_plan.get("payload")
+            if not isinstance(plan_payload, Mapping) or (
+                plan_payload.get("executionRealizerRef")
+                != "generic-omnigent-host@1"
+            ):
+                raise ValueError(
+                    "Omnigent planner Activity returned unsupported realizer authority"
+                )
+        return planned
 
     async def _request_with_persisted_retrieval_ref(
         self,

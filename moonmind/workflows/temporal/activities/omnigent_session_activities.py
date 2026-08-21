@@ -218,6 +218,172 @@ async def _load_intent_request(
     return AgentExecutionRequest.model_validate(raw_request)
 
 
+async def _load_planner_skillset(ref: str | None) -> dict[str, Any] | None:
+    """Read the immutable Skill snapshot at the Activity authority boundary."""
+
+    normalized = str(ref or "").strip()
+    if not normalized:
+        return None
+    from api_service.db.base import async_session_maker
+    from moonmind.schemas.agent_skill_models import ResolvedSkillSet
+    from moonmind.workflows.temporal.artifacts import (
+        TemporalArtifactRepository,
+        TemporalArtifactService,
+    )
+
+    async with async_session_maker() as session:
+        service = TemporalArtifactService(TemporalArtifactRepository(session))
+        _artifact, body = await service.read(
+            artifact_id=_artifact_id(normalized),
+            principal="agent_runtime",
+            allow_restricted_raw=True,
+        )
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("resolved Skill snapshot is not valid JSON") from exc
+    return ResolvedSkillSet.model_validate(payload).model_dump(mode="json")
+
+
+async def omnigent_compile_execution_plan_activity(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Resolve and atomically project trusted generic-harness plan authority."""
+
+    from sqlalchemy import select
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import (
+        ManagedAgentProviderProfile,
+        OmnigentOAuthHostBindingRecord,
+    )
+    from api_service.services.omnigent_policies import OmnigentPolicyService
+    from api_service.services.provider_profile_readiness import (
+        provider_profile_launch_ready,
+    )
+    from moonmind.omnigent.execution_profiles import PROFILES, selection_from_request
+    from moonmind.omnigent.generic_opencode_runtime import (
+        compile_opencode_request_authority,
+    )
+
+    raw_request = payload.get("request")
+    if not isinstance(raw_request, Mapping):
+        raise ValueError("planner Activity requires request authority")
+    request = AgentExecutionRequest.model_validate(raw_request)
+    if request.agent_kind != "external" or request.agent_id.strip().lower() != (
+        "omnigent"
+    ):
+        return request.model_dump(by_alias=True, mode="json", exclude_none=True)
+    if request.omnigent_execution_plan is not None or (
+        request.omnigent_harness_implementation is not None
+    ):
+        raise ValueError("normal workflow requests must not author planner authority")
+    provider_profile_id = str(request.execution_profile_ref or "").strip()
+    if not provider_profile_id:
+        raise ValueError("Omnigent planner requires executionProfileRef")
+
+    requested_target, requested_policy = selection_from_request(request.parameters)
+    if requested_target in {"omnigent-codex@1", "omnigent-claude@1"}:
+        return request.model_dump(by_alias=True, mode="json", exclude_none=True)
+    async with async_session_maker() as session:
+        provider_profile = await session.get(
+            ManagedAgentProviderProfile,
+            provider_profile_id,
+        )
+        if provider_profile is None:
+            raise ValueError("Omnigent planner Provider Profile does not exist")
+        if not provider_profile_launch_ready(provider_profile):
+            raise ValueError("Omnigent planner Provider Profile is not launch ready")
+        runtime_id = str(
+            getattr(provider_profile.runtime_id, "value", provider_profile.runtime_id)
+        )
+        binding = (
+            await session.execute(
+                select(OmnigentOAuthHostBindingRecord).where(
+                    OmnigentOAuthHostBindingRecord.provider_profile_id
+                    == provider_profile_id
+                )
+            )
+        ).scalar_one_or_none()
+        if binding is not None:
+            selected_target = str(binding.execution_profile_ref or "").strip()
+            if not selected_target:
+                selected_target = {
+                    "codex_cli": "omnigent-codex@1",
+                    "claude_code": "omnigent-claude@1",
+                    "opencode": "omnigent-opencode@1",
+                }.get(runtime_id, "")
+            selected_policy = str(
+                binding.launch_policy_ref
+                or requested_policy
+                or PROFILES[selected_target].default_policy_ref
+            )
+            if requested_target and requested_target != selected_target:
+                raise ValueError(
+                    "authored host selection conflicts with durable binding"
+                )
+            if requested_policy and requested_policy != selected_policy:
+                raise ValueError(
+                    "authored launch policy conflicts with durable binding"
+                )
+        else:
+            selected_target = requested_target or {
+                "codex_cli": "omnigent-codex@1",
+                "claude_code": "omnigent-claude@1",
+                "opencode": "omnigent-opencode@1",
+            }.get(runtime_id, "")
+            if not selected_target or selected_target not in PROFILES:
+                raise ValueError("Omnigent planner execution target is unavailable")
+            selected_policy = (
+                requested_policy or PROFILES[selected_target].default_policy_ref
+            )
+
+        # Codex and Claude retain their established profile-bound realizers.
+        if selected_target != "omnigent-opencode@1":
+            return request.model_dump(
+                by_alias=True, mode="json", exclude_none=True
+            )
+        if runtime_id != "opencode":
+            raise ValueError("OpenCode execution target requires opencode runtime")
+        policy_snapshot = await OmnigentPolicyService(
+            session
+        ).resolve_runtime_snapshot(selected_policy)
+        if (
+            policy_snapshot["boundaries"]["execution"]["profileRef"]
+            != selected_target
+        ):
+            raise ValueError(
+                "persisted policy execution profile conflicts with launch selection"
+            )
+        provider_projection = {
+            "runtime_id": runtime_id,
+            "provider_id": provider_profile.provider_id,
+            "default_model": provider_profile.default_model,
+            "credential_source": getattr(
+                provider_profile.credential_source,
+                "value",
+                provider_profile.credential_source,
+            ),
+            "runtime_materialization_mode": getattr(
+                provider_profile.runtime_materialization_mode,
+                "value",
+                provider_profile.runtime_materialization_mode,
+            ),
+        }
+
+    resolved_skillset = await _load_planner_skillset(
+        request.resolved_skillset_ref
+    )
+    planned = compile_opencode_request_authority(
+        request=request,
+        policy_snapshot=policy_snapshot,
+        provider_profile=provider_projection,
+        resolved_skillset=resolved_skillset,
+        observed_at=datetime.now(UTC),
+    )
+    return planned.model_dump(by_alias=True, mode="json", exclude_none=True)
+
+
 async def omnigent_resolve_intent_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -2829,6 +2995,7 @@ async def omnigent_release_leases_activity(
 
 
 __all__ = [
+    "omnigent_compile_execution_plan_activity",
     "omnigent_evaluate_session_admission_activity",
     "omnigent_resolve_intent_activity",
     "omnigent_load_reconciliation_inputs_activity",

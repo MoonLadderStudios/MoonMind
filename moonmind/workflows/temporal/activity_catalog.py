@@ -1019,6 +1019,15 @@ def build_default_activity_catalog(
             retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
         ),
         TemporalActivityDefinition(
+            activity_type="omnigent.compile_execution_plan",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(60, 120),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
+        ),
+        TemporalActivityDefinition(
             activity_type="omnigent.load_reconciliation_inputs",
             family="integration",
             capability_class="agent_runtime",
