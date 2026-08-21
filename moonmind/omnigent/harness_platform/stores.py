@@ -28,27 +28,27 @@ from moonmind.omnigent.harness_platform.failures import (
 
 
 class OmnigentExecutionPlanStore(Protocol):
-    async def load(self, plan_ref: str) -> OmnigentExecutionPlanEnvelope | None: ...
+    async def load(self, plan_ref: str) -> OmnigentExecutionPlanEnvelope | None: pass  # noqa
 
     async def load_or_compile(
         self,
         *,
         compile_fn: Any,
         compile_kwargs: dict[str, Any],
-    ) -> OmnigentExecutionPlanEnvelope: ...
+    ) -> OmnigentExecutionPlanEnvelope: pass  # noqa
 
-    async def persist(self, envelope: OmnigentExecutionPlanEnvelope) -> OmnigentExecutionPlanEnvelope: ...
+    async def persist(self, envelope: OmnigentExecutionPlanEnvelope) -> OmnigentExecutionPlanEnvelope: pass  # noqa
 
 
 class OmnigentRuntimeBindingStore(Protocol):
-    async def get(self, runtime_binding_ref: str) -> OmnigentRuntimeBinding | None: ...
+    async def get(self, runtime_binding_ref: str) -> OmnigentRuntimeBinding | None: pass  # noqa
 
     async def create_initial(
         self,
         *,
         execution_plan_ref: str,
         provider_leases: dict[str, dict[str, Any]],
-    ) -> OmnigentRuntimeBinding: ...
+    ) -> OmnigentRuntimeBinding: pass  # noqa
 
     async def update_with_host(
         self,
@@ -58,14 +58,14 @@ class OmnigentRuntimeBindingStore(Protocol):
         host_lease_ref: str,
         host_lease_generation: int,
         omnigent_host_id: str,
-    ) -> OmnigentRuntimeBinding: ...
+    ) -> OmnigentRuntimeBinding: pass  # noqa
 
     async def update_with_session(
         self,
         runtime_binding_ref: str,
         *,
         omnigent_session_id: str,
-    ) -> OmnigentRuntimeBinding: ...
+    ) -> OmnigentRuntimeBinding: pass  # noqa
 
 
 class InMemoryExecutionPlanStore:
