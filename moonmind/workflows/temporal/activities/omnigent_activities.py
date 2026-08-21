@@ -544,14 +544,12 @@ async def _try_generic_realizer_dispatch(
         # Surface as integration_error but do not fallback to codex
         from moonmind.schemas.agent_runtime_models import AgentRunResult
 
-        return AgentRunResult(
-            summary=f"generic dispatch failed: {exc}",
-            failureClass="integration_error",
-            providerErrorCode="OMNIGENT_GENERIC_DISPATCH_FAILED",
-            retryRecommendation="retry_transient_upstream",
-        )
-
-    return None  # non-generic already returned; generic always dispatched above
+            return AgentRunResult(
+                summary=f"generic dispatch failed: {exc}",
+                failureClass="integration_error",
+                providerErrorCode="OMNIGENT_GENERIC_DISPATCH_FAILED",
+                retryRecommendation="retry_transient_upstream",
+            )
 
 
 @activity.defn(name="integration.omnigent.execute")

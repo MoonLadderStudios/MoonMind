@@ -10,7 +10,7 @@ from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfil
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
 from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
-from moonmind.omnigent.realizers.registry import OmnigentExecutionRealizerRegistry, get_default_registry, reset_default_registry
+from moonmind.omnigent.realizers.registry import OmnigentExecutionRealizerRegistry, reset_default_registry
 from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRealizer
 from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 

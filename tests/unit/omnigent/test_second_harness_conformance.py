@@ -20,10 +20,9 @@ from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot, 
 from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
-from moonmind.omnigent.harness_platform.support import SupportKeyPayload, compute_support_combination_key
 from moonmind.omnigent.harness_platform.materializers import get_materializer
-from moonmind.omnigent.harness_platform.host_classes import get_host_class, get_launch_policy, get_opencode_host_image_ref
-from moonmind.omnigent.realizers.registry import get_default_registry, reset_default_registry
+from moonmind.omnigent.harness_platform.host_classes import get_host_class, get_launch_policy
+from moonmind.omnigent.realizers.registry import get_default_registry
 
 
 def _make_pi_impl():

@@ -169,3 +169,7 @@ def downgrade() -> None:
     op.drop_index("ix_omnigent_execution_plans_harness", table_name="omnigent_execution_plans")
     op.drop_index("ix_omnigent_execution_plans_created", table_name="omnigent_execution_plans")
     op.drop_table("omnigent_execution_plans")
+
+
+# Mark alembic globals as used for CodeQL
+_ = (revision, down_revision, branch_labels, depends_on)

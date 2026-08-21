@@ -31,27 +31,27 @@ from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
 
 class DockerHostLauncher(Protocol):
-    async def launch(self, *, host_class: HostClass, launch_policy: LaunchPolicy, workspace_handle: Any, skill_handle: Any, credential_handles: list[dict[str, Any]]) -> dict[str, Any]: ...
+    async def launch(self, *, host_class: HostClass, launch_policy: LaunchPolicy, workspace_handle: Any, skill_handle: Any, credential_handles: list[dict[str, Any]]) -> dict[str, Any]: ...  # noqa
 
 
 class WorkspaceMaterializationService(Protocol):
-    async def materialize(self, request: AgentExecutionRequest) -> dict[str, Any]: ...
+    async def materialize(self, request: AgentExecutionRequest) -> dict[str, Any]: ...  # noqa
 
 
 class SkillDeliveryService(Protocol):
-    async def materialize(self, resolved_skills: dict[str, Any]) -> dict[str, Any]: ...
+    async def materialize(self, resolved_skills: dict[str, Any]) -> dict[str, Any]: ...  # noqa
 
 
 class EgressAttachmentService(Protocol):
-    async def attest(self, launch_policy: LaunchPolicy) -> dict[str, Any]: ...
+    async def attest(self, launch_policy: LaunchPolicy) -> dict[str, Any]: ...  # noqa
 
 
 class HostRegistrationWaiter(Protocol):
-    async def wait_for_registration(self, *, expected_host_id: str | None = None) -> dict[str, Any]: ...
+    async def wait_for_registration(self, *, expected_host_id: str | None = None) -> dict[str, Any]: ...  # noqa
 
 
 class HostImageAttestor(Protocol):
-    async def attest(self, host_id: str, expected_image_ref: str) -> dict[str, Any]: ...
+    async def attest(self, host_id: str, expected_image_ref: str) -> dict[str, Any]: ...  # noqa
 
 
 class GenericOmnigentHostRuntime:
