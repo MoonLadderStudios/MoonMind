@@ -3981,6 +3981,10 @@ class OmnigentRuntimeBindingRecord(Base):
 
     __tablename__ = "omnigent_runtime_bindings"
     __table_args__ = (
+        UniqueConstraint(
+            "execution_plan_ref",
+            name="uq_omnigent_runtime_binding_execution_plan",
+        ),
         Index("ix_omnigent_runtime_bindings_plan", "execution_plan_ref"),
         Index("ix_omnigent_runtime_bindings_host", "omnigent_host_id"),
         Index("ix_omnigent_runtime_bindings_session", "omnigent_session_id"),
@@ -3996,7 +4000,9 @@ class OmnigentRuntimeBindingRecord(Base):
     host_lease_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     host_lease_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    runner_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     session_id: Mapped[Optional[str]] = mapped_column("omnigent_session_id", String(255), nullable=True)
+    chat_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     credential_runtime_handles_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     attestation_refs_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     cleanup_authority_refs_json: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)

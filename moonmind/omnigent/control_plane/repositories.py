@@ -617,9 +617,27 @@ class SessionRepository(_RepositoryBase):
             setattr(row, name, value)
         if metadata_patch:
             metadata = dict(row.metadata_ or {})
+            next_binding_revision = metadata_patch.get("runtimeBindingRevision")
+            current_binding_revision = metadata.get("runtimeBindingRevision")
+            if next_binding_revision is not None and current_binding_revision is not None:
+                if int(next_binding_revision) < int(current_binding_revision):
+                    raise FencingConflictError(
+                        f"Session {session_id!r} received a stale runtime binding revision"
+                    )
             for key, value in metadata_patch.items():
                 existing = metadata.get(key)
-                if existing is not None and value is not None and existing != value:
+                mutable_binding_projection = key in {
+                    "runtimeBindingRef",
+                    "runtimeBindingRevision",
+                    "runtimeBindingFencingGeneration",
+                    "runtimeBindingState",
+                }
+                if (
+                    existing is not None
+                    and value is not None
+                    and existing != value
+                    and not mutable_binding_projection
+                ):
                     raise ConflictingSessionAuthorityError(
                         f"Session {session_id!r} metadata {key!r} already has "
                         "different immutable authority"

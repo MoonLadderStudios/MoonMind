@@ -102,8 +102,16 @@ def compile_execution_plan(
     bridge_capabilities: dict[str, bool] | None = None,
     workspace_intent_ref: str = "workspace-intent:sha256:" + "a" * 64,
     policy_snapshot_ref: str = "omnigent-policy:sha256:" + "b" * 64,
+    policy_snapshot_digest: str | None = None,
+    effective_launch_snapshot_ref: str | None = None,
+    effective_launch_snapshot_digest: str | None = None,
+    host_image_ref: str | None = None,
+    omnigent_host_build_digest: str | None = None,
+    host_architecture: str | None = None,
     capture_policy_ref: str | None = None,
     execution_realizer_ref: str | None = None,
+    execution_authority: dict[str, Any] | None = None,
+    agent_profile_snapshot_ref: str | None = None,
 ) -> OmnigentExecutionPlanEnvelope:
     # 1. Validate agent profile (resolve snapshot)
     profile = validate_agent_profile(agent_profile)
@@ -350,8 +358,11 @@ def compile_execution_plan(
     plan_payload = OmnigentExecutionPlanPayload.model_validate(
         {
             "schemaVersion": "moonmind.omnigent-execution-plan-payload.v1",
+            "authority": execution_authority,
             "endpointRef": profile.endpointRef,
-            "agentProfileSnapshotRef": profile.snapshot_ref(),
+            "agentProfileSnapshotRef": (
+                agent_profile_snapshot_ref or profile.snapshot_ref()
+            ),
             "harnessCatalogRef": harness_catalog.catalogRef,
             "harnessId": profile.harness.id,
             "harnessImplementationRef": profile.harness.implementationRef,
@@ -359,6 +370,9 @@ def compile_execution_plan(
             "credentialBindingSetRef": credential_binding_set.ref,
             "credentialBindings": {slot: b.model_dump(by_alias=True, mode="json") for slot, b in credential_binding_set.bindings.items()},
             "hostClassRef": host_class.ref,
+            "hostImageRef": host_image_ref,
+            "omnigentHostBuildDigest": omnigent_host_build_digest,
+            "hostArchitecture": host_architecture,
             "launchPolicyRef": launch_policy.ref,
             "executionRealizerRef": realizer,
             "model": {
@@ -374,6 +388,9 @@ def compile_execution_plan(
             "workspaceIntentRef": workspace_intent_ref,
             "capturePolicyRef": capture_policy_ref,
             "policySnapshotRef": policy_snapshot_ref,
+            "policySnapshotDigest": policy_snapshot_digest,
+            "effectiveLaunchSnapshotRef": effective_launch_snapshot_ref,
+            "effectiveLaunchSnapshotDigest": effective_launch_snapshot_digest,
             "supportCombinationKey": support_key,
         }
     )

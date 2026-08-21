@@ -434,4 +434,9 @@ def test_image_does_not_install_unrelated_harnesses():
     assert "npm install" not in start_script.read_text()
     # Check script clears forbidden env
     check_script = Path("services/omnigent/scripts/check-opencode-host.sh")
-    assert "OPENCODE_AUTH_CONTENT" in check_script.read_text()
+    check_source = check_script.read_text()
+    assert "OPENCODE_AUTH_CONTENT" in check_source
+    # The host readiness check must validate the exact auth.json contract
+    # emitted by opencode-auth-json@1 (``key``, not the obsolete ``apiKey``).
+    assert "p.get('key')" in check_source
+    assert "'apiKey'" not in check_source

@@ -286,6 +286,7 @@ class MoonMindOmnigentSessionWorkflow:
             compiledExecutionIntentDigest=(
                 session_input.compiled_execution_intent_digest
             ),
+            omnigentExecutionPlan=session_input.omnigent_execution_plan,
             expectedRevision=durable.revision,
             fencingGeneration=durable.fencing_generation,
             decisionId=(
@@ -696,6 +697,13 @@ class MoonMindOmnigentSessionWorkflow:
                     ),
                     "compiledExecutionIntentDigest": (
                         session_input.compiled_execution_intent_digest
+                    ),
+                    "omnigentExecutionPlan": (
+                        session_input.omnigent_execution_plan.model_dump(
+                            mode="json", by_alias=True
+                        )
+                        if session_input.omnigent_execution_plan is not None
+                        else None
                     ),
                 },
             )

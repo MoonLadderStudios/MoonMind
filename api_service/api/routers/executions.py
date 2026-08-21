@@ -84,6 +84,9 @@ from api_service.services.omnigent_agent_profile_selection import (
     refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
 )
+from api_service.services.omnigent_agent_bootstrap_service import (
+    BOOTSTRAP_PROFILE_ID,
+)
 from api_service.services.control_stop_continuation import (
     SqlControlStopContinuationRepository,
     TemporalControlStopContinuationStarter,
@@ -4318,6 +4321,37 @@ def _serialize_execution(
     scheduled_for = getattr(record, "scheduled_for", None)
 
     recovery_eligibility = _project_recovery_eligibility(record, target_runtime)
+    omnigent_execution_plan = params.get("omnigentExecutionPlan")
+    if not isinstance(omnigent_execution_plan, Mapping):
+        plan_ref = str(memo.get("omnigent_execution_plan_ref") or "").strip()
+        plan_digest = str(
+            memo.get("omnigent_execution_plan_digest") or ""
+        ).strip()
+        plan_artifact = str(
+            memo.get("omnigent_execution_plan_artifact_ref") or ""
+        ).strip()
+        omnigent_execution_plan = (
+            {
+                "planRef": plan_ref,
+                "planDigest": plan_digest,
+                "planArtifactRef": plan_artifact,
+            }
+            if plan_ref and plan_digest and plan_artifact
+            else None
+        )
+    runtime_binding_ref = str(memo.get("omnigent_runtime_binding_ref") or "").strip()
+    omnigent_runtime_binding = (
+        {
+            "runtimeBindingRef": runtime_binding_ref,
+            "revision": memo.get("omnigent_runtime_binding_revision"),
+            "fencingGeneration": memo.get(
+                "omnigent_runtime_binding_fencing_generation"
+            ),
+            "state": memo.get("omnigent_runtime_binding_state"),
+        }
+        if runtime_binding_ref
+        else None
+    )
     return ExecutionModel(
         task_id=None,
         agent_run_id=agent_run_id,
@@ -4349,6 +4383,12 @@ def _serialize_execution(
         input_parameters=params,
         input_artifact_ref=getattr(record, "input_ref", None),
         task_input_snapshot=_workflow_input_snapshot_descriptor_from_record(record),
+        omnigent_execution_plan=(
+            dict(omnigent_execution_plan)
+            if isinstance(omnigent_execution_plan, Mapping)
+            else None
+        ),
+        omnigent_runtime_binding=omnigent_runtime_binding,
         target_runtime=target_runtime,
         target_skill=target_skill,
         model=param_model,
@@ -11131,9 +11171,45 @@ async def _create_execution_from_workflow_request(
         if create_idempotency_key
         else f"mm:{uuid4()}"
     )
+    if (
+        canonical_target_runtime == "omnigent"
+        and create_idempotency_key
+        and session is not None
+    ):
+        existing_execution = await session.get(
+            TemporalExecutionCanonicalRecord,
+            reserved_workflow_id,
+        )
+        if existing_execution is not None:
+            # Idempotent retries return the already-admitted authority before
+            # any current profile/default/catalog resolution can produce a new
+            # plan or duplicate an Agent Profile usage row.
+            return _serialize_execution(existing_execution)
     agent_profile_selection = payload.get("agentProfile")
+    selected_provider_profile = None
     if agent_profile_selection is None and isinstance(runtime_payload, Mapping):
         agent_profile_selection = runtime_payload.get("agentProfile")
+    authored_omnigent = payload.get("omnigent")
+    if (
+        agent_profile_selection is None
+        and canonical_target_runtime == "omnigent"
+        and isinstance(authored_omnigent, Mapping)
+        and str(authored_omnigent.get("executionTargetRef") or "").strip()
+        == "omnigent-codex@1"
+    ):
+        default_codex_profile = await _load_default_provider_profile_for_runtime(
+            session=session,
+            runtime_id="codex_cli",
+        )
+        if default_codex_profile is None:
+            raise _invalid_workflow_request(
+                "The managed Codex Omnigent path requires an enabled default "
+                "codex_cli Provider Profile."
+            )
+        agent_profile_selection = {
+            "profileId": BOOTSTRAP_PROFILE_ID,
+            "providerProfileRef": default_codex_profile.profile_id,
+        }
     if agent_profile_selection is not None:
         if canonical_target_runtime != "omnigent":
             raise _invalid_workflow_request(
@@ -11142,7 +11218,6 @@ async def _create_execution_from_workflow_request(
         if not isinstance(agent_profile_selection, Mapping):
             raise _invalid_workflow_request("agentProfile must be an object.")
         agent_profile_selection = dict(agent_profile_selection)
-        authored_omnigent = payload.get("omnigent")
         authored_launch_policy_ref = (
             str(authored_omnigent.get("launchPolicyRef") or "").strip()
             if isinstance(authored_omnigent, Mapping)
@@ -11190,6 +11265,100 @@ async def _create_execution_from_workflow_request(
             initial_parameters,
             snapshot=profile_snapshot,
         )
+        selected_provider_profile = await session.get(
+            ManagedAgentProviderProfile,
+            str(profile_snapshot["providerProfileRef"]),
+        )
+        if selected_provider_profile is None:
+            raise _invalid_workflow_request(
+                "Selected Provider Profile disappeared before plan compilation."
+            )
+
+    persisted_omnigent_plan = None
+    prelaunch_task_snapshot_ref = ""
+    if canonical_target_runtime == "omnigent":
+        if session is None:
+            raise _invalid_workflow_request(
+                "Omnigent execution-plan compilation requires durable storage."
+            )
+        profile_snapshot = initial_parameters.get("agentProfileSnapshot")
+        if not isinstance(profile_snapshot, Mapping):
+            raise _invalid_workflow_request(
+                "External Omnigent execution requires a launch-ready agentProfile."
+            )
+        if selected_provider_profile is None:
+            raise _invalid_workflow_request(
+                "External Omnigent execution requires a selected Provider Profile."
+            )
+        from api_service.db.base import async_session_maker
+        from api_service.services.omnigent_execution_plan_service import (
+            compile_and_persist_execution_plan,
+            persist_json_artifact,
+        )
+
+        snapshot_source, snapshot_task = _snapshot_source_payload_from_parameters(
+            initial_parameters
+        )
+        if not snapshot_task:
+            raise _invalid_workflow_request(
+                "Omnigent execution requires an immutable task input snapshot."
+            )
+        task_snapshot_payload = _build_original_workflow_input_snapshot_payload(
+            source_kind="create",
+            payload=snapshot_source,
+            task_payload=snapshot_task,
+            attachment_refs=attachment_index,
+        )
+        artifact_service = get_temporal_artifact_service(session)
+        principal_id = str(getattr(user, "id", "") or "system")
+        (
+            prelaunch_task_snapshot_ref,
+            prelaunch_task_snapshot_digest,
+        ) = await persist_json_artifact(
+            artifact_service=artifact_service,
+            principal=principal_id,
+            artifact_class="original_task_input_snapshot",
+            payload=task_snapshot_payload,
+        )
+        try:
+            persisted_omnigent_plan = await compile_and_persist_execution_plan(
+                session_factory=async_session_maker,
+                artifact_service=artifact_service,
+                principal=principal_id,
+                workflow_id=reserved_workflow_id,
+                agent_profile_snapshot=profile_snapshot,
+                provider_profile=selected_provider_profile,
+                initial_parameters=initial_parameters,
+                authored_request_ref=prelaunch_task_snapshot_ref,
+                authored_request_digest=prelaunch_task_snapshot_digest,
+                task_input_snapshot_ref=prelaunch_task_snapshot_ref,
+                task_input_snapshot_digest=prelaunch_task_snapshot_digest,
+                db_session=session,
+            )
+        except Exception as exc:
+            from moonmind.omnigent.harness_platform.failures import (
+                HarnessPlatformError,
+            )
+
+            if not isinstance(exc, (HarnessPlatformError, ValueError)):
+                raise
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": getattr(
+                        exc, "code", "omnigent_execution_plan_invalid"
+                    ),
+                    "message": str(exc),
+                },
+            ) from exc
+        initial_parameters["omnigentExecutionPlan"] = (
+            persisted_omnigent_plan.binding.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        )
+        initial_parameters["resolvedSkillsetRef"] = (
+            persisted_omnigent_plan.resolved_skillset_ref
+        )
 
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
@@ -11226,16 +11395,52 @@ async def _create_execution_from_workflow_request(
         record=record,
         attachment_refs=attachment_index,
     )
-
-    snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
-        session=session,
-        record=record,
-        user=user,
-        parameters=initial_parameters,
-        attachment_refs=attachment_index,
-        source_kind="create",
-        input_artifact_ref=input_artifact_ref,
-    )
+    if persisted_omnigent_plan is not None:
+        snapshot_ref = prelaunch_task_snapshot_ref
+        records_to_bind = [record]
+        if isinstance(record, TemporalExecutionRecord):
+            canonical_record = await session.get(
+                TemporalExecutionCanonicalRecord, record.workflow_id
+            )
+            if canonical_record is not None:
+                records_to_bind.append(canonical_record)
+        for target_record in records_to_bind:
+            memo = dict(getattr(target_record, "memo", None) or {})
+            memo.update(
+                {
+                    "task_input_snapshot_ref": snapshot_ref,
+                    "task_input_snapshot_version": _WORKFLOW_INPUT_SNAPSHOT_VERSION,
+                    "task_input_snapshot_source_kind": "create",
+                    "omnigent_execution_plan_ref": (
+                        persisted_omnigent_plan.binding.plan_ref
+                    ),
+                    "omnigent_execution_plan_digest": (
+                        persisted_omnigent_plan.binding.plan_digest
+                    ),
+                    "omnigent_execution_plan_artifact_ref": (
+                        persisted_omnigent_plan.binding.plan_artifact_ref
+                    ),
+                }
+            )
+            target_record.memo = memo
+            refs = list(getattr(target_record, "artifact_refs", None) or [])
+            for artifact_ref in (
+                snapshot_ref,
+                *persisted_omnigent_plan.artifact_refs,
+            ):
+                if artifact_ref not in refs:
+                    refs.append(artifact_ref)
+            target_record.artifact_refs = refs
+    else:
+        snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
+            session=session,
+            record=record,
+            user=user,
+            parameters=initial_parameters,
+            attachment_refs=attachment_index,
+            source_kind="create",
+            input_artifact_ref=input_artifact_ref,
+        )
     if snapshot_ref:
         await session.commit()
     if isinstance(record, (TemporalExecutionRecord, TemporalExecutionCanonicalRecord)):
@@ -13328,6 +13533,22 @@ async def create_execution(
                     "code": "invalid_skill_step_inputs",
                     "message": "Skill step inputs failed validation.",
                     "errors": skill_validation.error_dicts(),
+                },
+            )
+
+        raw_direct_runtime = str(
+            skill_validation.parameters.get("targetRuntime") or ""
+        ).strip()
+        if raw_direct_runtime and normalize_runtime_id(raw_direct_runtime) == "omnigent":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={
+                    "code": "omnigent_product_boundary_required",
+                    "message": (
+                        "Omnigent execution must use the task/workflow request "
+                        "envelope so Agent Profile resolution and immutable plan "
+                        "persistence complete before scheduling."
+                    ),
                 },
             )
 
@@ -16942,16 +17163,38 @@ async def continue_in_new_workflow(
             record=record,
             attachment_refs=source_attachments,
         )
-    await _persist_original_workflow_input_snapshot_from_parameters(
-        session=session,
-        record=record,
-        user=user,
-        parameters=dict(initial_params),
-        source_kind="linked_continuation",
-        source_workflow_id=source.workflow_id,
-        source_run_id=source_run_id,
-        input_artifact_ref=canonical.input_ref,
-    )
+    if isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
+        # A linked continuation is governed by the original plan's frozen
+        # continuation policy. Preserve its task snapshot authority; the new
+        # turn instruction and selected source evidence remain separate,
+        # explicitly linked continuation inputs rather than silently becoming a
+        # second plan compiled from current defaults.
+        await _reuse_original_task_input_snapshot_from_source(
+            session=session,
+            source_record=canonical,
+            target_record=record,
+        )
+        source_memo = dict(canonical.memo or {})
+        target_memo = dict(getattr(record, "memo", None) or {})
+        for key in (
+            "omnigent_execution_plan_ref",
+            "omnigent_execution_plan_digest",
+            "omnigent_execution_plan_artifact_ref",
+        ):
+            if source_memo.get(key) is not None:
+                target_memo[key] = source_memo[key]
+        record.memo = target_memo
+    else:
+        await _persist_original_workflow_input_snapshot_from_parameters(
+            session=session,
+            record=record,
+            user=user,
+            parameters=dict(initial_params),
+            source_kind="linked_continuation",
+            source_workflow_id=source.workflow_id,
+            source_run_id=source_run_id,
+            input_artifact_ref=canonical.input_ref,
+        )
     await session.commit()
 
     return ContinueInNewWorkflowResponse(
@@ -17242,6 +17485,32 @@ async def update_execution(
         user=user,
     )
     is_task_editing_update = payload.update_name in _TASK_EDITING_UPDATE_NAMES
+    recorded_plan = (
+        (getattr(record, "parameters", None) or {}).get("omnigentExecutionPlan")
+        if isinstance(getattr(record, "parameters", None), Mapping)
+        else None
+    )
+    exact_plan_rerun = (
+        payload.update_name == "RequestRerun"
+        and payload.input_artifact_ref is None
+        and payload.plan_artifact_ref is None
+        and payload.parameters_patch is None
+    )
+    if (
+        is_task_editing_update
+        and isinstance(recorded_plan, Mapping)
+        and not exact_plan_rerun
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "omnigent_execution_plan_replacement_required",
+                "message": (
+                    "Editing an admitted Omnigent execution requires a new "
+                    "execution so immutable plan authority can be recompiled."
+                ),
+            },
+        )
     if is_task_editing_update:
         _emit_task_editing_metric(
             "submit_attempt",
@@ -17687,13 +17956,14 @@ async def rerun_execution(
     # task dependency edges and recovery metadata from a prior execution.
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
     reserved_workflow_id = f"mm:{_uuid4()}"
-    initial_params = await refresh_managed_bootstrap_snapshot(
-        session,
-        parameters=initial_params,
-        consumer_type="workflow",
-        consumer_id=reserved_workflow_id,
-        user=user,
-    )
+    if not isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
+        initial_params = await refresh_managed_bootstrap_snapshot(
+            session,
+            parameters=initial_params,
+            consumer_type="workflow",
+            consumer_id=reserved_workflow_id,
+            user=user,
+        )
 
     # Generate a new idempotency key based on the original workflow ID
     new_idempotency_key = f"rerun:{workflow_id}:{_uuid4()}"
@@ -17723,16 +17993,33 @@ async def rerun_execution(
             },
         ) from exc
 
-    snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
-        session=session,
-        record=record,
-        user=user,
-        parameters=dict(initial_params),
-        source_kind="rerun",
-        source_workflow_id=canonical.workflow_id,
-        source_run_id=canonical.run_id,
-        input_artifact_ref=canonical.input_ref,
-    )
+    if isinstance(initial_params.get("omnigentExecutionPlan"), Mapping):
+        snapshot_ref = await _reuse_original_task_input_snapshot_from_source(
+            session=session,
+            source_record=canonical,
+            target_record=record,
+        )
+        source_memo = dict(canonical.memo or {})
+        target_memo = dict(getattr(record, "memo", None) or {})
+        for key in (
+            "omnigent_execution_plan_ref",
+            "omnigent_execution_plan_digest",
+            "omnigent_execution_plan_artifact_ref",
+        ):
+            if source_memo.get(key) is not None:
+                target_memo[key] = source_memo[key]
+        record.memo = target_memo
+    else:
+        snapshot_ref = await _persist_original_workflow_input_snapshot_from_parameters(
+            session=session,
+            record=record,
+            user=user,
+            parameters=dict(initial_params),
+            source_kind="rerun",
+            source_workflow_id=canonical.workflow_id,
+            source_run_id=canonical.run_id,
+            input_artifact_ref=canonical.input_ref,
+        )
 
     canonical_workflow_id, alias_used = _canonicalize_execution_identifier(workflow_id)
     if alias_used:

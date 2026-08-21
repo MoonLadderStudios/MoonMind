@@ -142,6 +142,12 @@ class SessionTimeline:
     # compiled intent
     intent_ref: Optional[str]
     intent_digest: Optional[str]
+    execution_plan_ref: Optional[str]
+    execution_plan_digest: Optional[str]
+    runtime_binding_ref: Optional[str]
+    runtime_binding_revision: Optional[int]
+    runtime_binding_fencing_generation: Optional[int]
+    runtime_binding_state: Optional[str]
 
     # canonical session state / authority
     desired_state: str
@@ -222,6 +228,16 @@ class SessionTimeline:
             "sessionId": self.session_id,
             "provider": self.provider,
             "intent": {"ref": self.intent_ref, "digest": self.intent_digest, "link": self.intent_link},
+            "executionPlan": {
+                "ref": self.execution_plan_ref,
+                "digest": self.execution_plan_digest,
+            },
+            "runtimeBinding": {
+                "ref": self.runtime_binding_ref,
+                "revision": self.runtime_binding_revision,
+                "fencingGeneration": self.runtime_binding_fencing_generation,
+                "state": self.runtime_binding_state,
+            },
             "state": {
                 "desired": self.desired_state,
                 "durable": self.durable_state,
@@ -428,6 +444,24 @@ def build_timeline(
         provider=session.provider,
         intent_ref=safe_timeline_ref(session.intent_ref),
         intent_digest=safe_timeline_ref(session.intent_digest),
+        execution_plan_ref=safe_timeline_ref(meta.get("executionPlanRef")),
+        execution_plan_digest=safe_timeline_ref(meta.get("executionPlanDigest")),
+        runtime_binding_ref=safe_timeline_ref(meta.get("runtimeBindingRef")),
+        runtime_binding_revision=(
+            int(meta["runtimeBindingRevision"])
+            if meta.get("runtimeBindingRevision") is not None
+            else None
+        ),
+        runtime_binding_fencing_generation=(
+            int(meta["runtimeBindingFencingGeneration"])
+            if meta.get("runtimeBindingFencingGeneration") is not None
+            else None
+        ),
+        runtime_binding_state=(
+            str(meta["runtimeBindingState"])
+            if meta.get("runtimeBindingState") is not None
+            else None
+        ),
         desired_state=session.desired_state,
         durable_state=session.reconciled_state or session.desired_state,
         observed_state=session.observed_state,

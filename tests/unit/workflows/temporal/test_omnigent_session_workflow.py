@@ -23,7 +23,10 @@ from moonmind.omnigent.reconciler import (
     TerminalOutcome,
     classify_provider_status,
 )
-from moonmind.schemas.agent_runtime_models import AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentRunResult,
+    OmnigentExecutionPlanBinding,
+)
 from moonmind.schemas.omnigent_session_models import (
     OMNIGENT_SESSION_FEATURE_GENERATION,
     OmnigentPersistFailureRequest,
@@ -124,6 +127,179 @@ def test_admission_contract_is_frozen_compact_and_fail_closed() -> None:
             admissionMode="enabled",
             admittedFeatureGeneration="omnigent-session-v2",
         )
+
+
+@pytest.mark.asyncio
+async def test_plan_bound_admission_rejects_current_host_image_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "a" * 64,
+        planDigest="sha256:" + "a" * 64,
+        planArtifactRef="art-plan",
+        taskInputSnapshotRef="art-task",
+        taskInputSnapshotDigest="sha256:" + "b" * 64,
+    )
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            credentialBindings={
+                "primary-model": SimpleNamespace(
+                    providerProfileRef="provider-profile-1",
+                    materializerRef="codex-oauth-home@1",
+                )
+            },
+            hostClassRef="omnigent-codex-current@1",
+            hostImageRef="ghcr.io/example/other@sha256:" + "1" * 64,
+            omnigentHostBuildDigest="sha256:" + "b" * 64,
+            hostArchitecture="linux/amd64",
+            harnessId="codex-native",
+            harnessImplementationRef=(
+                "omnigent-harness-implementation:sha256:"
+                "6db2fe2ebe07e7c26d46f0e72f9538fc9f23d72e67ed482ef34b395e9490eb14"
+            ),
+            launchPolicyRef="codex-on-demand@1",
+            executionRealizerRef="codex-profile-bound@1",
+        )
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_load_verified_execution_plan",
+        AsyncMock(return_value=plan),
+    )
+
+    with pytest.raises(ValueError, match="Host Class image"):
+        await omnigent_session_activities.omnigent_evaluate_session_admission_activity(
+            OmnigentSessionAdmissionRequest(
+                workflowId="workflow-1",
+                stepExecutionId="step-1",
+                agentRunId="agent-run-1",
+                executionProfileRef="provider-profile-1",
+                omnigentExecutionPlan=binding,
+            ).model_dump(mode="json", by_alias=True)
+        )
+
+
+def _exact_host_evidence_fixture() -> tuple[SimpleNamespace, dict[str, object]]:
+    from moonmind.omnigent.harness_platform.catalog import (
+        HarnessImplementationIdentity,
+    )
+    from moonmind.omnigent.harness_platform.host_classes import get_host_class
+
+    host_class = get_host_class("omnigent-codex-current@1")
+    implementation = HarnessImplementationIdentity.model_validate(
+        {
+            "sourceKind": "core",
+            "package": "omnigent",
+            "version": "1.0.0",
+            "digest": "sha256:" + "e" * 64,
+        }
+    )
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            hostClassRef=host_class.ref,
+            hostImageRef=None,
+            omnigentHostBuildDigest=None,
+            hostArchitecture=None,
+            harnessId="codex-native",
+            harnessImplementationRef=implementation.implementation_ref(),
+            classAdmissionDecision={
+                "requiredSatisfied": [],
+                "preferredSatisfied": [],
+                "degraded": [],
+                "unknown": [],
+            },
+            modelConfig=SimpleNamespace(
+                qualifiedId=None,
+                modelConfigDigest="sha256:" + "1" * 64,
+            ),
+            resolvedSkills={
+                "resolvedSkillSetRef": "artifact:skillset-1",
+                "resolvedSkillSetDigest": "sha256:" + "2" * 64,
+                "skillDeliveryRef": "skill-delivery:sha256:" + "3" * 64,
+            },
+            workspaceIntentRef="workspace-intent:sha256:" + "4" * 64,
+        )
+    )
+    preflight: dict[str, object] = {
+        "hostId": "host-1",
+        "resolvedSkillsetRef": "skillset-1",
+        "workspaceMountAttested": True,
+        "skillDeliveryAttested": True,
+        "restrictedEgressAttested": True,
+        "egressEvidenceRef": "art-egress-1",
+        "workspaceResolution": {"workspaceId": "workspace-1"},
+        "hostRegistrationEvidence": {
+            "hostId": "host-1",
+            "imageRef": host_class.imageRef,
+            "omnigentVersion": host_class.omnigentVersion,
+            "omnigentBuildDigest": host_class.omnigentBuildDigest,
+            "harnessImplementation": implementation.model_dump(
+                mode="json", by_alias=True
+            ),
+            "runtimeDependencies": [],
+            "architecture": "linux/amd64",
+            "capabilities": {},
+        },
+    }
+    return plan, preflight
+
+
+@pytest.mark.asyncio
+async def test_runtime_binding_requires_positive_skill_delivery_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, preflight = _exact_host_evidence_fixture()
+    preflight.pop("skillDeliveryAttested")
+
+    async def persist(**kwargs: object) -> str:
+        return f"art-{kwargs['artifact_type']}"
+
+    monkeypatch.setattr(omnigent_session_activities, "_write_json_artifact", persist)
+    with pytest.raises(RuntimeError, match="Skill delivery attestation"):
+        await omnigent_session_activities._persist_host_runtime_evidence(
+            request=SimpleNamespace(),
+            plan=plan,
+            preflight=preflight,
+            model_options={},
+            host_lease_generation=1,
+        )
+
+
+@pytest.mark.asyncio
+async def test_runtime_binding_exact_capabilities_use_preflight_attestations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan, preflight = _exact_host_evidence_fixture()
+    captured: dict[str, object] = {}
+
+    async def persist(**kwargs: object) -> str:
+        return f"art-{kwargs['artifact_type']}"
+
+    from moonmind.omnigent.harness_platform import capabilities
+
+    real_validate = capabilities.validate_exact_host_capabilities
+
+    def capture_validate(**kwargs: object):
+        captured.update(kwargs)
+        return real_validate(**kwargs)
+
+    monkeypatch.setattr(omnigent_session_activities, "_write_json_artifact", persist)
+    monkeypatch.setattr(
+        capabilities,
+        "validate_exact_host_capabilities",
+        capture_validate,
+    )
+    refs = await omnigent_session_activities._persist_host_runtime_evidence(
+        request=SimpleNamespace(),
+        plan=plan,
+        preflight=preflight,
+        model_options={},
+        host_lease_generation=1,
+    )
+
+    assert captured["mount_attested"] is True
+    assert captured["network_attested"] is True
+    assert refs["cleanup_authority_refs"] == ["art-egress-1"]
 
 
 def test_failure_contract_carries_only_typed_bounded_evidence() -> None:

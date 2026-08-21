@@ -466,6 +466,23 @@ def test_execution_plan_is_secret_free_and_non_self_referential():
     assert "providerLeaseRef" not in payload_json
     assert "docker.sock" not in payload_json
 
+    secret_payload = json.loads(json.dumps(payload_dict))
+    secret_payload["model"]["normalizedOptions"]["apiKey"] = "raw-secret"
+    with pytest.raises(ValueError, match="apiKey"):
+        create_execution_plan_envelope(secret_payload)
+
+    runtime_payload = json.loads(json.dumps(payload_dict))
+    runtime_payload["classAdmissionDecision"]["host_path"] = "/mutable/host/path"
+    with pytest.raises(ValueError, match="host_path"):
+        create_execution_plan_envelope(runtime_payload)
+
+    oversized_payload = json.loads(json.dumps(payload_dict))
+    oversized_payload["model"]["normalizedOptions"]["providerPayload"] = (
+        "x" * (16 * 1024 + 1)
+    )
+    with pytest.raises(ValueError, match="string is too large"):
+        create_execution_plan_envelope(oversized_payload)
+
 # AC 18: Every realized run persists a separate fenced runtime binding
 def test_runtime_binding_fenced():
     plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
@@ -1027,4 +1044,3 @@ def test_no_top_level_harness_identity():
     # Verified via compile_execution_plan handling any harness without new code path
     assert "external" == "external"
     assert "omnigent" == "omnigent"
-

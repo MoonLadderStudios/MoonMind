@@ -1028,6 +1028,18 @@ class OmnigentBridgeSessionStore:
                     if effective_launch_snapshot
                     else None
                 ),
+                **(
+                    {
+                        "executionPlanRef": (
+                            request.omnigent_execution_plan.plan_ref
+                        ),
+                        "executionPlanDigest": (
+                            request.omnigent_execution_plan.plan_digest
+                        ),
+                    }
+                    if request.omnigent_execution_plan is not None
+                    else {}
+                ),
             },
         )
         async with self._session_factory() as session:
@@ -2225,7 +2237,7 @@ class OmnigentBridgeSessionStore:
         terminal: bool,
     ) -> ChatBindingResolution:
         chat_binding_id = await self.ensure_chat_binding_id(row.bridge_session_id)
-        capabilities = _chat_binding_capabilities(row)
+        capabilities = await self._authority_bound_chat_capabilities(row)
         # Read-only posture is driven by the bound session and its effective
         # capabilities, never by Workflow terminality alone: a terminal session
         # is always read-only, and a live session is writable only when its
@@ -2247,6 +2259,65 @@ class OmnigentBridgeSessionStore:
             capabilities=capabilities,
             unavailable_reason=None,
         )
+
+    async def _authority_bound_chat_capabilities(
+        self,
+        row: OmnigentBridgeSession,
+    ) -> dict[str, bool]:
+        """Fail closed unless plan and current binding attest this chat row."""
+
+        metadata = dict(getattr(row, "metadata_", None) or {})
+        plan_ref = str(metadata.get("executionPlanRef") or "").strip()
+        if not plan_ref:
+            # Historical sessions retain their recorded compatibility behavior.
+            return _chat_binding_capabilities(row)
+        from moonmind.omnigent.harness_platform.stores import (
+            DbExecutionPlanStore,
+            DbRuntimeBindingStore,
+        )
+
+        plan = await DbExecutionPlanStore(self._session_factory).load(plan_ref)
+        state = await DbRuntimeBindingStore(
+            self._session_factory
+        ).get_current_state(plan_ref)
+        if plan is None or state is None:
+            return {}
+        expected_digest = "sha256:" + plan.planRef.rsplit(":", 1)[-1]
+        if str(metadata.get("executionPlanDigest") or "") != expected_digest:
+            return {}
+        binding = state.binding
+        provider_authorities = list(binding.providerLeases.values())
+        if not any(
+            authority.providerProfileRef == row.provider_profile_id
+            and authority.providerLeaseRef == row.provider_lease_id
+            and authority.credentialGeneration == row.credential_generation
+            for authority in provider_authorities
+        ):
+            return {}
+        if (
+            binding.hostBindingRef != row.host_binding_ref
+            or binding.hostLeaseRef != row.host_lease_ref
+            or binding.omnigentHostId != row.omnigent_host_id
+            or (
+                row.omnigent_session_id is not None
+                and binding.omnigentSessionId != row.omnigent_session_id
+            )
+            or binding.chatBindingRef != row.chat_binding_id
+            or (
+                row.omnigent_runner_id is not None
+                and binding.omnigentRunnerRef != row.omnigent_runner_id
+            )
+        ):
+            return {}
+        launch = dict(row.effective_launch_snapshot_json or {})
+        if (
+            launch.get("launchPolicyRef") != plan.payload.launchPolicyRef
+            or not binding.exactHostCapabilityDecisionRef
+            or not binding.skillDeliveryAttestationRef
+            or not binding.modelOptionAttestationRef
+        ):
+            return {}
+        return _chat_binding_capabilities(row)
 
     def _starting_binding(
         self,

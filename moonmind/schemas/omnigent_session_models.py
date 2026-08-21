@@ -17,7 +17,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic.alias_generators import to_camel
 
-from moonmind.schemas.agent_runtime_models import AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentRunResult,
+    OmnigentExecutionPlanBinding,
+)
 
 
 OMNIGENT_SESSION_WORKFLOW_SCHEMA_VERSION = "omnigent-session-workflow/v1"
@@ -99,6 +102,11 @@ class OmnigentSessionWorkflowInput(_OmnigentSessionModel):
     )
     compiled_execution_intent_digest: str = Field(
         alias="compiledExecutionIntentDigest", min_length=1, max_length=128
+    )
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None,
+        alias="omnigentExecutionPlan",
+        exclude_if=lambda value: value is None,
     )
     workflow_id: str = Field(alias="workflowId", min_length=1, max_length=255)
     step_execution_id: str = Field(
@@ -191,6 +199,11 @@ class OmnigentSessionAdmissionRequest(_OmnigentSessionModel):
     execution_profile_ref: str = Field(
         alias="executionProfileRef", min_length=1, max_length=255
     )
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None,
+        alias="omnigentExecutionPlan",
+        exclude_if=lambda value: value is None,
+    )
 
     @field_validator(
         "workflow_id", "step_execution_id", "agent_run_id", "execution_profile_ref"
@@ -262,6 +275,11 @@ class OmnigentSessionActivityRequest(_OmnigentSessionModel):
     )
     compiled_execution_intent_digest: str = Field(
         alias="compiledExecutionIntentDigest", min_length=1, max_length=128
+    )
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None,
+        alias="omnigentExecutionPlan",
+        exclude_if=lambda value: value is None,
     )
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     fencing_generation: int = Field(alias="fencingGeneration", ge=0)

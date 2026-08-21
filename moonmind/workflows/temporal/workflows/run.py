@@ -19280,6 +19280,7 @@ class MoonMindRunWorkflow:
             "repository",
             "tenant",
             "tenantId",
+            "omnigentExecutionPlan",
         )
         if self._workflow_patch_enabled(
             RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
@@ -20163,6 +20164,15 @@ class MoonMindRunWorkflow:
             "runtimeSelection": dict(runtime_selection),
             "skillSourcePolicy": skill_source_policy,
         }
+        omnigent_execution_plan = parameters.get("omnigentExecutionPlan")
+        if (
+            agent_kind == "external"
+            and _normalize_agent_runtime_id(agent_id) == "omnigent"
+            and isinstance(omnigent_execution_plan, Mapping)
+        ):
+            step_execution_payload["omnigentExecutionPlan"] = dict(
+                omnigent_execution_plan
+            )
         if attempt_context.retrieval_manifest_ref:
             step_execution_payload["retrievalManifestRef"] = (
                 attempt_context.retrieval_manifest_ref
@@ -20410,6 +20420,13 @@ class MoonMindRunWorkflow:
             agent_kind=agent_kind,
             agent_id=agent_id,
             execution_profile_ref=execution_profile_ref,
+            omnigent_execution_plan=(
+                dict(omnigent_execution_plan)
+                if agent_kind == "external"
+                and _normalize_agent_runtime_id(agent_id) == "omnigent"
+                and isinstance(omnigent_execution_plan, Mapping)
+                else None
+            ),
             correlation_id=correlation_id,
             idempotency_key=idempotency_key,
             instruction_ref=request_instruction_ref,
@@ -22776,7 +22793,7 @@ class MoonMindRunWorkflow:
             "harness",
             error_message="agentProfileSnapshot.document.harness is required",
         )
-        if harness not in {"codex-native", "claude-native"}:
+        if harness not in {"codex-native", "claude-native", "opencode-native"}:
             raise ValueError("agentProfileSnapshot.document.harness is unsupported")
 
         authored = self._json_mapping(value, path=path)

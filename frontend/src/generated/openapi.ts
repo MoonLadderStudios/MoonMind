@@ -8332,6 +8332,14 @@ export interface components {
             /** Inputartifactref */
             inputArtifactRef?: string | null;
             taskInputSnapshot?: components["schemas"]["WorkflowInputSnapshotDescriptorModel"];
+            /** Omnigentexecutionplan */
+            omnigentExecutionPlan?: {
+                [key: string]: unknown;
+            } | null;
+            /** Omnigentruntimebinding */
+            omnigentRuntimeBinding?: {
+                [key: string]: unknown;
+            } | null;
             /** Targetruntime */
             targetRuntime?: string | null;
             /** Targetskill */

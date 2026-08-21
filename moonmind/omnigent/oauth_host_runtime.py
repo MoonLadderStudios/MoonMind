@@ -880,6 +880,38 @@ class OmnigentOAuthHostRuntime:
             validated["egressAttestation"] = result["egressAttestation"]
             validated["workspaceResolution"] = dict(self._last_workspace_evidence)
             validated["egressEvidenceRef"] = launch_ref
+            validated["resolvedSkillsetRef"] = resolved_skillset_ref
+            # These booleans are the bounded result of checks already completed
+            # above.  Consumers must not infer attestation merely from a path or
+            # fabricate it while constructing the runtime binding.
+            validated["workspaceMountAttested"] = True
+            validated["skillDeliveryAttested"] = True
+            validated["restrictedEgressAttested"] = True
+            # Preserve only bounded, non-secret fields required to prove the
+            # exact registered host against an immutable execution plan. The
+            # full provider host object is deliberately not returned.
+            validated["hostRegistrationEvidence"] = {
+                key: host.get(key)
+                for key in (
+                    "id",
+                    "hostId",
+                    "host_id",
+                    "imageRef",
+                    "image_ref",
+                    "omnigentVersion",
+                    "omnigent_version",
+                    "omnigentBuildDigest",
+                    "omnigent_build_digest",
+                    "harnessImplementation",
+                    "harness_implementation",
+                    "runtimeDependencies",
+                    "runtime_dependencies",
+                    "architecture",
+                    "capabilities",
+                    "harnesses",
+                )
+                if host.get(key) is not None
+            }
             return validated
         except (Exception, asyncio.CancelledError) as exc:
             evidence = prepared_host_evidence()

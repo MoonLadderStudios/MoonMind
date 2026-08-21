@@ -5065,15 +5065,24 @@ class MoonMindAgentRun:
                     self._external_agent_id = validated_id
 
                     if execution_style == "streaming_gateway":
-                        session_admitted = use_omnigent_session_supervisor
+                        plan_bound_session = (
+                            validated_id == "omnigent"
+                            and request.omnigent_execution_plan is not None
+                        )
+                        session_admitted = (
+                            use_omnigent_session_supervisor or plan_bound_session
+                        )
                         admitted_feature_generation = (
                             OMNIGENT_SESSION_FEATURE_GENERATION
                         )
                         if (
                             validated_id == "omnigent"
                             and request.execution_profile_ref
-                            and use_omnigent_session_supervisor
-                            and use_omnigent_session_admission
+                            and session_admitted
+                            and (
+                                use_omnigent_session_admission
+                                or plan_bound_session
+                            )
                         ):
                             owner_workflow_id, step_execution_id = (
                                 self._omnigent_owner_identities(request)
@@ -5086,6 +5095,9 @@ class MoonMindAgentRun:
                                     agentRunId=workflow.info().workflow_id,
                                     executionProfileRef=(
                                         request.execution_profile_ref
+                                    ),
+                                    omnigentExecutionPlan=(
+                                        request.omnigent_execution_plan
                                     ),
                                 ).model_dump(mode="json", by_alias=True),
                                 cancellation_type=(

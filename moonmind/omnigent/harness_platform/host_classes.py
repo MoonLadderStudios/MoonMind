@@ -632,6 +632,38 @@ register_launch_policy(
 register_launch_policy(
     {
         "schemaVersion": "moonmind.omnigent-launch-policy.v2",
+        "policyId": "opencode-on-demand",
+        "version": 1,
+        "hostMode": "on-demand",
+        "hostClassSelector": {"requiredFeatures": ["readOnlyRoot", "restrictedEgress", "workspaceBind"]},
+        "isolation": {"runDedicated": True},
+        "limits": {"cpuMillis": 2000, "memoryMiB": 4096, "processes": 256, "timeoutSeconds": 5400, "temporaryStorageMiB": 256},
+        "network": {"egressPolicyRef": "omnigent-restricted-egress@1"},
+        "capture": {"required": True, "retentionDays": 30},
+        "cleanup": {"mode": "remove", "janitor": True},
+        "controlCapabilities": ["interrupt", "terminate", "clear_context"],
+    }
+)
+
+register_launch_policy(
+    {
+        "schemaVersion": "moonmind.omnigent-launch-policy.v2",
+        "policyId": "opencode-static",
+        "version": 1,
+        "hostMode": "static-connected",
+        "hostClassSelector": {"requiredFeatures": ["workspaceBind"]},
+        "isolation": {"runDedicated": False},
+        "limits": {"cpuMillis": 2000, "memoryMiB": 4096, "processes": 256, "timeoutSeconds": 5400, "temporaryStorageMiB": 256},
+        "network": {"egressPolicyRef": "omnigent-restricted-egress@1"},
+        "capture": {"required": True, "retentionDays": 30},
+        "cleanup": {"mode": "drain", "janitor": True},
+        "controlCapabilities": ["interrupt", "terminate", "clear_context"],
+    }
+)
+
+register_launch_policy(
+    {
+        "schemaVersion": "moonmind.omnigent-launch-policy.v2",
         "policyId": "codex-on-demand",
         "version": 1,
         "hostMode": "on-demand",

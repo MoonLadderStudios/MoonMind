@@ -1,4 +1,4 @@
-"""Hermetic production boundary for MoonLadderStudios/MoonMind#3705."""
+"""Hermetic product boundary for MoonLadderStudios/MoonMind#3705 and #3706."""
 
 from __future__ import annotations
 
@@ -6,8 +6,9 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
@@ -30,6 +31,7 @@ from api_service.api.routers.executions import (
     get_temporal_client,
     router,
 )
+from api_service.db.base import get_async_session
 from moonmind.omnigent.reconciler import (
     CompiledSessionIntent,
     DesiredLifecycle,
@@ -44,7 +46,11 @@ from moonmind.omnigent.reconciler import (
     SubmissionState,
     TerminalOutcome,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    OmnigentExecutionPlanBinding,
+)
 from moonmind.schemas.omnigent_session_models import OmnigentSessionWorkflowInput
 from moonmind.schemas.resilience_policy_models import compile_resilience_policy
 from moonmind.workflows.temporal.activity_catalog import (
@@ -275,6 +281,13 @@ async def _resolve_intent(payload: dict[str, Any]) -> dict[str, Any]:
     STATE["workflow_id"] = str(payload["workflowId"])
     STATE["step_execution_id"] = str(payload["stepExecutionId"])
     STATE["agent_run_id"] = str(payload["agentRunId"])
+    request_payload = payload.get("request")
+    execution_plan = (
+        request_payload.get("omnigentExecutionPlan")
+        if isinstance(request_payload, dict)
+        else None
+    )
+    STATE["execution_plan"] = execution_plan
     session_id = canonical_omnigent_session_id(
         workflow_id=str(payload["workflowId"]),
         step_execution_id=str(payload["stepExecutionId"]),
@@ -290,12 +303,14 @@ async def _resolve_intent(payload: dict[str, Any]) -> dict[str, Any]:
         initialTurnAttemptId=canonical_omnigent_turn_attempt_id(session_id),
         admittedFeatureGeneration="omnigent-session-v1",
         compatibilityVersion="v1",
+        omnigentExecutionPlan=execution_plan,
     ).model_dump(mode="json", by_alias=True)
 
 
 @activity.defn(name="omnigent.evaluate_session_admission")
-async def _evaluate_session_admission(_payload: dict[str, Any]) -> dict[str, Any]:
+async def _evaluate_session_admission(payload: dict[str, Any]) -> dict[str, Any]:
     CALLS.append("evaluate_session_admission")
+    STATE["admission_plan"] = payload.get("omnigentExecutionPlan")
     return {
         "admitted": bool(STATE["admission"]),
         "reasonCode": (
@@ -778,7 +793,7 @@ def _direct_session_activities() -> list[Any]:
 
 
 async def test_product_compiled_agent_run_converges_after_lost_terminal_event() -> None:
-    """The product compiler reaches the supervisor and snapshot recovery path."""
+    """The #3706 product plan reaches admission and the session supervisor."""
 
     _reset_state()
     app = FastAPI()
@@ -787,8 +802,73 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
     execution_service.create_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: execution_service
     app.dependency_overrides[get_temporal_client] = AsyncMock
+    provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default", provider_id="opencode-go"
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(side_effect=[provider_profile, None]),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    app.dependency_overrides[get_async_session] = lambda: db_session
     _override_user_dependencies(app, is_superuser=False)
-    with TestClient(app) as client:
+    profile_snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "opencode-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "opencode-go-default",
+        "executionProfileRef": "omnigent-opencode@1",
+        "allowedLaunchPolicyRefs": ["opencode-on-demand@1"],
+        "launchPolicyRef": "opencode-on-demand@1",
+        "agentId": "opencode-agent",
+        "policyRef": "omnigent-policy:sha256:" + "d" * 64,
+        "document": {
+            "endpointRef": "default",
+            "model": {"model": "opencode/model", "settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+            "harness": "opencode-native",
+        },
+    }
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_opencode_plan_3706",
+        taskInputSnapshotRef="art_opencode_task_3706",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    compiled_plan = SimpleNamespace(
+        binding=plan_binding,
+        artifact_refs=(
+            "art_profile_3706",
+            "art_skills_3706",
+            "art_opencode_plan_3706",
+        ),
+        resolved_skillset_ref="art_skills_3706",
+    )
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            new=AsyncMock(return_value=profile_snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
+            new=AsyncMock(
+                return_value=("art_opencode_task_3706", "sha256:" + "c" * 64)
+            ),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
+            new=AsyncMock(return_value=compiled_plan),
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+        TestClient(app) as client,
+    ):
         response = client.post(
             "/api/executions",
             json={
@@ -796,12 +876,17 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
                 "payload": {
                     "repository": "MoonLadderStudios/MoonMind",
                     "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "opencode-default",
+                        "providerProfileRef": "opencode-go-default",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-opencode@1",
+                        "launchPolicyRef": "opencode-on-demand@1",
+                    },
                     "workflow": {
                         "instructions": "Apply the requested repository change.",
-                        "runtime": {
-                            "mode": "omnigent",
-                            "executionProfileRef": "omnigent-codex",
-                        },
+                        "runtime": {"mode": "omnigent"},
                     },
                 },
             },
@@ -810,6 +895,9 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
     authored = execution_service.create_execution.await_args.kwargs[
         "initial_parameters"
     ]
+    assert authored["omnigentExecutionPlan"] == plan_binding.model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
 
     workflow_queue = get_workflow_task_queue()
     async with await WorkflowEnvironment.start_time_skipping() as env:
@@ -969,6 +1057,8 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
     assert "plan_generate" in CALLS
     assert "plan_read" in CALLS
     assert "resolve_intent" in CALLS
+    assert STATE["execution_plan"] == authored["omnigentExecutionPlan"]
+    assert STATE["admission_plan"] == authored["omnigentExecutionPlan"]
     assert "read_event_batch" in CALLS
     assert "observe_snapshot" in CALLS
     assert (
