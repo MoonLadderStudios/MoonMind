@@ -11,11 +11,7 @@ hermetic while production uses SQLAlchemy. The stores enforce:
 
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any, Protocol
-
-from pydantic import ValidationError
 
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
@@ -100,16 +96,9 @@ class InMemoryExecutionPlanStore:
         compile_fn: Any,
         compile_kwargs: dict[str, Any],
     ) -> OmnigentExecutionPlanEnvelope:
-        # Workflow input must not contain executionRealizerRef authoring
-        if "execution_realizer_ref" in compile_kwargs:
-            # Planner will reject non-trusted realizer; we also fail closed here
-            # to prevent bypass via store layer
-            realizer = compile_kwargs.get("execution_realizer_ref")
-            # Allow only codex-profile-bound@1 for codex preservation via trusted path
-            # Generic planner selects trusted; workflow cannot author it.
-            # If workflow passed a realizer, we treat as authoring attempt and ignore
-            # in favor of trusted selection – but we log via error if it's incompatible
-            pass
+        # Workflow input must not author executionRealizerRef – strip so trusted planner selects
+        compile_kwargs.pop("execution_realizer_ref", None)
+        compile_kwargs.pop("executionRealizerRef", None)
         envelope: OmnigentExecutionPlanEnvelope = compile_fn(**compile_kwargs)
         existing = self._plans.get(envelope.planRef)
         if existing is not None:

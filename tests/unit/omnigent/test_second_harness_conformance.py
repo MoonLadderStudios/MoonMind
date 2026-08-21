@@ -81,8 +81,9 @@ def test_pi_harness_via_generic_host_no_realizer_change():
     skills = ResolvedSkillSet.model_validate({"resolvedSkillSetRef": "artifact:test-pi", "resolvedSkillSetDigest": "sha256:" + "a" * 64, "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64})
     bs = create_binding_set(bindingSetId="pi-primary", version=1, bindings={"primary-model": {"providerProfileRef": "pi-profile", "materializerRef": "omnigent-provider-config@1"}})
 
-    # Host Class: native-standard now declares pi-native
-    hc = get_host_class("omnigent-native-standard@3")
+    # Host Class: dedicated pi host (not placeholder standard) – requires real digest
+    os.environ["OMNIGENT_PI_HOST_IMAGE_REF"] = "ghcr.io/moonladderstudios/omnigent-host-pi@sha256:" + "b" * 64
+    hc = get_host_class("omnigent-pi@1")
     assert hc.declares_harness(harness_id, impl.implementation_ref())
     assert hc.supports_materializer("omnigent-provider-config@1")
 

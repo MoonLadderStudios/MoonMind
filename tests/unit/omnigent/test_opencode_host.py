@@ -201,10 +201,7 @@ def test_materializer_writes_file_with_correct_perms_and_ownership():
     assert target.exists()
     if os.name != "nt":
         assert stat.S_IMODE(target.stat().st_mode) == OPENCODE_AUTH_FILE_MODE
-        parent = target.parent
-        assert stat.S_IMODE(parent.stat().st_mode) == OPENCODE_AUTH_PARENT_MODE
-    else:
-        parent = target.parent
+        assert stat.S_IMODE(target.parent.stat().st_mode) == OPENCODE_AUTH_PARENT_MODE
     # Verify content without leaking
     data = json.loads(target.read_bytes())
     assert data[OPENCODE_PROVIDER_KEY]["key"] == key

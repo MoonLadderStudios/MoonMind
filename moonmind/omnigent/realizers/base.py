@@ -8,7 +8,7 @@ the activity itself.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 # Re-export for convenience
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult

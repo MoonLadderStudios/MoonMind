@@ -81,20 +81,7 @@ def test_plan_persisted_and_retries_load_same_plan():
             model_normalized_options={},
         )
         persisted1 = await store.persist(envelope1)
-        # Retry compiles same plan – should load same ref
-        envelope2 = compile_execution_plan(
-            agent_profile=profile,
-            harness_catalog=catalog,
-            trust_record=trust,
-            resolved_skills=skills,
-            credential_binding_set=bs,
-            host_class_ref="omnigent-opencode@1",
-            launch_policy_ref="omnigent-on-demand@1",
-            model_qualified_id="opencode/model",
-            model_effort=None,
-            model_route_ref="opencode-go",
-            model_normalized_options={},
-        )
+        # Retry compiles same plan – should load same ref via store (no duplicate persist)
         persisted2 = await store.load_or_compile(compile_fn=compile_execution_plan, compile_kwargs=dict(
             agent_profile=profile,
             harness_catalog=catalog,

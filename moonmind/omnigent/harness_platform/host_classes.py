@@ -25,6 +25,9 @@ OMNIGENT_OPENCODE_HOST_IMAGE_ENV = "OMNIGENT_OPENCODE_HOST_IMAGE_REF"
 OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT = "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "c" * 64
 OPENCODE_PINNED_VERSION = "1.18.11"
 OPENCODE_SUPPORTED_RANGE = ">=1.17.7,<1.19.0"
+# Dedicated Pi host image env (Phase 8)
+OMNIGENT_PI_HOST_IMAGE_ENV = "OMNIGENT_PI_HOST_IMAGE_REF"
+OMNIGENT_PI_HOST_IMAGE_DEFAULT = "ghcr.io/moonladderstudios/omnigent-host-pi@sha256:" + "c" * 64
 
 
 def get_opencode_host_image_ref() -> str:
@@ -98,6 +101,67 @@ def get_opencode_host_class() -> HostClass:
                     code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                 )
     return get_host_class("omnigent-opencode@1")
+
+
+def get_pi_host_image_ref() -> str:
+    """Return the digest-pinned Pi host image ref from deployment config.
+
+    Fails closed when no real digest is configured. Pi host is not launchable
+    on the placeholder standard image.
+    """
+    raw = os.getenv(OMNIGENT_PI_HOST_IMAGE_ENV, "").strip()
+    if not raw:
+        raise HarnessPlatformError(
+            f"{OMNIGENT_PI_HOST_IMAGE_ENV} must be set to a digest-pinned image ref for launch",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    if not _IMAGE_RE.fullmatch(raw):
+        raise HarnessPlatformError(
+            f"{OMNIGENT_PI_HOST_IMAGE_ENV} must be digest-pinned (got {raw!r})",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    if raw.endswith("0" * 64) or raw.endswith("c" * 64):
+        raise HarnessPlatformError(
+            f"{OMNIGENT_PI_HOST_IMAGE_ENV} digest must not be placeholder",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    return raw
+
+
+def get_pi_host_class() -> HostClass:
+    """Convenience for the dedicated Pi host class (omnigent-pi@1)."""
+    if "omnigent-pi@1" not in HOST_CLASSES:
+        registered = _try_register_pi_host_class()
+        if registered is None:
+            try:
+                get_pi_host_image_ref()
+            except HarnessPlatformError as exc:
+                raise HarnessPlatformError(
+                    f"host class omnigent-pi@1 unavailable: {exc}",
+                    code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+                ) from exc
+            raise HarnessPlatformError(
+                "host class omnigent-pi@1 unavailable: no real image digest",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+            )
+    if "omnigent-pi@1" in HOST_CLASSES:
+        try:
+            current_ref = get_pi_host_image_ref()
+        except HarnessPlatformError as exc:
+            raise HarnessPlatformError(
+                f"host class omnigent-pi@1 unavailable: {exc}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+            ) from exc
+        stored = HOST_CLASSES["omnigent-pi@1"]
+        if stored.imageRef != current_ref:
+            _try_register_pi_host_class()
+            stored = HOST_CLASSES.get("omnigent-pi@1")
+            if stored is None or stored.imageRef != current_ref:
+                raise HarnessPlatformError(
+                    f"host class omnigent-pi@1 image mismatch",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                )
+    return get_host_class("omnigent-pi@1")
 
 
 class HostClassHarnessEntry(BaseModel):
@@ -204,11 +268,6 @@ register_host_class(
                 "implementationRef": _impl_ref("omnigent", "1.0.0", "sha256:" + "e" * 64),
                 "runtimeDependencies": [],
             },
-            {
-                "harnessId": "pi-native",
-                "implementationRef": _impl_ref("omnigent", "1.0.0", "sha256:" + "c" * 64),
-                "runtimeDependencies": [],
-            },
         ],
         "integrationModes": ["native-tui", "native-server", "cli-subprocess", "sdk-in-process"],
         "materializerRefs": ["codex-oauth-home@1", "opencode-auth-json@1", "omnigent-provider-config@1", "host-owned-auth@1", "none@1"],
@@ -298,6 +357,57 @@ try:
 except Exception:
     pass
 
+
+def _pi_host_class_data(image_ref: str) -> dict[str, object]:
+    return {
+        "schemaVersion": "moonmind.omnigent-host-class.v1",
+        "hostClassId": "omnigent-pi",
+        "version": 1,
+        "imageRef": image_ref,
+        "omnigentVersion": "1.0.0",
+        "omnigentBuildDigest": "sha256:" + "b" * 64,
+        "architectures": ["linux/amd64", "linux/arm64"],
+        "declaredHarnessImplementations": [
+            {
+                "harnessId": "pi-native",
+                "implementationRef": _impl_ref("omnigent", "1.0.0", "sha256:" + "c" * 64),
+                "runtimeDependencies": [],
+            }
+        ],
+        "integrationModes": ["native-server"],
+        "materializerRefs": ["omnigent-provider-config@1", "host-owned-auth@1"],
+        "features": {
+            "git": True,
+            "tmux": True,
+            "bubblewrap": True,
+            "workspaceBind": True,
+            "readOnlyRoot": True,
+            "restrictedEgress": True,
+            "mountedSkills": True,
+            "mountedTools": True,
+        },
+        "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+    }
+
+
+def _try_register_pi_host_class() -> HostClass | None:
+    try:
+        image_ref = get_pi_host_image_ref()
+    except HarnessPlatformError:
+        return None
+    if "omnigent-pi@1" in HOST_CLASSES:
+        existing = HOST_CLASSES["omnigent-pi@1"]
+        if existing.imageRef == image_ref:
+            return existing
+        HOST_CLASSES.pop("omnigent-pi@1", None)
+    return register_host_class(_pi_host_class_data(image_ref))
+
+
+try:
+    _try_register_pi_host_class()
+except Exception:
+    pass
+
 register_host_class(
     {
         "schemaVersion": "moonmind.omnigent-host-class.v1",
@@ -332,7 +442,7 @@ register_host_class(
 
 
 def get_host_class(ref: str) -> HostClass:
-    # Lazy registration for omnigent-opencode@1 (Phase 0: requires real digest)
+    # Lazy registration for dedicated hosts (Phase 0/8: requires real digest)
     if ref == "omnigent-opencode@1" and ref not in HOST_CLASSES:
         registered = _try_register_opencode_host_class()
         if registered is not None:
@@ -349,12 +459,27 @@ def get_host_class(ref: str) -> HostClass:
             f"host class {ref} unavailable",
             code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
         )
+    if ref == "omnigent-pi@1" and ref not in HOST_CLASSES:
+        registered = _try_register_pi_host_class()
+        if registered is not None:
+            return registered
+        try:
+            get_pi_host_image_ref()
+        except HarnessPlatformError as exc:
+            raise HarnessPlatformError(
+                f"host class {ref} unavailable: {exc}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+            ) from exc
+        raise HarnessPlatformError(
+            f"host class {ref} unavailable",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+        )
     if ref not in HOST_CLASSES:
         raise HarnessPlatformError(
             f"host class {ref} unavailable",
             code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
         )
-    # For omnigent-opencode@1, ensure stored image still matches current env
+    # For dedicated hosts, ensure stored image still matches current env
     if ref == "omnigent-opencode@1":
         try:
             current_ref = get_opencode_host_image_ref()
@@ -367,6 +492,23 @@ def get_host_class(ref: str) -> HostClass:
         if stored.imageRef != current_ref:
             # Re-register if env changed (tests vary digest)
             updated = _try_register_opencode_host_class()
+            if updated is None or updated.imageRef != current_ref:
+                raise HarnessPlatformError(
+                    f"host class {ref} image mismatch",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                )
+            return updated
+    if ref == "omnigent-pi@1":
+        try:
+            current_ref = get_pi_host_image_ref()
+        except HarnessPlatformError as exc:
+            raise HarnessPlatformError(
+                f"host class {ref} unavailable: {exc}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+            ) from exc
+        stored = HOST_CLASSES[ref]
+        if stored.imageRef != current_ref:
+            updated = _try_register_pi_host_class()
             if updated is None or updated.imageRef != current_ref:
                 raise HarnessPlatformError(
                     f"host class {ref} image mismatch",

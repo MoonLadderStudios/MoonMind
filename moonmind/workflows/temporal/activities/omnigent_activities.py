@@ -15,6 +15,20 @@ from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 # Generic realizer dispatch helpers (Phase 1)
 _GENERIC_HARNESS_IDS = {"opencode-native", "pi-native", "qwen-native", "claude-native"}
 
+# Singleton plan store for retry-stable planRef (P1 3828196601) – fixed observedAt
+# ensures retries do not replan with a different digest.
+_GENERIC_PLAN_STORE: Any | None = None
+_GENERIC_CATALOG_OBSERVED_AT = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+
+
+def _get_generic_plan_store() -> Any:
+    global _GENERIC_PLAN_STORE
+    if _GENERIC_PLAN_STORE is None:
+        from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
+
+        _GENERIC_PLAN_STORE = InMemoryExecutionPlanStore()
+    return _GENERIC_PLAN_STORE
+
 
 _IMMUTABLE_RECOVERY_DIMENSIONS = (
     "instructionDigest",
@@ -353,7 +367,24 @@ async def _try_generic_realizer_dispatch(
         or isinstance(params.get("omnigentAgentProfileV2"), dict)
         or isinstance(params.get("agentProfileV2"), dict)
     )
-    harness_id = str(agent.get("harnessId") or agent.get("harness") or session_cfg.get("harness") or "").strip()
+    # Canonical harness override is `harnessOverride` (profile_bound_execution._bind_exact_host)
+    harness_id = str(
+        agent.get("harnessOverride")
+        or agent.get("harnessId")
+        or agent.get("harness")
+        or session_cfg.get("harnessOverride")
+        or session_cfg.get("harness")
+        or session_cfg.get("harnessId")
+        or ""
+    ).strip()
+    # If v2 profile present, its harness takes precedence over session/agent override
+    if has_v2_profile:
+        v2_payload = omnigent.get("agentProfileV2") if isinstance(omnigent.get("agentProfileV2"), dict) else (params.get("omnigentAgentProfileV2") if isinstance(params.get("omnigentAgentProfileV2"), dict) else params.get("agentProfileV2"))
+        if isinstance(v2_payload, dict):
+            v2_harness = v2_payload.get("harness", {}) if isinstance(v2_payload.get("harness"), dict) else {}
+            v2_id = str(v2_harness.get("id") or "").strip()
+            if v2_id:
+                harness_id = v2_id
     is_generic_harness = harness_id in _GENERIC_HARNESS_IDS and harness_id != "codex-native"
 
     # Also detect via explicit generic marker for hermetic tests
@@ -378,14 +409,11 @@ async def _try_generic_realizer_dispatch(
         # Do not honor workflow-authored realizer; planner will select trusted
         pass
 
-    # If no v2 profile payload to compile, we cannot yet fully realize;
-    # return a bounded not-implemented result that still proves the dispatch
-    # path exists and is harness-neutral (no runtime fallback).
-    # In production with full v2 request, this would compile and delegate.
-    if not has_v2_profile:
-        # For hermetic harness test with only harnessId, synthesize a minimal
-        # plan via planner using test fixtures and dispatch generically
-        try:
+    # Unified generic dispatch – both harness-only and v2 payloads compile and
+    # delegate via the same harness-neutral planner path (P1 3828196581).
+    # This ensures the canonical v2 input also goes through plan persistence
+    # and realizer dispatch, not the legacy driver.
+    try:
             from datetime import UTC, datetime
 
             from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
@@ -419,7 +447,7 @@ async def _try_generic_realizer_dispatch(
                         "setupSteps": [],
                     }
                 ],
-                observedAt=datetime.now(UTC),
+                observedAt=_GENERIC_CATALOG_OBSERVED_AT,
             )
             trust = classify_harness_trust(harnessId=harness_id, implementation=impl, trustState=TrustState.core_trusted)
             # Use a minimal v2 profile for the harness
@@ -443,29 +471,68 @@ async def _try_generic_realizer_dispatch(
             )
             skills = ResolvedSkillSet.model_validate({"resolvedSkillSetRef": "artifact:test", "resolvedSkillSetDigest": "sha256:" + "a" * 64, "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64})
             bs = create_binding_set(bindingSetId="test-generic", version=1, bindings={"primary-model": {"providerProfileRef": "test-provider", "materializerRef": "opencode-auth-json@1" if harness_id != "pi-native" else "omnigent-provider-config@1"}})
-            # Host class selection: opencode uses dedicated, pi uses standard
-            host_class_ref = "omnigent-opencode@1" if harness_id == "opencode-native" else "omnigent-native-standard@3"
-            # Ensure opencode image env is set for host class lookup in tests
+            # Host class selection: dedicated images per harness (fail closed without real digest)
+            if harness_id == "opencode-native":
+                host_class_ref = "omnigent-opencode@1"
+            elif harness_id == "pi-native":
+                host_class_ref = "omnigent-pi@1"
+            else:
+                host_class_ref = "omnigent-native-standard@3"
+            # Fail closed when dedicated image not configured – do not inject fabricated digest
             if harness_id == "opencode-native":
                 import os
 
-                os.environ.setdefault("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "a" * 64)
-            envelope = compile_execution_plan(
-                agent_profile=profile,
-                harness_catalog=catalog,
-                trust_record=trust,
-                resolved_skills=skills,
-                credential_binding_set=bs,
-                host_class_ref=host_class_ref,
-                launch_policy_ref="omnigent-on-demand@1",
-                model_qualified_id="test/model",
-                model_effort=None,
-                model_route_ref="opencode-go",
-                model_normalized_options={},
+                from moonmind.omnigent.harness_platform.failures import HarnessPlatformError as _HPE, HarnessPlatformFailure as _HPF
+
+                if not os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip():
+                    raise _HPE(
+                        "OMNIGENT_OPENCODE_HOST_IMAGE_REF must be set to a digest-pinned image for opencode",
+                        code=_HPF.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
+            if harness_id == "pi-native":
+                import os
+
+                from moonmind.omnigent.harness_platform.failures import HarnessPlatformError as _HPE2, HarnessPlatformFailure as _HPF2
+
+                if not os.getenv("OMNIGENT_PI_HOST_IMAGE_REF", "").strip():
+                    raise _HPE2(
+                        "OMNIGENT_PI_HOST_IMAGE_REF must be set to a digest-pinned image for pi",
+                        code=_HPF2.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
+            # Bind plan to request's actual model selection (P1 3828196631)
+            model_qualified_id = (
+                str(params.get("model") or "").strip()
+                or str(omnigent.get("model") or "").strip()
+                or str(agent.get("model") or "").strip()
+                or str(params.get("modelId") or "").strip()
+                or "test/model"
             )
-            # Persist via in-memory store (retry-safe)
-            store = InMemoryExecutionPlanStore()
-            persisted = await store.persist(envelope)
+            model_route_ref = str(
+                params.get("modelRoute") or params.get("model_route") or omnigent.get("modelRoute") or omnigent.get("routeRef") or ("pi" if harness_id == "pi-native" else "opencode-go")
+            ).strip() or ("pi" if harness_id == "pi-native" else "opencode-go")
+            _effort_raw = params.get("effort") or params.get("modelEffort") or omnigent.get("effort") or agent.get("effort")
+            model_effort = str(_effort_raw).strip() if isinstance(_effort_raw, str) and str(_effort_raw).strip() else None
+            model_options = params.get("modelOptions") if isinstance(params.get("modelOptions"), dict) else (omnigent.get("modelOptions") if isinstance(omnigent.get("modelOptions"), dict) else {})
+
+            # Use singleton store so retries load same planRef (P1 3828196601)
+            store = _get_generic_plan_store()
+            # Compile via store's load_or_compile to ensure retry stability (fixed observedAt)
+            persisted = await store.load_or_compile(
+                compile_fn=compile_execution_plan,
+                compile_kwargs=dict(
+                    agent_profile=profile,
+                    harness_catalog=catalog,
+                    trust_record=trust,
+                    resolved_skills=skills,
+                    credential_binding_set=bs,
+                    host_class_ref=host_class_ref,
+                    launch_policy_ref="omnigent-on-demand@1",
+                    model_qualified_id=model_qualified_id,
+                    model_effort=model_effort,
+                    model_route_ref=model_route_ref,
+                    model_normalized_options=model_options,
+                ),
+            )
             # Dispatch via registry – must be generic-omnigent-host@1, no fallback
             registry = get_default_registry()
             realizer = registry.require(persisted.payload.executionRealizerRef)
@@ -484,8 +551,7 @@ async def _try_generic_realizer_dispatch(
                 retryRecommendation="retry_transient_upstream",
             )
 
-    # Full v2 profile path (not yet exercised in hermetic tests)
-    return None
+    return None  # non-generic already returned; generic always dispatched above
 
 
 @activity.defn(name="integration.omnigent.execute")

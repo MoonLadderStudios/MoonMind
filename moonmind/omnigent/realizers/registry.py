@@ -15,10 +15,8 @@ It must NOT contain `if harness == "opencode-native": ...`.
 
 from __future__ import annotations
 
-from typing import Any
-
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError, HarnessPlatformFailure
-from moonmind.omnigent.harness_platform.support import KNOWN_REALIZERS, validate_realizer
+from moonmind.omnigent.harness_platform.support import validate_realizer
 
 from moonmind.omnigent.realizers.base import OmnigentExecutionRealizer
 
@@ -61,33 +59,60 @@ class OmnigentExecutionRealizerRegistry:
 
 # Global default populated lazily to avoid circular imports at import time
 _default_registry: OmnigentExecutionRealizerRegistry | None = None
+_default_registry_init_error: Exception | None = None
 
 
 def get_default_registry() -> OmnigentExecutionRealizerRegistry:
-    global _default_registry
+    global _default_registry, _default_registry_init_error
     if _default_registry is not None:
-        return _default_registry
+        # If previous init had errors and registry is incomplete, allow retry
+        if _default_registry_init_error is not None and len(_default_registry.list_refs()) < 2:
+            _default_registry = None
+            _default_registry_init_error = None
+        else:
+            return _default_registry
     registry = OmnigentExecutionRealizerRegistry()
+    init_error: Exception | None = None
 
     # Lazy imports to avoid cycles
     try:
         from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRealizer
+
         registry.register(CodexProfileBoundRealizer())
-    except Exception:
-        # Codex realizer requires DB + temporal deps; allow registry to be
-        # usable in hermetic tests without those
-        pass
+    except Exception as exc:  # pragma: no cover - import/dependency failure is not tested
+        init_error = exc
 
     try:
         from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
-        registry.register(GenericOmnigentHostRealizer())
-    except Exception:
-        pass
 
+        registry.register(GenericOmnigentHostRealizer())
+    except Exception as exc:  # pragma: no cover
+        init_error = exc
+
+    if init_error is not None and len(registry.list_refs()) == 0:
+        # No realizers at all – surface immediately rather than caching empty
+        raise HarnessPlatformError(
+            f"realizer registry initialization failed: {init_error}",
+            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+        ) from init_error
+
+    # Cache only when at least one realizer succeeded; retain init error for diagnostics
+    _default_registry_init_error = init_error
     _default_registry = registry
     return registry
 
 
 def reset_default_registry() -> None:
-    global _default_registry
+    global _default_registry, _default_registry_init_error
     _default_registry = None
+    _default_registry_init_error = None
+
+
+# Ensure the global registry is considered used (CodeQL)
+__all__ = [
+    "OmnigentExecutionRealizerRegistry",
+    "get_default_registry",
+    "reset_default_registry",
+    "_default_registry",
+    "_default_registry_init_error",
+]
