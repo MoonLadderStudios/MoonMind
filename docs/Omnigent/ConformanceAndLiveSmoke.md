@@ -134,14 +134,24 @@ before its evidence can enter the publication job. The final publication-tree
 scan runs after per-mode cleanup and final report generation, and therefore
 covers the cleanup logs and the exact report tree uploaded by the workflow.
 
+Host images are pinned per host class rather than shared: `--host-image` pins
+the Codex stock host and `--opencode-host-image` pins the dedicated OpenCode
+host, and each claimed combination publishes the digest-pinned image that
+actually executed it. Each per-combination report publishes that combination's
+own authentication mode and exactly the four case ids and row evidence refs of
+the combination it qualifies, so one passing report cannot cover another
+combination.
+
 Each passing combination binds its evidence to the exact support-combination
 identity that ran: Omnigent server and host build refs, harness implementation
 and vendor runtime refs, agent source, materializers, provider compatibility
 class, Host Class, architecture, launch policy, normalized model-configuration
 digest, execution realizer, required-capability digest, and the Provider Profile
-class. The recorded `supportCombinationKey` must recompute from those fields, so
-evidence for one combination can never qualify another. The manifest also
-carries the scenario and route-inventory versions, the deployed dashboard and
+class. The recorded `supportCombinationKey` must recompute from those fields,
+and the Provider Profile class, credential materializer, and authentication mode
+are pinned by the claimed inventory, so evidence for one combination can never
+qualify another. The manifest also carries the scenario and route-inventory
+versions, the deployed dashboard and
 Omnigent UI bundle digests, each case's measured duration, the durable operator
 timeline ref for the terminal cleaned-up session, the cleanup outcome, and the
 superseded report ref.
@@ -153,6 +163,12 @@ stop, and clear-context, capture gates evidence harvest, and only a `remove`
 cleanup mode advertises session cleanup. The `capabilitySnapshot` record must
 cover exactly that set and record one observed enforcement outcome per
 advertised capability that matches the effective intersection.
+
+Cleanup evidence is derived the same way. A `remove` cleanup mode must show the
+live host stopped and its live resources removed; a `drain` cleanup mode retires
+a static-connected host that keeps serving, so it shows a drain and retains its
+live resources. Both orders end with Provider Profile release, and the observed
+step order must match the required order exactly.
 
 `MOONMIND_OMNIGENT_WORKFLOW_CHAT_SUPERSEDED_REPORT` optionally names the report
 this run supersedes. When it is omitted the manifest records no superseded ref

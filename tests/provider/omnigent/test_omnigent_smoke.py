@@ -342,6 +342,10 @@ async def test_live_native_workflow_chat_release_matrix(bridge_store) -> None:
             continue
         assert entry.get("status") == "passed"
         assert set(entry.get("rows") or {}) == set(REQUIRED_WORKFLOW_CHAT_ROWS)
+        # The combination is only qualified by the host image that ran it.
+        assert entry.get("hostImageRef") == (payload.get("images") or {}).get(
+            combination.host_image_key
+        )
 
 
 async def test_live_cumulative_remediation_journey(bridge_store) -> None:

@@ -1091,7 +1091,11 @@ freshness window. Each combination binds its evidence to the exact
 support-combination identity — harness implementation, vendor runtime,
 materializers, Host Class, architecture, launch policy, normalized model
 configuration, execution realizer, required capabilities, and Provider Profile
-class — and the recorded `supportCombinationKey` must recompute from it.
+class — and the recorded `supportCombinationKey` must recompute from it. The
+Provider Profile class, credential materializer, authentication mode, and the
+digest-pinned host image that executed the combination are pinned by the claimed
+inventory, so evidence gathered under one credential authority or host image can
+never qualify another.
 
 Every source record carries an observation timestamp, immutable image digests,
 and one server-owned correlation envelope containing the Workflow, chat binding,
@@ -1109,16 +1113,16 @@ record-specific observed facts are:
 | `facadeRequests` | every compatibility route bound to an observed request path/method/transport, HTML/HTTP/SSE/WebSocket authorization, server-resolved binding/session, reconnect reauthorization |
 | `resourceInventory` | request-correlated approval/tool/file/terminal/agent/task resources |
 | `mutationReceipts` | exactly one receipt for every mutation derived from the compatibility map, including actor, idempotency, expected state, outcome, upstream correlation, and audit ref |
-| `denialAudit` | alternate-binding, provider-session, hidden-control, immutable-policy, cross-user, and cross-workflow denials before upstream forwarding |
-| `executionCreation` | the browser-originated `POST /api/executions` create, the Temporal workflow/run/task-queue routing it produced, the resolved Agent Profile snapshot, execution plan, and Provider Profile, and the live bridge session it resolved to |
-| `capabilitySnapshot` | upstream/profile/provider-policy/workflow/caller inputs, their recomputed intersection digest over exactly the combination's advertised capability contract, and one observed enforcement outcome per advertised capability |
+| `denialAudit` | alternate-binding, provider-session, hidden-control, immutable-policy, cross-user, and cross-workflow denials before upstream forwarding; each cross-scope denial records the authorized and attempted user and Workflow identities and varies exactly the scope it claims to isolate |
+| `executionCreation` | the browser-originated `POST /api/executions` create — cross-checked against the matching browser trace event's method and normalized path — the Temporal workflow/run/task-queue routing it produced, the resolved Agent Profile snapshot, execution plan, and Provider Profile, and the live bridge session it resolved to |
+| `capabilitySnapshot` | upstream/profile/provider-policy/workflow/caller inputs, their recomputed intersection digest over exactly the combination's advertised capability contract, and one observed enforcement outcome per advertised capability; a denied capability's enforcement request is expected to be denied in the browser trace |
 | `scanAudit` | blocked-content and unavailable-enforcement sends, neither forwarded |
 | `credentialBoundary` | every traced request verified to expose no upstream credential in the browser and forward no MoonMind credential upstream, plus a server-side credential injection ref |
 | `terminalSnapshot` | terminal state, read-only projection, denied mutation requests |
 | `capturedEvidence` | packaged MoonMind artifact and capture-manifest refs resolved and digest-bound into the acceptance manifest |
 | `continuationReceipt` | production destination-creation receipt, pinned source run, durable outbound `linked_continuation` relationship identity, idempotency, and matching source before/after digests |
 | `replaySnapshot` | host unavailable and replay resolved from the captured MoonMind artifacts |
-| `cleanupReceipt` | consecutively ordered live-host stop, provider-session removal, workspace publication, and Provider Profile release, with release last, plus the observed host mode, launch-policy cleanup mode, and cleanup state |
+| `cleanupReceipt` | the consecutively ordered cleanup steps the combination's cleanup mode can truthfully emit — live-host stop for `remove`, live-host drain for `drain` — then provider-session removal, workspace publication, and Provider Profile release last, plus the observed host mode, launch-policy cleanup mode, live-resource disposition, and cleanup state |
 
 ---
 

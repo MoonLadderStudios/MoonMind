@@ -77,6 +77,12 @@ _TERMINAL_CAPABILITIES = frozenset(
     }
 )
 _WORKSPACE_CAPABILITIES = frozenset({"uploadFiles", "mutateWorkspace"})
+
+# Provider Profile classes are release identity: the credential and provider
+# authority a combination ran under is pinned by the claimed inventory, so
+# evidence gathered under one class can never qualify another.
+_CODEX_OAUTH_PROFILE_CLASS = "omnigent-codex-oauth-profile-class@1"
+_OPENCODE_API_KEY_PROFILE_CLASS = "omnigent-opencode-api-key-profile-class@1"
 _CONTROL_CAPABILITY_REQUIREMENTS: Mapping[str, str] = {
     "interruptTurn": "interrupt",
     "stopSession": "terminate",
@@ -132,6 +138,16 @@ class WorkflowChatCombination:
     compose_profile: str
     compose_services: tuple[str, ...]
     native_chat_claimed: bool
+    # Credential/provider authority identity is code-owned per combination:
+    # evidence collected under one Provider Profile class, credential
+    # materializer, or authentication mode never qualifies another.
+    provider_profile_class: str = ""
+    credential_materializer_ref: str = ""
+    auth_mode: str = ""
+    # The manifest ``images`` key that pins the host image which actually
+    # executes this combination. Distinct host classes ship distinct images, so
+    # a single shared ``host`` digest cannot qualify all of them.
+    host_image_key: str = "host"
     unsupported_reason: str | None = None
 
     def __post_init__(self) -> None:
@@ -139,6 +155,19 @@ class WorkflowChatCombination:
             raise ConformanceContractError(
                 "workflow Chat combination must either be claimed or carry one "
                 f"stable unsupported reason: {self.combination_id}"
+            )
+        if self.native_chat_claimed and not all(
+            (
+                self.provider_profile_class,
+                self.credential_materializer_ref,
+                self.auth_mode,
+                self.host_image_key,
+            )
+        ):
+            raise ConformanceContractError(
+                "workflow Chat claimed combination must name its Provider "
+                "Profile class, credential materializer, authentication mode, "
+                f"and pinned host image: {self.combination_id}"
             )
         validate_realizer(self.execution_realizer_ref)
 
@@ -153,6 +182,33 @@ class WorkflowChatCombination:
     @property
     def host_mode(self) -> str:
         return self.launch_policy.hostMode
+
+    @property
+    def cleanup_mode(self) -> str:
+        return str(self.launch_policy.cleanup.get("mode") or "")
+
+    @property
+    def required_cleanup_steps(self) -> tuple[str, ...]:
+        """Return the ordered cleanup steps this host mode can truthfully emit.
+
+        On-demand hosts are removed, so the live host stops. Static-connected
+        hosts are drained and keep serving the next run, so demanding a stopped
+        host would force the adapter to publish false evidence.
+        """
+
+        steps = _CLEANUP_STEPS_BY_MODE.get(self.cleanup_mode)
+        if steps is None:
+            raise ConformanceContractError(
+                "workflow Chat combination has no cleanup contract for mode "
+                f"{self.cleanup_mode!r}: {self.combination_id}"
+            )
+        return steps
+
+    @property
+    def live_resources_removed_expected(self) -> bool:
+        """Whether cleanup must report the live host's resources as removed."""
+
+        return self.cleanup_mode == "remove"
 
     @property
     def advertised_capabilities(self) -> frozenset[str]:
@@ -174,6 +230,10 @@ WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
         compose_profile="omnigent-host-codex",
         compose_services=("omnigent",),
         native_chat_claimed=True,
+        provider_profile_class=_CODEX_OAUTH_PROFILE_CLASS,
+        credential_materializer_ref="codex-oauth-home@1",
+        auth_mode="codex-oauth",
+        host_image_key="host",
     ),
     WorkflowChatCombination(
         combination_id="codex-static-connected-through-omnigent",
@@ -184,6 +244,10 @@ WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
         compose_profile="omnigent-host-codex",
         compose_services=("omnigent", "omnigent-host-codex"),
         native_chat_claimed=True,
+        provider_profile_class=_CODEX_OAUTH_PROFILE_CLASS,
+        credential_materializer_ref="codex-oauth-home@1",
+        auth_mode="codex-oauth",
+        host_image_key="host",
     ),
     WorkflowChatCombination(
         combination_id="opencode-through-generic-omnigent-host",
@@ -194,6 +258,12 @@ WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
         compose_profile="omnigent-host-codex",
         compose_services=("omnigent",),
         native_chat_claimed=True,
+        provider_profile_class=_OPENCODE_API_KEY_PROFILE_CLASS,
+        credential_materializer_ref="opencode-auth-json@1",
+        auth_mode="opencode-api-key",
+        # The OpenCode journey runs the dedicated OpenCode host image, which is
+        # pinned separately from the Codex host digest.
+        host_image_key="opencodeHost",
     ),
 )
 
@@ -210,6 +280,17 @@ def workflow_chat_combinations() -> dict[str, WorkflowChatCombination]:
             )
         inventory[combination.combination_id] = combination
     return inventory
+
+
+def workflow_chat_case_id(combination_id: str, row_name: str) -> str:
+    """Return the one canonical report case id for a combination's row.
+
+    The case id is code-owned so a report cannot satisfy one combination's
+    retirement coverage with another combination's passing cases.
+    """
+
+    return f"workflow-chat-{combination_id}-{row_name}"
+
 
 REQUIRED_WORKFLOW_CHAT_ROWS: Mapping[str, frozenset[str]] = {
     "native-live-conversation": frozenset(
@@ -297,6 +378,7 @@ REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS: Mapping[str, frozenset[str]] = {
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SHA256_REF = re.compile(r"^sha256:[0-9a-f]{64}$")
+_IMAGE_DIGEST_REF = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _CORRELATION_FIELDS = (
     "workflowId",
     "chatBindingId",
@@ -321,8 +403,10 @@ _DENIAL_KINDS = frozenset(
         "cross_workflow",
     }
 )
-# Cleanup must finish with provider-profile release, after the live host and
-# provider session are gone and the workspace result is durable.
+# Cleanup must finish with provider-profile release, after the live host is
+# retired for its host mode, the provider session is gone, and the workspace
+# result is durable. On-demand hosts stop; static-connected hosts drain and keep
+# serving, so their truthful terminal step is a drain, not a stop.
 _PROVIDER_PROFILE_RELEASE_STEP = "provider_profile_release"
 _REQUIRED_CLEANUP_STEPS = (
     "live_host_stopped",
@@ -330,6 +414,28 @@ _REQUIRED_CLEANUP_STEPS = (
     "workspace_published",
     _PROVIDER_PROFILE_RELEASE_STEP,
 )
+_DRAIN_CLEANUP_STEPS = (
+    "live_host_drained",
+    "provider_session_removed",
+    "workspace_published",
+    _PROVIDER_PROFILE_RELEASE_STEP,
+)
+_CLEANUP_STEPS_BY_MODE: Mapping[str, tuple[str, ...]] = {
+    "remove": _REQUIRED_CLEANUP_STEPS,
+    "drain": _DRAIN_CLEANUP_STEPS,
+}
+_CLEANUP_STEP_KINDS = frozenset(_REQUIRED_CLEANUP_STEPS) | frozenset(
+    _DRAIN_CLEANUP_STEPS
+)
+# Cross-scope denials only prove isolation when they record the authorized and
+# attempted identities, so a relabelled ordinary 403 cannot satisfy them.
+_CROSS_SCOPE_IDENTITY_FIELDS = (
+    "authorizedUserId",
+    "attemptedUserId",
+    "authorizedWorkflowId",
+    "attemptedWorkflowId",
+)
+_CROSS_SCOPE_DENIAL_KINDS = frozenset({"cross_user", "cross_workflow"})
 _EXECUTIONS_CREATE_PATH = "/api/executions"
 _TERMINAL_STATES = frozenset(
     {"completed", "failed", "canceled", "cancelled", "timed_out", "stopped"}
@@ -421,6 +527,47 @@ def _require_evidence_items(value: Any, *, field: str) -> list[dict[str, str]]:
         seen.add(ref)
         result.append({"ref": ref, "sha256": digest})
     return result
+
+
+def _validate_cross_scope_denial(
+    denial: Mapping[str, Any], *, kind: str, workflow_id: str
+) -> None:
+    """Require the identities that make a cross-scope denial meaningful.
+
+    ``cross_user`` and ``cross_workflow`` are isolation claims, not labels: the
+    audit must name the authorized scope under test and the different scope the
+    attempt used, so an ordinary 403 cannot be relabelled as either check.
+    """
+
+    identity = _require_mapping(
+        denial.get("scopeIdentity"),
+        field="denialAudit.data.denials[].scopeIdentity",
+    )
+    if set(identity) != set(_CROSS_SCOPE_IDENTITY_FIELDS):
+        raise ConformanceContractError(
+            f"workflow Chat {kind} denial does not record both scope identities"
+        )
+    values = {
+        field: _require_string(
+            identity[field],
+            field=f"denialAudit.data.denials[].scopeIdentity.{field}",
+        )
+        for field in _CROSS_SCOPE_IDENTITY_FIELDS
+    }
+    if values["authorizedWorkflowId"] != workflow_id:
+        raise ConformanceContractError(
+            f"workflow Chat {kind} denial is not bound to the workflow under test"
+        )
+    same_user = values["attemptedUserId"] == values["authorizedUserId"]
+    same_workflow = values["attemptedWorkflowId"] == values["authorizedWorkflowId"]
+    # Exactly one scope may vary, otherwise the denial does not isolate the
+    # property it claims to prove.
+    if (kind == "cross_user" and (same_user or not same_workflow)) or (
+        kind == "cross_workflow" and (same_workflow or not same_user)
+    ):
+        raise ConformanceContractError(
+            f"workflow Chat {kind} denial does not vary exactly that scope"
+        )
 
 
 def _validate_record_data(
@@ -741,11 +888,10 @@ def _validate_record_data(
         denial_ids: set[str] = set()
         for denial in denials:
             item = _require_mapping(denial, field="denialAudit.data.denials[]")
-            kinds.add(
-                _require_string(
-                    item.get("kind"), field="denialAudit.data.denials[].kind"
-                )
+            kind = _require_string(
+                item.get("kind"), field="denialAudit.data.denials[].kind"
             )
+            kinds.add(kind)
             if (
                 item.get("requestId") not in request_id_set
                 or item.get("requestId") in denial_ids
@@ -758,6 +904,10 @@ def _validate_record_data(
             _require_string(
                 item.get("auditRef"), field="denialAudit.data.denials[].auditRef"
             )
+            if kind in _CROSS_SCOPE_DENIAL_KINDS:
+                _validate_cross_scope_denial(
+                    item, kind=kind, workflow_id=workflow_id
+                )
         if not _DENIAL_KINDS.issubset(kinds):
             raise ConformanceContractError(
                 "workflow Chat denialAudit coverage is incomplete"
@@ -994,6 +1144,7 @@ def _validate_record_data(
             raise ConformanceContractError(
                 "workflow Chat cleanupReceipt requires ordered cleanup steps"
             )
+        required_steps = combination.required_cleanup_steps
         observed: dict[int, str] = {}
         for raw_step in steps:
             step = _require_mapping(raw_step, field="cleanupReceipt.data.steps[]")
@@ -1002,7 +1153,7 @@ def _validate_record_data(
             )
             order = step.get("order")
             if (
-                kind not in _REQUIRED_CLEANUP_STEPS
+                kind not in _CLEANUP_STEP_KINDS
                 or not isinstance(order, int)
                 or isinstance(order, bool)
                 or order in observed
@@ -1018,14 +1169,15 @@ def _validate_record_data(
         ordered = [observed[key] for key in sorted(observed)]
         if (
             sorted(observed) != list(range(1, len(ordered) + 1))
-            or set(ordered) != set(_REQUIRED_CLEANUP_STEPS)
-            or ordered[-1] != _PROVIDER_PROFILE_RELEASE_STEP
-            or data.get("liveResourcesRemoved") is not True
+            # The documented contract is an order, not a set: publishing the
+            # workspace before removing the provider session is not equivalent.
+            or tuple(ordered) != required_steps
+            or data.get("liveResourcesRemoved")
+            is not combination.live_resources_removed_expected
             or data.get("providerProfileReleasedLast") is not True
             or data.get("outcome") != "released"
             or data.get("hostMode") != combination.host_mode
-            or data.get("cleanupMode")
-            != combination.launch_policy.cleanup.get("mode")
+            or data.get("cleanupMode") != combination.cleanup_mode
         ):
             raise ConformanceContractError(
                 "workflow Chat cleanupReceipt does not prove release-last cleanup"
@@ -1149,7 +1301,33 @@ def validate_workflow_chat_source_records(
         str(item["requestId"]): item
         for item in sources["browserTrace"]["data"]["networkEvents"]
     }
+    creation_source = sources.get("executionCreation")
+    if creation_source is not None:
+        creation_data = creation_source["data"]
+        create_event = browser_events[str(creation_data["createRequestId"])]
+        # The record must describe the same observed call the browser made, not
+        # merely reuse a request ID seen somewhere in the trace.
+        if str(create_event["method"]) != "POST" or urllib.parse.urlsplit(
+            str(create_event["path"])
+        ).path != _EXECUTIONS_CREATE_PATH:
+            raise ConformanceContractError(
+                "workflow Chat executionCreation does not match the observed "
+                "browser create request"
+            )
     expected_denial_statuses: dict[str, int] = {}
+    capability_source = sources.get("capabilitySnapshot")
+    if capability_source is not None:
+        # A capability that evaluates false is enforced with a real denial, so
+        # its browser event is a 403 rather than an unsuccessful positive.
+        expected_denial_statuses.update(
+            {
+                str(observation["requestId"]): 403
+                for observation in capability_source["data"][
+                    "enforcement"
+                ].values()
+                if observation.get("outcome") == "denied"
+            }
+        )
     denial_source = sources.get("denialAudit")
     if denial_source is not None:
         expected_denial_statuses.update(
@@ -1355,15 +1533,20 @@ def _validate_binding_identity(
             "workflow Chat acceptance binding identity is incomplete: "
             f"{combination.combination_id}"
         )
-    _require_string(
-        payload.get("providerProfileClass"),
-        field="bindingIdentity.providerProfileClass",
+    materializer_refs = _require_string_list(
+        payload.get("materializerRefs"), field="bindingIdentity.materializerRefs"
     )
     if (
         payload.get("hostClassRef") != combination.host_class_ref
         or payload.get("launchPolicyRef") != combination.launch_policy_ref
         or payload.get("executionRealizerRef")
         != combination.execution_realizer_ref
+        # The Provider Profile class is not part of the canonical support-key
+        # payload, so it is pinned by the claimed inventory instead: evidence
+        # collected under one credential authority class cannot qualify another.
+        or payload.get("providerProfileClass")
+        != combination.provider_profile_class
+        or combination.credential_materializer_ref not in materializer_refs
     ):
         raise ConformanceContractError(
             "workflow Chat acceptance binding identity does not match the "
@@ -1645,6 +1828,7 @@ def validate_workflow_chat_acceptance_manifest(
                 or entry.get("rows")
                 or entry.get("reports")
                 or entry.get("bindingIdentity")
+                or entry.get("hostImageRef")
             ):
                 raise ConformanceContractError(
                     "workflow Chat acceptance must report an unclaimed combination "
@@ -1661,10 +1845,23 @@ def validate_workflow_chat_acceptance_manifest(
         _validate_binding_identity(
             entry.get("bindingIdentity"), combination=combination
         )
+        # A combination is only qualified by the host image that actually ran
+        # it, so the digest is pinned per host class instead of sharing one
+        # ``host`` entry across materially different images.
+        host_image_ref = images.get(combination.host_image_key)
+        if entry.get("hostImageRef") != host_image_ref or _IMAGE_DIGEST_REF.fullmatch(
+            str(host_image_ref or "")
+        ) is None:
+            raise ConformanceContractError(
+                "workflow Chat acceptance combination does not pin the host "
+                f"image digest that executed it: {combination_id}"
+            )
         cleanup_outcome = entry.get("cleanupOutcome")
-        if not isinstance(cleanup_outcome, Mapping) or any(
-            cleanup_outcome.get(field) is not True
-            for field in ("liveResourcesRemoved", "providerProfileReleasedLast")
+        if (
+            not isinstance(cleanup_outcome, Mapping)
+            or cleanup_outcome.get("providerProfileReleasedLast") is not True
+            or cleanup_outcome.get("liveResourcesRemoved")
+            is not combination.live_resources_removed_expected
         ):
             raise ConformanceContractError(
                 "workflow Chat acceptance combination lacks a complete cleanup "
@@ -1684,6 +1881,7 @@ def validate_workflow_chat_acceptance_manifest(
             )
         global_correlation: dict[str, str] | None = None
         observed_cleanup_state: str | None = None
+        row_evidence_refs: dict[str, set[str]] = {}
         for row_name, required_assertions in REQUIRED_WORKFLOW_CHAT_ROWS.items():
             row = rows[row_name]
             if not isinstance(row, Mapping) or row.get("status") != "passed":
@@ -1701,6 +1899,7 @@ def validate_workflow_chat_acceptance_manifest(
                 raise ConformanceContractError(
                     f"workflow Chat acceptance row lacks controlling evidence: {row_name}"
                 )
+            row_evidence_refs[row_name] = {str(ref_value) for ref_value in refs}
             for ref_value in refs:
                 ref = str(ref_value)
                 evidence = resolved.get(ref)
@@ -1892,6 +2091,7 @@ def validate_workflow_chat_acceptance_manifest(
                 ) from exc
             case_statuses: list[str] = []
             case_ids: set[str] = set()
+            case_refs_by_id: dict[str, set[str]] = {}
             if isinstance(cases, list):
                 for case in cases:
                     case_id = case.get("caseId") if isinstance(case, Mapping) else None
@@ -1922,6 +2122,7 @@ def validate_workflow_chat_acceptance_manifest(
                             "workflow Chat acceptance report cases are malformed"
                         )
                     case_ids.add(case_id)
+                    case_refs_by_id[case_id] = {str(item) for item in case_refs}
                     case_statuses.append(str(case_status))
             computed_summary = {
                 status_name: sum(value == status_name for value in case_statuses)
@@ -1938,10 +2139,26 @@ def validate_workflow_chat_acceptance_manifest(
                 or report_generated_at > generated_at
                 or generated_at - report_generated_at > timedelta(days=1)
                 or failed != 0
-                or passed < 1
+                or skipped != 0
+                or passed != len(REQUIRED_WORKFLOW_CHAT_ROWS)
             ):
                 raise ConformanceContractError(
                     "workflow Chat acceptance references a non-passing report"
+                )
+            # A report only qualifies this combination when its cases name this
+            # combination's rows and reference exactly that row's evidence.
+            if case_refs_by_id != {
+                workflow_chat_case_id(combination_id, row_name): refs
+                for row_name, refs in row_evidence_refs.items()
+            }:
+                raise ConformanceContractError(
+                    "workflow Chat acceptance report does not cover this "
+                    f"combination's row evidence: {combination_id}"
+                )
+            if report.get("authMode") != combination.auth_mode:
+                raise ConformanceContractError(
+                    "workflow Chat acceptance report publishes the wrong "
+                    f"authentication mode: {combination_id}"
                 )
             used_refs.add(ref)
 
@@ -2021,5 +2238,6 @@ __all__ = [
     "build_workflow_chat_acceptance_manifest",
     "validate_workflow_chat_source_records",
     "validate_workflow_chat_acceptance_manifest",
+    "workflow_chat_case_id",
     "workflow_chat_combinations",
 ]

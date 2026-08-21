@@ -29,6 +29,7 @@ from moonmind.omnigent.workflow_chat_acceptance import (
     WorkflowChatCombination,
     build_workflow_chat_acceptance_manifest,
     validate_workflow_chat_acceptance_manifest,
+    workflow_chat_case_id,
     workflow_chat_combinations,
 )
 
@@ -36,6 +37,7 @@ NOW = datetime(2026, 8, 13, tzinfo=timezone.utc)
 IMAGES = {
     "server": "ghcr.io/omnigent/server@sha256:" + "1" * 64,
     "host": "ghcr.io/omnigent/host@sha256:" + "2" * 64,
+    "opencodeHost": "ghcr.io/omnigent/host-opencode@sha256:" + "3" * 64,
 }
 BUNDLE_DIGESTS = {
     "dashboard": "sha256:" + "7" * 64,
@@ -89,7 +91,7 @@ def _binding_identity(combination: WorkflowChatCombination) -> dict[str, object]
         ),
         "vendorRuntimeRefs": ["opencode@1.18.11#sha256:" + "d" * 64],
         "agentSourceRef": "agent-source:sha256:" + "c" * 64,
-        "materializerRefs": ["codex-oauth-home@1"],
+        "materializerRefs": [combination.credential_materializer_ref],
         "providerCompatibilityClass": "omnigent-provider-binding-set@1",
         "hostClassRef": combination.host_class_ref,
         "architecture": "linux/amd64",
@@ -103,7 +105,7 @@ def _binding_identity(combination: WorkflowChatCombination) -> dict[str, object]
         "supportCombinationKey": compute_support_combination_key(
             SupportKeyPayload.model_validate(fields)
         ),
-        "providerProfileClass": "omnigent-codex-oauth-profile-class@1",
+        "providerProfileClass": combination.provider_profile_class,
     }
 
 
@@ -113,7 +115,9 @@ def _request_ids(
     if row_name == "scoped-transports-and-resources":
         count = len(compatibility_map()["routes"]) + 1
     elif row_name == "authority-and-security-denials":
-        count = 8 + capability_count
+        # 8 scoped denial/scan requests, one independent capability-enforcement
+        # denial, then one allowed observation per advertised capability.
+        count = 9 + capability_count
     else:
         count = 6
     return [f"request-{combination_id}-{row_name}-{item}" for item in range(count)]
@@ -150,7 +154,7 @@ def _browser_events(
                         for item in range(len(request_ids))]
         elif row_name == "authority-and-security-denials":
             statuses = [
-                403 if item <= 6 else 503 if item == 7 else 200
+                403 if item <= 6 or item == 8 else 503 if item == 7 else 200
                 for item in range(len(request_ids))
             ]
         else:
@@ -328,6 +332,19 @@ def _record_data(
             "cross_user",
             "cross_workflow",
         ]
+        authorized_scope = {
+            "authorizedUserId": "user-1",
+            "attemptedUserId": "user-1",
+            "authorizedWorkflowId": correlation["workflowId"],
+            "attemptedWorkflowId": correlation["workflowId"],
+        }
+        cross_scope = {
+            "cross_user": {**authorized_scope, "attemptedUserId": "user-2"},
+            "cross_workflow": {
+                **authorized_scope,
+                "attemptedWorkflowId": f"other-{correlation['workflowId']}",
+            },
+        }
         return {
             "requestIds": request_ids[: len(kinds)],
             "denials": [
@@ -336,6 +353,11 @@ def _record_data(
                     "kind": kind,
                     "upstreamForwarded": False,
                     "auditRef": f"artifact://denial-{item}",
+                    **(
+                        {"scopeIdentity": cross_scope[kind]}
+                        if kind in cross_scope
+                        else {}
+                    ),
                 }
                 for item, kind in enumerate(kinds)
             ],
@@ -361,13 +383,16 @@ def _record_data(
         enforcement = {}
         for item, capability in enumerate(advertised):
             if capability == "changeModel":
+                # An independent enforcement request, not a request id already
+                # present in denialAudit, so the denied status is derived from
+                # the capability observation itself.
                 enforcement[capability] = {
-                    "requestId": request_ids[2],
+                    "requestId": request_ids[8],
                     "outcome": "denied",
                 }
             else:
                 enforcement[capability] = {
-                    "requestId": request_ids[8 + item],
+                    "requestId": request_ids[9 + item],
                     "outcome": "allowed",
                 }
         return {
@@ -476,20 +501,13 @@ def _record_data(
                     "outcome": "completed",
                     "auditRef": f"artifact://cleanup-{item}",
                 }
-                for item, kind in enumerate(
-                    (
-                        "live_host_stopped",
-                        "provider_session_removed",
-                        "workspace_published",
-                        "provider_profile_release",
-                    )
-                )
+                for item, kind in enumerate(combination.required_cleanup_steps)
             ],
-            "liveResourcesRemoved": True,
+            "liveResourcesRemoved": combination.live_resources_removed_expected,
             "providerProfileReleasedLast": True,
             "outcome": "released",
             "hostMode": combination.host_mode,
-            "cleanupMode": combination.launch_policy.cleanup.get("mode"),
+            "cleanupMode": combination.cleanup_mode,
             "cleanupState": "cleaned",
         }
     raise AssertionError(f"missing test source record: {record_type}")
@@ -590,7 +608,7 @@ def _matrix(root: Path) -> dict[str, object]:
             }
             cases.append(
                 {
-                    "caseId": f"workflow-chat-{combination_id}-{row_name}",
+                    "caseId": workflow_chat_case_id(combination_id, row_name),
                     "status": "passed",
                     "durationMs": 1000 + row_index,
                     "evidenceRefs": [case_ref],
@@ -603,6 +621,7 @@ def _matrix(root: Path) -> dict[str, object]:
                 "schemaVersion": "moonmind.omnigent.conformance-report/v1",
                 "generatedAt": NOW.isoformat(),
                 "images": IMAGES,
+                "authMode": combination.auth_mode,
                 "cases": cases,
                 "summary": {"passed": len(cases), "failed": 0, "skipped": 0},
             },
@@ -620,12 +639,15 @@ def _matrix(root: Path) -> dict[str, object]:
             **declared,
             "status": "passed",
             "unsupportedReason": None,
+            "hostImageRef": IMAGES[combination.host_image_key],
             "bindingIdentity": _binding_identity(combination),
             "rows": rows,
             "reports": [report_ref],
             "timelineRef": timeline_ref,
             "cleanupOutcome": {
-                "liveResourcesRemoved": True,
+                "liveResourcesRemoved": (
+                    combination.live_resources_removed_expected
+                ),
                 "providerProfileReleasedLast": True,
                 "cleanupState": "cleaned",
             },
@@ -1667,3 +1689,296 @@ def test_cleanup_outcome_must_match_the_typed_cleanup_receipt(tmp_path: Path) ->
         validate_workflow_chat_acceptance_manifest(
             manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
         )
+
+
+STATIC_COMBINATION = "codex-static-connected-through-omnigent"
+OPENCODE_COMBINATION = "opencode-through-generic-omnigent-host"
+
+
+def _validate(manifest: dict, root: Path) -> None:
+    validate_workflow_chat_acceptance_manifest(
+        manifest, evidence_root=root, expected_commit="abc123", now=NOW
+    )
+
+
+def test_cross_scope_denial_without_identities_fails_closed(tmp_path: Path) -> None:
+    source = _matrix(tmp_path)
+
+    def drop_identity(payload: dict) -> None:
+        for denial in payload["data"]["denials"]:
+            denial.pop("scopeIdentity", None)
+
+    _rewrite_source(
+        tmp_path,
+        row_name="authority-and-security-denials",
+        record_type="denialAudit",
+        update=drop_identity,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="scopeIdentity"):
+        _validate(manifest, tmp_path)
+
+
+def test_relabelled_cross_scope_denial_fails_closed(tmp_path: Path) -> None:
+    source = _matrix(tmp_path)
+
+    def reuse_authorized_scope(payload: dict) -> None:
+        for denial in payload["data"]["denials"]:
+            if denial["kind"] == "cross_user":
+                # A denial that never left the authorized user proves nothing
+                # about user isolation.
+                denial["scopeIdentity"]["attemptedUserId"] = denial[
+                    "scopeIdentity"
+                ]["authorizedUserId"]
+
+    _rewrite_source(
+        tmp_path,
+        row_name="authority-and-security-denials",
+        record_type="denialAudit",
+        update=reuse_authorized_scope,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="vary exactly that scope"):
+        _validate(manifest, tmp_path)
+
+
+def test_cross_scope_denial_must_bind_the_workflow_under_test(
+    tmp_path: Path,
+) -> None:
+    source = _matrix(tmp_path)
+
+    def borrow_another_session(payload: dict) -> None:
+        for denial in payload["data"]["denials"]:
+            if denial["kind"] == "cross_workflow":
+                denial["scopeIdentity"]["authorizedWorkflowId"] = "other-workflow"
+
+    _rewrite_source(
+        tmp_path,
+        row_name="authority-and-security-denials",
+        record_type="denialAudit",
+        update=borrow_another_session,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="workflow under test"):
+        _validate(manifest, tmp_path)
+
+
+def test_denied_capability_enforcement_expects_a_denied_browser_status(
+    tmp_path: Path,
+) -> None:
+    source = _matrix(tmp_path)
+    row_index = ROW_NAMES.index("authority-and-security-denials")
+    snapshot = json.loads(
+        (
+            tmp_path
+            / _source_ref(PRIMARY_COMBINATION, row_index, "capabilitySnapshot")
+        ).read_text(encoding="utf-8")
+    )
+    denied_request_id = next(
+        observation["requestId"]
+        for observation in snapshot["data"]["enforcement"].values()
+        if observation["outcome"] == "denied"
+    )
+    # An independent enforcement request, not one already listed in denialAudit.
+    assert denied_request_id not in {
+        item["requestId"]
+        for item in json.loads(
+            (
+                tmp_path / _source_ref(PRIMARY_COMBINATION, row_index, "denialAudit")
+            ).read_text(encoding="utf-8")
+        )["data"]["denials"]
+    }
+
+    def succeed_denied_enforcement(payload: dict) -> None:
+        for event in payload["data"]["networkEvents"]:
+            if event["requestId"] == denied_request_id:
+                event["responseStatus"] = 200
+
+    _rewrite_source(
+        tmp_path,
+        row_name="authority-and-security-denials",
+        record_type="browserTrace",
+        update=succeed_denied_enforcement,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="unexpected response status"):
+        _validate(manifest, tmp_path)
+
+
+def test_execution_creation_must_match_the_observed_browser_call(
+    tmp_path: Path,
+) -> None:
+    source = _matrix(tmp_path)
+
+    def rewrite_create_event(payload: dict) -> None:
+        create_event = payload["data"]["networkEvents"][1]
+        create_event["method"] = "GET"
+        create_event["path"] = f"/api/executions/workflow-{PRIMARY_COMBINATION}"
+
+    _rewrite_source(
+        tmp_path,
+        row_name="native-live-conversation",
+        record_type="browserTrace",
+        update=rewrite_create_event,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(
+        ConformanceContractError, match="observed browser create request"
+    ):
+        _validate(manifest, tmp_path)
+
+
+def test_cleanup_step_order_is_enforced(tmp_path: Path) -> None:
+    source = _matrix(tmp_path)
+
+    def swap_middle_steps(payload: dict) -> None:
+        steps = payload["data"]["steps"]
+        steps[1]["order"], steps[2]["order"] = steps[2]["order"], steps[1]["order"]
+
+    _rewrite_source(
+        tmp_path,
+        row_name="terminal-evidence-and-continuation",
+        record_type="cleanupReceipt",
+        update=swap_middle_steps,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="release-last cleanup"):
+        _validate(manifest, tmp_path)
+
+
+def test_static_connected_cleanup_is_a_drain_not_a_stop() -> None:
+    inventory = workflow_chat_combinations()
+    static = inventory[STATIC_COMBINATION]
+    on_demand = inventory[PRIMARY_COMBINATION]
+
+    assert static.required_cleanup_steps[0] == "live_host_drained"
+    assert static.live_resources_removed_expected is False
+    assert on_demand.required_cleanup_steps[0] == "live_host_stopped"
+    assert on_demand.live_resources_removed_expected is True
+
+
+def test_static_connected_host_may_not_claim_a_stopped_host(
+    tmp_path: Path,
+) -> None:
+    source = _matrix(tmp_path)
+
+    def claim_a_stopped_host(payload: dict) -> None:
+        payload["data"]["steps"][0]["kind"] = "live_host_stopped"
+        payload["data"]["liveResourcesRemoved"] = True
+
+    _rewrite_source(
+        tmp_path,
+        row_name="terminal-evidence-and-continuation",
+        record_type="cleanupReceipt",
+        update=claim_a_stopped_host,
+        combination_id=STATIC_COMBINATION,
+    )
+    source["combinations"][STATIC_COMBINATION]["cleanupOutcome"][
+        "liveResourcesRemoved"
+    ] = True
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="cleanup outcome"):
+        _validate(manifest, tmp_path)
+
+
+def test_provider_profile_class_is_pinned_by_the_claimed_inventory(
+    tmp_path: Path,
+) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    manifest["combinations"][OPENCODE_COMBINATION]["bindingIdentity"][
+        "providerProfileClass"
+    ] = workflow_chat_combinations()[PRIMARY_COMBINATION].provider_profile_class
+
+    with pytest.raises(ConformanceContractError, match="combination under test"):
+        _validate(manifest, tmp_path)
+
+
+def test_credential_materializer_must_match_the_combination(tmp_path: Path) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    manifest["combinations"][OPENCODE_COMBINATION]["bindingIdentity"][
+        "materializerRefs"
+    ] = ["codex-oauth-home@1"]
+
+    with pytest.raises(ConformanceContractError, match="combination under test"):
+        _validate(manifest, tmp_path)
+
+
+def test_opencode_combination_pins_its_own_host_image(tmp_path: Path) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    manifest["combinations"][OPENCODE_COMBINATION]["hostImageRef"] = manifest[
+        "images"
+    ]["host"]
+
+    with pytest.raises(ConformanceContractError, match="host image digest"):
+        _validate(manifest, tmp_path)
+
+
+def test_report_from_another_combination_cannot_qualify_this_one(
+    tmp_path: Path,
+) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    manifest["combinations"][OPENCODE_COMBINATION]["reports"] = [
+        f"report-{PRIMARY_COMBINATION}.json"
+    ]
+
+    with pytest.raises(ConformanceContractError, match="row evidence"):
+        _validate(manifest, tmp_path)
+
+
+def test_report_case_must_reference_its_own_row_evidence(tmp_path: Path) -> None:
+    source = _matrix(tmp_path)
+    report_path = tmp_path / f"report-{PRIMARY_COMBINATION}.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["cases"][0]["evidenceRefs"] = report["cases"][1]["evidenceRefs"]
+    _write(report_path, report)
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="row evidence"):
+        _validate(manifest, tmp_path)
+
+
+def test_report_must_publish_the_combination_auth_mode(tmp_path: Path) -> None:
+    source = _matrix(tmp_path)
+    report_path = tmp_path / f"report-{OPENCODE_COMBINATION}.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["authMode"] = workflow_chat_combinations()[
+        PRIMARY_COMBINATION
+    ].auth_mode
+    _write(report_path, report)
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="authentication mode"):
+        _validate(manifest, tmp_path)
