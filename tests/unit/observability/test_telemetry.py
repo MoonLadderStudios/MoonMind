@@ -27,14 +27,20 @@ def test_backend_links_require_safe_absolute_template(monkeypatch):
 
 
 def test_initialize_is_idempotent(monkeypatch):
-    telemetry._state["provider"] = None
-    installed = []
-    monkeypatch.setattr(telemetry.trace, "set_tracer_provider", installed.append)
+    telemetry._state["trace_provider"] = None
+    telemetry._state["meter_provider"] = None
+    installed_traces = []
+    installed_meters = []
+    monkeypatch.setattr(telemetry.trace, "set_tracer_provider", installed_traces.append)
+    monkeypatch.setattr(telemetry.metrics, "set_meter_provider", installed_meters.append)
     settings = TelemetrySettings(enabled=True)
 
     first = telemetry.initialize_telemetry(settings)
     second = telemetry.initialize_telemetry(settings)
 
     assert first is second
-    assert installed == [first]
-    telemetry._state["provider"] = None
+    assert installed_traces == [first]
+    assert len(installed_meters) == 1
+    assert telemetry._state["meter_provider"] is installed_meters[0]
+    telemetry._state["trace_provider"] = None
+    telemetry._state["meter_provider"] = None

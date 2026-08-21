@@ -10,6 +10,7 @@ from typing import Any
 from temporalio import activity
 
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 
 
 _IMMUTABLE_RECOVERY_DIMENSIONS = (
@@ -513,6 +514,9 @@ async def omnigent_oauth_host_janitor_activity(
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
+    control_plane_metrics.increment(
+        control_plane_metrics.JANITOR_OPERATIONS, janitor_outcome="claim"
+    )
     async with httpx.AsyncClient() as http_client:
         client = OmnigentHttpClient(
             base_url=resolved_server_url(),
@@ -531,7 +535,8 @@ async def omnigent_oauth_host_janitor_activity(
         payload = dict(request or {})
         action_kind = str(payload.get("actionKind") or "").strip()
         if action_kind:
-            return await janitor.run_action(
+            try:
+                result = await janitor.run_action(
                 action_kind=action_kind,
                 profile_id=str(payload.get("profile_id") or "").strip(),
                 host_lease_ref=str(payload.get("hostLeaseRef") or "").strip(),
@@ -539,11 +544,47 @@ async def omnigent_oauth_host_janitor_activity(
                     str(payload.get("expectedHostState") or "").strip() or None
                 ),
                 request_id=str(payload.get("requestId") or "").strip(),
+                )
+            except Exception:
+                control_plane_metrics.increment(
+                    control_plane_metrics.JANITOR_OPERATIONS,
+                    janitor_outcome="failure",
+                )
+                raise
+            control_plane_metrics.increment(
+                control_plane_metrics.JANITOR_OPERATIONS, janitor_outcome="success"
             )
-        return await janitor.run(
-            profile_id=str((request or {}).get("profile_id") or "").strip() or None,
-            force=bool((request or {}).get("force", False)),
+            if isinstance(result, dict) and any(
+                int(result.get(key) or 0) > 0
+                for key in ("conflicts", "claimConflicts", "fencingConflicts")
+            ):
+                control_plane_metrics.increment(
+                    control_plane_metrics.JANITOR_OPERATIONS,
+                    janitor_outcome="conflict",
+                )
+            return result
+        try:
+            result = await janitor.run(
+                profile_id=str((request or {}).get("profile_id") or "").strip() or None,
+                force=bool((request or {}).get("force", False)),
+            )
+        except Exception:
+            control_plane_metrics.increment(
+                control_plane_metrics.JANITOR_OPERATIONS, janitor_outcome="failure"
+            )
+            raise
+        control_plane_metrics.increment(
+            control_plane_metrics.JANITOR_OPERATIONS, janitor_outcome="success"
         )
+        if isinstance(result, dict) and any(
+            int(result.get(key) or 0) > 0
+            for key in ("conflicts", "claimConflicts", "fencingConflicts")
+        ):
+            control_plane_metrics.increment(
+                control_plane_metrics.JANITOR_OPERATIONS,
+                janitor_outcome="conflict",
+            )
+        return result
 
 
 __all__ = [

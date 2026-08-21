@@ -13,7 +13,8 @@ from __future__ import annotations
 
 import pytest
 
-from moonmind.omnigent.control_plane import metrics, spans
+from moonmind.omnigent.control_plane import metrics, spans, telemetry
+from moonmind.omnigent.control_plane.records import FencingScope
 from moonmind.omnigent.reconciler import DecisionKind
 
 
@@ -141,6 +142,89 @@ def test_observation_metric_aggregates_count_total_last():
     assert obs[key]["count"] == 2
     assert obs[key]["total"] == 2.0
     assert obs[key]["last"] == 1.5
+
+
+def test_metrics_record_into_the_opentelemetry_plane(monkeypatch):
+    class _Instrument:
+        def __init__(self):
+            self.calls = []
+
+        def add(self, value, *, attributes):
+            self.calls.append(("add", value, attributes))
+
+        def record(self, value, *, attributes):
+            self.calls.append(("record", value, attributes))
+
+    counter = _Instrument()
+    histogram = _Instrument()
+    monkeypatch.setattr(
+        metrics,
+        "_otel_instrument",
+        lambda definition: counter
+        if definition.kind == metrics.COUNTER
+        else histogram,
+    )
+
+    metrics.increment(
+        metrics.RECONCILIATION_DECISIONS,
+        decision_class="submit_turn",
+        reason_class="awaiting",
+    )
+    metrics.observe(metrics.RECONCILIATION_CONVERGENCE_LATENCY, 1.25)
+
+    assert counter.calls == [
+        (
+            "add",
+            1,
+            {"decision_class": "submit_turn", "reason_class": "awaiting"},
+        )
+    ]
+    assert histogram.calls == [("record", 1.25, {})]
+
+
+def test_otel_metric_failure_cannot_change_local_evidence(monkeypatch):
+    monkeypatch.setattr(
+        metrics,
+        "_otel_instrument",
+        lambda _definition: (_ for _ in ()).throw(RuntimeError("exporter down")),
+    )
+    metrics.increment(metrics.QUARANTINED_AMBIGUITY)
+    assert next(iter(metrics.snapshot()["counters"].values())) == 1
+
+
+def test_concurrency_metrics_record_into_opentelemetry_and_preserve_local_evidence(
+    monkeypatch,
+):
+    class _Counter:
+        def __init__(self):
+            self.calls = []
+
+        def add(self, value, *, attributes):
+            self.calls.append((value, attributes))
+
+    counter = _Counter()
+    telemetry.reset()
+    monkeypatch.setattr(telemetry, "_otel_counter", lambda _name: counter)
+
+    telemetry.record_revision_conflict(scope=FencingScope.SESSION_SUPERVISOR)
+
+    assert counter.calls == [(1, {"fencing_scope": "session_supervisor"})]
+    assert telemetry.snapshot()[(telemetry.REVISION_CONFLICTS, "session_supervisor")] == 1
+    telemetry.reset()
+
+
+def test_concurrency_otel_failure_cannot_change_local_evidence(monkeypatch):
+    telemetry.reset()
+    monkeypatch.setattr(
+        telemetry,
+        "_otel_counter",
+        lambda _name: (_ for _ in ()).throw(RuntimeError("meter unavailable")),
+    )
+
+    telemetry.record_duplicate_command_suppressed()
+
+    assert telemetry.snapshot()[(telemetry.DUPLICATE_COMMAND_SUPPRESSED, "session")] == 1
+    telemetry.reset()
 
 
 def test_counter_and_observation_kinds_are_enforced():

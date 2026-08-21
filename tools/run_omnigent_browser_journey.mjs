@@ -173,6 +173,9 @@ const branch = required("MOONMIND_OMNIGENT_TEST_BRANCH");
 const outputDir = required("MOONMIND_OMNIGENT_BROWSER_OUTPUT_DIR");
 const storageState = process.env.MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE || undefined;
 const canaryToken = required("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN");
+const catalogBootstrapEvidence = (
+  process.env.MOONMIND_OMNIGENT_CATALOG_BOOTSTRAP_EVIDENCE || ""
+).trim();
 const timeout = Number(process.env.MOONMIND_OMNIGENT_BROWSER_TIMEOUT_MS || "900000");
 const remediationTargetId = (
   process.env.MOONMIND_OMNIGENT_REMEDIATION_TARGET_WORKFLOW_ID || ""
@@ -219,9 +222,15 @@ const staticRows = new Set([
 fs.mkdirSync(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 try {
+  const extraHTTPHeaders = {
+    "X-MoonMind-Acceptance-Canary": canaryToken,
+    ...(catalogBootstrapEvidence
+      ? { "X-MoonMind-Acceptance-Evidence": catalogBootstrapEvidence }
+      : {}),
+  };
   const context = await browser.newContext({
     ...(storageState ? { storageState } : {}),
-    extraHTTPHeaders: { "X-MoonMind-Acceptance-Canary": canaryToken },
+    extraHTTPHeaders,
   });
   const page = await context.newPage();
   const requests = [];
