@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from moonmind.omnigent.bridge_config import parse_bridge_config
+from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.bridge_proxy import (
     BridgePrincipalBinding,
     BridgeSessionCreateRequest,
@@ -595,6 +596,7 @@ async def test_create_session_propagates_client_failure_class() -> None:
 
 
 async def test_get_session_proxies_snapshot() -> None:
+    control_plane_metrics.reset()
     store, client = _FakeStore(), _FakeClient()
     proxy = _proxy(store, client)
 
@@ -602,6 +604,10 @@ async def test_get_session_proxies_snapshot() -> None:
 
     assert snapshot["id"] == "sess-42"
     assert client.get_calls == ["sess-42"]
+    assert any(
+        key.startswith(control_plane_metrics.SNAPSHOT_LATENCY)
+        for key in control_plane_metrics.snapshot()["observations"]
+    )
 
 
 async def test_get_session_maps_client_error_status() -> None:
@@ -868,6 +874,20 @@ async def test_stream_timed_out_snapshot_is_terminal() -> None:
         )
     ]
     assert events == []
+
+
+async def test_stream_records_readiness_only_after_receiving_an_event() -> None:
+    control_plane_metrics.reset()
+    stream = _proxy(_FakeStore(), _FakeClient()).stream_events("sess-9")
+
+    assert await anext(stream) == {"type": "status", "status": "running"}
+    await stream.aclose()
+
+    counters = control_plane_metrics.snapshot()["counters"]
+    assert any(
+        key.startswith(control_plane_metrics.TRANSPORT_READINESS)
+        for key in counters
+    )
 
 
 async def test_stop_session_preserves_stock_control_event_type() -> None:

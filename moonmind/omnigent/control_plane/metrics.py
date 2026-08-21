@@ -21,10 +21,10 @@ Cardinality discipline (issue acceptance criterion):
   :data:`FORBIDDEN_LABEL_KEYS` is rejected at registration and at record time,
   so a high-cardinality identity can never enter the metric label space.
 
-The registry is process-local and additive; a host exporter reads
-:func:`snapshot` and maps the bounded names/labels onto its metric backend.
-Recording never performs exporter I/O and never raises on a bounded input, so a
-telemetry backend failure cannot change application correctness.
+The registry keeps a process-local aggregate for diagnostics and records the
+same bounded values through the process OpenTelemetry meter. Export remains
+asynchronous in the SDK, and recording failures are isolated from application
+correctness.
 """
 
 from __future__ import annotations
@@ -251,8 +251,43 @@ class _ObservationAggregate:
 
 
 _lock = threading.Lock()
+_otel_lock = threading.Lock()
 _counters: defaultdict[tuple[str, tuple[tuple[str, str], ...]], int] = defaultdict(int)
 _observations: dict[tuple[str, tuple[tuple[str, str], ...]], _ObservationAggregate] = {}
+_otel_instruments: dict[str, object] = {}
+
+
+def _otel_instrument(metric: MetricDefinition) -> object:
+    """Resolve one process-wide OTel instrument lazily at the activity/API edge."""
+
+    with _otel_lock:
+        existing = _otel_instruments.get(metric.name)
+        if existing is not None:
+            return existing
+        from opentelemetry import metrics as otel_metrics
+
+        meter = otel_metrics.get_meter("moonmind.omnigent.control_plane")
+        instrument = (
+            meter.create_counter(metric.name, unit=metric.unit)
+            if metric.kind == COUNTER
+            else meter.create_histogram(metric.name, unit=metric.unit)
+        )
+        _otel_instruments[metric.name] = instrument
+        return instrument
+
+
+def _emit_otel(metric: MetricDefinition, value: float, labels: tuple[tuple[str, str], ...]) -> None:
+    """Best-effort OTel recording; exporter/instrument failure is never authority."""
+
+    try:
+        instrument = _otel_instrument(metric)
+        attributes = dict(labels)
+        if metric.kind == COUNTER:
+            instrument.add(int(value), attributes=attributes)  # type: ignore[attr-defined]
+        else:
+            instrument.record(float(value), attributes=attributes)  # type: ignore[attr-defined]
+    except Exception:
+        logger.warning("Omnigent OpenTelemetry metric recording failed", exc_info=True)
 
 
 def _normalize_labels(metric: MetricDefinition, labels: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
@@ -297,6 +332,7 @@ def increment(name: str, *, amount: int = 1, **labels: object) -> None:
     key = _normalize_labels(metric, labels)
     with _lock:
         _counters[(name, key)] += amount
+    _emit_otel(metric, amount, key)
     logger.info("omnigent.control_plane.metric", extra={"metric": name, "kind": COUNTER})
 
 
@@ -316,6 +352,7 @@ def observe(name: str, value: float, **labels: object) -> None:
         agg.count += 1
         agg.total += numeric
         agg.last = numeric
+    _emit_otel(metric, numeric, key)
     logger.info("omnigent.control_plane.metric", extra={"metric": name, "kind": OBSERVATION})
 
 

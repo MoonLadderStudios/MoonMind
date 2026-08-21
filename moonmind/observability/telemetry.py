@@ -14,13 +14,17 @@ from dataclasses import dataclass
 from typing import Mapping
 from urllib.parse import quote, urlparse
 
-from opentelemetry import trace
+from opentelemetry import metrics, trace
+from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 
 logger = logging.getLogger(__name__)
 _lock = threading.Lock()
-_state: dict[str, TracerProvider | None] = {"provider": None}
+_state: dict[str, TracerProvider | MeterProvider | None] = {
+    "trace_provider": None,
+    "meter_provider": None,
+}
 _SECRET_KEY = re.compile(r"(?i)(authorization|cookie|password|secret|token|api[-_]?key)")
 
 
@@ -98,8 +102,8 @@ def initialize_telemetry(settings: TelemetrySettings) -> TracerProvider | None:
     if not settings.enabled:
         return None
     with _lock:
-        if _state["provider"] is not None:
-            return _state["provider"]
+        if _state["trace_provider"] is not None:
+            return _state["trace_provider"]  # type: ignore[return-value]
         try:
             attributes = {
                 "service.name": settings.service_name,
@@ -111,15 +115,30 @@ def initialize_telemetry(settings: TelemetrySettings) -> TracerProvider | None:
             if settings.worker_fleet:
                 attributes["moonmind.worker.fleet"] = settings.worker_fleet
             provider = TracerProvider(resource=Resource.create(attributes))
+            metric_readers = []
             if settings.otlp_endpoint:
                 from opentelemetry.sdk.trace.export import BatchSpanProcessor
                 if settings.otlp_protocol == "http/protobuf":
                     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+                    from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
                 else:
                     from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+                    from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+                from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
                 provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otlp_endpoint)))
+                metric_readers.append(
+                    PeriodicExportingMetricReader(
+                        OTLPMetricExporter(endpoint=settings.otlp_endpoint)
+                    )
+                )
+            meter_provider = MeterProvider(
+                resource=Resource.create(attributes),
+                metric_readers=metric_readers,
+            )
             trace.set_tracer_provider(provider)
-            _state["provider"] = provider
+            metrics.set_meter_provider(meter_provider)
+            _state["trace_provider"] = provider
+            _state["meter_provider"] = meter_provider
             return provider
         except Exception:
             logger.warning("OpenTelemetry initialization failed; continuing without export", exc_info=True)

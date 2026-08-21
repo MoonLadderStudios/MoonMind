@@ -2438,20 +2438,20 @@ pymupdf = ["pymupdf (>=1.23.21,<2)"]
 
 [[package]]
 name = "llama-index-readers-github"
-version = "0.11.1"
+version = "0.11.2"
 description = "llama-index readers github integration"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_readers_github-0.11.1-py3-none-any.whl", hash = "sha256:f147ed034ca448defbf507c1650f9e158cc36aad4213de7533879b0f2d7c9892"},
-    {file = "llama_index_readers_github-0.11.1.tar.gz", hash = "sha256:fbfed64bd873f80f47b6517542db8f92289407970563b9600894c0e6202cd964"},
+    {file = "llama_index_readers_github-0.11.2-py3-none-any.whl", hash = "sha256:a5251e01fb7aaaf100f375f29c76f939b5f58ccf70105f890d06f413209f17c6"},
+    {file = "llama_index_readers_github-0.11.2.tar.gz", hash = "sha256:b65ddde1afdabe9881025146b1e9fcdb57f223a1254c24fa3972d1740f832bc1"},
 ]
 
 [package.dependencies]
 httpx = ">=0.26.0"
 llama-index-core = ">=0.13.0,<0.15"
-llama-index-readers-file = ">=0.5.0,<0.6"
+llama-index-embeddings-openai = ">=0.6.0,<0.7"
 
 [package.extras]
 github-app = ["pyjwt[crypto] (>=2.8.0)"]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,18 @@ def _matrix_fixtures():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _catalog_bootstrap(module):
+    return {
+        "schemaVersion": module.CATALOG_BOOTSTRAP_EVIDENCE_VERSION,
+        "observedAt": datetime.now(timezone.utc).isoformat(),
+        "providerSnapshotObserved": True,
+        "eventTransportObserved": True,
+        "serverImageRefObserved": "example/server@sha256:" + "1" * 64,
+        "hostImageRefObserved": "example/host@sha256:" + "2" * 64,
+        "uiBuildRefObserved": "commit-abc123",
+    }
 
 
 def test_compose_is_isolated_and_cleanup_preserves_volumes(tmp_path, monkeypatch):
@@ -221,6 +234,11 @@ def test_browser_executes_complete_release_rows_with_authority_chain(tmp_path, m
     )
 
     def action(scenario, name, **inputs):
+        if scenario == "browser-setup":
+            return {
+                "catalogBootstrapEvidence": _catalog_bootstrap(module),
+                "evidenceRefs": [f"artifact://setup/{name}"],
+            }
         if scenario == "browser":
             actions.append(name)
         row_authority = dict(authority)
@@ -287,6 +305,7 @@ def test_browser_rejects_missing_authority_or_fallback_claim(tmp_path, monkeypat
     monkeypatch.setattr(runner, "action", lambda scenario, name, **inputs: {
         "ok": True,
         "row": name,
+        "catalogBootstrapEvidence": _catalog_bootstrap(module),
         "browserOriginated": True,
         "normalCreateRequest": True,
         "workflowDetailTerminalReplay": True,

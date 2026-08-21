@@ -32,8 +32,9 @@ if [ "${INSTALL_CODEX_CLI}" != "true" ]; then
     echo "INSTALL_CODEX_CLI=${INSTALL_CODEX_CLI}; skipping Codex install and using stubs" >&2
     stub_codex
 else
-    if ! npm install -g @openai/codex@"${CODEX_CLI_VERSION}"; then
-        echo "Warning: Failed to install @openai/codex; installing stub" >&2
+    if ! npm install -g --include=optional @openai/codex@"${CODEX_CLI_VERSION}"; then
+        install_status=$?
+        echo "Warning: Failed to install @openai/codex (exit ${install_status}); installing stub" >&2
         stub_codex
     else
         CODEX_LINK_TARGET=$(readlink -f /usr/local/bin/codex)

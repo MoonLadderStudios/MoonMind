@@ -1,52 +1,336 @@
 [
   {
-    "id": 3810507762,
+    "id": 3813108025,
     "disposition": "addressed",
-    "rationale": "tests/integration/workflows/temporal/test_omnigent_session_supervisor.py now imports the omnigent_session module once, via the module-alias `import from` form at the top of the file, and the function-local `import ... as session_module` was removed."
+    "rationale": "Added Protocol stub comment to ReconcileDispatcher.request_reconcile ellipsis (line 107) to clarify it is an intentional interface stub, not a no-effect statement."
   },
   {
-    "id": 3810507774,
+    "id": 3813108036,
     "disposition": "addressed",
-    "rationale": "Same fix for agent_run: one top-level `from ... import agent_run as agent_run_module`, function-local duplicate import removed."
+    "rationale": "Added Protocol stub comment to DiagnosticPublisher.publish ellipsis (line 119) for same reason."
   },
   {
-    "id": 3810507785,
+    "id": 3813108054,
     "disposition": "addressed",
-    "rationale": "Added an explanatory comment on the `except (asyncio.TimeoutError, TimeoutError): pass` in _await_wake_or_snapshot_deadline: timing out is the normal no-wake path that falls through to the next scheduled snapshot."
+    "rationale": "Added explanatory comment to empty except in bridge_proxy._metric_increment: telemetry failures are auxiliary and must not affect lifecycle authority."
   },
   {
-    "id": 3810534147,
+    "id": 3813108065,
     "disposition": "addressed",
-    "rationale": "P1. Provider-snapshot observation identity now includes the turn confirmation marker, so the quiet-period confirming read persists its own row (with providerTurn.turnComplete) instead of deduplicating against the earlier pending observation, while retries of the same read still dedupe. Covered by test_snapshot_requires_stable_marked_turn_before_idle_terminal, whose fake now enforces the real (session, dedup key) idempotency contract."
+    "rationale": "Added explanatory comment to empty except in bridge_proxy._metric_observe for same telemetry rationale."
   },
   {
-    "id": 3810534150,
+    "id": 3813108078,
     "disposition": "addressed",
-    "rationale": "P2. Durable terminal mapping now derives from the reducer's own classify_provider_status via _durable_terminal_outcome, so timed_out/timeout classify as FAILURE and CANCELLED is reserved for explicit cancel states. Covered by test_durable_terminal_outcome_matches_reducer_classification."
+    "rationale": "Added missing comment to second worker readiness except in omnigent_catalog._live_deployment_readiness: readiness is fail-closed, malformed worker metadata must not advertise launch authority."
   },
   {
-    "id": 3810534154,
+    "id": 3813108087,
     "disposition": "addressed",
-    "rationale": "P1. Added the omnigent.heartbeat_host_lease activity (registered in the catalog, runtime map, and runtime wrapper) and the supervisor now renews the host lease every poll cycle before observing, keeping renewal inside the janitor's 90s heartbeat timeout. Non-renewable, cleanup-claimed, and missing leases are reported for reconciliation rather than failing the session. Covered by test_poll_cycle_renews_host_lease_before_observing and test_heartbeat_activity_renews_only_a_renewable_lease."
+    "rationale": "Added comment to empty except in omnigent_catalog protected evidence observe: telemetry failures must not affect lifecycle authority."
   },
   {
-    "id": 3810534159,
+    "id": 3813108094,
     "disposition": "addressed",
-    "rationale": "P1. omnigent_stop_host_activity now claims cleanup authority via _claim_host_cleanup_authority (claim_host_lease_cleanup compare-and-swap on the observed status and heartbeat) and skips stop/delete entirely when another owner won the fence. Covered by test_stop_host_does_not_run_cleanup_it_did_not_win."
+    "rationale": "Added comment to empty except in repositories SessionRepository.mark_terminal latency observe; telemetry failures are ignored."
   },
   {
-    "id": 3810534164,
+    "id": 3813108101,
     "disposition": "addressed",
-    "rationale": "P1. The profile lease request now sends workflowId (the supervisor's own durable workflow ID), stepExecutionId, idempotencyKey, and ownerIsWorkflow=False, all of which survive the manager's metadata allowlist, so acquire_slot_v2 can verify the owning workflow instead of raising ProviderProfileLeaseOwnerMissing. Covered by test_profile_lease_request_carries_owning_workflow_authority."
+    "rationale": "Added comment to empty except in repositories ObservationRepository schema value increment; telemetry failures are ignored."
   },
   {
-    "id": 3810534166,
+    "id": 3813108115,
     "disposition": "addressed",
-    "rationale": "P2. _queue_signal_intent no longer raises on a full backlog: it deduplicates by (kind, requestId), admits one cancellation and one cleanup intent past the bound so recovery intents are never lost, and otherwise counts a bounded droppedIntentCount exposed on the state query. Covered by test_full_signal_backlog_never_throws_from_a_signal_handler and test_repeated_signal_request_id_is_deduplicated_not_requeued."
+    "rationale": "Added comment to stuck_state_reconciliation._increment_metric except: telemetry failures must not affect lifecycle authority."
   },
   {
-    "id": 4969010602,
+    "id": 3813108132,
+    "disposition": "addressed",
+    "rationale": "Added comment to stuck_state_reconciliation._observe_metric except: same telemetry rationale."
+  },
+  {
+    "id": 3813135896,
+    "disposition": "addressed",
+    "rationale": "Fixed TemporalOmnigentReconcileDispatcher to route to MoonMind.OmnigentSession workflow via omnigent-session:{session_id} and signal operator_reconcile_requested, instead of hard-coded wf:session:codex_cli which does not exist for external Omnigent sessions. Commit 9708607.. now routes correctly; test updated."
+  },
+  {
+    "id": 3813135902,
+    "disposition": "addressed",
+    "rationale": "Persist observation_frontier_digest on every decision via compute_digest of providerEventCursor/snapshotFrontier/revision in stuck_state_reconciliation._record_observation_and_decision, preventing false REPEATED_RECONCILIATION_NO_PROGRESS."
+  },
+  {
+    "id": 3813135905,
+    "disposition": "addressed",
+    "rationale": "Added rotation offset to list_reconciliation_candidates (offset param) and sweep now rotates by observed_now timestamp % 100, preventing same oldest rows from monopolizing bounded batch."
+  },
+  {
+    "id": 3813135910,
+    "disposition": "addressed",
+    "rationale": "Changed LIVE_CONFORMANCE_EVIDENCE_STALE detection in stuck_state.py to not fire on missing evidence alone when runner is unknown; only stale timestamp or explicit runner_down is actionable, matching durable wiring expectation."
+  },
+  {
+    "id": 3813135915,
+    "disposition": "addressed",
+    "rationale": "Modified omnigent_catalog snapshot_ready/event_transport_ready to treat missing observations as not-yet-observed rather than hard admission blocker, while support gate still surfaces missing protected evidence; provider observations are expected to be persisted at snapshot/event boundary."
+  },
+  {
+    "id": 3813135922,
+    "disposition": "addressed",
+    "rationale": "Fixed omnigent_session_timeline to prefer latest journal decision via latest_for_session instead of stale last_decision_ref, with fallback to pointer only when journal empty."
+  },
+  {
+    "id": 3813135931,
+    "disposition": "addressed",
+    "rationale": "Added SessionRepository.recover_from_quarantine fenced recovery method that restores historical_read_state from quarantined to live under current fencing, providing authorized operator remediation path."
+  },
+  {
+    "id": 3813135936,
+    "disposition": "addressed",
+    "rationale": "Fixed Depends(get_current_user) to Depends(get_current_user()) in all four timeline routes, resolving 403 for authorized operators."
+  },
+  {
+    "id": 3825494788,
+    "disposition": "addressed",
+    "rationale": "Same as 3813108094: added explanatory comment to repositories 963 empty except; duplicate bot finding on same line."
+  },
+  {
+    "id": 4972324465,
     "disposition": "not-applicable",
-    "rationale": "Codex review summary body with no specific requested change; its individual findings are tracked as the review comments above."
+    "rationale": "Informational Codex review summary with no specific requested change; individual findings are tracked as separate review comments."
+  },
+  {
+    "id": 3825780392,
+    "disposition": "addressed",
+    "rationale": "Changed ReconcileDispatcher Protocol stub from single-line ellipsis to pass with comment to satisfy linter while preserving Protocol semantics."
+  },
+  {
+    "id": 3825780407,
+    "disposition": "addressed",
+    "rationale": "Changed DiagnosticPublisher Protocol stub similarly from ellipsis to pass."
+  },
+  {
+    "id": 3825914206,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except in test helper _build_app: get_current_user may fail when auth settings not configured, override is best-effort."
+  },
+  {
+    "id": 3825741220,
+    "path": ".github/workflows/docker-publish-opencode-host.yml",
+    "line": 43,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Workflow lacked explicit permissions for GITHUB_TOKEN. Added top-level permissions: contents: read and job-level permissions for metadata/build/merge.",
+    "fix": "Added permissions: contents: read at workflow top and permissions: contents: read for metadata job; build/merge already had read+write but now consistent."
+  },
+  {
+    "id": 3825768389,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1743,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Unused local variable fake_home was assigned but never used. Removed and replaced ambient isolation with context manager.",
+    "fix": "Removed fake_home and subprocess version-check stub; replaced with isolated env context manager and live HTTP catalog validation."
+  },
+  {
+    "id": 3825768399,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 347,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort cleanup of stale tmp file' to OSError handler."
+  },
+  {
+    "id": 3825768413,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 356,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort ownership in non-root test containers' to OSError handler."
+  },
+  {
+    "id": 3825768422,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 368,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort ownership in non-root test containers' to tmp_path chown handler."
+  },
+  {
+    "id": 3825768429,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 533,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort parent cleanup' to OSError handler."
+  },
+  {
+    "id": 3825768436,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 540,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort tmp cleanup' to OSError handler."
+  },
+  {
+    "id": 3825768446,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 542,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort glob cleanup' to OSError handler."
+  },
+  {
+    "id": 3825780248,
+    "path": "moonmind/omnigent/harness_platform/host_classes.py",
+    "line": 191,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Host Class registration alone does not make OpenCode executable; no production call sites selected the class. Added Omnigent execution profile omnigent-opencode@1 and launch policies opencode-on-demand/static, wired via execution_profiles and omnigent_catalog eligibility, so Workflow Create can select opencode and planner can compile with omnigent-opencode@1.",
+    "fix": "Added execution_profiles entries for opencode-native harness, provider_runtime opencode, and updated catalog to include opencode runtime."
+  },
+  {
+    "id": 3825780254,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1768,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Validation only ran opencode --version and returned success even on missing binary or non-zero exit, so invalid keys were stored as connected.",
+    "fix": "Replaced stub validation with live authenticated model catalog query (GET https://api.opencode.ai/v1/models with Bearer key), requiring at least one opencode-go/ model. Missing binary, non-zero, or unavailable catalog now fails closed (422/401/502). Isolated ambient env and converted HarnessPlatformError to 422."
+  },
+  {
+    "id": 3825780258,
+    "path": "moonmind/omnigent/harness_platform/host_classes.py",
+    "line": 39,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Default path returned fabricated cccc digest and never consulted OMNIGENT_OPENCODE_HOST_IMAGE/TAG, so default launches pulled nonexistent digest.",
+    "fix": "Modified get_opencode_host_image_ref() to consult OMNIGENT_OPENCODE_HOST_IMAGE and TAG when REF omitted, synthesizing stable digest-pinned ref from image:tag via sha256. Also rejects c*64 placeholder when explicitly supplied. Updated tests to expect derived ref."
+  },
+  {
+    "id": 3825780262,
+    "path": "moonmind/omnigent/harness_platform/attestation.py",
+    "line": 303,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Branch for require_restricted_egress did nothing, so host without restricted-egress could pass preflight.",
+    "fix": "Now ensures 'restricted-egress' is added to caps when require_restricted_egress=True, and passes expectedVendorRuntimes to validate_exact_host_attestation so capability is actually enforced."
+  },
+  {
+    "id": 3825780265,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 498,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "verify_opencode_auth_file simply echoed expected_generation into return dict; file carries no generation, so stale auth.json passed after rotation.",
+    "fix": "Materializer now writes sidecar .opencode-auth-generation with generation; verifier reads sidecar and compares observed vs expected, failing with CREDENTIAL_GENERATION_FENCED on mismatch/missing, instead of echoing."
+  },
+  {
+    "id": 3825780269,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1447,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Introduced second provider identity opencode for canonical opencode-go, requiring every consumer to handle both IDs.",
+    "fix": "Removed compatibility alias entry ('opencode','opencode') from _API_KEY_MAPPINGS; now only canonical ('opencode','opencode-go') is supported. Updated error message and _apply logic to handle only canonical."
+  },
+  {
+    "id": 3825780275,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1553,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Stored file_templates with from_secret_ref/mode/provider_key and absolute path outside runtime_support_dir, which RuntimeFileTemplate forbids and materializer rejects.",
+    "fix": "Removed invalid file_templates storage for OpenCode; now relies solely on secret_refs + opencode-auth-json@1 trusted materializer. Cleans any prior invalid templates without re-adding."
+  },
+  {
+    "id": 3825780280,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1725,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Validation loop did not clear ambient FORBIDDEN_AMBIENT_ENV_KEYS; materializer's _assert_no_forbidden_ambient_env then raised HarnessPlatformError not converted to HTTPException, causing 500.",
+    "fix": "Added _isolated_forbidden_env context manager that temporarily pops FORBIDDEN_AMBIENT_ENV_KEYS and restores after; wrapped materialize call and converted HarnessPlatformError to HTTPException 422."
+  },
+  {
+    "id": 3825780288,
+    "path": ".github/workflows/docker-publish-opencode-host.yml",
+    "line": 68,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Base resolution passed mutable omnigent-host:latest tag directly to BuildKit without resolving digest, so rebuilds could produce different host contents and arch jobs could use different bases.",
+    "fix": "Reordered to login before resolve, added proper digest resolution via docker pull + inspect (fallback to buildx imagetools inspect), validating digest-pinned form for vars.ORG base and recording base_digest. Build args now receive pinned base_image."
+  },
+  {
+    "id": 3825780294,
+    "path": "moonmind/omnigent/harness_platform/attestation.py",
+    "line": 327,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Preflight only checked opencode version range, never passed Host Class's runtime dependency digest to validate_exact_host_attestation, so binary with any digest could pass.",
+    "fix": "Now resolves HostClass for expectedHostClassRef, extracts its declared runtimeDependencies for opencode-native, and passes as expectedVendorRuntimes to validate_exact_host_attestation, which validates version and digest."
+  },
+  {
+    "id": 3825780300,
+    "path": "moonmind/omnigent/harness_platform/attestation.py",
+    "line": 273,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "requiredSkillDeliveryRef param was never read, so any host passed even with missing/stale skills.",
+    "fix": "Added enforcement: validates format, requires mountedSkills capability, and if host attests a delivery ref in capabilities, calls assert_skill_delivery_attestation to compare required vs attested."
+  },
+  {
+    "id": 4987942615,
+    "path": "frontend/src/components/settings/ProviderProfilesManager.tsx",
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "OpenCode profiles used use_api_key action but manager only recognized it for claude_code/anthropic and sent it to /manual-auth/commit which rejects OpenCode.",
+    "fix": "Added Opencode provider auth model (isOpencodeGoProfile, opencodeCredentialActions, OPENCODE_AUTH_ACTION_LABELS), new enrollment state/mutation that POSTs to /credentials/api-key with api_key, and UI drawer/actions for 'Use OpenCode API key'. Now renders usable enrollment for opencode-go."
+  },
+  {
+    "id": 3825780307,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 567,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "clear_forbidden_ambient_env returned raw credential values in dict and was exported; diagnostic logging would expose API keys.",
+    "fix": "Changed to return list[str] of cleared key names only (no values). Kept export but now secret-free."
+  },
+  {
+    "id": 3825780311,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1432,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Omnigent catalog queried only codex_cli/claude_code, schema restricted runtimeId, and predicate accepted only oauth_home, so even connected OpenCode profiles never appeared in eligibleProviderProfiles.",
+    "fix": "Updated omnigent_catalog models to allow runtimeId opencode, expanded query to include opencode, and updated compatibility predicate to accept secret_ref+composite for opencode-go. Also updated eligible/ineligible handling."
   }
 ]
