@@ -1,0 +1,13 @@
+{
+  "invariant": "repository readiness defers execution.fanout to the direct managed runtime, which mints only a workflow-scoped bearer from trusted resolved-Skill authorization before launch",
+  "repositoryCapabilityOwner": "runtime",
+  "capabilitySourceKind": "managed_process",
+  "requiredClaimBindings": [
+    "parentWorkflowId",
+    "agentRunId",
+    "stepId",
+    "runtimeId"
+  ],
+  "staleCapabilityFileSelectorRemoved": true,
+  "unknownCapabilitiesRemainFailClosed": true
+}
