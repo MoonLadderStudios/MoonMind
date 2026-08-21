@@ -40,7 +40,7 @@ def _capabilities(role: str) -> list[dict[str, object]]:
 
 def _passing_report(**overrides) -> dict[str, object]:
     route_inventory = {
-        "schemaVersion": "moonmind.omnigent.native-ui-route-inventory/v2",
+        "schemaVersion": "moonmind.omnigent.native-ui-route-inventory/v3",
         "artifactDigests": {
             "omnigent": "git:" + "1" * 40,
             "ui": "sha256:" + "2" * 64,
@@ -51,10 +51,10 @@ def _passing_report(**overrides) -> dict[str, object]:
         },
         "routes": [
             {
-                "routeKey": "GET /health",
+                "routeKey": "GET /v1/info",
                 "transport": "http",
                 "classification": "binding_scoped",
-                "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/health",
+                "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/info",
                 "callerPermission": "binding_owner_or_explicit_read_grant",
                 "requestBounds": {"maxBodyBytes": 0},
                 "responseBounds": {"maxBodyBytes": 1024},
@@ -64,11 +64,28 @@ def _passing_report(**overrides) -> dict[str, object]:
                 "historicalRead": "live_only",
                 "unsupportedBehavior": "not_applicable",
                 "mutationReceipt": None,
+                "responseContract": {
+                    "declaredStatusCodes": [200],
+                    "declaredResponseModel": None,
+                    "facadeBody": "bounded_virtualized_payload",
+                    "mutationReceiptSchemaVersion": None,
+                },
             }
         ],
         "uiRouteReferences": [
-            {"path": "/v1/info", "sourceFile": "omnigent/web/src/lib/api.ts"}
+            {
+                "routeKey": "GET /v1/info",
+                "method": "GET",
+                "path": "/v1/info",
+                "sourceFile": "omnigent/web/src/lib/api.ts",
+                "sourceLine": 1,
+                "join": "exact_stock_route",
+                "classification": "binding_scoped",
+            }
         ],
+        "uiDelegatedNetworkCalls": [],
+        "uiDelegatedCallCount": 0,
+        "uiReferenceCount": 1,
         "websocketProtocols": [],
         "sseProtocols": [],
         "routeCount": 1,
@@ -301,6 +318,58 @@ def test_route_inventory_digest_drift_fails_exact_artifact_gate() -> None:
 
     assert any(
         failure["code"] == "route_inventory_digest_mismatch"
+        for failure in projection["failures"]
+    )
+
+
+def test_unjoined_ui_network_call_fails_exact_artifact_gate() -> None:
+    report = _passing_report()
+    report["routeInventory"]["uiRouteReferences"][0]["join"] = "fail_closed"
+
+    projection = evaluate_exact_artifact_conformance(
+        report, required_digests=REQUIRED_DIGESTS
+    )
+
+    assert any(
+        failure["code"] == "route_inventory_unclassified"
+        for failure in projection["failures"]
+    )
+
+
+def test_unclassified_delegated_ui_call_fails_exact_artifact_gate() -> None:
+    report = _passing_report()
+    report["routeInventory"]["uiDelegatedNetworkCalls"] = [
+        {
+            "networkApi": "hostFetch",
+            "sourceFile": "omnigent/web/src/lib/api.ts",
+            "sourceLine": 2,
+            "classification": "unscoped_upstream_fallback",
+            "argumentDigest": "sha256:" + "7" * 64,
+            "unknownBehavior": "omnigent_chat_transport_unsupported",
+        }
+    ]
+    report["routeInventory"]["uiDelegatedCallCount"] = 1
+
+    projection = evaluate_exact_artifact_conformance(
+        report, required_digests=REQUIRED_DIGESTS
+    )
+
+    assert any(
+        failure["code"] == "route_inventory_unclassified"
+        for failure in projection["failures"]
+    )
+
+
+def test_missing_route_response_contract_fails_exact_artifact_gate() -> None:
+    report = _passing_report()
+    del report["routeInventory"]["routes"][0]["responseContract"]
+
+    projection = evaluate_exact_artifact_conformance(
+        report, required_digests=REQUIRED_DIGESTS
+    )
+
+    assert any(
+        failure["code"] == "route_inventory_unclassified"
         for failure in projection["failures"]
     )
 

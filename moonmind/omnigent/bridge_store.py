@@ -2973,6 +2973,7 @@ class OmnigentBridgeSessionStore:
         capture_manifest_ref: str,
         resource_projection_ref: str,
         evidence_completeness: str,
+        resource_projection: Mapping[str, Any],
     ) -> None:
         """Attach MoonMind-owned embedded harvest evidence without terminalizing."""
         async with self._session_factory() as session:
@@ -2988,6 +2989,7 @@ class OmnigentBridgeSessionStore:
                 {
                     "captureManifestRef": str(capture_manifest_ref)[:1024],
                     "resourceProjectionRef": str(resource_projection_ref)[:1024],
+                    "resourceProjection": dict(resource_projection),
                     "evidenceCompleteness": str(evidence_completeness)[:64],
                 }
             )

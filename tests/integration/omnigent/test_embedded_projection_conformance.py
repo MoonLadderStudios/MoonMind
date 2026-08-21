@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -187,6 +188,17 @@ class _ResourceChannel:
                 "items": [{"id": "file-1", "filename": "session.log"}]
             },
             "/v1/sessions/embedded-session/resources/files/file-1/content": b"session file evidence\n",
+            "/v1/sessions/embedded-session/resources/terminals": {
+                "object": "list",
+                "data": [
+                    {
+                        "id": "terminal-main",
+                        "session_id": "embedded-session",
+                        "status": "exited",
+                    }
+                ],
+                "has_more": False,
+            },
         }
 
     async def request_runner(
@@ -210,26 +222,53 @@ async def test_embedded_resources_share_the_canonical_proxy_shapes(
         run_store=store, config=_config(), host_channels=_ResourceChannel()
     )
     running = await start_fake_omnigent_server(FakeOmnigentServer())
-    proxy = OmnigentHttpClient(base_url=running.base_url)
     try:
-        assert await facade.get_resource(
-            "changed_files", "embedded-session"
-        ) == await proxy.list_changed_files("proxy-session")
-        assert await facade.get_resource(
-            "workspace_files", "embedded-session"
-        ) == await proxy.list_workspace_files("proxy-session")
-        assert await facade.get_resource(
-            "workspace_file", "embedded-session", "src/app.py"
-        ) == await proxy.get_workspace_file("proxy-session", "src/app.py")
-        assert await facade.get_resource(
-            "workspace_diff", "embedded-session", "src/app.py"
-        ) == await proxy.get_workspace_diff("proxy-session", "src/app.py")
-        assert await facade.get_resource(
-            "session_files", "embedded-session"
-        ) == await proxy.list_session_files("proxy-session")
-        assert await facade.get_resource(
-            "session_file", "embedded-session", "file-1"
-        ) == await proxy.get_session_file_content("proxy-session", "file-1")
+        async with httpx.AsyncClient(trust_env=False) as http_client:
+            proxy = OmnigentHttpClient(
+                base_url=running.base_url,
+                client=http_client,
+            )
+            assert await facade.get_resource(
+                "changed_files", "embedded-session"
+            ) == await proxy.list_changed_files("proxy-session")
+            assert await facade.get_resource(
+                "workspace_files", "embedded-session"
+            ) == await proxy.list_workspace_files("proxy-session")
+            assert await facade.get_resource(
+                "workspace_file", "embedded-session", "src/app.py"
+            ) == await proxy.get_workspace_file("proxy-session", "src/app.py")
+            assert await facade.get_resource(
+                "workspace_diff", "embedded-session", "src/app.py"
+            ) == await proxy.get_workspace_diff("proxy-session", "src/app.py")
+            assert await facade.get_resource(
+                "session_files", "embedded-session"
+            ) == await proxy.list_session_files("proxy-session")
+            assert await facade.get_resource(
+                "session_file", "embedded-session", "file-1"
+            ) == await proxy.get_session_file_content("proxy-session", "file-1")
+            embedded_terminals = await facade.list_session_terminals(
+                "embedded-session"
+            )
+            proxy_terminals = await proxy.list_session_terminals("proxy-session")
+            assert (
+                embedded_terminals["object"]
+                == proxy_terminals["object"]
+                == "list"
+            )
+            assert (
+                embedded_terminals["has_more"]
+                is proxy_terminals["has_more"]
+                is False
+            )
+            assert (
+                embedded_terminals["data"][0]["id"]
+                == proxy_terminals["data"][0]["id"]
+            )
+            assert (
+                embedded_terminals["data"][0]["session_id"]
+                == "embedded-session"
+            )
+            assert proxy_terminals["data"][0]["session_id"] == "proxy-session"
     finally:
         await running.runner.cleanup()
 

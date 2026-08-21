@@ -710,7 +710,6 @@ _STOCK_NATIVE_READ_CASES = (
     ("items", "session_items", "relay"),
     ("resources/terminals", "terminal_view", "relay"),
     ("resources/terminals/t-1", "terminal_status", "relay"),
-    ("resources/terminals/t-1/logs", "execution_logs", "relay"),
     ("resources/files/file-1/content", "resource_download", "resource"),
     ("subagents", "subagent_tree", "relay"),
     ("tasks", "task_todo", "relay"),
@@ -837,6 +836,60 @@ def test_every_additional_stock_native_read_uses_the_bound_identity(
     else:
         assert upstream_calls == []
         assert proxy.resources == []
+
+
+def test_large_live_terminal_resource_body_uses_declared_resource_bound(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.resolved_server_url",
+        lambda: "https://stock-omnigent.invalid",
+    )
+    response_body = b"x" * 2_000_000
+    read_limits: list[int] = []
+
+    class _Content:
+        async def read(self, limit: int) -> bytes:
+            read_limits.append(limit)
+            return response_body
+
+    class _Response:
+        status = 200
+        headers = {"content-type": "application/octet-stream"}
+        content = _Content()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        def request(self, *_args, **_kwargs):
+            return _Response()
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.aiohttp.ClientSession",
+        lambda **_kwargs: _Client(),
+    )
+    client, _proxy, _store = _build()
+
+    response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/terminals/terminal-main"
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.content == response_body
+    assert read_limits == [10 * 1024 * 1024 + 1]
 
 
 @pytest.mark.parametrize(
@@ -1572,6 +1625,86 @@ def test_large_artifact_backed_resource_body_survives_provider_cleanup(
     assert response.headers["content-type"].startswith("application/octet-stream")
     assert session_response.status_code == 200
     assert session_response.content == content
+    assert proxy.resources == []
+
+
+def test_terminal_list_and_status_survive_provider_and_host_cleanup(
+    monkeypatch,
+) -> None:
+    terminal = {
+        "id": "terminal-main",
+        "session_id": _PROVIDER_SESSION_ID,
+        "status": "exited",
+        "metadata": {"exit_code": 0},
+    }
+    row = _row(
+        status="completed",
+        omnigent_session_id="",
+        metadata_={
+            **_row().metadata_,
+            "capabilityAuthority": {
+                **_row().metadata_["capabilityAuthority"],
+                "providerSessionId": _PROVIDER_SESSION_ID,
+            },
+        },
+        terminal_refs={
+            "resourceProjection": {
+                "schemaVersion": "moonmind.omnigent.resource_projection.v1",
+                "groups": [
+                    {
+                        "groupKey": "terminals",
+                        "resources": [
+                            {
+                                "terminalId": "terminal-main",
+                                "label": "terminal-main",
+                                "status": "available",
+                                "artifactRef": (
+                                    "artifact://omnigent/corr/terminal-main.json"
+                                ),
+                                "sizeBytes": len(json.dumps(terminal).encode()),
+                                "contentType": "application/json",
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+    )
+
+    class _Gateway:
+        async def read_bytes(self, artifact_ref: str) -> bytes:
+            assert artifact_ref.endswith("/terminal-main.json")
+            return json.dumps(terminal).encode()
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.LocalOmnigentArtifactGateway",
+        _Gateway,
+    )
+    client, proxy, _store = _build(store=_FakeStore(row=row))
+
+    listing = client.get(
+        _path(f"v1/sessions/{_CHAT_BINDING_ID}/resources/terminals")
+    )
+    status_response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/terminals/terminal-main"
+        )
+    )
+    traversal = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/terminals/%2e%2e"
+        )
+    )
+
+    assert listing.status_code == 200
+    assert listing.json()["data"][0]["terminalId"] == "terminal-main"
+    assert "artifactRef" not in listing.text
+    assert status_response.status_code == 200
+    assert status_response.json()["id"] == "terminal-main"
+    assert _PROVIDER_SESSION_ID not in status_response.text
+    assert traversal.status_code in {400, 403, 404}
     assert proxy.resources == []
 
 

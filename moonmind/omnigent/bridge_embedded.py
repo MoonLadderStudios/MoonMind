@@ -631,6 +631,7 @@ class OmnigentEmbeddedHostProtocolFacade:
             "workspace_diff": (routes.workspace_diffs, False),
             "session_files": (routes.session_files, True),
             "session_file": (routes.session_file, False),
+            "terminals": (routes.session_terminals, True),
         }
         if operation not in route_templates:
             raise OmnigentBridgeError(
@@ -697,6 +698,9 @@ class OmnigentEmbeddedHostProtocolFacade:
 
     async def get_session_file_content(self, session_id: str, file_id: str) -> bytes:
         return await self.get_resource("session_file", session_id, file_id)
+
+    async def list_session_terminals(self, session_id: str) -> Any:
+        return await self.get_resource("terminals", session_id)
 
     async def harvest_session(
         self, session_id: str, *, payload: dict[str, Any] | None = None,
@@ -813,7 +817,10 @@ class OmnigentEmbeddedHostProtocolFacade:
             "sourceIssue": "MoonLadderStudios/MoonMind#3424",
             "provider": "omnigent",
             "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
-            "evidenceCompleteness": "complete",
+            "evidenceCompleteness": {
+                "status": "complete",
+                "unavailableReasons": {},
+            },
             "artifactRefs": refs,
             "evidenceClassification": {
                 "required": sorted(refs),
@@ -846,25 +853,37 @@ class OmnigentEmbeddedHostProtocolFacade:
                 failure_class="system_error", status_code=500,
                 code="omnigent_embedded_required_evidence_unavailable",
             ) from exc
-        unavailable = sorted(key for key in manifest if key.endswith("Unavailable"))
+        unavailable = sorted(
+            key
+            for key, value in manifest.items()
+            if key.endswith("Unavailable") and value
+        )
         item_unavailable = any(
             isinstance(item, dict) and item.get("unavailable")
-            for group in ("changedFiles", "workspaceFiles", "sessionFiles")
+            for group in (
+                "changedFiles",
+                "workspaceFiles",
+                "sessionFiles",
+                "terminals",
+            )
             for item in (manifest.get(group) or [])
         )
+        evidence_status = "degraded" if unavailable or item_unavailable else "complete"
+        unavailable_reasons = {
+            key: manifest[key]
+            for key in unavailable
+            if manifest.get(key)
+        }
+        manifest["evidenceCompleteness"] = {
+            "status": evidence_status,
+            "unavailableReasons": unavailable_reasons,
+        }
         if unavailable or item_unavailable:
-            manifest["evidenceCompleteness"] = "optional_degradation"
             if unavailable:
                 manifest["optionalEvidenceUnavailable"] = unavailable
         projection = {
-            "schemaVersion": "moonmind.omnigent.resource_projection.v1",
+            **harvester.resource_projection(),
             "sourceMode": HOST_PROTOCOL_MODE_EMBEDDED,
-            "resources": {
-                key: value for key, value in manifest.items()
-                if key in {"changedFiles", "workspaceFiles", "workspaceDiffs", "sessionFiles"}
-            },
-            "artifactRefs": refs,
-            "evidenceCompleteness": manifest["evidenceCompleteness"],
         }
         try:
             projection_ref = await self._artifact_gateway.write_json(
@@ -896,7 +915,8 @@ class OmnigentEmbeddedHostProtocolFacade:
             row.bridge_session_id,
             capture_manifest_ref=manifest_ref,
             resource_projection_ref=projection_ref,
-            evidence_completeness=manifest["evidenceCompleteness"],
+            evidence_completeness=evidence_status,
+            resource_projection=projection,
         )
         await self._run_store.record_resource_harvest_completed(session_id)
         await self._run_store.record_lifecycle_event(
@@ -912,7 +932,7 @@ class OmnigentEmbeddedHostProtocolFacade:
                 "controlKey": control_key,
                 "captureManifestRef": manifest_ref,
                 "resourceProjectionRef": projection_ref,
-                "evidenceCompleteness": manifest["evidenceCompleteness"],
+                "evidenceCompleteness": evidence_status,
             },
         )
         await self._record_control(

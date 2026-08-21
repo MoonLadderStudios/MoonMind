@@ -165,6 +165,10 @@ class FakeOmnigentServer:
             "/v1/sessions/{session_id}/resources/files/{file_id}/content",
             self.get_session_file_content,
         )
+        app.router.add_get(
+            "/v1/sessions/{session_id}/resources/terminals",
+            self.list_session_terminals,
+        )
         return app
 
     async def list_agents(self, request: web.Request) -> web.Response:
@@ -370,6 +374,32 @@ class FakeOmnigentServer:
         if (fault := await self._fault(request, "resources.session-file")) is not None:
             return fault
         return web.Response(body=b"session file evidence\n", content_type="text/plain")
+
+    async def list_session_terminals(self, request: web.Request) -> web.Response:
+        if (fault := await self._fault(request, "resources.terminals")) is not None:
+            return fault
+        session_id = request.match_info["session_id"]
+        return web.json_response(
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "id": "terminal-main",
+                        "session_id": session_id,
+                        "name": "main",
+                        "status": "exited",
+                        "metadata": {
+                            "exit_code": 0,
+                            "direct_attach_url": (
+                                f"ws://provider.invalid/v1/sessions/{session_id}/"
+                                "resources/terminals/terminal-main/attach?opaque=fake"
+                            ),
+                        },
+                    }
+                ],
+                "has_more": False,
+            }
+        )
 
 
 async def start_fake_omnigent_server(

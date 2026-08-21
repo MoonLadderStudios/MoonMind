@@ -1545,6 +1545,18 @@ async def test_embedded_harvest_publishes_canonical_manifest(store, tmp_path) ->
                     return {"items": [{"path": "src/main.py"}]}
                 if path.endswith("/filesystem"):
                     return {"items": [{"path": "src/main.py", "type": "file"}]}
+                if path.endswith("/terminals"):
+                    return {
+                        "object": "list",
+                        "data": [
+                            {
+                                "id": "terminal-main",
+                                "session_id": "sess-embedded",
+                                "status": "exited",
+                            }
+                        ],
+                        "has_more": False,
+                    }
                 return {"items": [{"id": "report", "filename": "report.txt"}]}
             if "/diff/" in path:
                 return b"+changed\n"
@@ -1560,7 +1572,7 @@ async def test_embedded_harvest_publishes_canonical_manifest(store, tmp_path) ->
     persisted = await store.get_bridge_session(row.bridge_session_id)
     manifest = await gateway.read_text(result["captureManifestRef"])
 
-    assert result["status"] == "completed_with_diagnostics"
+    assert result["status"] == "completed"
     assert persisted.capture_manifest_ref == result["captureManifestRef"]
     assert '"schemaVersion": "moonmind.omnigent.capture_manifest.v1"' in manifest
     assert "MoonLadderStudios/MoonMind#3424" in manifest
@@ -1568,7 +1580,13 @@ async def test_embedded_harvest_publishes_canonical_manifest(store, tmp_path) ->
     assert '"runnerLogRef"' in manifest
     assert '"diagnosticsRef"' in manifest
     assert '"optionalNotApplicable"' in manifest
-    assert '"evidenceCompleteness": "optional_degradation"' in manifest
+    assert '"status": "complete"' in manifest
+    assert '"terminalId": "terminal-main"' in manifest
+    projection = persisted.terminal_refs["resourceProjection"]
+    terminal_group = next(
+        group for group in projection["groups"] if group["groupKey"] == "terminals"
+    )
+    assert terminal_group["resources"][0]["terminalId"] == "terminal-main"
     events = await store.list_events(row.bridge_session_id)
     associations = [
         event for event in events

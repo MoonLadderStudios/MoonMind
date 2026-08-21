@@ -349,6 +349,10 @@ class BridgePublicApiRoutes(BaseModel):
         "/v1/sessions/{session_id}/resources/files/{file_id}/content",
         alias="sessionFile",
     )
+    session_terminals: str = Field(
+        "/v1/sessions/{session_id}/resources/terminals",
+        alias="sessionTerminals",
+    )
 
     @model_validator(mode="after")
     def _routes_are_omnigent_shaped(self) -> "BridgePublicApiRoutes":

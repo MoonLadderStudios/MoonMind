@@ -2,19 +2,20 @@
   "artifactDigests": {
     "harnessImplementation": "sha256:df70caa8be51a6871e72606d5d2979d816f1ffe36f2d3506674fffd60f076607",
     "host": "sha256:2a16d709081159e27f5718a3998cfd821179259413a84bd16f82f7d4b908e334",
-    "moonmindFacade": "sha256:448e30fc16426bc3dabc4238864a12fd0a0aa9c44aa9d5d7e6b5a1a6ae878277",
+    "moonmindFacade": "sha256:f12fcf31f2301c45085eb59b596aa06ca31873e61828fd302c089a66629123d9",
     "omnigent": "git:ed9369474f3ea3e28cb1871e731100be5da923e1",
     "server": "sha256:bc5e484988c4fb38178604da8f7ca6cae58d8e49dc3b25b17c8897d7ee80cdd1",
     "ui": "sha256:d981a0608c0c55e845c27226f641cfd8ed2815866a12d35ada2f0b3fcc1dd6a7"
   },
   "classifiedRouteCount": 126,
-  "inventoryDigest": "sha256:5e3ff3e833c7b410c02ece4f6a86846e10030217963601767d1f9a1729e80b5d",
+  "inventoryDigest": "sha256:8ddcdea4d2160e8f077ac9a1bcd128fe5bd949037a59b4bcae79afb1bce4ee8a",
   "routeCount": 126,
   "routes": [
     {
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:d1c2fa81b54dd2b754d48691dbc5ac46e1f9f23e3ed9667120a09f0bf9f275a5",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -36,6 +37,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/policies/{policy_id}",
       "sourceFile": "omnigent/omnigent/server/routes/default_policies.py",
       "sourceLine": 367,
@@ -46,6 +55,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:2dae43b06b0b9a4aeb7f0b39b5553112928ff077d0538f26d3912cfbdbe48027",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -67,6 +77,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/projects/{project_id}",
       "sourceFile": "omnigent/omnigent/server/routes/projects.py",
       "sourceLine": 142,
@@ -77,6 +95,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:d63e44dbeaf6d196d38248c52c70e53bac8cd3dc6234063ff6d680eaa69adee7",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -98,6 +117,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/scheduled-tasks/{scheduled_task_id}",
       "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
       "sourceLine": 510,
@@ -108,6 +135,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:b5536f69cb3ad8c423b94241ec8d24e355c82c68e85538879938b80dce48ffa3",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -129,6 +157,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/sessions/{session_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_events.py",
       "sourceLine": 1926,
@@ -139,6 +175,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:cb865485b44f33bd9a9a52a33f02620649f19d924c571e5418d748511d01569d",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -160,6 +197,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
       "sourceFile": "omnigent/omnigent/server/routes/session_mcp_servers.py",
       "sourceLine": 149,
@@ -170,6 +215,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:17431ce55dd526774401a95d2d44e674984c7ecbaee838b846180c743add261a",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -191,6 +237,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "ClearCodexGoalResponse",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/sessions/{session_id}/codex_goal",
       "sourceFile": "omnigent/omnigent/server/routes/codex/sessions.py",
       "sourceLine": 665,
@@ -201,6 +255,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:5f07702646800cc0fcf250ffe1a3d3c359b2974451dd8f66a4f5c8b3be7a0dfc",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -222,6 +277,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/sessions/{session_id}/comments/{comment_id}",
       "sourceFile": "omnigent/omnigent/server/routes/comments.py",
       "sourceLine": 314,
@@ -232,6 +295,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:7287868b83beeee2109be2ebab6af4e0a3a7ef19fd8d1dee44691969477665d4",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -253,6 +317,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          204
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/sessions/{session_id}/permissions/{target_user_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_permissions.py",
       "sourceLine": 189,
@@ -263,6 +335,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:397baf3c6465fd3a08cdd3893aabff2efd49830b8f4830c582d68744c9d72576",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -284,6 +357,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/sessions/{session_id}/policies/{policy_id}",
       "sourceFile": "omnigent/omnigent/server/routes/session_policies.py",
       "sourceLine": 378,
@@ -294,6 +375,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:adce4d99866496c702f9828dfd43372d8c9f38cb932e6128e13386a6e797bcbe",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -315,6 +397,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 2115,
@@ -325,6 +415,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:28960694b2eaf7c299a2833e933dd3b0f0dd2f4f4046749eb2c45ecda21661bc",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -346,6 +437,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "DELETE /v1/sessions/{session_id}/resources/files/{file_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1402,
@@ -356,6 +455,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "binding_scoped",
       "facadeOperation": "terminal_close",
+      "handlerDigest": "sha256:fde2a5a1b89beeccd6504b50049b17fbfa79fcd26ebdd1d2a72c487298b2fad7",
       "historicalRead": "not_applicable",
       "idempotency": "durable_mutation_receipt",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -381,6 +481,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
       "routeKey": "DELETE /v1/sessions/{session_id}/resources/terminals/{terminal_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1120,
@@ -391,6 +499,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "liveness",
+      "handlerDigest": "sha256:cc7e543180e8f1b88c96ba084cbaf8605b09ef1cfae09286a52b37521eea456c",
       "historicalRead": "live_only",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -412,6 +521,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /health",
       "sourceFile": "omnigent/omnigent/server/app.py",
       "sourceLine": 1805,
@@ -422,6 +539,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "list_agents",
+      "handlerDigest": "sha256:5c567bf60ff146e78b6862a2818a608a0eb220bbd1a4089a90d2c438881a8e4b",
       "historicalRead": "durable_journal_or_snapshot",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -443,6 +561,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/agents",
       "sourceFile": "omnigent/omnigent/server/routes/builtin_agents.py",
       "sourceLine": 141,
@@ -453,6 +579,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:85cd7ac151cf705eb4d2396bf809bb1956276770a6cf305fe4de62e874b0de0d",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -474,6 +601,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/branding/logo/{variant}",
       "sourceFile": "omnigent/omnigent/server/app.py",
       "sourceLine": 2107,
@@ -484,6 +619,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:82e30647e557edd28ed05116f9ea8ef5efe27d4df7c838878e10a6bbc952fda9",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -505,6 +641,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/harnesses",
       "sourceFile": "omnigent/omnigent/server/routes/harnesses.py",
       "sourceLine": 18,
@@ -515,6 +659,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "host_liveness",
+      "handlerDigest": "sha256:5e1f60e5e1b76906db6e0c0713d7bb0cc9b04157a961669441add6b7de4e50fe",
       "historicalRead": "live_only",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -536,6 +681,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/hosts",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 580,
@@ -546,6 +699,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:46f395ba76e6da6090f72c089dd642c3649c1666f266187fbbad064f19282337",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -567,6 +721,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/hosts/{host_id}",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 638,
@@ -577,6 +739,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:4cbe54e82cd0b66dfe9cd8a3314fae212a43701032e0872995fb5dbba059a0c9",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -598,6 +761,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/hosts/{host_id}/credentials/detected",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 1467,
@@ -608,6 +779,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:15a5658b1e8bbb29eed4eb798ef3994039cfd2bf382327b072d0b2300189e3b8",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -629,6 +801,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/hosts/{host_id}/filesystem",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 991,
@@ -639,6 +819,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:3f853df8a79f91488c77d77a395694f02d5d36978d5615106463353c4a913d5e",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -660,6 +841,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/hosts/{host_id}/filesystem/{path:path}",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 1029,
@@ -670,6 +859,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:d6ac52ad719b4f6b4c014590e5615b01b662e018838a14f3d5d12a36bedbaba3",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -691,6 +881,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/hosts/{host_id}/harnesses/{harness}/model-options",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 679,
@@ -701,6 +899,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:5f466cffa738b871b2507779de3ba2be75349291458105cbca2874a7cd06de09",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -722,6 +921,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/hosts/{host_id}/worktrees",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 1507,
@@ -732,6 +939,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "native_server_info",
+      "handlerDigest": "sha256:9b261983114fb33e2ce0032d7c46ca42eac1f9bad46adc4e021cda3dae217442",
       "historicalRead": "durable_journal_or_snapshot",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -753,6 +961,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "ServerInfoResponse",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/info",
       "sourceFile": "omnigent/omnigent/server/app.py",
       "sourceLine": 1951,
@@ -763,6 +979,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "native_current_user",
+      "handlerDigest": "sha256:6ff4babf6addeb2b34f74cfc266e73635891f3d174156f4491858577705807f9",
       "historicalRead": "durable_journal_or_snapshot",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -784,6 +1001,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/me",
       "sourceFile": "omnigent/omnigent/server/app.py",
       "sourceLine": 2138,
@@ -794,6 +1019,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:052097ffdbcc670024f1e8e2d777315559c0d420822628a079035471086ca04b",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -815,6 +1041,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/policies",
       "sourceFile": "omnigent/omnigent/server/routes/default_policies.py",
       "sourceLine": 250,
@@ -825,6 +1059,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:06597f4aa7b3106fd081c56b9aa886bed25ea51bd916b7704d5c4e1bcbad8f9e",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -846,6 +1081,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/policies/{policy_id}",
       "sourceFile": "omnigent/omnigent/server/routes/default_policies.py",
       "sourceLine": 276,
@@ -856,6 +1099,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:d83e4fb46ac8b4c36c2e7f45e1e89f68f99542b96f2fc0d499f2e99fa49ad2f9",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -877,6 +1121,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/policy-registry",
       "sourceFile": "omnigent/omnigent/server/routes/policy_registry.py",
       "sourceLine": 35,
@@ -887,6 +1139,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:a69491f4e89e26c394de14e4b00ddcd91ca3c0db6e4021704f51fe97e65dc1c5",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -908,6 +1161,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/projects",
       "sourceFile": "omnigent/omnigent/server/routes/projects.py",
       "sourceLine": 86,
@@ -918,6 +1179,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:d27be45060c68bb871eeb3c85a116f7f2805076497466d02f43fd85b9436f9f8",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -939,6 +1201,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/projects/{project_id}",
       "sourceFile": "omnigent/omnigent/server/routes/projects.py",
       "sourceLine": 98,
@@ -949,6 +1219,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:8ec3ee1d19c0ee507ea5da005432b40d2b6e71bcdd45b9f44afd67f7f27e1f49",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -970,6 +1241,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/runners",
       "sourceFile": "omnigent/omnigent/server/routes/runner_tunnel.py",
       "sourceLine": 222,
@@ -980,6 +1259,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "runner_liveness",
+      "handlerDigest": "sha256:9bf59f80d26523b6d2805a810c9f5b84388f40f30863538265c629577e7968eb",
       "historicalRead": "live_only",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1001,6 +1281,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/runners/{runner_id}/status",
       "sourceFile": "omnigent/omnigent/server/routes/runner_tunnel.py",
       "sourceLine": 253,
@@ -1011,6 +1299,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:2a721d5ed42ea1d906233a874b2283cb94468bcb1793a947a0cf1cec24745b86",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1032,6 +1321,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/scheduled-tasks",
       "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
       "sourceLine": 327,
@@ -1042,6 +1339,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:5eaf40bd1fc54d413ce73d0bfb74c8e9682265ecb848c0d16d02ecc6a718aefb",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1063,6 +1361,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/scheduled-tasks/{scheduled_task_id}",
       "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
       "sourceLine": 361,
@@ -1073,6 +1379,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:7781b74540a2b1c73ee24e65df8d44d3e8ddcf2ad6c3d0ee05bcae986bc48f14",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1094,6 +1401,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/scheduled-tasks/{scheduled_task_id}/runs",
       "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
       "sourceLine": 380,
@@ -1104,6 +1419,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "list_sessions",
+      "handlerDigest": "sha256:d527132294272d5df39798ad8adaab6bd748cf1c988c3db5503f3ef4d9a62fae",
       "historicalRead": "durable_journal_or_snapshot",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1125,6 +1441,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 812,
@@ -1135,6 +1459,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "list_projects",
+      "handlerDigest": "sha256:92c995e421936ade939315935f9408e74e1d567f43f1de3193f34a9fd9908a78",
       "historicalRead": "durable_journal_or_snapshot",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1156,6 +1481,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/projects",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 621,
@@ -1166,6 +1499,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "get_session",
+      "handlerDigest": "sha256:23455d0c0fbc66b0aa4e5561f2f1509b26aa0d159ef2d56a3840369968fdb69e",
       "historicalRead": "durable_journal_or_snapshot",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1187,6 +1521,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 700,
@@ -1197,6 +1539,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:2824fe9587ef3352bc649d9b60836d4eb990f0a63236a87afccf412525a76974",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1218,6 +1561,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/agent",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_agent.py",
       "sourceLine": 93,
@@ -1228,6 +1579,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:7d243306a9507630d740c810454ac8771b9e681f04ffaa4433dac33980710786",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1249,6 +1601,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/agent/contents",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_agent.py",
       "sourceLine": 136,
@@ -1259,6 +1619,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:07b50255d5f67f3718d28b8dc1cf8ea81c1b318394db66acc83c7bab87440b09",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1280,6 +1641,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/agent/mcp-servers",
       "sourceFile": "omnigent/omnigent/server/routes/session_mcp_servers.py",
       "sourceLine": 91,
@@ -1290,6 +1659,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:447338370929439979229493b8d55a59e1e0f30bf88edcbe82bdb51ebe8f7e91",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1311,6 +1681,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/child_sessions",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_items.py",
       "sourceLine": 116,
@@ -1321,6 +1699,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:144f78ae8688e93623e434a5b33eb10b04f23dadf0c7b790a9e1f7beeab8d233",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1342,6 +1721,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "CodexGoalResponse",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/codex_goal",
       "sourceFile": "omnigent/omnigent/server/routes/codex/sessions.py",
       "sourceLine": 476,
@@ -1352,6 +1739,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:10f4e93492d21f32b480870b2370375df89212f3f1006f6f98ea1a1253e9fd3c",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1373,6 +1761,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/comments",
       "sourceFile": "omnigent/omnigent/server/routes/comments.py",
       "sourceLine": 243,
@@ -1383,6 +1779,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:78f13aa3c3eaa82ce4fb3af7cca833c760dca7bbec2c9e94eebf721491d4e31c",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1404,6 +1801,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/elicitations/{elicitation_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_elicitations.py",
       "sourceLine": 133,
@@ -1414,6 +1819,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "session_items",
+      "handlerDigest": "sha256:2eccc959cc2c682019ddaf806fcb44cf2a1a7349b894e2f7b9ff4a06beae478e",
       "historicalRead": "artifact_projection_after_cleanup",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1435,6 +1841,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/items",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_items.py",
       "sourceLine": 58,
@@ -1445,6 +1859,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:1f4d5ead4b11af8bcc9d6af2140c2ddc1282e5773acd7138dedd1a8315eaffe5",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1466,6 +1881,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "SessionLabelsResponse",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/labels",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 769,
@@ -1476,6 +1899,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:939c82399b78d7eb8d9f790e2e55e310bd4889d10594ea8a440fa8b925ef73dc",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1497,6 +1921,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/owner",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_permissions.py",
       "sourceLine": 279,
@@ -1507,6 +1939,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:7ace3e9fec0d61b7a55084532f691807c200349f79ca0651dc3b8acc20c3bdf9",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1528,6 +1961,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/permissions",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_permissions.py",
       "sourceLine": 303,
@@ -1538,6 +1979,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:ea9743d152de8e5e64ffb8a6b1e2dd29acef60d7e7e96fa80128a5ca2b848e85",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1559,6 +2001,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/policies",
       "sourceFile": "omnigent/omnigent/server/routes/session_policies.py",
       "sourceLine": 237,
@@ -1569,6 +2019,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:1d0d2148f24b2c0345f8abbf90802fea76397e85fe14e112c2bd8c21cc301b88",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1590,6 +2041,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/policies/{policy_id}",
       "sourceFile": "omnigent/omnigent/server/routes/session_policies.py",
       "sourceLine": 272,
@@ -1600,6 +2059,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:633802f9e4cc065b9b648fa0ef76366ca2da4aff1d9793effdeba12dda6a7cdc",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1621,6 +2081,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "SessionResourcePaginatedList",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 113,
@@ -1631,6 +2099,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:4d8192f94966dfaf82ba4a761a3431b9da593861fbc8797598b91612377e220e",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1652,6 +2121,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/environments",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 704,
@@ -1662,6 +2139,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:1023b95dc976a1bb45676f44697ac7e8c70c28554793df1f7377fec16be8752b",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1683,6 +2161,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 723,
@@ -1693,6 +2179,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:5a427f485898118dbaab1b701a5083f3ffe0aae5ebf9d5d41baa970e390cde99",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1714,6 +2201,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/changes",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1898,
@@ -1724,6 +2219,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:0034ee524de5a9c3ad7cabfbdce1eef42ef8ab09ea0cffed6c2b3436a3a9a490",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1745,6 +2241,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/diff/{relative_path:path}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1929,
@@ -1755,6 +2259,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:8f03197b3aadb68627b997b5e688230c04c33c6d8e88ebc959f005ab1e091ef5",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1776,6 +2281,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1713,
@@ -1786,6 +2299,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:79c2f03a69162125e365b6b9f4eb3457b886983d7b4a2e181883f15913b69653",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1807,6 +2321,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1967,
@@ -1817,6 +2339,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:393c26db1f0b36ce0eb1bc056cc27a0c2ae311681488b8789d007baf652a867d",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1838,6 +2361,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/search",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1763,
@@ -1848,6 +2379,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:b1f24e646a452ced2328ef48c2897562bffa8e1001cbaf838e7979f6f437f98e",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1869,6 +2401,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/search/{path:path}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1810,
@@ -1879,6 +2419,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "session_files",
+      "handlerDigest": "sha256:a2bc02ef65b519a05c64aae8758dc9546965afdf4a8e1cc8025a1f339eb10425",
       "historicalRead": "artifact_projection_after_cleanup",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1900,6 +2441,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/files",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1169,
@@ -1910,6 +2459,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:e1087c448836410c0d988b7858e83524584b8d74890bbdf2c7e77b8d898c453a",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1931,6 +2481,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/files/{file_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1307,
@@ -1941,6 +2499,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "session_file",
+      "handlerDigest": "sha256:24ffdcd2ce63f5cd5ae6f53a410f577d8c305248a0c46a5ed9bf1c4d786d34bf",
       "historicalRead": "artifact_projection_after_cleanup",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1962,6 +2521,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/files/{file_id}/content",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1340,
@@ -1972,6 +2539,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "terminal_view",
+      "handlerDigest": "sha256:e3d6fcc8d43ddb119142d01a513cc56ae46cc1545ad8cfc11822023816591d34",
       "historicalRead": "artifact_projection_after_cleanup",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -1993,6 +2561,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/terminals",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 799,
@@ -2003,6 +2579,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "terminal_status",
+      "handlerDigest": "sha256:2d422f58f549025f4fac4e59ea8ac17cb7dce41bb3f14f10ea808f2366875766",
       "historicalRead": "artifact_projection_after_cleanup",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2024,6 +2601,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/terminals/{terminal_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1016,
@@ -2034,6 +2619,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:d9a877bfd9154cf0be32b7eeabc7d02d5ef9ff865989d1d06f0a8de86df6faf2",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2055,6 +2641,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/resources/{resource_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 2184,
@@ -2065,6 +2659,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "stream_events",
+      "handlerDigest": "sha256:4361f35f42a3f7ef8c40d3634bf98846a80ffb778138f4fe90ee9256446d5b63",
       "historicalRead": "durable_journal_or_snapshot",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2086,6 +2681,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sessions/{session_id}/stream",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_events.py",
       "sourceLine": 1724,
@@ -2096,6 +2699,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:cefe7844106442d35dab3c27d2c4dcc81e15e0b0234a4c1875a39181a27e2293",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2117,6 +2721,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/sharing",
       "sourceFile": "omnigent/omnigent/server/routes/sharing.py",
       "sourceLine": 99,
@@ -2127,6 +2739,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:f0782fef823723a29e450ed8ff93d6623a57dbd3de414814bf7795b4d7ffbae1",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2148,6 +2761,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "UsageReport",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "GET /v1/usage",
       "sourceFile": "omnigent/omnigent/server/routes/usage.py",
       "sourceLine": 214,
@@ -2158,6 +2779,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:a8619163b6419df71d98a7ee827c1373cbe51f4b3a22fc3844e5bfbb54622374",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2179,6 +2801,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PATCH /v1/policies/{policy_id}",
       "sourceFile": "omnigent/omnigent/server/routes/default_policies.py",
       "sourceLine": 304,
@@ -2189,6 +2819,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:62e84e992418f761d31404113065d63ec94abd4d226cb294ace647e212ca08b6",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2210,6 +2841,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PATCH /v1/projects/{project_id}",
       "sourceFile": "omnigent/omnigent/server/routes/projects.py",
       "sourceLine": 114,
@@ -2220,6 +2859,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:1aa09e426e8cfbf6688c69445c5e174e42533189c18b6e2c6c063a43e2c73794",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2241,6 +2881,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PATCH /v1/scheduled-tasks/{scheduled_task_id}",
       "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
       "sourceLine": 461,
@@ -2251,6 +2899,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:4af5331595f12e264d47e51932f3da8109f0c332a1eb81d58c2c020ecf6352d6",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2272,6 +2921,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PATCH /v1/sessions/{session_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 1474,
@@ -2282,6 +2939,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:38e018932dae2655b6acc889c0be7423f09f3b4647b70e13c205d17b51c24c44",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2303,6 +2961,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "CodexGoalResponse",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PATCH /v1/sessions/{session_id}/codex_goal/status",
       "sourceFile": "omnigent/omnigent/server/routes/codex/sessions.py",
       "sourceLine": 604,
@@ -2313,6 +2979,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:fc6a4dddf5cd4ea716280f89e706c60f710342b2b4febddbc2ab2b4644b288ba",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2334,6 +3001,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PATCH /v1/sessions/{session_id}/comments/{comment_id}",
       "sourceFile": "omnigent/omnigent/server/routes/comments.py",
       "sourceLine": 265,
@@ -2344,6 +3019,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:72f76692410a770b27a443c2743848ca420d31332bb1e6a7052f9bdc2e318231",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2365,6 +3041,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PATCH /v1/sessions/{session_id}/policies/{policy_id}",
       "sourceFile": "omnigent/omnigent/server/routes/session_policies.py",
       "sourceLine": 302,
@@ -2375,6 +3059,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:9e8d9261e9a724ac7971393615f4528241150536815006aa5ff8dca4e61e93c3",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2396,6 +3081,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PATCH /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 2083,
@@ -2406,6 +3099,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:a66ece6a8b041bbb5fc4349fcf7b42546906fb5be071474e52ac837efe86a071",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2427,6 +3121,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/hosts/{host_id}/directories",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 1159,
@@ -2437,6 +3139,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:ece47a734697dcc6dc4aa57766cc38cead464d37bb5b8a4a7ad1a2afe85cdbe4",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2458,6 +3161,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/hosts/{host_id}/harnesses/{harness}/credential",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 1356,
@@ -2468,6 +3179,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:f2f2649fe9e1e01dbed26270171efbdd6737fceabdb29cd3468d7aff69a672df",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2489,6 +3201,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/hosts/{host_id}/harnesses/{harness}/install",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 1243,
@@ -2499,6 +3219,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:fb396949aee3e7daf8695bb8976c5691b23ac22588db3b98c5242b554234be57",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2520,6 +3241,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/hosts/{host_id}/runners",
       "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
       "sourceLine": 714,
@@ -2530,6 +3259,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:837dd0312027017e2ef6d133f25de0f7d13795c347c40bc59acc7f7ade85efd3",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2551,6 +3281,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "ImportSessionResponse",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/imports",
       "sourceFile": "omnigent/omnigent/server/routes/imports.py",
       "sourceLine": 123,
@@ -2561,6 +3299,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:0c8d77a090b0626d78992b04fdfbd9f3cf83c2dc1f586e72b5019d90e8dc9544",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2582,6 +3321,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/policies",
       "sourceFile": "omnigent/omnigent/server/routes/default_policies.py",
       "sourceLine": 171,
@@ -2592,6 +3339,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:a4330ba587ac556fc85d193a73a6772455103fdff87b534c421d7ccc3ae2dd17",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2613,6 +3361,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/projects",
       "sourceFile": "omnigent/omnigent/server/routes/projects.py",
       "sourceLine": 63,
@@ -2623,6 +3379,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:2e7394d10f69a85d7d4566419883221a99baaa041d31b619e037be75d5ac68fe",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2644,6 +3401,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/runners/{runner_id}/token",
       "sourceFile": "omnigent/omnigent/server/routes/runner_tunnel.py",
       "sourceLine": 286,
@@ -2654,6 +3419,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:98b8a082dfc7e2bbc2c5268785805dcddcd0a0207dd49948ee7aa22e2c456db4",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2675,6 +3441,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/scheduled-tasks",
       "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
       "sourceLine": 286,
@@ -2685,6 +3459,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:47e49fbd481d5956157afc09b5a08aab7127d5a24473d3c61916e07e9b3774f5",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2706,6 +3481,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          202
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/scheduled-tasks/{scheduled_task_id}/run",
       "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
       "sourceLine": 418,
@@ -2716,6 +3499,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:fc591b33f3b790bd2524524db1e910090f216ea3162c92b7bcaf65a48ebdb037",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2737,6 +3521,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          201
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 214,
@@ -2747,6 +3539,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:c85576d3262e658469e9da8fd200e886755c6805f458e4cf05214a041efa6d21",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2768,6 +3561,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/agent/mcp-servers",
       "sourceFile": "omnigent/omnigent/server/routes/session_mcp_servers.py",
       "sourceLine": 110,
@@ -2778,6 +3579,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:48a52d5728e2107a2e1dcd534e287e76b2395f5f8081e0dd2d3aa394f39d5b27",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2799,6 +3601,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "AutomaticSessionRenameResponse",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/auto-title",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 1415,
@@ -2809,6 +3619,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "binding_scoped",
       "facadeOperation": "browser_pane",
+      "handlerDigest": "sha256:9578f21a1dc09337b622e695c131a748c5b60038eae2131100123da0bb5381ff",
       "historicalRead": "not_applicable",
       "idempotency": "durable_mutation_receipt",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2834,6 +3645,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
       "routeKey": "POST /v1/sessions/{session_id}/browser/action_claim/{action_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_browser.py",
       "sourceLine": 133,
@@ -2844,6 +3663,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "binding_scoped",
       "facadeOperation": "browser_pane",
+      "handlerDigest": "sha256:fd289a4b2f8057cdfe32ac7f9240e943cc4a7707b490b7bb65f952b7f7fc962c",
       "historicalRead": "not_applicable",
       "idempotency": "durable_mutation_receipt",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2869,6 +3689,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
       "routeKey": "POST /v1/sessions/{session_id}/browser/action_request",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_browser.py",
       "sourceLine": 61,
@@ -2879,6 +3707,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "binding_scoped",
       "facadeOperation": "browser_pane",
+      "handlerDigest": "sha256:ab63f9be157ca598cabdcbd476094d961a98f4e2e2a7b1cd26e1d6d78aabb66f",
       "historicalRead": "not_applicable",
       "idempotency": "durable_mutation_receipt",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2904,6 +3733,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          202
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
       "routeKey": "POST /v1/sessions/{session_id}/browser/action_result/{action_id}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_browser.py",
       "sourceLine": 175,
@@ -2914,6 +3751,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:a4b89f99e3c83d29854b996596fc0b134759063db7f64f8c24b03a8cd0d9a92f",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2935,6 +3773,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/comments",
       "sourceFile": "omnigent/omnigent/server/routes/comments.py",
       "sourceLine": 208,
@@ -2945,6 +3791,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:f5c7a6158fd89b55dd3aa09b183e626c44136be9efe3a6e8e7ae7a02068f0ae4",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -2966,6 +3813,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/comments/send",
       "sourceFile": "omnigent/omnigent/server/routes/comments.py",
       "sourceLine": 343,
@@ -2976,6 +3831,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "binding_scoped",
       "facadeOperation": "resolve_elicitation",
+      "handlerDigest": "sha256:8fc72a5b5d46bd694ecd290bb3b1dc1b298b39cf35e7141dea6ae9259fdfe4ad",
       "historicalRead": "not_applicable",
       "idempotency": "durable_mutation_receipt",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3001,6 +3857,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          202
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
       "routeKey": "POST /v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_elicitations.py",
       "sourceLine": 66,
@@ -3011,6 +3875,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "binding_scoped",
       "facadeOperation": "post_event",
+      "handlerDigest": "sha256:b696c785f5d077d006f7f49c16d54d5af27afd7c42debb36e23ca701ca001299",
       "historicalRead": "not_applicable",
       "idempotency": "durable_mutation_receipt",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3036,6 +3901,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          202
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
       "routeKey": "POST /v1/sessions/{session_id}/events",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_events.py",
       "sourceLine": 374,
@@ -3046,6 +3919,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:9c0adb7dcf38afbee7217da5a99693d4cd432090f00d1f38a6e9866409ab9b5e",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3067,6 +3941,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/hooks/antigravity-elicitation-request",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
       "sourceLine": 1027,
@@ -3077,6 +3959,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:3b9f7639c65fa4c22899327fd694fe8ff01782d6a02466cf479e813f6b207611",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3098,6 +3981,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/hooks/codex-elicitation-request",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
       "sourceLine": 942,
@@ -3108,6 +3999,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:fdbae82cdc8420b748c6415fd5d358bbe738d0833b4c08c61789da293205d2df",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3129,6 +4021,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/hooks/cursor-permission-request",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
       "sourceLine": 1130,
@@ -3139,6 +4039,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:361a51c9820a598b3daccefb104a63bce7c35070f9c0b2763f4692959d8b9276",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3160,6 +4061,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/hooks/native-permission-request",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
       "sourceLine": 1247,
@@ -3170,6 +4079,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:ad35490f3a359868de6e3996f68534ba863c40b25856397a33c17946445c6958",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3191,6 +4101,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/hooks/permission-request",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
       "sourceLine": 142,
@@ -3201,6 +4119,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:469d31102a25c46c0a7a53e57c6963cc2eda2f0a09f89c0075e77ccb098508a7",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3222,6 +4141,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/hooks/route-subagent",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
       "sourceLine": 1380,
@@ -3232,6 +4159,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:71b0720db125af54261d83d0abc1ccc4b254ba3362b646953bbc853a1e700c51",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3253,6 +4181,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/hooks/route-turn",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
       "sourceLine": 1514,
@@ -3263,6 +4199,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:96f9c8a5eb363522df1b21db420d2f8ac62f867581b3e7d383c6797fb9cd4a85",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3284,6 +4221,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/mcp",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_agent.py",
       "sourceLine": 326,
@@ -3294,6 +4239,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:ea3f2f8efc2170d62a1290ec13f7c8d013db65e44802c5b6472879e8df7fa03c",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3315,6 +4261,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/policies",
       "sourceFile": "omnigent/omnigent/server/routes/session_policies.py",
       "sourceLine": 154,
@@ -3325,6 +4279,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:29b19aacb81bb217538bef10bf51565adb28c9d419fd4840fcc7d1b16b5d738b",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3346,6 +4301,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/policies/evaluate",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
       "sourceLine": 537,
@@ -3356,6 +4319,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:9f475f61e9512948dabac80b42c947fbadf708b9a4f19e7d128e6a2a4d294924",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3377,6 +4341,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/resources/environments/{environment_id}/shell",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 2147,
@@ -3387,6 +4359,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "binding_scoped",
       "facadeOperation": "resource_upload",
+      "handlerDigest": "sha256:1bd0e8c8d3be77abf7b4e9ad4e8c7c8d0ffcd801c1ee9a99df05114fc4af282f",
       "historicalRead": "not_applicable",
       "idempotency": "durable_mutation_receipt",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3412,6 +4385,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          201
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
       "routeKey": "POST /v1/sessions/{session_id}/resources/files",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1213,
@@ -3422,6 +4403,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:bfc300eb3860b166b7b59d1cf6e5776ace40728f692eccc201c621cc34089bc9",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3443,6 +4425,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/resources/files:copy",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1443,
@@ -3453,6 +4443,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "binding_scoped",
       "facadeOperation": "terminal_create",
+      "handlerDigest": "sha256:6b1c1b120e02be0a3512c8e8b1b938d6909b3e20ae73a08c2727d7d9348eeab0",
       "historicalRead": "not_applicable",
       "idempotency": "durable_mutation_receipt",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3478,6 +4469,14 @@
         "maxFrameBytes": 0,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
       "routeKey": "POST /v1/sessions/{session_id}/resources/terminals",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 917,
@@ -3488,6 +4487,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:26b05c546e3560b5b6141004b6e0fb8a5803dcabf82400b3f1b77854de98495b",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3509,6 +4509,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/resources/terminals/{terminal_id}/transfer",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 1037,
@@ -3519,6 +4527,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:1324cc6d7936a974ca5c084e79a2611d145846c0f20fb4f0573260873b680481",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3540,6 +4549,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{session_id}/switch-agent",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 2207,
@@ -3550,6 +4567,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:facacd5651bb94988a142eb2c2256600d39bb79596fcf2ce55809401093c306d",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3571,6 +4589,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          201
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "POST /v1/sessions/{source_id}/fork",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 1981,
@@ -3581,6 +4607,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:f50fa0acb9a0548ad064898db32242e7fa764053ee6becf166a5b6d784f7ea60",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3602,6 +4629,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PUT /v1/sessions/{session_id}/agent",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_agent.py",
       "sourceLine": 213,
@@ -3612,6 +4647,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:4fae761fe2477329bcd9294ede538b40481f883cd900638cd5f2bad5285fc463",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3633,6 +4669,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PUT /v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
       "sourceFile": "omnigent/omnigent/server/routes/session_mcp_servers.py",
       "sourceLine": 129,
@@ -3643,6 +4687,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:172f5a7a1904fcf1d2aa12c4bcb56133d6bacad1d36da757d61d5a7544f644fa",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3664,6 +4709,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "CodexGoalResponse",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PUT /v1/sessions/{session_id}/codex_goal",
       "sourceFile": "omnigent/omnigent/server/routes/codex/sessions.py",
       "sourceLine": 533,
@@ -3674,6 +4727,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:44121405484c1adfa0b060ba06ac5f2c37b73c6ff44cd1315c6b93959ead05bc",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3695,6 +4749,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PUT /v1/sessions/{session_id}/permissions",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_permissions.py",
       "sourceLine": 87,
@@ -3705,6 +4767,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:b3e772ddd5d6874426ef7be91084dde89a3ad6e25535a86af268e1b5b16420d7",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3726,6 +4789,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          204
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PUT /v1/sessions/{session_id}/read-state",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 665,
@@ -3736,6 +4807,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:93745a1954b1e3b4a8b73b411d2aecf634e4aced211ee156c0570b6805b7ee27",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3757,6 +4829,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": "None",
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PUT /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
       "sourceLine": 2051,
@@ -3767,6 +4847,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:0ab1c4258ba19832e55316973f31643653e94ea438301f306ac107cbd43202b8",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3788,6 +4869,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "PUT /v1/sharing",
       "sourceFile": "omnigent/omnigent/server/routes/sharing.py",
       "sourceLine": 105,
@@ -3798,6 +4887,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "binding_scoped",
       "facadeOperation": "dictation_stream",
+      "handlerDigest": "sha256:33d9fedd42ee7c39398d963483aaf6bb5e78b534466f5c6a87eab64949ce7757",
       "historicalRead": "not_applicable",
       "idempotency": "durable_mutation_receipt",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3823,6 +4913,14 @@
         "maxFrameBytes": 1048576,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "WEBSOCKET /v1/dictation/stream",
       "sourceFile": "omnigent/omnigent/server/routes/dictation.py",
       "sourceLine": 108,
@@ -3833,6 +4931,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:e633afba833dcfdb9b6f323b1cb0dbb11ce8353c6a23af63345b717a4214bac0",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3854,6 +4953,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "WEBSOCKET /v1/hosts/{host_id}/tunnel",
       "sourceFile": "omnigent/omnigent/server/routes/host_tunnel.py",
       "sourceLine": 134,
@@ -3864,6 +4971,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "fail_closed",
       "facadeOperation": null,
+      "handlerDigest": "sha256:480d67142b341b8ab65a80f54090e53de4c481195ac5a0de5bdcb2f07b31aef4",
       "historicalRead": "unsupported",
       "idempotency": "no_upstream_delivery",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3885,6 +4993,14 @@
         "maxFrameBytes": 0,
         "maxItems": 0
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "stable_fail_closed_diagnostic",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "WEBSOCKET /v1/runners/{runner_id}/tunnel",
       "sourceFile": "omnigent/omnigent/server/routes/runner_tunnel.py",
       "sourceLine": 345,
@@ -3895,6 +5011,7 @@
       "callerPermission": "binding_owner_or_explicit_read_grant",
       "classification": "binding_scoped",
       "facadeOperation": "ws_session_updates",
+      "handlerDigest": "sha256:16a1b166b38527d9d272428faf1c16e2c24b5de0282c857a98096379d0068305",
       "historicalRead": "durable_journal_or_snapshot",
       "idempotency": "read_only",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3916,6 +5033,14 @@
         "maxFrameBytes": 1048576,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "WEBSOCKET /v1/sessions/updates",
       "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
       "sourceLine": 1131,
@@ -3926,6 +5051,7 @@
       "callerPermission": "binding_owner_or_explicit_mutation_grant",
       "classification": "binding_scoped",
       "facadeOperation": "terminal_attach",
+      "handlerDigest": "sha256:ac0c0d0cd33e1cf0797cf16d05ce4172eab90e152df2e715bcb4af872c5a0e62",
       "historicalRead": "not_applicable",
       "idempotency": "durable_mutation_receipt",
       "identityVirtualization": "provider_session_id_to_chat_binding_id",
@@ -3951,6 +5077,14 @@
         "maxFrameBytes": 1048576,
         "maxItems": 250
       },
+      "responseContract": {
+        "declaredResponseModel": null,
+        "declaredStatusCodes": [
+          200
+        ],
+        "facadeBody": "bounded_virtualized_payload",
+        "mutationReceiptSchemaVersion": null
+      },
       "routeKey": "WEBSOCKET /v1/sessions/{session_id}/resources/terminals/{terminal_id}/attach",
       "sourceFile": "omnigent/omnigent/server/routes/terminal_attach.py",
       "sourceLine": 134,
@@ -3958,7 +5092,7 @@
       "unsupportedBehavior": "not_applicable"
     }
   ],
-  "schemaVersion": "moonmind.omnigent.native-ui-route-inventory/v2",
+  "schemaVersion": "moonmind.omnigent.native-ui-route-inventory/v3",
   "sourceIssue": "MoonLadderStudios/MoonMind#3635",
   "sseProtocols": [
     {
@@ -3969,362 +5103,1422 @@
       "upstreamCursorBehavior": "snapshot_then_live_tail_no_server_replay"
     }
   ],
+  "uiDelegatedCallCount": 28,
+  "uiDelegatedNetworkCalls": [
+    {
+      "argumentDigest": "sha256:a0af9f865bf637e6736817f4ce552e4cdf7b8c36ea75bc254c1d1f0af744b5bf",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "authenticatedFetch",
+      "sourceFile": "omnigent/web/src/components/BrandLogo.tsx",
+      "sourceLine": 51,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:a0af9f865bf637e6736817f4ce552e4cdf7b8c36ea75bc254c1d1f0af744b5bf",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "authenticatedFetch",
+      "sourceFile": "omnigent/web/src/components/SessionImage.tsx",
+      "sourceLine": 113,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:28e5ebabd9d8f6e237df63da2b503785093f0229241bc7021198f63c43b93269",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "WebSocket",
+      "sourceFile": "omnigent/web/src/components/blocks/TerminalSession.ts",
+      "sourceLine": 533,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:28e5ebabd9d8f6e237df63da2b503785093f0229241bc7021198f63c43b93269",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "authenticatedFetch",
+      "sourceFile": "omnigent/web/src/hooks/useAvailableAgents.ts",
+      "sourceLine": 135,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:28e5ebabd9d8f6e237df63da2b503785093f0229241bc7021198f63c43b93269",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "authenticatedFetch",
+      "sourceFile": "omnigent/web/src/hooks/useComments.ts",
+      "sourceLine": 49,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:3fa2662bd40fbe101d31c9ec3269b1194a73df9ae1c33ac021343476bfb914f1",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "authenticatedFetch",
+      "sourceFile": "omnigent/web/src/hooks/useHostFilesystem.ts",
+      "sourceLine": 182,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:4f97ebfbc97f0b88db6dd327fc01718f553f80dceb701142a42a6a5992e5dd4f",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "authenticatedFetch",
+      "sourceFile": "omnigent/web/src/hooks/useHostFilesystem.ts",
+      "sourceLine": 259,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:015cbe4f39c350152e61b1316f9127085aee068ff72be64061d20e967952222a",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "authenticatedFetch",
+      "sourceFile": "omnigent/web/src/hooks/useWorkspaceChangedFiles.ts",
+      "sourceLine": 690,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:b6af9249579b19a1f9b5f9a37bf0023e4f9784dbaa1b8bbe6a828901727d7eb1",
+      "classification": "outside_binding_auth_fail_closed",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/accountsApi.ts",
+      "sourceLine": 63,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:63a3bf99c0343b20f887971e9e14ac9591c749f7ed6158e96ea6dbc460d7ccaa",
+      "classification": "outside_binding_auth_fail_closed",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/accountsApi.ts",
+      "sourceLine": 110,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:6465f074c1323382aa42484aaf1dba0c402cf526e6324450f6e47163a7987c8d",
+      "classification": "outside_binding_auth_fail_closed",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/accountsApi.ts",
+      "sourceLine": 131,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:ff5a6147b0676848b25dd3e4f3bd5dbd88411cdc3943736c1e8c4b1eafb18222",
+      "classification": "outside_binding_auth_fail_closed",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/accountsApi.ts",
+      "sourceLine": 157,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:b2162559f46b20e82a58b178d6f3a3d61968a00b62b337dbb8387c4b7bc638ae",
+      "classification": "outside_binding_auth_fail_closed",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/accountsApi.ts",
+      "sourceLine": 210,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:689de4741527986db2484769b78af05dc4f0bf50aa201332bd7fe04d121d87c5",
+      "classification": "outside_binding_auth_fail_closed",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/accountsApi.ts",
+      "sourceLine": 251,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:fd0f7fa9253122e8e0d071154ad1e6abb3ac20e70aecdf2cd8f210e45c8d549f",
+      "classification": "outside_binding_auth_fail_closed",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/accountsApi.ts",
+      "sourceLine": 367,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:7678c4e7c1761f16d19572c31aff38a9acea8c9368974fe5b766aaf79249a285",
+      "classification": "outside_binding_auth_fail_closed",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/accountsApi.ts",
+      "sourceLine": 386,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:daaee599e9b60ce9cc48dd75c8aff323d15defd1b70130a3b5c2e19fe3d3dde0",
+      "classification": "outside_binding_auth_fail_closed",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/accountsApi.ts",
+      "sourceLine": 418,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:76e4fd22747acad5ce1abda1252dbc18b45a317e8419fca34c7952f7bd6b9464",
+      "classification": "outside_binding_auth_fail_closed",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/accountsApi.ts",
+      "sourceLine": 444,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:6fca53c7352164502550e6dcf18a42ab7453ca7fe825091d48225d7db70d1515",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "resolveWebSocketUrl",
+      "sourceFile": "omnigent/web/src/lib/dictation.ts",
+      "sourceLine": 40,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:87c9d645cd41f97c8ffa552a590e7d2ea471801f190f5827aba16871d072b9d4",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "hostFetch",
+      "sourceFile": "omnigent/web/src/lib/host.ts",
+      "sourceLine": 197,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:a0af9f865bf637e6736817f4ce552e4cdf7b8c36ea75bc254c1d1f0af744b5bf",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "fetch",
+      "sourceFile": "omnigent/web/src/lib/host.ts",
+      "sourceLine": 201,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:87c9d645cd41f97c8ffa552a590e7d2ea471801f190f5827aba16871d072b9d4",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "resolveWebSocketUrl",
+      "sourceFile": "omnigent/web/src/lib/host.ts",
+      "sourceLine": 204,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:a0af9f865bf637e6736817f4ce552e4cdf7b8c36ea75bc254c1d1f0af744b5bf",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "resolveWebSocketUrl",
+      "sourceFile": "omnigent/web/src/lib/host.ts",
+      "sourceLine": 206,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:379b3c1b13220054e7520fa3e0ac1b18b69739a801e59553820ba4a7c9ceabfa",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "authenticatedFetch",
+      "sourceFile": "omnigent/web/src/lib/identity.ts",
+      "sourceLine": 374,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:28e5ebabd9d8f6e237df63da2b503785093f0229241bc7021198f63c43b93269",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "hostFetch",
+      "sourceFile": "omnigent/web/src/lib/identity.ts",
+      "sourceLine": 439,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:28e5ebabd9d8f6e237df63da2b503785093f0229241bc7021198f63c43b93269",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "hostFetch",
+      "sourceFile": "omnigent/web/src/lib/identity.ts",
+      "sourceLine": 457,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:6fca53c7352164502550e6dcf18a42ab7453ca7fe825091d48225d7db70d1515",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "resolveWebSocketUrl",
+      "sourceFile": "omnigent/web/src/lib/sessionUpdatesSocket.ts",
+      "sourceLine": 88,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "argumentDigest": "sha256:509fa87857f9f3c0152ecdb94c94b1b0f561116ef40e0ab49486e36c845cc6c5",
+      "classification": "scoped_transport_adapter_then_exact_route_gate",
+      "networkApi": "WebSocket",
+      "sourceFile": "omnigent/web/src/lib/terminals.ts",
+      "sourceLine": 108,
+      "unknownBehavior": "omnigent_chat_transport_unsupported"
+    }
+  ],
+  "uiReferenceCount": 108,
   "uiRouteReferences": [
     {
-      "path": "/v1/...",
-      "sourceFile": "omnigent/web/src/lib/host.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "DELETE",
+      "path": "/v1/policies/{policy_id}",
+      "routeKey": "DELETE /v1/policies/{policy_id}",
+      "sourceFile": "omnigent/web/src/hooks/useDefaultPolicies.ts",
+      "sourceLine": 90,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/agents",
-      "sourceFile": "omnigent/web/src/hooks/useAvailableAgents.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "DELETE",
+      "path": "/v1/projects/{id}",
+      "routeKey": "DELETE /v1/projects/{project_id}",
+      "sourceFile": "omnigent/web/src/lib/projectsApi.ts",
+      "sourceLine": 132,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/conversations/",
-      "sourceFile": "omnigent/web/src/hooks/useConversations.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "DELETE",
+      "path": "/v1/scheduled-tasks/{id}",
+      "routeKey": "DELETE /v1/scheduled-tasks/{scheduled_task_id}",
+      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts",
+      "sourceLine": 295,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/conversations/:id/items",
-      "sourceFile": "omnigent/web/src/lib/blocks.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "DELETE",
+      "path": "/v1/sessions/{id}",
+      "routeKey": "DELETE /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 491,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/dictation/stream",
-      "sourceFile": "omnigent/web/src/lib/dictation.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "DELETE",
+      "path": "/v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
+      "routeKey": "DELETE /v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
+      "sourceFile": "omnigent/web/src/hooks/useAgents.ts",
+      "sourceLine": 250,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "DELETE",
+      "path": "/v1/sessions/{session_id}/codex_goal",
+      "routeKey": "DELETE /v1/sessions/{session_id}/codex_goal",
+      "sourceFile": "omnigent/web/src/lib/codexGoalApi.ts",
+      "sourceLine": 216,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "DELETE",
+      "path": "/v1/sessions/{session_id}/comments/{comment_id}",
+      "routeKey": "DELETE /v1/sessions/{session_id}/comments/{comment_id}",
+      "sourceFile": "omnigent/web/src/hooks/useComments.ts",
+      "sourceLine": 110,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "DELETE",
+      "path": "/v1/sessions/{session_id}/permissions/{user_id}",
+      "routeKey": "DELETE /v1/sessions/{session_id}/permissions/{target_user_id}",
+      "sourceFile": "omnigent/web/src/lib/permissionsApi.ts",
+      "sourceLine": 160,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "DELETE",
+      "path": "/v1/sessions/{session_id}/policies/{policy_id}",
+      "routeKey": "DELETE /v1/sessions/{session_id}/policies/{policy_id}",
+      "sourceFile": "omnigent/web/src/hooks/usePolicies.ts",
+      "sourceLine": 106,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "liveness",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/health",
+      "routeKey": "GET /health",
+      "sourceFile": "omnigent/web/src/hooks/useRunnerHealth.ts",
+      "sourceLine": 95,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/harnesses",
-      "sourceFile": "omnigent/web/src/lib/agentLabels.ts"
+      "routeKey": "GET /v1/harnesses",
+      "sourceFile": "omnigent/web/src/lib/agentLabels.ts",
+      "sourceLine": 68,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/harnesses",
-      "sourceFile": "omnigent/web/src/lib/harnessSetup.ts"
-    },
-    {
-      "path": "/v1/harnesses",
-      "sourceFile": "omnigent/web/src/shell/HarnessSetupDialog.tsx"
-    },
-    {
+      "classification": "binding_scoped",
+      "facadeOperation": "host_liveness",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/hosts",
-      "sourceFile": "omnigent/web/src/hooks/useHosts.ts"
+      "routeKey": "GET /v1/hosts",
+      "sourceFile": "omnigent/web/src/hooks/useHosts.ts",
+      "sourceLine": 38,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/hosts",
-      "sourceFile": "omnigent/web/src/lib/sessionHost.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/hosts/{host_id}/credentials/detected",
+      "routeKey": "GET /v1/hosts/{host_id}/credentials/detected",
+      "sourceFile": "omnigent/web/src/hooks/useHosts.ts",
+      "sourceLine": 293,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/hosts/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useHostFilesystem.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/hosts/{host_id}/harnesses/{harness}/model-options",
+      "routeKey": "GET /v1/hosts/{host_id}/harnesses/{harness}/model-options",
+      "sourceFile": "omnigent/web/src/hooks/useHosts.ts",
+      "sourceLine": 92,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/hosts/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useHostWorktrees.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/hosts/{host_id}/worktrees",
+      "routeKey": "GET /v1/hosts/{host_id}/worktrees",
+      "sourceFile": "omnigent/web/src/hooks/useHostWorktrees.ts",
+      "sourceLine": 51,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/hosts/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useHosts.ts"
-    },
-    {
-      "path": "/v1/hosts/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts"
-    },
-    {
-      "path": "/v1/hosts//",
-      "sourceFile": "omnigent/web/src/shell/HarnessCredentialForm.tsx"
-    },
-    {
-      "path": "/v1/hosts/{host_id}/...",
-      "sourceFile": "omnigent/web/src/lib/identity.ts"
-    },
-    {
-      "path": "/v1/hosts/{id}/filesystem",
-      "sourceFile": "omnigent/web/src/hooks/useHostFilesystem.ts"
-    },
-    {
-      "path": "/v1/hosts/{id}/filesystem/{path:path}",
-      "sourceFile": "omnigent/web/src/hooks/useHostFilesystem.ts"
-    },
-    {
+      "classification": "binding_scoped",
+      "facadeOperation": "native_server_info",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/info",
-      "sourceFile": "omnigent/web/src/App.tsx"
+      "routeKey": "GET /v1/info",
+      "sourceFile": "omnigent/web/src/lib/capabilities.ts",
+      "sourceLine": 294,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/info",
-      "sourceFile": "omnigent/web/src/components/CostRoutingControl.tsx"
-    },
-    {
-      "path": "/v1/info",
-      "sourceFile": "omnigent/web/src/embed.tsx"
-    },
-    {
-      "path": "/v1/info",
-      "sourceFile": "omnigent/web/src/lib/CapabilitiesContext.tsx"
-    },
-    {
-      "path": "/v1/info",
-      "sourceFile": "omnigent/web/src/lib/capabilities.ts"
-    },
-    {
-      "path": "/v1/info",
-      "sourceFile": "omnigent/web/src/pages/ChatPage.tsx"
-    },
-    {
-      "path": "/v1/info",
-      "sourceFile": "omnigent/web/src/pages/SetupPage.tsx"
-    },
-    {
+      "classification": "binding_scoped",
+      "facadeOperation": "native_current_user",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/me",
-      "sourceFile": "omnigent/web/src/hooks/useIsAdmin.ts"
+      "routeKey": "GET /v1/me",
+      "sourceFile": "omnigent/web/src/lib/identity.ts",
+      "sourceLine": 279,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/me",
-      "sourceFile": "omnigent/web/src/lib/identity.ts"
-    },
-    {
-      "path": "/v1/me",
-      "sourceFile": "omnigent/web/src/pages/PoliciesPage.tsx"
-    },
-    {
-      "path": "/v1/me",
-      "sourceFile": "omnigent/web/src/pages/SettingsPage.tsx"
-    },
-    {
-      "path": "/v1/me",
-      "sourceFile": "omnigent/web/src/pages/SharingPage.tsx"
-    },
-    {
-      "path": "/v1/me",
-      "sourceFile": "omnigent/web/src/shell/settingsNav.tsx"
-    },
-    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/policies",
-      "sourceFile": "omnigent/web/src/hooks/useDefaultPolicies.ts"
+      "routeKey": "GET /v1/policies",
+      "sourceFile": "omnigent/web/src/hooks/useDefaultPolicies.ts",
+      "sourceLine": 25,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/policies/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useDefaultPolicies.ts"
-    },
-    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/policy-registry",
-      "sourceFile": "omnigent/web/src/hooks/usePolicies.ts"
+      "routeKey": "GET /v1/policy-registry",
+      "sourceFile": "omnigent/web/src/hooks/usePolicies.ts",
+      "sourceLine": 42,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/projects",
-      "sourceFile": "omnigent/web/src/lib/projectsApi.ts"
+      "routeKey": "GET /v1/projects",
+      "sourceFile": "omnigent/web/src/lib/projectsApi.ts",
+      "sourceLine": 72,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/projects/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/lib/projectsApi.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/projects/{id}",
+      "routeKey": "GET /v1/projects/{project_id}",
+      "sourceFile": "omnigent/web/src/lib/projectsApi.ts",
+      "sourceLine": 80,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/responses",
-      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts"
-    },
-    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/runners",
-      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts"
+      "routeKey": "GET /v1/runners",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 750,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/runners/{id}",
-      "sourceFile": "omnigent/web/src/lib/identity.ts"
-    },
-    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/scheduled-tasks",
-      "sourceFile": "omnigent/web/src/hooks/useScheduledTasks.ts"
+      "routeKey": "GET /v1/scheduled-tasks",
+      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts",
+      "sourceLine": 222,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/scheduled-tasks",
-      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/scheduled-tasks/{id}",
+      "routeKey": "GET /v1/scheduled-tasks/{scheduled_task_id}",
+      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts",
+      "sourceLine": 229,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/scheduled-tasks/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/scheduled-tasks/{id}/runs",
+      "routeKey": "GET /v1/scheduled-tasks/{scheduled_task_id}/runs",
+      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts",
+      "sourceLine": 235,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
+      "classification": "binding_scoped",
+      "facadeOperation": "list_sessions",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/sessions",
-      "sourceFile": "omnigent/web/src/hooks/useAgents.ts"
+      "routeKey": "GET /v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useAgents.ts",
+      "sourceLine": 89,
+      "unsupportedBehavior": "not_applicable"
     },
     {
+      "classification": "binding_scoped",
+      "facadeOperation": "list_sessions",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/sessions",
-      "sourceFile": "omnigent/web/src/hooks/useAvailableAgents.ts"
+      "routeKey": "GET /v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useAvailableAgents.ts",
+      "sourceLine": 183,
+      "unsupportedBehavior": "not_applicable"
     },
     {
+      "classification": "binding_scoped",
+      "facadeOperation": "list_sessions",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/sessions",
-      "sourceFile": "omnigent/web/src/hooks/useConversations.ts"
+      "routeKey": "GET /v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 372,
+      "unsupportedBehavior": "not_applicable"
     },
     {
+      "classification": "binding_scoped",
+      "facadeOperation": "list_sessions",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/sessions",
-      "sourceFile": "omnigent/web/src/hooks/useDirectorySessions.ts"
+      "routeKey": "GET /v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 1146,
+      "unsupportedBehavior": "not_applicable"
     },
     {
+      "classification": "binding_scoped",
+      "facadeOperation": "list_sessions",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/sessions",
-      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts"
+      "routeKey": "GET /v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 1429,
+      "unsupportedBehavior": "not_applicable"
     },
     {
+      "classification": "binding_scoped",
+      "facadeOperation": "list_sessions",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/sessions",
-      "sourceFile": "omnigent/web/src/lib/types.ts"
+      "routeKey": "GET /v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 1697,
+      "unsupportedBehavior": "not_applicable"
     },
     {
+      "classification": "binding_scoped",
+      "facadeOperation": "list_sessions",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/sessions",
-      "sourceFile": "omnigent/web/src/shell/NewChatDialog.tsx"
+      "routeKey": "GET /v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 1723,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/components/blocks/TerminalView.tsx"
+      "classification": "binding_scoped",
+      "facadeOperation": "list_sessions",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions",
+      "routeKey": "GET /v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 1742,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useAgents.ts"
+      "classification": "binding_scoped",
+      "facadeOperation": "list_sessions",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions",
+      "routeKey": "GET /v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useDirectorySessions.ts",
+      "sourceLine": 36,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useAvailableAgents.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useBrowserAgentRelay.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useChildSessions.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useComments.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useConversations.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useFileContent.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useFileDiff.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/usePolicies.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useSessionItems.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useTerminals.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useUnseenConversations.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useWorkspaceChangedFiles.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/hooks/useWriteFileContent.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/lib/codexGoalApi.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/lib/filesApi.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/lib/lastAssistantText.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/lib/permissionsApi.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/pages/ApprovePage.tsx"
-    },
-    {
-      "path": "/v1/sessions/${encodeURIComponent",
-      "sourceFile": "omnigent/web/src/pages/ChatPage.tsx"
-    },
-    {
-      "path": "/v1/sessions/.../resources/files/.../content",
-      "sourceFile": "omnigent/web/src/components/SessionImage.tsx"
-    },
-    {
-      "path": "/v1/sessions/.../resources/terminals/.../attach",
-      "sourceFile": "omnigent/web/src/components/blocks/TerminalView.tsx"
-    },
-    {
+      "classification": "binding_scoped",
+      "facadeOperation": "list_projects",
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/sessions/projects",
-      "sourceFile": "omnigent/web/src/hooks/useConversations.ts"
+      "routeKey": "GET /v1/sessions/projects",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 1393,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/sessions/updates",
-      "sourceFile": "omnigent/web/src/lib/identity.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{conversation_id}/resources/environments/{d_e_f_a_u_l_t__e_n_v_i_r_o_n_m_e_n_t__i_d}",
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}",
+      "sourceFile": "omnigent/web/src/hooks/useWorkspaceChangedFiles.ts",
+      "sourceLine": 785,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/sessions/updates",
-      "sourceFile": "omnigent/web/src/lib/sessionUpdatesSocket.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{conversation_id}/resources/environments/{d_e_f_a_u_l_t__e_n_v_i_r_o_n_m_e_n_t__i_d}/changes",
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/changes",
+      "sourceFile": "omnigent/web/src/hooks/useWorkspaceChangedFiles.ts",
+      "sourceLine": 214,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/sessions/updates",
-      "sourceFile": "omnigent/web/src/store/chatStore.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{conversation_id}/resources/environments/{d_e_f_a_u_l_t__e_n_v_i_r_o_n_m_e_n_t__i_d}/diff/{encoded_path}",
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/diff/{relative_path:path}",
+      "sourceFile": "omnigent/web/src/hooks/useFileDiff.ts",
+      "sourceLine": 35,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/sessions/{id}/",
-      "sourceFile": "omnigent/web/src/hooks/useConversations.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{conversation_id}/resources/environments/{d_e_f_a_u_l_t__e_n_v_i_r_o_n_m_e_n_t__i_d}/filesystem/{encoded_path}",
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "sourceFile": "omnigent/web/src/hooks/useFileContent.ts",
+      "sourceLine": 37,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/sessions/{id}/",
-      "sourceFile": "omnigent/web/src/lib/sessionHost.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{conversation_id}/resources/environments/{d_e_f_a_u_l_t__e_n_v_i_r_o_n_m_e_n_t__i_d}/filesystem/{encoded_path}",
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "sourceFile": "omnigent/web/src/hooks/useWorkspaceChangedFiles.ts",
+      "sourceLine": 567,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/sessions/{id}/agent",
-      "sourceFile": "omnigent/web/src/lib/identity.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{conversation_id}/resources/environments/{d_e_f_a_u_l_t__e_n_v_i_r_o_n_m_e_n_t__i_d}/filesystem/{segment:path}",
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "sourceFile": "omnigent/web/src/hooks/useWorkspaceChangedFiles.ts",
+      "sourceLine": 360,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/sessions/{id}/permissions",
-      "sourceFile": "omnigent/web/src/lib/permissionsApi.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{conversation_id}/resources/environments/{d_e_f_a_u_l_t__e_n_v_i_r_o_n_m_e_n_t__i_d}/search/{segment:path}",
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/search/{path:path}",
+      "sourceFile": "omnigent/web/src/hooks/useWorkspaceChangedFiles.ts",
+      "sourceLine": 503,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/sessions/{id}/resources/terminals/{tid}/attach",
-      "sourceFile": "omnigent/web/src/lib/host.ts"
+      "classification": "binding_scoped",
+      "facadeOperation": "terminal_view",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{conversation_id}/resources/terminals",
+      "routeKey": "GET /v1/sessions/{session_id}/resources/terminals",
+      "sourceFile": "omnigent/web/src/hooks/useTerminals.ts",
+      "sourceLine": 184,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/sessions/{id}/stream",
-      "sourceFile": "omnigent/web/src/lib/sse.ts"
+      "classification": "binding_scoped",
+      "facadeOperation": "get_session",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{id}",
+      "routeKey": "GET /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 304,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/sessions/{id}/stream",
-      "sourceFile": "omnigent/web/src/lib/types.ts"
+      "classification": "binding_scoped",
+      "facadeOperation": "get_session",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}",
+      "routeKey": "GET /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 776,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/sessions/{id}/switch-agent",
-      "sourceFile": "omnigent/web/src/shell/SwitchAgentDialog.tsx"
+      "classification": "binding_scoped",
+      "facadeOperation": "get_session",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}",
+      "routeKey": "GET /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 816,
+      "unsupportedBehavior": "not_applicable"
     },
     {
-      "path": "/v1/sessions/{session_id}/...",
-      "sourceFile": "omnigent/web/src/lib/identity.ts"
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/agent",
+      "routeKey": "GET /v1/sessions/{session_id}/agent",
+      "sourceFile": "omnigent/web/src/hooks/useAgents.ts",
+      "sourceLine": 142,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/agent",
+      "routeKey": "GET /v1/sessions/{session_id}/agent",
+      "sourceFile": "omnigent/web/src/hooks/useAvailableAgents.ts",
+      "sourceLine": 242,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/child_sessions",
+      "routeKey": "GET /v1/sessions/{session_id}/child_sessions",
+      "sourceFile": "omnigent/web/src/hooks/useChildSessions.ts",
+      "sourceLine": 177,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/codex_goal",
+      "routeKey": "GET /v1/sessions/{session_id}/codex_goal",
+      "sourceFile": "omnigent/web/src/lib/codexGoalApi.ts",
+      "sourceLine": 152,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/elicitations/{elicitation_id}",
+      "routeKey": "GET /v1/sessions/{session_id}/elicitations/{elicitation_id}",
+      "sourceFile": "omnigent/web/src/pages/ApprovePage.tsx",
+      "sourceLine": 56,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "session_items",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/items",
+      "routeKey": "GET /v1/sessions/{session_id}/items",
+      "sourceFile": "omnigent/web/src/hooks/useSessionItems.ts",
+      "sourceLine": 66,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "session_items",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/items",
+      "routeKey": "GET /v1/sessions/{session_id}/items",
+      "sourceFile": "omnigent/web/src/lib/lastAssistantText.ts",
+      "sourceLine": 108,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "session_items",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/items",
+      "routeKey": "GET /v1/sessions/{session_id}/items",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 850,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/owner",
+      "routeKey": "GET /v1/sessions/{session_id}/owner",
+      "sourceFile": "omnigent/web/src/lib/permissionsApi.ts",
+      "sourceLine": 125,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/permissions",
+      "routeKey": "GET /v1/sessions/{session_id}/permissions",
+      "sourceFile": "omnigent/web/src/lib/permissionsApi.ts",
+      "sourceLine": 111,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/policies",
+      "routeKey": "GET /v1/sessions/{session_id}/policies",
+      "sourceFile": "omnigent/web/src/hooks/usePolicies.ts",
+      "sourceLine": 35,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "stream_events",
+      "join": "exact_stock_route",
+      "method": "GET",
+      "path": "/v1/sessions/{session_id}/stream",
+      "routeKey": "GET /v1/sessions/{session_id}/stream",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 951,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/sharing",
-      "sourceFile": "omnigent/web/src/hooks/useSharing.ts"
+      "routeKey": "GET /v1/sharing",
+      "sourceFile": "omnigent/web/src/hooks/useSharing.ts",
+      "sourceLine": 28,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
     },
     {
-      "path": "/v1/traces",
-      "sourceFile": "omnigent/web/src/lib/telemetry.ts"
-    },
-    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "GET",
       "path": "/v1/usage",
-      "sourceFile": "omnigent/web/src/lib/usageApi.ts"
+      "routeKey": "GET /v1/usage",
+      "sourceFile": "omnigent/web/src/lib/usageApi.ts",
+      "sourceLine": 62,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/policies/{policy_id}",
+      "routeKey": "PATCH /v1/policies/{policy_id}",
+      "sourceFile": "omnigent/web/src/hooks/useDefaultPolicies.ts",
+      "sourceLine": 71,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/projects/{id}",
+      "routeKey": "PATCH /v1/projects/{project_id}",
+      "sourceFile": "omnigent/web/src/lib/projectsApi.ts",
+      "sourceLine": 101,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/projects/{id}",
+      "routeKey": "PATCH /v1/projects/{project_id}",
+      "sourceFile": "omnigent/web/src/lib/projectsApi.ts",
+      "sourceLine": 116,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/scheduled-tasks/{id}",
+      "routeKey": "PATCH /v1/scheduled-tasks/{scheduled_task_id}",
+      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts",
+      "sourceLine": 285,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/sessions/{id}",
+      "routeKey": "PATCH /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 456,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/sessions/{id}",
+      "routeKey": "PATCH /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 473,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/sessions/{id}",
+      "routeKey": "PATCH /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 1189,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/sessions/{id}",
+      "routeKey": "PATCH /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 1511,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/sessions/{id}",
+      "routeKey": "PATCH /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 1771,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/sessions/{session_id}",
+      "routeKey": "PATCH /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 720,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/sessions/{session_id}/codex_goal/status",
+      "routeKey": "PATCH /v1/sessions/{session_id}/codex_goal/status",
+      "sourceFile": "omnigent/web/src/lib/codexGoalApi.ts",
+      "sourceLine": 198,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/sessions/{session_id}/comments/{comment_id}",
+      "routeKey": "PATCH /v1/sessions/{session_id}/comments/{comment_id}",
+      "sourceFile": "omnigent/web/src/hooks/useComments.ts",
+      "sourceLine": 130,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PATCH",
+      "path": "/v1/sessions/{sid}",
+      "routeKey": "PATCH /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts",
+      "sourceLine": 1893,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/hosts/{host_id}/directories",
+      "routeKey": "POST /v1/hosts/{host_id}/directories",
+      "sourceFile": "omnigent/web/src/hooks/useHostFilesystem.ts",
+      "sourceLine": 304,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/hosts/{host_id}/harnesses/{harness}/credential",
+      "routeKey": "POST /v1/hosts/{host_id}/harnesses/{harness}/credential",
+      "sourceFile": "omnigent/web/src/hooks/useHosts.ts",
+      "sourceLine": 236,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/hosts/{host_id}/harnesses/{harness}/install",
+      "routeKey": "POST /v1/hosts/{host_id}/harnesses/{harness}/install",
+      "sourceFile": "omnigent/web/src/hooks/useHosts.ts",
+      "sourceLine": 146,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/hosts/{host_id}/runners",
+      "routeKey": "POST /v1/hosts/{host_id}/runners",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 642,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/policies",
+      "routeKey": "POST /v1/policies",
+      "sourceFile": "omnigent/web/src/hooks/useDefaultPolicies.ts",
+      "sourceLine": 52,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/projects",
+      "routeKey": "POST /v1/projects",
+      "sourceFile": "omnigent/web/src/lib/projectsApi.ts",
+      "sourceLine": 90,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/scheduled-tasks",
+      "routeKey": "POST /v1/scheduled-tasks",
+      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts",
+      "sourceLine": 258,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/scheduled-tasks/{id}/run",
+      "routeKey": "POST /v1/scheduled-tasks/{scheduled_task_id}/run",
+      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts",
+      "sourceLine": 309,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions",
+      "routeKey": "POST /v1/sessions",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 473,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions",
+      "routeKey": "POST /v1/sessions",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 509,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions",
+      "routeKey": "POST /v1/sessions",
+      "sourceFile": "omnigent/web/src/shell/NewChatDialog.tsx",
+      "sourceLine": 3885,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "browser_pane",
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{conversation_id}/browser/action_claim/{action_id}",
+      "routeKey": "POST /v1/sessions/{session_id}/browser/action_claim/{action_id}",
+      "sourceFile": "omnigent/web/src/hooks/useBrowserAgentRelay.ts",
+      "sourceLine": 302,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "browser_pane",
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{conversation_id}/browser/action_result/{action_id}",
+      "routeKey": "POST /v1/sessions/{session_id}/browser/action_result/{action_id}",
+      "sourceFile": "omnigent/web/src/hooks/useBrowserAgentRelay.ts",
+      "sourceLine": 326,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "terminal_create",
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{conversation_id}/resources/terminals",
+      "routeKey": "POST /v1/sessions/{session_id}/resources/terminals",
+      "sourceFile": "omnigent/web/src/hooks/useTerminals.ts",
+      "sourceLine": 227,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{session_id}/agent/mcp-servers",
+      "routeKey": "POST /v1/sessions/{session_id}/agent/mcp-servers",
+      "sourceFile": "omnigent/web/src/hooks/useAgents.ts",
+      "sourceLine": 204,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{session_id}/comments",
+      "routeKey": "POST /v1/sessions/{session_id}/comments",
+      "sourceFile": "omnigent/web/src/hooks/useComments.ts",
+      "sourceLine": 81,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{session_id}/comments/send",
+      "routeKey": "POST /v1/sessions/{session_id}/comments/send",
+      "sourceFile": "omnigent/web/src/hooks/useComments.ts",
+      "sourceLine": 163,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "resolve_elicitation",
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
+      "routeKey": "POST /v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 1001,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "resolve_elicitation",
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
+      "routeKey": "POST /v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
+      "sourceFile": "omnigent/web/src/pages/ApprovePage.tsx",
+      "sourceLine": 86,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "post_event",
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{session_id}/events",
+      "routeKey": "POST /v1/sessions/{session_id}/events",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 909,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{session_id}/policies",
+      "routeKey": "POST /v1/sessions/{session_id}/policies",
+      "sourceFile": "omnigent/web/src/hooks/usePolicies.ts",
+      "sourceLine": 82,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "resource_upload",
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{session_id}/resources/files",
+      "routeKey": "POST /v1/sessions/{session_id}/resources/files",
+      "sourceFile": "omnigent/web/src/lib/filesApi.ts",
+      "sourceLine": 17,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{session_id}/switch-agent",
+      "routeKey": "POST /v1/sessions/{session_id}/switch-agent",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 588,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "POST",
+      "path": "/v1/sessions/{source_id}/fork",
+      "routeKey": "POST /v1/sessions/{source_id}/fork",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts",
+      "sourceLine": 562,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PUT",
+      "path": "/v1/sessions/{conversation_id}/read-state",
+      "routeKey": "PUT /v1/sessions/{session_id}/read-state",
+      "sourceFile": "omnigent/web/src/hooks/useUnseenConversations.ts",
+      "sourceLine": 120,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PUT",
+      "path": "/v1/sessions/{conversation_id}/resources/environments/{d_e_f_a_u_l_t__e_n_v_i_r_o_n_m_e_n_t__i_d}/filesystem/{encoded_path}",
+      "routeKey": "PUT /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "sourceFile": "omnigent/web/src/hooks/useWriteFileContent.ts",
+      "sourceLine": 16,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PUT",
+      "path": "/v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
+      "routeKey": "PUT /v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
+      "sourceFile": "omnigent/web/src/hooks/useAgents.ts",
+      "sourceLine": 229,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PUT",
+      "path": "/v1/sessions/{session_id}/codex_goal",
+      "routeKey": "PUT /v1/sessions/{session_id}/codex_goal",
+      "sourceFile": "omnigent/web/src/lib/codexGoalApi.ts",
+      "sourceLine": 178,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PUT",
+      "path": "/v1/sessions/{session_id}/permissions",
+      "routeKey": "PUT /v1/sessions/{session_id}/permissions",
+      "sourceFile": "omnigent/web/src/lib/permissionsApi.ts",
+      "sourceLine": 136,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "join": "exact_stock_route",
+      "method": "PUT",
+      "path": "/v1/sharing",
+      "routeKey": "PUT /v1/sharing",
+      "sourceFile": "omnigent/web/src/hooks/useSharing.ts",
+      "sourceLine": 46,
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "dictation_stream",
+      "join": "exact_stock_route",
+      "method": "WEBSOCKET",
+      "path": "/v1/dictation/stream",
+      "routeKey": "WEBSOCKET /v1/dictation/stream",
+      "sourceFile": "omnigent/web/src/lib/dictation.ts",
+      "sourceLine": 38,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "dictation_stream",
+      "join": "exact_stock_route",
+      "method": "WEBSOCKET",
+      "path": "/v1/dictation/stream",
+      "routeKey": "WEBSOCKET /v1/dictation/stream",
+      "sourceFile": "omnigent/web/src/lib/dictation.ts",
+      "sourceLine": 255,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "ws_session_updates",
+      "join": "exact_stock_route",
+      "method": "WEBSOCKET",
+      "path": "/v1/sessions/updates",
+      "routeKey": "WEBSOCKET /v1/sessions/updates",
+      "sourceFile": "omnigent/web/src/lib/sessionUpdatesSocket.ts",
+      "sourceLine": 86,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "ws_session_updates",
+      "join": "exact_stock_route",
+      "method": "WEBSOCKET",
+      "path": "/v1/sessions/updates",
+      "routeKey": "WEBSOCKET /v1/sessions/updates",
+      "sourceFile": "omnigent/web/src/lib/sessionUpdatesSocket.ts",
+      "sourceLine": 194,
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "classification": "binding_scoped",
+      "facadeOperation": "terminal_attach",
+      "join": "exact_stock_route",
+      "method": "WEBSOCKET",
+      "path": "/v1/sessions/{session_id}/resources/terminals/{terminal_id}/attach",
+      "routeKey": "WEBSOCKET /v1/sessions/{session_id}/resources/terminals/{terminal_id}/attach",
+      "sourceFile": "omnigent/web/src/components/blocks/TerminalView.tsx",
+      "sourceLine": 654,
+      "unsupportedBehavior": "not_applicable"
     }
   ],
   "unclassifiedRouteCount": 0,

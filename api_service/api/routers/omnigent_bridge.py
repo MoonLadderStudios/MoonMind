@@ -117,11 +117,12 @@ from moonmind.omnigent.native_ui_compat import (
     CODE_COMPAT_REVIEW_REQUIRED,
     CODE_TRANSPORT_UNSUPPORTED,
     CODE_WS_SUBPROTOCOL_REJECTED,
-    NativeUiCompatibilityError,
     DISPOSITION_SERVED,
+    NativeUiCompatibilityError,
     classify_native_ui_http,
     classify_native_ui_websocket,
     negotiate_ws_subprotocol,
+    route_policy,
     upstream_http_path,
     upstream_websocket_path,
 )
@@ -3248,6 +3249,8 @@ _DURABLE_RESOURCE_GROUPS = {
     "workspace_diff": "diffs",
     "session_files": "session_files",
     "session_file": "session_files",
+    "terminal_view": "terminals",
+    "terminal_status": "terminals",
 }
 _DURABLE_RESOURCE_MAX_ITEMS = 100
 _DURABLE_RESOURCE_MAX_BYTES = 10 * 1024 * 1024
@@ -3285,7 +3288,11 @@ def _durable_resource_available(row: Any, operation_name: str) -> bool:
 
 
 async def _serve_durable_resource(
-    row: Any, *, operation_name: str, resource_value: str | None
+    row: Any,
+    *,
+    operation_name: str,
+    resource_value: str | None,
+    chat_binding_id: str | None = None,
 ) -> dict[str, Any] | Response:
     """Serve a captured resource without reviving provider/host authority."""
 
@@ -3298,7 +3305,12 @@ async def _serve_durable_resource(
             code="omnigent_bridge_terminal_evidence_unavailable",
         )
 
-    if operation_name in {"changed_files", "workspace_files", "session_files"}:
+    if operation_name in {
+        "changed_files",
+        "workspace_files",
+        "session_files",
+        "terminal_view",
+    }:
         visible_keys = {
             "label",
             "status",
@@ -3309,13 +3321,20 @@ async def _serve_durable_resource(
             "sizeBytes",
             "sourceEventSequence",
             "unavailableReason",
+            "terminalId",
         }
         data = [
             {key: value for key, value in resource.items() if key in visible_keys}
             for resource in resources
         ]
         identities = [
-            str(item.get("fileId") or item.get("path") or item.get("filename") or "")
+            str(
+                item.get("terminalId")
+                or item.get("fileId")
+                or item.get("path")
+                or item.get("filename")
+                or ""
+            )
             for item in data
         ]
         identities = [item for item in identities if item]
@@ -3327,7 +3346,13 @@ async def _serve_durable_resource(
             "has_more": False,
         }
 
-    lookup_key = "fileId" if operation_name == "session_file" else "path"
+    lookup_key = (
+        "terminalId"
+        if operation_name == "terminal_status"
+        else "fileId"
+        if operation_name == "session_file"
+        else "path"
+    )
     requested = str(resource_value or "")
     resource = next(
         (item for item in resources if str(item.get(lookup_key) or "") == requested),
@@ -3365,6 +3390,34 @@ async def _serve_durable_resource(
             status_code=413,
             code=CODE_PAYLOAD_TOO_LARGE,
         )
+    if operation_name == "terminal_status":
+        try:
+            terminal = json.loads(content)
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            raise WorkflowChatFacadeError(
+                "The captured terminal metadata is invalid.",
+                failure_class="integration_error",
+                status_code=503,
+                code="omnigent_bridge_terminal_evidence_unavailable",
+            ) from exc
+        if not isinstance(terminal, dict):
+            raise WorkflowChatFacadeError(
+                "The captured terminal metadata is invalid.",
+                failure_class="integration_error",
+                status_code=503,
+                code="omnigent_bridge_terminal_evidence_unavailable",
+            )
+        virtualized = _virtualize_facade_payload(
+            terminal,
+            provider_session_id=_durable_provider_session_id(row),
+            chat_binding_id=str(chat_binding_id or "").strip(),
+        )
+        # Generic session-payload virtualization intentionally maps a root
+        # ``id`` to the binding id.  A terminal resource has its own opaque id,
+        # so restore the already-authorized lookup identity after recursively
+        # virtualizing its session references and removing topology fields.
+        virtualized["id"] = requested
+        return virtualized
     media_type = (
         "text/x-diff"
         if operation_name == "workspace_diff"
@@ -4450,6 +4503,19 @@ async def _dispatch_native_ui_http(
             chat_binding_id=chat_binding_id,
             query_params=request.query_params,
         )
+    serve_durable_native_resource = (
+        route.name in {"terminal_view", "terminal_status"}
+        and is_read_only(session_status)
+        and not provider_session_id
+        and _durable_resource_available(row, route.name)
+    )
+    if serve_durable_native_resource:
+        return await _serve_durable_resource(
+            row,
+            operation_name=route.name,
+            resource_value=match.params.get("terminal_id"),
+            chat_binding_id=chat_binding_id,
+        )
     if not provider_session_id and route.name != "session_reconnect":
         raise WorkflowChatFacadeError(
             "The Workflow Chat binding has no active provider session yet.",
@@ -4612,8 +4678,11 @@ async def _dispatch_native_ui_http(
                 allow_redirects=False,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as upstream:
-                payload = await upstream.content.read(_FACADE_MAX_BODY_BYTES + 1)
-                if len(payload) > _FACADE_MAX_BODY_BYTES:
+                response_limit = int(
+                    route_policy(route)["responseBounds"]["maxBodyBytes"]
+                )
+                payload = await upstream.content.read(response_limit + 1)
+                if len(payload) > response_limit:
                     raise WorkflowChatFacadeError(
                         "The upstream response exceeds the facade limit.",
                         failure_class="integration_error",
@@ -5394,6 +5463,7 @@ async def _dispatch_workflow_chat_facade(
             row,
             operation_name=operation.name,
             resource_value=resource_value,
+            chat_binding_id=chat_binding_id,
         )
     result = await facade.get_resource(
         operation.name, provider_session_id, resource_value

@@ -70,7 +70,10 @@ def test_every_exact_stock_route_has_one_explicit_classification() -> None:
         "binding_scoped",
         "fail_closed",
     }
-    assert all(route["publicRoute"].startswith("/api/workflow-chat-bindings/") for route in routes)
+    assert all(
+        route["publicRoute"].startswith("/api/workflow-chat-bindings/")
+        for route in routes
+    )
     assert all(route["callerPermission"] for route in routes)
     assert all(route["requestBounds"] for route in routes)
     assert all(route["responseBounds"] for route in routes)
@@ -79,18 +82,77 @@ def test_every_exact_stock_route_has_one_explicit_classification() -> None:
     assert all(route["idempotency"] for route in routes)
     assert all(route["historicalRead"] for route in routes)
     assert all(route["unsupportedBehavior"] for route in routes)
+    assert all(route["handlerDigest"].startswith("sha256:") for route in routes)
+    assert all(route["responseContract"]["declaredStatusCodes"] for route in routes)
+    assert all(
+        route["responseContract"]["mutationReceiptSchemaVersion"]
+        == "moonmind.omnigent.mutation-receipt.v1"
+        for route in routes
+        if route["classification"] == "binding_scoped"
+        and route["method"] not in {"GET", "WEBSOCKET"}
+    )
 
     by_key = {route["routeKey"]: route for route in routes}
-    assert by_key["GET /v1/sessions/{session_id}/items"]["classification"] == "binding_scoped"
-    assert by_key["WEBSOCKET /v1/sessions/updates"]["classification"] == "binding_scoped"
-    assert by_key["GET /v1/sessions/{session_id}/child_sessions"]["classification"] == "fail_closed"
+    assert (
+        by_key["GET /v1/sessions/{session_id}/items"]["classification"]
+        == "binding_scoped"
+    )
+    assert (
+        by_key["WEBSOCKET /v1/sessions/updates"]["classification"]
+        == "binding_scoped"
+    )
+    assert (
+        by_key["GET /v1/sessions/{session_id}/child_sessions"]["classification"]
+        == "fail_closed"
+    )
     assert (
         by_key["GET /v1/sessions/{session_id}/resources/files/{file_id}"][
             "classification"
         ]
         == "fail_closed"
     )
-    assert by_key["PUT /v1/sessions/{session_id}/codex_goal"]["classification"] == "fail_closed"
+    assert (
+        by_key["PUT /v1/sessions/{session_id}/codex_goal"]["classification"]
+        == "fail_closed"
+    )
+
+
+def test_every_ui_network_call_is_method_aware_and_exactly_joined() -> None:
+    inventory = generate_native_ui_route_inventory(_REPO_ROOT)
+    route_keys = {route["routeKey"] for route in inventory["routes"]}
+    references = inventory["uiRouteReferences"]
+
+    assert references
+    assert inventory["uiReferenceCount"] == len(references)
+    assert all(reference["join"] == "exact_stock_route" for reference in references)
+    assert all(reference["routeKey"] in route_keys for reference in references)
+    assert all(reference["method"] for reference in references)
+    assert all(reference["sourceLine"] > 0 for reference in references)
+    assert {
+        reference["routeKey"]
+        for reference in references
+        if reference["method"] == "WEBSOCKET"
+    } == {
+        "WEBSOCKET /v1/dictation/stream",
+        "WEBSOCKET /v1/sessions/updates",
+        (
+            "WEBSOCKET /v1/sessions/{session_id}/resources/terminals/"
+            "{terminal_id}/attach"
+        ),
+    }
+
+    delegated = inventory["uiDelegatedNetworkCalls"]
+    assert delegated
+    assert inventory["uiDelegatedCallCount"] == len(delegated)
+    assert {call["classification"] for call in delegated} <= {
+        "outside_binding_auth_fail_closed",
+        "scoped_transport_adapter_then_exact_route_gate",
+    }
+    assert all(call["argumentDigest"].startswith("sha256:") for call in delegated)
+    assert all(
+        call["unknownBehavior"] == "omnigent_chat_transport_unsupported"
+        for call in delegated
+    )
 
 
 def test_websocket_message_classes_come_from_exact_ui_and_server_sources() -> None:

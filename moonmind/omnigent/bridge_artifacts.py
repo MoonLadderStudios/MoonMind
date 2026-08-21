@@ -319,6 +319,7 @@ _HARVEST_UNAVAILABLE_KEYS = (
     "changedFilesUnavailable",
     "workspaceFilesUnavailable",
     "sessionFilesUnavailable",
+    "terminalsUnavailable",
 )
 
 
@@ -340,7 +341,7 @@ def _optional_resource_harvest_failed(manifest: dict[str, Any]) -> bool:
         return True
     return any(
         isinstance(item, dict) and item.get("unavailable")
-        for group in ("changedFiles", "workspaceFiles", "sessionFiles")
+        for group in ("changedFiles", "workspaceFiles", "sessionFiles", "terminals")
         for item in (manifest.get(group) or [])
     )
 
@@ -602,7 +603,14 @@ class BridgeResourceHarvester:
         await self.harvest_workspace_diffs(changed_items=changed_items)
         if _capture_enabled(capture_policy, "sessionFiles"):
             await self.harvest_session_files()
+        if _capture_enabled(capture_policy, "terminals"):
+            await self.harvest_terminals()
         _reconcile_changed_file_evidence(self._manifest)
+
+    def resource_projection(self) -> dict[str, Any]:
+        """Return the canonical bounded projection for the harvested manifest."""
+
+        return _capture_resource_projection(self._manifest)
 
     async def harvest_changed_files(self) -> list[dict[str, Any]]:
         try:
@@ -834,6 +842,61 @@ class BridgeResourceHarvester:
                 }
             )
         self._manifest["sessionFiles"] = harvested
+
+    async def harvest_terminals(self) -> None:
+        """Capture stock terminal metadata at the embedded-host boundary."""
+
+        try:
+            page = await self._client.list_session_terminals(self._session_id)
+        except Exception as exc:
+            self._manifest["terminalsUnavailable"] = _compact_summary(
+                exc,
+                fallback="terminal resources unavailable",
+            )
+            return
+        page = _terminal_capture_page(page)
+        index_ref = await capture_artifact_json(
+            self._artifact_gateway,
+            self._request,
+            self._refs,
+            key="terminalsIndexRef",
+            name="output.omnigent.terminals.index.json",
+            payload=page,
+            link_type="output.omnigent.terminals.index",
+        )
+        self._manifest["terminalsIndexRef"] = index_ref
+        harvested: list[dict[str, Any]] = []
+        for item in _resource_items(page)[:_MAX_OMNIGENT_HARVEST_ITEMS]:
+            item = _terminal_capture_payload(item)
+            terminal_id = str(
+                item.get("id")
+                or item.get("terminal_id")
+                or item.get("terminalId")
+                or ""
+            ).strip()
+            if not terminal_id:
+                continue
+            metadata_ref = await capture_artifact_json(
+                self._artifact_gateway,
+                self._request,
+                self._refs,
+                key=f"terminalMetadataRef:{terminal_id}",
+                name=f"output.omnigent.terminals/{terminal_id}.json",
+                payload=item,
+                link_type="output.omnigent.terminal.metadata",
+            )
+            harvested.append(
+                {
+                    "terminalId": terminal_id,
+                    "label": str(item.get("name") or terminal_id).strip(),
+                    "artifactRef": metadata_ref,
+                    "contentType": "application/json",
+                    "sizeBytes": len(
+                        json.dumps(item, sort_keys=True, separators=(",", ":")).encode()
+                    ),
+                }
+            )
+        self._manifest["terminals"] = harvested
 
 
 def _capture_enabled(capture_policy: dict[str, Any] | None, key: str) -> bool:
@@ -1103,6 +1166,67 @@ async def _harvest_session_files(
     manifest["sessionFiles"] = harvested
 
 
+async def _harvest_terminals(
+    *,
+    client: OmnigentHttpClient,
+    artifact_gateway: OmnigentArtifactGateway,
+    request: AgentExecutionRequest,
+    session_id: str,
+    manifest: dict[str, Any],
+    refs: dict[str, str],
+) -> None:
+    """Capture stock terminal list/status objects before live-host cleanup."""
+
+    try:
+        page = await client.list_session_terminals(session_id)
+    except Exception as exc:
+        manifest["terminalsUnavailable"] = _compact_summary(
+            exc,
+            fallback="terminal resources unavailable",
+        )
+        return
+    page = _terminal_capture_page(page)
+    index_ref = await _capture_artifact_json(
+        artifact_gateway,
+        request,
+        refs,
+        key="terminalsIndexRef",
+        name="output.omnigent.terminals.index.json",
+        payload=page,
+        link_type="output.omnigent.terminals.index",
+    )
+    manifest["terminalsIndexRef"] = index_ref
+    harvested: list[dict[str, Any]] = []
+    for item in _resource_items(page)[:_MAX_OMNIGENT_HARVEST_ITEMS]:
+        item = _terminal_capture_payload(item)
+        terminal_id = str(
+            item.get("id") or item.get("terminal_id") or item.get("terminalId") or ""
+        ).strip()
+        if not terminal_id:
+            continue
+        metadata_ref = await _capture_artifact_json(
+            artifact_gateway,
+            request,
+            refs,
+            key=f"terminalMetadataRef:{terminal_id}",
+            name=f"output.omnigent.terminals/{terminal_id}.json",
+            payload=item,
+            link_type="output.omnigent.terminal.metadata",
+        )
+        harvested.append(
+            {
+                "terminalId": terminal_id,
+                "label": str(item.get("name") or terminal_id).strip(),
+                "artifactRef": metadata_ref,
+                "contentType": "application/json",
+                "sizeBytes": len(
+                    json.dumps(item, sort_keys=True, separators=(",", ":")).encode()
+                ),
+            }
+        )
+    manifest["terminals"] = harvested
+
+
 def _resource_content_type(path: str) -> str:
     return mimetypes.guess_type(path)[0] or "application/octet-stream"
 
@@ -1143,6 +1267,35 @@ def _resource_path(item: dict[str, Any]) -> str:
         or item.get("name")
         or ""
     ).strip().strip("/")
+
+
+def _terminal_capture_payload(item: dict[str, Any]) -> dict[str, Any]:
+    """Remove ephemeral direct-attach authority from durable terminal metadata."""
+
+    captured = dict(redact_sensitive_payload(item))
+    metadata = captured.get("metadata")
+    if isinstance(metadata, dict):
+        metadata = dict(metadata)
+        metadata.pop("direct_attach_url", None)
+        metadata.pop("directAttachUrl", None)
+        captured["metadata"] = metadata
+    return captured
+
+
+def _terminal_capture_page(page: dict[str, Any]) -> dict[str, Any]:
+    """Redact every terminal object before persisting the collection index."""
+
+    captured = dict(redact_sensitive_payload(page))
+    for key in ("items", "data"):
+        value = captured.get(key)
+        if isinstance(value, list):
+            captured[key] = [
+                _terminal_capture_payload(item)
+                if isinstance(item, dict)
+                else item
+                for item in value
+            ]
+    return captured
 
 
 def _child_session_ids(
@@ -1328,6 +1481,7 @@ def _capture_resource_groups(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         ("diffs", "Diffs", "workspaceDiffs"),
         ("workspace_files", "Workspace files", "workspaceFiles"),
         ("session_files", "Session files", "sessionFiles"),
+        ("terminals", "Terminals", "terminals"),
         ("snapshots", "Snapshots", "snapshotEvidence"),
         ("logs_and_journals", "Logs and event journals", "journalEvidence"),
         ("diagnostics", "Diagnostics", "diagnosticEvidence"),
@@ -1339,6 +1493,7 @@ def _capture_resource_groups(manifest: dict[str, Any]) -> list[dict[str, Any]]:
             ("Changed-file index", "changedFilesIndexRef"),
             ("Workspace-file index", "workspaceFilesIndexRef"),
             ("Session-file index", "sessionFilesIndexRef"),
+            ("Terminal index", "terminalsIndexRef"),
         )
         if manifest.get(ref_key)
     ]
@@ -1347,6 +1502,7 @@ def _capture_resource_groups(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         "diffs": "workspaceDiffsUnavailable",
         "workspace_files": "workspaceFilesUnavailable",
         "session_files": "sessionFilesUnavailable",
+        "terminals": "terminalsUnavailable",
     }
     groups: list[dict[str, Any]] = []
     for key, title, manifest_key in definitions:
@@ -1406,6 +1562,7 @@ def _capture_resource_projection(manifest: dict[str, Any]) -> dict[str, Any]:
                 "sourceEventSequence",
                 "fileId",
                 "filename",
+                "terminalId",
             ):
                 if item.get(key) is not None:
                     value = item[key]
@@ -1625,6 +1782,15 @@ async def _build_capture_bundle_impl(
         )
         if _capture_enabled(capture_policy, "sessionFiles"):
             await _harvest_session_files(
+                client=client,
+                artifact_gateway=artifact_gateway,
+                request=request,
+                session_id=session_id,
+                manifest=manifest,
+                refs=refs,
+            )
+        if _capture_enabled(capture_policy, "terminals"):
+            await _harvest_terminals(
                 client=client,
                 artifact_gateway=artifact_gateway,
                 request=request,
@@ -1852,6 +2018,7 @@ async def _build_capture_bundle_impl(
         "changedFilesIndexRef",
         "workspaceFilesIndexRef",
         "sessionFilesIndexRef",
+        "terminalsIndexRef",
         "childSessionsRef",
         "externalStateRef",
     ):

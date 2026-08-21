@@ -121,6 +121,7 @@ _ROUTE_POLICY_FIELDS = frozenset(
         "historicalRead",
         "unsupportedBehavior",
         "mutationReceipt",
+        "responseContract",
     }
 )
 
@@ -224,7 +225,10 @@ def evaluate_exact_artifact_conformance(
         classified_count = route_inventory.get("classifiedRouteCount")
         unclassified_count = route_inventory.get("unclassifiedRouteCount")
         routes = route_inventory.get("routes")
+        ui_delegated_calls = route_inventory.get("uiDelegatedNetworkCalls")
+        ui_delegated_count = route_inventory.get("uiDelegatedCallCount")
         ui_references = route_inventory.get("uiRouteReferences")
+        ui_reference_count = route_inventory.get("uiReferenceCount")
         websocket_protocols = route_inventory.get("websocketProtocols")
         sse_protocols = route_inventory.get("sseProtocols")
         if route_inventory.get("schemaVersion") != INVENTORY_SCHEMA_VERSION:
@@ -349,11 +353,50 @@ def evaluate_exact_artifact_conformance(
             and observed_sse_keys == sse_route_keys
             and isinstance(ui_references, list)
             and bool(ui_references)
+            and ui_reference_count == len(ui_references)
             and all(
                 isinstance(reference, Mapping)
                 and str(reference.get("path") or "").startswith("/v1/")
+                and reference.get("method") in {
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE",
+                    "WEBSOCKET",
+                }
+                and reference.get("routeKey") in set(route_keys)
+                and reference.get("join") == "exact_stock_route"
+                and reference.get("classification")
+                in {"binding_scoped", "fail_closed"}
                 and reference.get("sourceFile")
+                and isinstance(reference.get("sourceLine"), int)
                 for reference in ui_references
+            )
+            and isinstance(ui_delegated_calls, list)
+            and ui_delegated_count == len(ui_delegated_calls)
+            and all(
+                isinstance(call, Mapping)
+                and call.get("networkApi")
+                in {
+                    "authenticatedFetch",
+                    "hostFetch",
+                    "fetch",
+                    "resolveWebSocketUrl",
+                    "WebSocket",
+                }
+                and call.get("classification")
+                in {
+                    "outside_binding_auth_fail_closed",
+                    "scoped_transport_adapter_then_exact_route_gate",
+                }
+                and _DIGEST.fullmatch(str(call.get("argumentDigest") or ""))
+                and call.get("unknownBehavior")
+                == "omnigent_chat_transport_unsupported"
+                and call.get("sourceFile")
+                and isinstance(call.get("sourceLine"), int)
+                and call["sourceLine"] > 0
+                for call in ui_delegated_calls
             )
         )
         if (

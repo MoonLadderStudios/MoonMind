@@ -19,7 +19,12 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.integration, pytest.mark.integrat
 
 
 @pytest_asyncio.fixture
-async def fake_omnigent_server(request: pytest.FixtureRequest):
+async def fake_omnigent_server(
+    request: pytest.FixtureRequest,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     server = FakeOmnigentServer(supports_diff=bool(request.param))
     running = await start_fake_omnigent_server(server)
     try:
@@ -59,7 +64,7 @@ async def test_omnigent_execute_harvests_resources_with_fake_server(
         artifact_gateway=LocalOmnigentArtifactGateway(root=tmp_path),
     )
 
-    assert result.failure_class is None
+    assert result.failure_class is None, (result.summary, server.route_calls)
     assert result.summary == "fake Omnigent completed"
     assert result.metadata["workspaceFilesIndexRef"].startswith("artifact://omnigent/")
     assert result.metadata["sessionFilesIndexRef"].startswith("artifact://omnigent/")
@@ -77,6 +82,26 @@ async def test_omnigent_execute_harvests_resources_with_fake_server(
     )
     assert manifest["workspaceFiles"][0]["path"] == "README.md"
     assert manifest["sessionFiles"][0]["filename"] == "session.log"
+    assert manifest["terminals"][0]["terminalId"] == "terminal-main"
+    assert "resources.terminals" in server.route_calls
+    terminal_metadata = json.loads(
+        (
+            tmp_path
+            / "corr-1"
+            / "output.omnigent.terminals"
+            / "terminal-main.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert terminal_metadata["metadata"] == {"exit_code": 0}
+    assert "direct_attach_url" not in json.dumps(terminal_metadata)
+    terminal_index = json.loads(
+        (
+            tmp_path
+            / "corr-1"
+            / "output.omnigent.terminals.index.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert "direct_attach_url" not in json.dumps(terminal_index)
     if server.supports_diff:
         assert manifest["patchUnavailable"] is False
         assert manifest["workspaceDiffs"][0]["path"] == "src/app.py"

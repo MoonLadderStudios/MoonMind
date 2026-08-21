@@ -290,6 +290,20 @@ class OmnigentHttpClient:
             f"/v1/sessions/{quote(session_id, safe='')}/resources/files",
         )
 
+    async def list_session_terminals(self, session_id: str) -> dict[str, Any]:
+        """Return the complete bounded terminal resource page for capture.
+
+        The stock UI requests ascending creation order so the session's own
+        terminal remains first.  Capture uses the stock maximum page size and
+        persists the exact returned resource objects before host cleanup.
+        """
+
+        return await self._request(
+            "GET",
+            f"/v1/sessions/{quote(session_id, safe='')}"
+            "/resources/terminals?limit=1000&order=asc",
+        )
+
     async def get_session_file_content(self, session_id: str, file_id: str) -> bytes:
         return await self._request_bytes(
             "GET",

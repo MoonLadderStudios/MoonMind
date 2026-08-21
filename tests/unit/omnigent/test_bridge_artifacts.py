@@ -68,6 +68,22 @@ class FakeHarvestClient:
     async def get_session_file_content(self, _session_id: str, _file_id: str) -> bytes:
         return b"session file evidence\n"
 
+    async def list_session_terminals(self, session_id: str) -> dict[str, Any]:
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": "terminal-main",
+                    "session_id": session_id,
+                    "status": "running",
+                    "metadata": {
+                        "direct_attach_url": "ws://127.0.0.1/attach?token=ephemeral"
+                    },
+                }
+            ],
+            "has_more": False,
+        }
+
     async def get_session(self, session_id: str) -> dict[str, Any]:
         return {"id": session_id, "status": "completed"}
 
@@ -229,12 +245,35 @@ async def test_bridge_resource_harvester_writes_section_12_artifacts(tmp_path) -
     assert manifest["workspaceFiles"][1] == {"path": "src", "skipped": "directory"}
     assert manifest["workspaceDiffs"][0]["path"] == "src/app.py"
     assert manifest["sessionFiles"][0]["filename"] == "session.log"
+    assert manifest["terminals"][0]["terminalId"] == "terminal-main"
+    assert "direct_attach_url" not in json.dumps(manifest["terminals"])
+    terminal_metadata = json.loads(
+        (
+            tmp_path
+            / "corr-1"
+            / "output.omnigent.terminals"
+            / "terminal-main.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert terminal_metadata["status"] == "running"
+    assert "direct_attach_url" not in json.dumps(terminal_metadata)
+    terminal_index = json.loads(
+        (
+            tmp_path
+            / "corr-1"
+            / "output.omnigent.terminals.index.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert "direct_attach_url" not in json.dumps(terminal_index)
     assert manifest["patchUnavailable"] is False
     assert manifest["changedFiles"][0]["diffArtifactRef"] == manifest["workspaceDiffs"][0]["artifactRef"]
     assert refs["changedFilesIndexRef"].endswith(
         "/output.omnigent.changed_files.index.json"
     )
     assert refs["childSessionsRef"].endswith("/runtime.omnigent.child_sessions.jsonl")
+    assert refs["terminalsIndexRef"].endswith(
+        "/output.omnigent.terminals.index.json"
+    )
 
     diff = (
         tmp_path

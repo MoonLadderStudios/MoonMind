@@ -111,6 +111,21 @@ async def test_omnigent_client_exposes_confirmed_operations() -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_session_terminals_uses_bounded_ascending_stock_page() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.raw_path.split(b"?", 1)[0] == (
+            b"/v1/sessions/sess%2F1/resources/terminals"
+        )
+        assert dict(request.url.params) == {"limit": "1000", "order": "asc"}
+        return httpx.Response(200, json={"data": []})
+
+    transport = httpx.MockTransport(handler)
+    client = OmnigentHttpClient(base_url="https://omnigent.test", transport=transport)
+
+    assert await client.list_session_terminals("sess/1") == {"data": []}
+
+
+@pytest.mark.asyncio
 async def test_injected_http_client_preserves_omnigent_timeout_contract() -> None:
     """An injected client must not replace Omnigent's transport timeouts."""
 
