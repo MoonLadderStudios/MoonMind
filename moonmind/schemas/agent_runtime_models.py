@@ -725,6 +725,14 @@ class AgentExecutionRequest(BaseModel):
     step_execution: AgentRuntimeStepExecutionLaunch | None = Field(
         None, alias="stepExecution"
     )
+    # Trusted, secret-free planner output. The production launch compiler treats
+    # these as an atomic pair when the plan selects the generic host realizer.
+    omnigent_execution_plan: dict[str, Any] | None = Field(
+        None, alias="omnigentExecutionPlan"
+    )
+    omnigent_harness_implementation: dict[str, Any] | None = Field(
+        None, alias="omnigentHarnessImplementation"
+    )
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
     remediation_workspace: dict[str, Any] | None = Field(
         None, alias="remediationWorkspace"
@@ -808,6 +816,38 @@ class AgentExecutionRequest(BaseModel):
                 raise ValueError(
                     "managedSession.runtimeId must match the managed-session runtime"
                 )
+        if self.omnigent_execution_plan is not None:
+            from moonmind.omnigent.harness_platform.execution_plan import (
+                OmnigentExecutionPlanEnvelope,
+            )
+
+            plan = OmnigentExecutionPlanEnvelope.model_validate(
+                self.omnigent_execution_plan
+            )
+            normalized_plan = plan.model_dump(
+                by_alias=True, mode="json"
+            )
+            if _contains_sensitive_key(
+                normalized_plan,
+                allowed_sensitive_keys=frozenset(
+                    {"credentialBindings", "credentialBindingSetRef"}
+                ),
+            ):
+                raise ValueError(
+                    "omnigentExecutionPlan must not contain raw credential keys"
+                )
+            self.omnigent_execution_plan = normalized_plan
+        if self.omnigent_harness_implementation is not None:
+            from moonmind.omnigent.harness_platform.catalog import (
+                HarnessImplementationIdentity,
+            )
+
+            implementation = HarnessImplementationIdentity.model_validate(
+                self.omnigent_harness_implementation
+            )
+            self.omnigent_harness_implementation = implementation.model_dump(
+                by_alias=True, mode="json"
+            )
         if self.remediation_workspace is not None:
             from moonmind.omnigent.remediation_workspace import (
                 RemediationWorkspaceBinding,

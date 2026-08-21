@@ -17,7 +17,11 @@ import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
-from api_service.db.models import Base, OmnigentBridgeSession
+from api_service.db.models import (
+    Base,
+    OmnigentBridgeSession,
+    ProviderProfileAuthState,
+)
 from api_service.services.omnigent_policies import bootstrap_document
 from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
@@ -30,7 +34,6 @@ from moonmind.omnigent.effective_capabilities import (
 from moonmind.omnigent.generic_opencode_runtime import (
     GenericHostRuntimeObservation,
     build_generic_harness_authority,
-    create_generic_harness_attach_contract,
 )
 from moonmind.omnigent.harness_platform.attestation import (
     HostHarnessAttestation,
@@ -55,7 +58,8 @@ from moonmind.omnigent.oauth_hosts import (
 )
 from moonmind.omnigent.policies import compile_policy_snapshot
 from moonmind.omnigent.profile_bound_execution import (
-    _compile_persisted_effective_launch,
+    OmnigentProfileBoundExecutionCoordinator,
+    compile_persisted_effective_launch_for_intent,
 )
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
@@ -78,12 +82,18 @@ from moonmind.workflows.temporal.activities import (
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
 
 
-def _request() -> AgentExecutionRequest:
+def _request(
+    *,
+    execution_plan: dict | None = None,
+    harness_implementation: dict | None = None,
+) -> AgentExecutionRequest:
     return AgentExecutionRequest(
         agentKind="external",
         agentId="omnigent",
         correlationId="generic-authority-workflow",
         idempotencyKey="generic-authority-session",
+        omnigentExecutionPlan=execution_plan,
+        omnigentHarnessImplementation=harness_implementation,
         workspaceSpec={
             "workspaceLocator": {
                 "kind": "sandbox",
@@ -262,7 +272,8 @@ def _with_launch_digest(payload: dict) -> dict:
     return launch
 
 
-def _production_launch_and_evidence() -> tuple[dict, dict, dict]:
+def _production_launch_and_evidence(
+) -> tuple[dict, dict, dict, AgentExecutionRequest]:
     host_class = get_host_class("omnigent-codex-current@1")
     policy = compile_policy_snapshot(
         policy_id="codex-on-demand",
@@ -280,23 +291,21 @@ def _production_launch_and_evidence() -> tuple[dict, dict, dict]:
         policy_snapshot_ref=policy["snapshotRef"],
         host_image_ref=host_class.imageRef,
     )
-    attach_contract = create_generic_harness_attach_contract(
+    request = _request(
         execution_plan=evidence["executionPlan"],
         harness_implementation=evidence["hostHarnessAttestation"][
             "harnessImplementation"
         ],
     )
-    launch = _compile_persisted_effective_launch(
+    launch = compile_persisted_effective_launch_for_intent(
         policy,
+        request=request,
         provider_profile_id="provider-1",
-        generic_attach_contract=attach_contract.model_dump(
-            by_alias=True, mode="json"
-        ),
     )
-    return policy, launch, evidence
+    return policy, launch, evidence, request
 
 
-def _host_binding(launch: dict) -> OmnigentOAuthHostBinding:
+def _host_binding(launch: dict | None) -> OmnigentOAuthHostBinding:
     return OmnigentOAuthHostBinding(
         bindingRef="host-binding:1",
         providerProfileId="provider-1",
@@ -320,6 +329,158 @@ def _host_binding(launch: dict) -> OmnigentOAuthHostBinding:
         launchPolicyRef="codex-on-demand@1",
         effectiveLaunchSnapshot=launch,
     )
+
+
+async def test_production_intent_compiler_binds_generic_plan_before_host_preparation(
+) -> None:
+    policy, launch, evidence, request = _production_launch_and_evidence()
+
+    assert launch["executionPlanRef"] == evidence["executionPlan"]["planRef"]
+    assert launch["executionRealizerRef"] == "generic-omnigent-host@1"
+    assert launch["genericHarnessAttachContract"] == {
+        "schemaVersion": "moonmind.omnigent-generic-harness-attach.v1",
+        "hostCatalogContract": "omnigent.http.host-catalog.v1",
+        "executionPlan": evidence["executionPlan"],
+        "harnessImplementation": evidence["hostHarnessAttestation"][
+            "harnessImplementation"
+        ],
+    }
+    assert compile_persisted_effective_launch_for_intent(
+        policy,
+        request=AgentExecutionRequest.model_validate(
+            request.model_dump(by_alias=True, mode="json", exclude_none=True)
+        ),
+        provider_profile_id="provider-1",
+    ) == launch
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["omnigentExecutionPlan", "omnigentHarnessImplementation"],
+)
+async def test_production_intent_compiler_rejects_partial_generic_authority(
+    missing_field: str,
+) -> None:
+    policy, _launch, evidence, _request_value = _production_launch_and_evidence()
+    intent_fields = {
+        "execution_plan": evidence["executionPlan"],
+        "harness_implementation": evidence["hostHarnessAttestation"][
+            "harnessImplementation"
+        ],
+    }
+    intent_fields.pop(
+        "execution_plan"
+        if missing_field == "omnigentExecutionPlan"
+        else "harness_implementation"
+    )
+    request = _request(**intent_fields)
+
+    with pytest.raises(ValueError, match="requires both execution plan"):
+        compile_persisted_effective_launch_for_intent(
+            policy,
+            request=request,
+            provider_profile_id="provider-1",
+        )
+
+
+async def test_profile_bound_coordinator_rejects_partial_planner_authority_before_lease(
+) -> None:
+    policy, _launch, evidence, _request_value = _production_launch_and_evidence()
+    request = _request(
+        execution_plan=evidence["executionPlan"],
+    ).model_copy(update={"execution_profile_ref": "provider-1"})
+    lease_client = SimpleNamespace(
+        acquire_execution_lease=AsyncMock(),
+        release_lease=AsyncMock(),
+    )
+    run_store = SimpleNamespace(
+        get_or_create=AsyncMock(return_value=SimpleNamespace()),
+        record_lifecycle_event=AsyncMock(),
+    )
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=lambda: None,
+        lease_client=lease_client,
+        host_repository=SimpleNamespace(
+            get_binding_for_profile=AsyncMock(return_value=_host_binding(None))
+        ),
+        host_runtime=SimpleNamespace(),
+        run_store=run_store,
+        execution_runner=AsyncMock(),
+        artifact_gateway=object(),
+    )
+    coordinator._resolve_profile = AsyncMock(  # type: ignore[method-assign]
+        return_value=SimpleNamespace(
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            disabled_reason=None,
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=900,
+            runtime_id="codex_cli",
+            credential_source="oauth_volume",
+            runtime_materialization_mode="oauth_home",
+            volume_ref="codex_auth_volume",
+            volume_mount_path="/home/app/.codex",
+            secret_refs={},
+            command_behavior={},
+        )
+    )
+    coordinator._resolve_policy_snapshot = AsyncMock(  # type: ignore[method-assign]
+        return_value=policy
+    )
+
+    with pytest.raises(ValueError, match="requires both execution plan"):
+        await coordinator.execute(request)
+
+    lease_client.acquire_execution_lease.assert_not_awaited()
+    assert any(
+        call.kwargs.get("event_type") == "policy_authority_resolution"
+        and call.kwargs.get("status") == "failed"
+        for call in run_store.record_lifecycle_event.await_args_list
+    )
+
+
+async def test_planner_intent_rejects_raw_credentials_and_wrong_profile() -> None:
+    policy, _launch, evidence, _request_value = _production_launch_and_evidence()
+    payload = copy.deepcopy(evidence["executionPlan"]["payload"])
+    payload["model"]["normalizedOptions"] = {"apiKey": "must-not-persist"}
+    leaked_plan = create_execution_plan_envelope(payload).model_dump(
+        by_alias=True, mode="json"
+    )
+
+    with pytest.raises(ValueError, match="must not contain raw credential keys"):
+        _request(
+            execution_plan=leaked_plan,
+            harness_implementation=evidence["hostHarnessAttestation"][
+                "harnessImplementation"
+            ],
+        )
+
+    with pytest.raises(ValueError, match="does not select the launch Provider Profile"):
+        compile_persisted_effective_launch_for_intent(
+            policy,
+            request=_request(
+                execution_plan=evidence["executionPlan"],
+                harness_implementation=evidence["hostHarnessAttestation"][
+                    "harnessImplementation"
+                ],
+            ),
+            provider_profile_id="different-provider",
+        )
+
+
+async def test_production_intent_compiler_keeps_existing_codex_launch_unchanged(
+) -> None:
+    policy, _launch, _evidence, _request_value = _production_launch_and_evidence()
+
+    launch = compile_persisted_effective_launch_for_intent(
+        policy,
+        request=_request(),
+        provider_profile_id="provider-1",
+    )
+
+    assert "executionPlanRef" not in launch
+    assert "executionRealizerRef" not in launch
+    assert "genericHarnessAttachContract" not in launch
 
 
 def _host_lease() -> OmnigentHostLease:
@@ -466,10 +627,9 @@ async def test_ensure_host_activity_persists_real_preflight_authority_for_facade
         await connection.run_sync(Base.metadata.create_all)
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    policy, launch, _evidence = _production_launch_and_evidence()
-    binding = _host_binding(launch)
+    policy, launch, _evidence, request = _production_launch_and_evidence()
+    binding = _host_binding(None)
     lease = _host_lease()
-    request = _request()
     canonical_session = SimpleNamespace(
         session_id="canonical-session",
         revision=1,
@@ -508,10 +668,23 @@ async def test_ensure_host_activity_persists_real_preflight_authority_for_facade
     class FakeHostRepository(OmnigentOAuthHostRepository):
         def __init__(self, _factory) -> None:
             self.lease = lease
+            self.binding = binding
 
         async def get_binding_for_profile(self, profile_id: str):
             assert profile_id == "provider-1"
-            return binding
+            return self.binding
+
+        async def create_or_update_static_binding(self, **kwargs):
+            assert kwargs["profile_id"] == "provider-1"
+            compiled_launch = kwargs["effective_launch_snapshot"]
+            assert compiled_launch["executionPlanRef"] == _evidence[
+                "executionPlan"
+            ]["planRef"]
+            assert compiled_launch["genericHarnessAttachContract"]
+            self.binding = self.binding.model_copy(
+                update={"effective_launch_snapshot": compiled_launch}
+            )
+            return self.binding
 
         async def create_or_get_host_lease(self, **kwargs):
             assert kwargs["provider_lease_id"] == "provider-lease-1"

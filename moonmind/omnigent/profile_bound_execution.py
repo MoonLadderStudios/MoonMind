@@ -658,6 +658,42 @@ def _compile_persisted_effective_launch(
     return payload
 
 
+def compile_persisted_effective_launch_for_intent(
+    policy_snapshot: Mapping[str, Any],
+    *,
+    request: AgentExecutionRequest,
+    provider_profile_id: str,
+    follow_up_retrieval: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compile one launch from policy plus trusted planner intent.
+
+    Both the profile-bound coordinator and the canonical-session Activity use
+    this boundary.  Keeping generic contract creation here prevents either
+    launch path from persisting a policy-only snapshot when the compiled intent
+    selected ``generic-omnigent-host@1``.
+    """
+
+    from moonmind.omnigent.generic_opencode_runtime import (
+        create_generic_harness_attach_contract_from_execution_intent,
+    )
+
+    attach_contract = create_generic_harness_attach_contract_from_execution_intent(
+        execution_plan=request.omnigent_execution_plan,
+        harness_implementation=request.omnigent_harness_implementation,
+        provider_profile_id=provider_profile_id,
+    )
+    return _compile_persisted_effective_launch(
+        policy_snapshot,
+        provider_profile_id=provider_profile_id,
+        follow_up_retrieval=follow_up_retrieval,
+        generic_attach_contract=(
+            attach_contract.model_dump(by_alias=True, mode="json")
+            if attach_contract is not None
+            else None
+        ),
+    )
+
+
 class OmnigentProfileBoundExecutionCoordinator:
     """Own the profile lease through host/session harvesting and cleanup."""
 
@@ -1045,8 +1081,9 @@ class OmnigentProfileBoundExecutionCoordinator:
                 runtime=provider_runtime,
                 compatibility_digest=policy_snapshot.get("policyDigest"),
             ):
-                effective_launch = _compile_persisted_effective_launch(
+                effective_launch = compile_persisted_effective_launch_for_intent(
                     policy_snapshot,
+                    request=request,
                     provider_profile_id=profile_id,
                     follow_up_retrieval=follow_up_block,
                 )

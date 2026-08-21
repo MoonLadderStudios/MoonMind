@@ -1088,7 +1088,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
     from moonmind.omnigent.profile_bound_execution import (
         OmnigentProfileBoundExecutionCoordinator,
-        _compile_persisted_effective_launch,
+        compile_persisted_effective_launch_for_intent,
         compile_follow_up_retrieval_policy,
         enforce_required_follow_up_retrieval,
     )
@@ -1164,8 +1164,9 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         ).strip(),
     )
     enforce_required_follow_up_retrieval(authored_follow_up, follow_up)
-    effective_launch = _compile_persisted_effective_launch(
+    effective_launch = compile_persisted_effective_launch_for_intent(
         policy_snapshot,
+        request=agent_request,
         provider_profile_id=session.provider_profile_id,
         follow_up_retrieval=follow_up,
     )

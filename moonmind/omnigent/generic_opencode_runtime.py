@@ -313,6 +313,52 @@ def create_generic_harness_attach_contract(
     )
 
 
+def create_generic_harness_attach_contract_from_execution_intent(
+    *,
+    execution_plan: Any | None,
+    harness_implementation: Any | None,
+    provider_profile_id: str,
+) -> GenericHarnessAttachContract | None:
+    """Resolve the planner-owned generic attach input from compiled intent.
+
+    The compiled execution intent is the immutable handoff between the trusted
+    planner and both production launch coordinators.  A generic plan and its
+    exact implementation identity are an atomic pair: accepting either one on
+    its own would let a launch lose the authority needed at ``prepare_host``.
+    The selected Provider Profile must also be one of the plan's pre-lease
+    credential bindings before the contract can become launch authority.
+
+    Codex and other existing realizers omit both values and retain their
+    established launch path unchanged.
+    """
+
+    if execution_plan is None and harness_implementation is None:
+        return None
+    if not isinstance(execution_plan, Mapping) or not isinstance(
+        harness_implementation, Mapping
+    ):
+        raise ValueError(
+            "generic execution intent requires both execution plan and "
+            "harness implementation"
+        )
+
+    contract = create_generic_harness_attach_contract(
+        execution_plan=execution_plan,
+        harness_implementation=harness_implementation,
+    )
+    planned_profiles = {
+        str(binding.get("providerProfileRef") or "").strip()
+        for binding in contract.execution_plan.payload.credentialBindings.values()
+        if isinstance(binding, Mapping)
+    }
+    selected_profile = str(provider_profile_id or "").strip()
+    if not selected_profile or selected_profile not in planned_profiles:
+        raise ValueError(
+            "generic execution plan does not select the launch Provider Profile"
+        )
+    return contract
+
+
 def bind_generic_harness_attach_contract(
     *,
     effective_launch: Mapping[str, Any],
@@ -661,6 +707,7 @@ __all__ = [
     "bind_generic_harness_attach_contract",
     "compile_opencode_execution_plan",
     "create_generic_harness_attach_contract",
+    "create_generic_harness_attach_contract_from_execution_intent",
     "build_generic_harness_authority",
     "build_preflight_generic_harness_authority",
     "materialize_opencode_credential_for_host",
