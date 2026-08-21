@@ -126,7 +126,7 @@ class CanonicalTurnCommandService:
     ) -> CanonicalTurnCommandClaim:
         """Claim within an existing application transaction."""
 
-        canonical_key = canonical_turn_command_key(idempotency_key)
+        canonical_key = canonical_turn_command_key(workflow_id, idempotency_key)
         claim_token = canonical_turn_claim_token(canonical_key)
         session = None
         bootstrap_turn = None
@@ -202,7 +202,10 @@ class CanonicalTurnCommandService:
                         turn_attempt_id=first_turn_id,
                         session_id=session_id,
                         idempotency_key=(
-                            "omnigent-bootstrap:" + bootstrap.source_idempotency_key
+                            "omnigent-bootstrap:"
+                            + canonical_turn_command_key(
+                                workflow_id, bootstrap.source_idempotency_key
+                            )
                         ),
                         lineage_kind="initial",
                         step_execution_id=bootstrap.step_execution_id,
@@ -307,6 +310,7 @@ class CanonicalTurnCommandService:
     async def settle(
         self,
         *,
+        workflow_id: str,
         idempotency_key: str,
         outcome: ControlPlaneOutcome,
         provider_receipt_id: str | None = None,
@@ -314,7 +318,7 @@ class CanonicalTurnCommandService:
     ) -> ControlPlaneOutcome:
         """Settle the command and advance its turn without session terminality."""
 
-        canonical_key = canonical_turn_command_key(idempotency_key)
+        canonical_key = canonical_turn_command_key(workflow_id, idempotency_key)
         claim_token = canonical_turn_claim_token(canonical_key)
         async with self._store.transaction() as repos:
             command = await repos.commands.get_by_idempotency_key(canonical_key)

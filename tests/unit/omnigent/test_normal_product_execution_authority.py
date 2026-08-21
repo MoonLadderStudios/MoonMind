@@ -16,6 +16,7 @@ from moonmind.omnigent.harness_platform.catalog import (
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
+    bind_runtime_request_authority,
 )
 from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.harness_platform.stores import (
@@ -162,6 +163,32 @@ def test_normal_product_plan_freezes_registered_authority(
     assert "providerLeaseRef" not in serialized
     assert "credentialGeneration" not in serialized
     assert "hostLeaseRef" not in serialized
+
+
+def test_normal_product_rejects_unmaterializable_pi_and_missing_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "9" * 64,
+    )
+    with pytest.raises(HarnessPlatformError) as pi_error:
+        compile_normal_product_execution_plan(
+            agent_profile_snapshot=_snapshot(harness="pi-native"),
+            workflow_parameters={"model": "provider/model", "workflow": {}},
+            workflow_id="mm:unsupported-pi",
+        )
+    assert pi_error.value.code == "OMNIGENT_HARNESS_UNKNOWN"
+
+    snapshot = _snapshot()
+    snapshot["document"]["model"] = {}
+    with pytest.raises(HarnessPlatformError) as model_error:
+        compile_normal_product_execution_plan(
+            agent_profile_snapshot=snapshot,
+            workflow_parameters={"workflow": {}},
+            workflow_id="mm:missing-model",
+        )
+    assert model_error.value.code == "OMNIGENT_MODEL_UNAVAILABLE"
 
 
 def test_default_registry_composes_every_generic_host_production_boundary(
@@ -364,6 +391,72 @@ async def test_generic_dispatch_loads_persisted_plan_without_replanning() -> Non
 
 
 @pytest.mark.asyncio
+async def test_generic_dispatch_derives_late_skill_and_step_model_authority() -> None:
+    store = InMemoryExecutionPlanStore()
+    admitted = compile_normal_product_execution_plan(
+        agent_profile_snapshot=_snapshot(harness="codex-native"),
+        workflow_parameters={"model": "gpt-5", "workflow": {}},
+        workflow_id="mm:dispatch-late-authority",
+    )
+    await store.persist(admitted)
+    realizer = SimpleNamespace(
+        execute=AsyncMock(return_value=AgentRunResult(summary="derived"))
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-derived",
+        idempotencyKey="idem-derived",
+        resolvedSkillsetRef="artifact://skills/resolved-step",
+        parameters={
+            "executionPlanRef": admitted.planRef,
+            "model": "provider/step-model",
+            "effort": "high",
+        },
+    )
+
+    result = await _try_generic_realizer_dispatch(
+        request,
+        plan_store=store,
+        realizer_registry=SimpleNamespace(require=lambda _ref: realizer),
+    )
+
+    assert result is not None and result.summary == "derived"
+    dispatched_request, dispatched_plan = realizer.execute.await_args.args
+    assert dispatched_plan.planRef != admitted.planRef
+    assert dispatched_request.parameters["executionPlanRef"] == dispatched_plan.planRef
+    assert dispatched_plan.payload.resolvedSkills["resolvedSkillSetRef"] == (
+        "artifact://skills/resolved-step"
+    )
+    assert dispatched_plan.payload.modelConfig.qualifiedId == "provider/step-model"
+    assert dispatched_plan.payload.modelConfig.effort == "high"
+    assert dispatched_plan.payload.supportIdentity.modelConfigDigest == (
+        dispatched_plan.payload.modelConfig.modelConfigDigest
+    )
+    assert await store.load(dispatched_plan.planRef) == dispatched_plan
+
+
+def test_runtime_request_rejects_a_different_resolved_skill_snapshot() -> None:
+    admitted = compile_normal_product_execution_plan(
+        agent_profile_snapshot=_snapshot(harness="codex-native"),
+        workflow_parameters={
+            "model": "gpt-5",
+            "resolvedSkillsetRef": "artifact://skills/admitted",
+            "workflow": {},
+        },
+        workflow_id="mm:dispatch-skill-conflict",
+    )
+
+    with pytest.raises(HarnessPlatformError) as exc_info:
+        bind_runtime_request_authority(
+            admitted,
+            resolved_skillset_ref="artifact://skills/different",
+        )
+
+    assert exc_info.value.code == "OMNIGENT_SKILL_DELIVERY_MISMATCH"
+
+
+@pytest.mark.asyncio
 async def test_generic_request_without_admitted_plan_fails_closed() -> None:
     request = AgentExecutionRequest(
         agentKind="external",
@@ -485,8 +578,113 @@ async def test_generic_realizer_persists_generations_and_exact_host(
         "supportCombinationKey": plan.payload.supportCombinationKey,
         "identityComplete": True,
     }
+    assert "effectiveLaunchRef" not in result.metadata["omnigentCheckpointCapture"]
     authority.release.assert_awaited_once()
     host_runtime.cleanup.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generic_realizer_resumes_persisted_host_authority_on_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "9" * 64,
+    )
+    plan = compile_normal_product_execution_plan(
+        agent_profile_snapshot=_snapshot(),
+        workflow_parameters={"model": "provider/model", "workflow": {}},
+        workflow_id="mm:resume-host",
+    )
+    provider_leases = {
+        "primary-model": {
+            "providerProfileRef": "opencode-native-provider",
+            "providerLeaseRef": "provider-lease:resume",
+            "credentialGeneration": 4,
+            "credentialRuntimeRef": "credential-runtime:resume",
+        }
+    }
+    binding_store = InMemoryRuntimeBindingStore()
+    initial = await binding_store.create_initial(
+        execution_plan_ref=plan.planRef,
+        provider_leases=provider_leases,
+    )
+    persisted = await binding_store.update_with_host(
+        initial.runtimeBindingRef,
+        host_binding_ref="host-binding:resume",
+        host_lease_ref="host-lease:resume",
+        host_lease_generation=8,
+        omnigent_host_id="host-resume",
+    )
+    acquired = SimpleNamespace(
+        provider_leases=provider_leases,
+        credential_handles=(),
+    )
+    runtime_authority = SimpleNamespace(
+        acquire=AsyncMock(return_value=acquired),
+        release=AsyncMock(),
+    )
+    host_runtime = SimpleNamespace(
+        assert_ready=lambda: None,
+        realize=AsyncMock(),
+        cleanup=AsyncMock(),
+    )
+    driver = AsyncMock(return_value=AgentRunResult(summary="resumed"))
+    turn_commands = SimpleNamespace(
+        claim=AsyncMock(
+            return_value=SimpleNamespace(
+                session_id="canonical-session",
+                turn_attempt_id="turn-resume",
+                command_id="command-resume",
+                claim_token="claim-resume",
+                expected_session_revision=2,
+                fencing_generation=1,
+                owns_delivery=True,
+            )
+        ),
+        bind_runtime_authority=AsyncMock(),
+        settle=AsyncMock(),
+    )
+    realizer = GenericOmnigentHostRealizer(
+        runtime_binding_store=binding_store,
+        runtime_authority=runtime_authority,
+        host_runtime=host_runtime,
+        execution_driver=driver,
+        turn_command_service=turn_commands,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="corr-resume",
+        idempotencyKey="idem-resume",
+        parameters={"executionPlanRef": plan.planRef},
+    )
+
+    result = await realizer.execute(request, plan)
+
+    assert result.summary == "resumed"
+    host_runtime.realize.assert_not_awaited()
+    enriched = driver.await_args.args[0]
+    assert enriched.parameters["runtimeBindingRef"] == persisted.runtimeBindingRef
+    authorization = enriched.parameters["omnigent"][
+        "_moonmindProfileAuthorization"
+    ]
+    assert authorization["executionPlanRef"] == plan.planRef
+    assert authorization["runtimeBindingRef"] == persisted.runtimeBindingRef
+    assert authorization["providerLeaseRef"] == "provider-lease:resume"
+    host_runtime.cleanup.assert_awaited_once_with(
+        plan.planRef,
+        persisted.runtimeBindingRef,
+        command_authority=host_runtime.cleanup.await_args.kwargs[
+            "command_authority"
+        ],
+    )
+    runtime_authority.release.assert_awaited_once_with(
+        acquired,
+        command_authority=runtime_authority.release.await_args.kwargs[
+            "command_authority"
+        ],
+    )
 
 
 @pytest.mark.asyncio

@@ -2496,6 +2496,66 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         )
         self.assertEqual(request.execution_profile_ref, "codex-openai-oauth")
 
+    def test_agent_profile_snapshot_compiles_admitted_opencode_harness(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._profile_snapshots = {
+            "opencode-provider": {
+                "profile_id": "opencode-provider",
+                "runtime_id": "opencode_go",
+            }
+        }
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "mm:opencode-profile"
+            run_id = "run-1"
+
+        snapshot = {
+            "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+            "profileId": "omnigent-opencode-default",
+            "version": 1,
+            "digest": "sha256:" + "b" * 64,
+            "providerProfileRef": "opencode-provider",
+            "executionProfileRef": "omnigent-opencode@1",
+            "launchPolicyRef": "omnigent-on-demand@1",
+            "agentId": "opencode-agent",
+            "document": {
+                "endpointRef": "default",
+                "harness": "opencode-native",
+            },
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=True,
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "opencode-provider",
+                    },
+                },
+                workflow_parameters={
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-opencode@1",
+                        "launchPolicyRef": "omnigent-on-demand@1",
+                    },
+                    "agentProfileSnapshot": snapshot,
+                },
+                node_id="node-opencode",
+                tool_name="omnigent",
+            )
+
+        self.assertEqual(request.execution_profile_ref, "opencode-provider")
+        self.assertEqual(
+            request.parameters["omnigent"]["agent"]["harnessOverride"],
+            "opencode-native",
+        )
+
     def test_agent_profile_snapshot_rejects_conflicting_legacy_authority(self) -> None:
         wf = MoonMindRunWorkflow()
 
@@ -3597,7 +3657,7 @@ class TestFetchProfileSnapshots(unittest.TestCase):
                                 },
                             ]
                         }
-                    elif runtime_id == "claude_code":
+                    elif runtime_id == "opencode_go":
                         return {"profiles": []}
                 return {}
 
@@ -3669,7 +3729,10 @@ class TestFetchProfileSnapshots(unittest.TestCase):
             # codex_cli profiles are missing, but claude_code profiles should be there
             self.assertIn("claude_anthropic_sonnet", wf._profile_snapshots)
             self.assertNotIn("codex_openrouter_qwen36_plus", wf._profile_snapshots)
-            self.assertEqual(wf._profile_snapshot_runtime_ids, {"claude_code"})
+            self.assertEqual(
+                wf._profile_snapshot_runtime_ids,
+                {"claude_code", "opencode_go"},
+            )
             self.assertEqual(
                 wf._validated_execution_profile_ref(
                     "codex-profile-from-failed-fetch",

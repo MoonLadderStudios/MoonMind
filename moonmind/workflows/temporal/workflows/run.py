@@ -30,6 +30,10 @@ with workflow.unsafe.imports_passed_through():
         authored_repository_source,
         authored_starting_branch,
     )
+    from moonmind.omnigent.harness_platform.admission import (
+        NORMAL_PRODUCT_HARNESS_IDS,
+        NORMAL_PRODUCT_PROVIDER_RUNTIME_IDS,
+    )
     from api_service.services.provider_profile_readiness import (
         provider_profile_launch_ready_from_payload,
     )
@@ -999,7 +1003,10 @@ def _worker_capability_unavailable_error(
 
 
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
-_PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code")
+_PROFILE_SYNC_RUNTIME_IDS = (
+    *sorted(NORMAL_PRODUCT_PROVIDER_RUNTIME_IDS),
+    "claude_code",
+)
 _MANAGED_AGENT_IDS = frozenset(
     {
         "claude",
@@ -20696,7 +20703,9 @@ class MoonMindRunWorkflow:
                 child_runtime_id = self._managed_runtime_id(agent_id or "")
                 compatible_runtime_ids = {child_runtime_id}
                 if child_runtime_id == "omnigent":
-                    compatible_runtime_ids.add("codex_cli")
+                    compatible_runtime_ids.update(
+                        NORMAL_PRODUCT_PROVIDER_RUNTIME_IDS
+                    )
                 if compatible_runtime_ids.isdisjoint(
                     str(item).strip() for item in authoritative_runtime_ids
                 ):
@@ -20721,7 +20730,7 @@ class MoonMindRunWorkflow:
         child_runtime_id = self._managed_runtime_id(agent_id)
         compatible_runtime_ids = {child_runtime_id}
         if child_runtime_id == "omnigent":
-            compatible_runtime_ids.add("codex_cli")
+            compatible_runtime_ids.update(NORMAL_PRODUCT_PROVIDER_RUNTIME_IDS)
         if runtime_id not in compatible_runtime_ids:
             if self._workflow_is_replaying():
                 return profile_id
@@ -22719,7 +22728,7 @@ class MoonMindRunWorkflow:
         agent = normalized.get("agent")
         if isinstance(agent, Mapping):
             harness = agent.get("harnessOverride")
-            if harness not in {"codex-native", "claude-native"}:
+            if harness not in {*NORMAL_PRODUCT_HARNESS_IDS, "claude-native"}:
                 raise ValueError(
                     f"{path}.agent.harnessOverride must be a supported native harness"
                 )
@@ -22805,7 +22814,7 @@ class MoonMindRunWorkflow:
             "harness",
             error_message="agentProfileSnapshot.document.harness is required",
         )
-        if harness not in {"codex-native", "claude-native"}:
+        if harness not in {*NORMAL_PRODUCT_HARNESS_IDS, "claude-native"}:
             raise ValueError("agentProfileSnapshot.document.harness is unsupported")
 
         authored = self._json_mapping(value, path=path)

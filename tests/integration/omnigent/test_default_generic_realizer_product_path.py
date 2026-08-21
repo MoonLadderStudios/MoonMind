@@ -241,6 +241,7 @@ async def test_default_registry_executes_and_cleans_up_opencode_product_path(
         if args[0] == "run":
             docker_state["launched"] = True
             docker_state["container"] = args[args.index("--name") + 1]
+            docker_state["platform"] = args[args.index("--platform") + 1]
             docker_state["image"] = args[-1]
             docker_state["lease"] = next(
                 value.split("=", 1)[1]
@@ -402,6 +403,7 @@ async def test_default_registry_executes_and_cleans_up_opencode_product_path(
         "omnigent-host:default-product-path"
     )
     assert docker_state["launched"] is True
+    assert docker_state["platform"] == plan.payload.supportIdentity.architecture
     assert docker_state["removed"] is True
     assert released_leases == ["provider-lease:default-product-path"]
 

@@ -1,57 +1,24 @@
 [
-  {
-    "id": 3828381449,
-    "disposition": "addressed",
-    "rationale": "Added a distinct digest-pinned --opencode-host-image input, exported OMNIGENT_OPENCODE_HOST_IMAGE_REF for the run, gave each combination a code-owned host_image_key, and required every claimed combination to publish hostImageRef equal to that pinned images entry."
-  },
-  {
-    "id": 3828381452,
-    "disposition": "addressed",
-    "rationale": "Cleanup expectations are now derived from the launch policy cleanup mode: remove requires live_host_stopped with liveResourcesRemoved true, drain requires live_host_drained with liveResourcesRemoved false, at both the cleanupReceipt and manifest cleanupOutcome gates."
-  },
-  {
-    "id": 3828381455,
-    "disposition": "addressed",
-    "rationale": "The cleanup receipt now compares the ordered step list directly against the combination's required step tuple instead of comparing sets with a release-last check."
-  },
-  {
-    "id": 3828381462,
-    "disposition": "addressed",
-    "rationale": "Report cases must now equal the code-owned workflow_chat_case_id set for the combination's four rows and reference exactly that row's evidence refs; passed must equal the row count and skipped must be zero."
-  },
-  {
-    "id": 3828381466,
-    "disposition": "addressed",
-    "rationale": "action() takes a log_id and the workflow_chat controller passes the combination id, so each combination retains its own workflow_chat-<row>-<combination>.log."
-  },
-  {
-    "id": 3828381471,
-    "disposition": "addressed",
-    "rationale": "providerProfileClass is now pinned by the claimed combination inventory (with the credential materializer ref required in bindingIdentity.materializerRefs), so evidence collected under one credential/provider authority class cannot qualify another."
-  },
-  {
-    "id": 3828381477,
-    "disposition": "addressed",
-    "rationale": "executionCreation is cross-checked against the matching browser trace event's method and normalized path before created_through_public_executions_api is derived."
-  },
-  {
-    "id": 3828381485,
-    "disposition": "addressed",
-    "rationale": "Denied capability enforcement observations are propagated into expected_denial_statuses, and the unit fixture now uses an independent enforcement request id instead of reusing one from denialAudit."
-  },
-  {
-    "id": 4990980963,
-    "disposition": "not-applicable",
-    "rationale": "Informational Codex review summary body; no action requested."
-  },
-  {
-    "id": 3828381491,
-    "disposition": "addressed",
-    "rationale": "_write_workflow_chat_report takes an auth_mode; each per-combination report publishes the combination's code-owned auth mode (validated against the manifest) and the aggregate report names every mode it exercised."
-  },
-  {
-    "id": 3828381495,
-    "disposition": "addressed",
-    "rationale": "cross_user and cross_workflow denials must record authorized/attempted user and workflow identities, bind the authorized workflow to the session under test, and vary exactly the scope they claim to isolate."
-  }
+  {"id": 3832490788, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
+  {"id": 3832490807, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
+  {"id": 3832490813, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
+  {"id": 3832490827, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
+  {"id": 3832490844, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
+  {"id": 3832490857, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
+  {"id": 3832490870, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
+  {"id": 3832490886, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
+  {"id": 3832528263, "disposition": "addressed", "rationale": "The Activity now derives and persists a digest-addressed plan containing the actual resolved Skill snapshot before realizer dispatch."},
+  {"id": 3832528270, "disposition": "addressed", "rationale": "Retries reacquire and validate the deterministic Provider Profile lease, resume persisted host authority, reach the driver, then clean up and release."},
+  {"id": 3832528277, "disposition": "addressed", "rationale": "Explicit and default Provider Profile queries now enforce global-or-requesting-owner visibility."},
+  {"id": 3832528285, "disposition": "addressed", "rationale": "Exact existing Agent Profile usage is reused on idempotent retries instead of inserting a duplicate unique row."},
+  {"id": 3832528293, "disposition": "addressed", "rationale": "Removed Pi from normal-product admission until a production credential materializer exists."},
+  {"id": 3832528297, "disposition": "addressed", "rationale": "Step model and effort overrides are bound into a derived plan and support identity before runtime side effects."},
+  {"id": 3832528304, "disposition": "addressed", "rationale": "Canonical command and bootstrap-turn idempotency identities are now scoped by workflow."},
+  {"id": 4996059049, "disposition": "not-applicable", "rationale": "Informational automated review summary contains no actionable feedback."},
+  {"id": 3832528311, "disposition": "addressed", "rationale": "Docker launch now pins --platform to the architecture recorded in the admitted support identity."},
+  {"id": 3832528320, "disposition": "addressed", "rationale": "Full reruns compile and persist new execution authority against the reserved rerun workflow identity."},
+  {"id": 3832528326, "disposition": "addressed", "rationale": "Admission now rejects profiles without an effective model before lease or host acquisition."},
+  {"id": 3832528332, "disposition": "addressed", "rationale": "Run accepts normal-product registered harnesses and synchronizes their registered Provider runtime identities, including OpenCode."},
+  {"id": 3832528337, "disposition": "addressed", "rationale": "Generic realizer authorization now propagates provider lease, host, endpoint, plan, binding, policy, and realizer identity into the durable bridge row."},
+  {"id": 3832528341, "disposition": "addressed", "rationale": "Generic checkpoint capture omits effectiveLaunchRef because no valid omnigent-launch snapshot exists."}
 ]

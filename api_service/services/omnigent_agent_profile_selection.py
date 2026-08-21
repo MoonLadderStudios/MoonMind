@@ -5,7 +5,7 @@ import copy
 from typing import Any, Mapping
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
@@ -23,6 +23,18 @@ from api_service.services.omnigent_agent_profile_service import (
 from api_service.services.provider_profile_readiness import provider_profile_launch_ready
 
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
+
+
+def _provider_profile_visibility_filter(user: User | None) -> Any | None:
+    """Return the SQL visibility boundary shared by explicit/default selection."""
+
+    user_id = getattr(user, "id", None)
+    if user_id is None or bool(getattr(user, "is_superuser", False)):
+        return None
+    return or_(
+        ManagedAgentProviderProfile.owner_user_id.is_(None),
+        ManagedAgentProviderProfile.owner_user_id == user_id,
+    )
 
 
 def _enforce_override_ceilings(
@@ -256,6 +268,9 @@ async def resolve_agent_profile_snapshot(
             ManagedAgentProviderProfile.credential_source == requirements["credentialSource"],
             ManagedAgentProviderProfile.runtime_materialization_mode == requirements["materializationMode"],
         )
+    visibility_filter = _provider_profile_visibility_filter(user)
+    if visibility_filter is not None:
+        provider_query = provider_query.where(visibility_filter)
     if requirements.get("providerIds"):
         provider_query = provider_query.where(
             ManagedAgentProviderProfile.provider_id.in_(requirements["providerIds"])
@@ -316,13 +331,25 @@ async def resolve_agent_profile_snapshot(
         "upstreamSnapshot": upstream_snapshot,
         "validationResult": version.validation_result,
     }
-    if replace_existing_usage:
-        usage = await session.scalar(
-            select(OmnigentAgentProfileUsage).where(
-                OmnigentAgentProfileUsage.consumer_type == consumer_type,
-                OmnigentAgentProfileUsage.consumer_id == consumer_id,
-            )
+    usage = await session.scalar(
+        select(OmnigentAgentProfileUsage).where(
+            OmnigentAgentProfileUsage.consumer_type == consumer_type,
+            OmnigentAgentProfileUsage.consumer_id == consumer_id,
         )
+    )
+    if usage is not None and not replace_existing_usage:
+        if (
+            usage.profile_id != profile_id
+            or usage.version != version.version
+            or usage.digest != version.digest
+            or usage.effective_snapshot != snapshot
+        ):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Agent Profile usage conflicts with the existing consumer authority",
+            )
+        return copy.deepcopy(dict(usage.effective_snapshot))
+    if replace_existing_usage:
         if usage is None:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -407,6 +434,9 @@ async def resolve_default_agent_profile_snapshot(
                 ManagedAgentProviderProfile.profile_id.asc(),
             )
         )
+        visibility_filter = _provider_profile_visibility_filter(user)
+        if visibility_filter is not None:
+            query = query.where(visibility_filter)
         if requirements.get("providerIds"):
             query = query.where(
                 ManagedAgentProviderProfile.provider_id.in_(

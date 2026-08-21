@@ -527,6 +527,11 @@ def _profile_authorization_evidence(
         "endpointRef",
         "omnigentHostId",
         "bridgeSessionId",
+        "executionPlanRef",
+        "runtimeBindingRef",
+        "hostClassRef",
+        "launchPolicyRef",
+        "executionRealizerRef",
     }
     return {key: payload[key] for key in allowed if payload.get(key) is not None}
 
@@ -1495,7 +1500,8 @@ async def run_omnigent_execution(
             endpoint_ref=selection.endpoint_ref or "default",
             idempotency_key=request.idempotency_key,
         )
-        external_state.update(_profile_authorization_evidence(request))
+        profile_authorization = _profile_authorization_evidence(request)
+        external_state.update(profile_authorization)
         delete_after_harvest = bool(
             selection.capture.get("deleteOmnigentSessionAfterHarvest", False)
         )
@@ -1548,6 +1554,49 @@ async def run_omnigent_execution(
                         "workspace": selection.session.workspace,
                     },
                 )
+                required_profile_authority = {
+                    "providerProfileId",
+                    "credentialGeneration",
+                    "providerLeaseRef",
+                    "hostBindingRef",
+                    "hostLeaseRef",
+                    "endpointRef",
+                    "executionPlanRef",
+                    "runtimeBindingRef",
+                }
+                if required_profile_authority <= set(profile_authorization):
+                    durable_row = await run_store.bind_profile_authorization(
+                        request=request,
+                        endpoint_ref=str(profile_authorization["endpointRef"]),
+                        provider_profile_id=str(
+                            profile_authorization["providerProfileId"]
+                        ),
+                        provider_lease_id=str(
+                            profile_authorization["providerLeaseRef"]
+                        ),
+                        credential_generation=int(
+                            profile_authorization["credentialGeneration"]
+                        ),
+                        host_binding_ref=str(
+                            profile_authorization["hostBindingRef"]
+                        ),
+                        host_lease_ref=str(profile_authorization["hostLeaseRef"]),
+                        omnigent_host_id=str(
+                            profile_authorization.get("omnigentHostId") or ""
+                        )
+                        or None,
+                        effective_launch_snapshot={
+                            key: profile_authorization[key]
+                            for key in (
+                                "executionPlanRef",
+                                "runtimeBindingRef",
+                                "hostClassRef",
+                                "launchPolicyRef",
+                                "executionRealizerRef",
+                            )
+                            if profile_authorization.get(key) is not None
+                        },
+                    )
                 bridge_session_id = str(
                     getattr(durable_row, "bridge_session_id", "") or ""
                 )

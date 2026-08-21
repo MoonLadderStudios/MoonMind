@@ -19,8 +19,10 @@ from typing import Any, Mapping, Sequence
 
 from api_service.db.models import (
     OmnigentCredentialRuntimeRecord,
+    OmnigentExecutionPlanRecord,
     OmnigentHostBindingRecordV2,
     OmnigentHostLeaseRecordV2,
+    OmnigentRuntimeBindingRecord,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
@@ -661,6 +663,8 @@ class DeploymentGenericHostServices:
             args: list[str] = [
                 "run",
                 "-d",
+                "--platform",
+                state.plan.payload.supportIdentity.architecture,
                 "--name",
                 container_name,
                 "--hostname",
@@ -998,6 +1002,33 @@ class DeploymentGenericHostServices:
         authority: dict[str, Any],
     ) -> None:
         state = self._state(authority)
+        if runtime_binding_ref and not state.container_name:
+            async with self._session_factory() as session:
+                binding = await session.get(
+                    OmnigentRuntimeBindingRecord, runtime_binding_ref
+                )
+                if binding is not None and binding.host_binding_ref:
+                    state.host_binding_ref = binding.host_binding_ref
+                    state.host_lease_ref = binding.host_lease_ref
+                    state.host_lease_generation = binding.host_lease_generation
+                    binding_digest = str(binding.host_binding_ref).rsplit(
+                        "sha256:", 1
+                    )[-1]
+                    state.container_name = (
+                        "moonmind-omnigent-" + binding_digest[:24]
+                    )
+                    if state.plan is None:
+                        plan_record = await session.get(
+                            OmnigentExecutionPlanRecord, binding.execution_plan_ref
+                        )
+                        if plan_record is not None:
+                            state.plan = OmnigentExecutionPlanEnvelope.model_validate(
+                                {
+                                    "schemaVersion": plan_record.schema_version,
+                                    "planRef": plan_record.plan_ref,
+                                    "payload": plan_record.payload_json,
+                                }
+                            )
         if state.plan is not None and state.plan.planRef != plan_ref:
             raise HarnessPlatformError(
                 "cleanup plan differs from persisted host authority",

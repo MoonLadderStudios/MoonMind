@@ -55,7 +55,8 @@ class DockerHostLauncher(Protocol):
         skill_handle: Any,
         credential_handles: list[dict[str, Any]],
         authority: dict[str, Any],
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        raise NotImplementedError
 
 
 class WorkspaceMaterializationService(Protocol):
@@ -64,7 +65,8 @@ class WorkspaceMaterializationService(Protocol):
         request: AgentExecutionRequest,
         *,
         authority: dict[str, Any],
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        raise NotImplementedError
 
 
 class SkillDeliveryService(Protocol):
@@ -73,7 +75,8 @@ class SkillDeliveryService(Protocol):
         resolved_skills: dict[str, Any],
         *,
         authority: dict[str, Any],
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        raise NotImplementedError
 
 
 class EgressAttachmentService(Protocol):
@@ -82,7 +85,8 @@ class EgressAttachmentService(Protocol):
         launch_policy: LaunchPolicy,
         *,
         authority: dict[str, Any],
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        raise NotImplementedError
 
 
 class HostRegistrationWaiter(Protocol):
@@ -91,7 +95,8 @@ class HostRegistrationWaiter(Protocol):
         *,
         expected_host_id: str | None = None,
         authority: dict[str, Any],
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        raise NotImplementedError
 
 
 class HostImageAttestor(Protocol):
@@ -101,7 +106,8 @@ class HostImageAttestor(Protocol):
         expected_image_ref: str,
         *,
         authority: dict[str, Any],
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        raise NotImplementedError
 
 
 class HostCleanupService(Protocol):
@@ -112,7 +118,8 @@ class HostCleanupService(Protocol):
         runtime_binding_ref: str | None,
         host_id: str | None,
         authority: dict[str, Any],
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
 
 class HostRealizationContextService(Protocol):
@@ -122,7 +129,8 @@ class HostRealizationContextService(Protocol):
         request: AgentExecutionRequest,
         plan: OmnigentExecutionPlanEnvelope,
         authority: Mapping[str, Any],
-    ) -> None: ...
+    ) -> None:
+        raise NotImplementedError
 
 
 class GenericOmnigentHostRuntime:

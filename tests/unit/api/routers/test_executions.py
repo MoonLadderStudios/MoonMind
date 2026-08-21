@@ -13370,6 +13370,90 @@ def test_request_rerun_update_redirects_response_to_created_rerun_execution() ->
 
 
 @pytest.mark.asyncio
+async def test_rerun_recompiles_execution_authority_for_reserved_workflow() -> None:
+    old_plan_ref = "omnigent-execution-plan:sha256:" + "1" * 64
+    new_plan_ref = "omnigent-execution-plan:sha256:" + "2" * 64
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "profile-1",
+        "version": 2,
+        "digest": "sha256:" + "3" * 64,
+        "providerProfileRef": "provider-1",
+        "executionProfileRef": "omnigent-opencode@1",
+        "launchPolicyRef": "omnigent-on-demand@1",
+        "agentId": "agent-1",
+        "document": {"model": {"model": "provider/model"}},
+    }
+    refreshed = {
+        "agentProfileSnapshot": snapshot,
+        "executionPlanRef": old_plan_ref,
+        "model": "provider/model",
+    }
+    canonical = SimpleNamespace(
+        workflow_id="mm:source",
+        run_id="run-source",
+        workflow_type=SimpleNamespace(value="MoonMind.UserWorkflow"),
+        owner_id=uuid4(),
+        owner_type=SimpleNamespace(value="user"),
+        memo={"title": "Rerun source"},
+        parameters=dict(refreshed),
+        input_ref=None,
+        plan_ref=None,
+        manifest_ref=None,
+    )
+    created = SimpleNamespace(workflow_id="mm:rerun-created")
+    service = SimpleNamespace(
+        _full_rerun_parameters=Mock(return_value=dict(refreshed)),
+        create_execution=AsyncMock(return_value=created),
+    )
+    session = SimpleNamespace(
+        get=AsyncMock(return_value=canonical),
+        commit=AsyncMock(),
+    )
+    compiler = AsyncMock(return_value=SimpleNamespace(planRef=new_plan_ref))
+    user = SimpleNamespace(id=canonical.owner_id, is_superuser=False)
+
+    with patch.object(
+        executions_module,
+        "_get_owned_execution",
+        AsyncMock(return_value=SimpleNamespace()),
+    ), patch.object(
+        executions_module,
+        "refresh_managed_bootstrap_snapshot",
+        AsyncMock(return_value=dict(refreshed)),
+    ), patch.object(
+        executions_module,
+        "compile_and_persist_execution_authority",
+        compiler,
+    ), patch.object(
+        executions_module,
+        "_persist_original_workflow_input_snapshot_from_parameters",
+        AsyncMock(return_value=None),
+    ), patch.object(
+        executions_module,
+        "_serialize_execution",
+        Mock(return_value={"workflowId": "mm:rerun-created"}),
+    ):
+        result = await executions_module.rerun_execution(
+            workflow_id="mm:source",
+            response=Response(),
+            service=service,
+            session=session,
+            user=user,
+            _submit_enabled=None,
+        )
+
+    assert result == {"workflowId": "mm:rerun-created"}
+    compile_kwargs = compiler.await_args.kwargs
+    reserved_workflow_id = compile_kwargs["workflow_id"]
+    assert reserved_workflow_id.startswith("mm:")
+    assert compile_kwargs["agent_profile_snapshot"] == snapshot
+    create_kwargs = service.create_execution.await_args.kwargs
+    assert create_kwargs["_workflow_id"] == reserved_workflow_id
+    assert create_kwargs["initial_parameters"]["executionPlanRef"] == new_plan_ref
+
+
+@pytest.mark.asyncio
 async def test_request_rerun_update_flushes_snapshot_reuse_before_serializing_response(
     tmp_path,
 ) -> None:

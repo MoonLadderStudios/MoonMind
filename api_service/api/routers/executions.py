@@ -17740,6 +17740,21 @@ async def rerun_execution(
         consumer_id=reserved_workflow_id,
         user=user,
     )
+    rerun_snapshot = initial_params.get("agentProfileSnapshot")
+    if isinstance(rerun_snapshot, Mapping):
+        try:
+            rerun_plan = await compile_and_persist_execution_authority(
+                session,
+                agent_profile_snapshot=rerun_snapshot,
+                workflow_parameters=initial_params,
+                workflow_id=reserved_workflow_id,
+            )
+        except HarnessPlatformError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": str(exc.code), "message": str(exc)},
+            ) from exc
+        initial_params["executionPlanRef"] = rerun_plan.planRef
 
     # Generate a new idempotency key based on the original workflow ID
     new_idempotency_key = f"rerun:{workflow_id}:{_uuid4()}"

@@ -3735,6 +3735,7 @@ async def _claim_facade_message(
             )
             if receipt is not None:
                 await canonical_settle(
+                    workflow_id=str(row.moonmind_workflow_id),
                     idempotency_key=idempotency_key,
                     outcome=canonical_outcome,
                     result_ref=str(receipt.get("durableAuditRef") or "") or None,
@@ -3880,6 +3881,7 @@ async def _record_facade_mutation_audit(
 
         provider_receipt_id = str(metadata.get("upstreamCorrelation") or "") or None
         await canonical_settle(
+            workflow_id=str(row.moonmind_workflow_id),
             idempotency_key=request_id,
             outcome=(
                 ControlPlaneOutcome.DELIVERY_UNKNOWN

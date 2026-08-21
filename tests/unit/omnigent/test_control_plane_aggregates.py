@@ -784,6 +784,7 @@ async def test_workflow_chat_uses_canonical_turn_and_command_authority(
     assert alias is not None and alias.session_id == session.session_id
 
     outcome = await service.settle(
+        workflow_id="wf-chat-command",
         idempotency_key="browser-message-1",
         outcome=ControlPlaneOutcome.APPLIED,
         provider_receipt_id="provider-receipt-1",
@@ -842,6 +843,7 @@ async def test_initial_command_uses_the_single_bootstrap_turn(
     assert turns[0].instruction_digest == "sha256:" + "7" * 64
 
     await service.settle(
+        workflow_id="wf-initial-command",
         idempotency_key="initial-command-idempotency",
         outcome=ControlPlaneOutcome.APPLIED,
     )
@@ -862,6 +864,36 @@ async def test_initial_command_uses_the_single_bootstrap_turn(
         ),
     )
     assert replay.outcome is ControlPlaneOutcome.ALREADY_APPLIED
+
+
+@pytest.mark.asyncio
+async def test_canonical_command_idempotency_is_scoped_to_workflow(store) -> None:
+    service = CanonicalTurnCommandService(store)
+    claims = []
+    for workflow_id in ("wf-scope-one", "wf-scope-two"):
+        claims.append(
+            await service.claim(
+                workflow_id=workflow_id,
+                provider_session_ref="",
+                chat_binding_id=None,
+                command_type="execute_admitted_plan",
+                idempotency_key="shared-client-key",
+                payload_digest="sha256:" + "8" * 64,
+                step_execution_id=f"step-{workflow_id}",
+                bootstrap=CanonicalSessionBootstrap(
+                    provider="omnigent",
+                    step_execution_id=f"step-{workflow_id}",
+                    agent_run_id=f"agent-{workflow_id}",
+                    source_idempotency_key="shared-client-key",
+                    execution_plan_ref=None,
+                ),
+            )
+        )
+
+    assert claims[0].session_id != claims[1].session_id
+    assert claims[0].command_id != claims[1].command_id
+    assert claims[0].idempotency_key != claims[1].idempotency_key
+    assert all(claim.owns_delivery for claim in claims)
 
 
 @pytest.mark.asyncio

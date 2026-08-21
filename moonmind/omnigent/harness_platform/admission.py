@@ -71,6 +71,7 @@ class HarnessAdmissionRegistration:
     implementation: HarnessImplementationIdentity
     host_class_ref: str
     integration_mode: str
+    provider_runtime_id: str
     materializer_ref: str
     accepted_auth_model: str
     model_route_ref: str
@@ -98,6 +99,7 @@ HARNESS_ADMISSION_REGISTRATIONS: dict[str, HarnessAdmissionRegistration] = {
         implementation=_implementation("e"),
         host_class_ref="omnigent-codex-current@1",
         integration_mode="native-server",
+        provider_runtime_id="codex_cli",
         materializer_ref="codex-oauth-home@1",
         accepted_auth_model="oauth_volume",
         model_route_ref="openai",
@@ -108,22 +110,19 @@ HARNESS_ADMISSION_REGISTRATIONS: dict[str, HarnessAdmissionRegistration] = {
         implementation=_implementation("a"),
         host_class_ref="omnigent-opencode@1",
         integration_mode="native-server",
+        provider_runtime_id="opencode_go",
         materializer_ref="opencode-auth-json@1",
         accepted_auth_model="own-auth",
         model_route_ref="opencode-go",
         catalog_capabilities=("interrupt", "streaming"),
     ),
-    "pi-native": HarnessAdmissionRegistration(
-        harness_id="pi-native",
-        implementation=_implementation("c"),
-        host_class_ref="omnigent-pi@1",
-        integration_mode="native-server",
-        materializer_ref="omnigent-provider-config@1",
-        accepted_auth_model="omnigent-provider-config",
-        model_route_ref="pi",
-        catalog_capabilities=("interrupt", "streaming"),
-    ),
 }
+
+NORMAL_PRODUCT_HARNESS_IDS = frozenset(HARNESS_ADMISSION_REGISTRATIONS)
+NORMAL_PRODUCT_PROVIDER_RUNTIME_IDS = frozenset(
+    registration.provider_runtime_id
+    for registration in HARNESS_ADMISSION_REGISTRATIONS.values()
+)
 
 
 def _mapping(value: Any, *, field_name: str) -> Mapping[str, Any]:
@@ -365,6 +364,11 @@ def compile_normal_product_execution_plan(
         ).strip()
         or None
     )
+    if model_id is None:
+        raise HarnessPlatformError(
+            "an explicit model is required before Omnigent host acquisition",
+            code=HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE,
+        )
     effort = (
         str(
             workflow_parameters.get("effort") or model_document.get("effort") or ""
@@ -521,6 +525,8 @@ async def compile_and_persist_execution_authority(
 
 
 __all__ = [
+    "NORMAL_PRODUCT_HARNESS_IDS",
+    "NORMAL_PRODUCT_PROVIDER_RUNTIME_IDS",
     "HARNESS_ADMISSION_REGISTRATIONS",
     "HarnessAdmissionRegistration",
     "compile_and_persist_execution_authority",

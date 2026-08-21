@@ -204,6 +204,7 @@ class GenericOmnigentHostRealizer:
         binding = None
         host_authority_binding_ref: str | None = None
         try:
+            previous_binding = await binding_store.latest_for_plan(plan.planRef)
             acquired = await runtime_authority.acquire(
                 request=request,
                 plan=plan,
@@ -229,82 +230,110 @@ class GenericOmnigentHostRealizer:
                         ),
                     )
                 handles_by_slot[slot] = dict(handle)
-            binding = await binding_store.create_initial(
-                execution_plan_ref=plan.planRef,
-                provider_leases=dict(acquired.provider_leases),
-                credential_handles=handles_by_slot,
-            )
+            if previous_binding is not None and previous_binding.hostBindingRef:
+                expected_leases = {
+                    slot: lease.model_dump(by_alias=True, mode="json")
+                    for slot, lease in previous_binding.providerLeases.items()
+                }
+                if expected_leases != acquired.provider_leases:
+                    raise HarnessPlatformError(
+                        "persisted host authority differs from reacquired Provider "
+                        "Profile generations",
+                        code=(
+                            HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT
+                        ),
+                    )
+                binding = previous_binding
+                existing_host_authority = True
+            else:
+                binding = await binding_store.create_initial(
+                    execution_plan_ref=plan.planRef,
+                    provider_leases=dict(acquired.provider_leases),
+                    credential_handles=handles_by_slot,
+                )
             host_authority_binding_ref = binding.runtimeBindingRef
             await turn_commands.bind_runtime_authority(
                 session_id=command_claim.session_id,
                 execution_plan_ref=plan.planRef,
                 runtime_binding_ref=binding.runtimeBindingRef,
             )
-            existing_host_authority = binding.hostBindingRef is not None
             if existing_host_authority:
-                raise HarnessPlatformError(
-                    "an existing host binding requires reconciliation; refusing "
-                    "to launch a duplicate host",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                host_context = {
+                    "hostId": binding.omnigentHostId,
+                    "omnigentHostId": binding.omnigentHostId,
+                    "hostBindingRef": binding.hostBindingRef,
+                    "hostLeaseRef": binding.hostLeaseRef,
+                    "hostLeaseGeneration": binding.hostLeaseGeneration,
+                    "hostClassRef": host_class.ref,
+                    "launchPolicyRef": launch_policy.ref,
+                    "workspacePath": "/workspaces/run",
+                }
+                host_realized = True
+            else:
+                host_context = await host_runtime.realize(
+                    request=request,
+                    plan=plan,
+                    host_class=host_class,
+                    launch_policy=launch_policy,
+                    credential_handles=list(acquired.credential_handles),
+                    runtime_binding_ref=binding.runtimeBindingRef,
+                    command_authority=command_authority,
                 )
-            host_context = await host_runtime.realize(
-                request=request,
-                plan=plan,
-                host_class=host_class,
-                launch_policy=launch_policy,
-                credential_handles=list(acquired.credential_handles),
-                runtime_binding_ref=binding.runtimeBindingRef,
-                command_authority=command_authority,
-            )
-            host_realized = True
-            required_host_fields = {
-                "hostBindingRef": host_context.get("hostBindingRef"),
-                "hostLeaseRef": host_context.get("hostLeaseRef"),
-                "hostLeaseGeneration": host_context.get("hostLeaseGeneration"),
-                "omnigentHostId": host_context.get("omnigentHostId")
-                or host_context.get("hostId"),
-            }
-            missing = sorted(
-                key for key, value in required_host_fields.items() if value in {None, ""}
-            )
-            if missing:
-                raise HarnessPlatformError(
-                    "host realization omitted exact runtime-binding authority: "
-                    + ", ".join(missing),
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                host_realized = True
+                required_host_fields = {
+                    "hostBindingRef": host_context.get("hostBindingRef"),
+                    "hostLeaseRef": host_context.get("hostLeaseRef"),
+                    "hostLeaseGeneration": host_context.get("hostLeaseGeneration"),
+                    "omnigentHostId": host_context.get("omnigentHostId")
+                    or host_context.get("hostId"),
+                }
+                missing = sorted(
+                    key
+                    for key, value in required_host_fields.items()
+                    if value in {None, ""}
                 )
-            binding = await binding_store.update_with_host(
-                binding.runtimeBindingRef,
-                host_binding_ref=str(required_host_fields["hostBindingRef"]),
-                host_lease_ref=str(required_host_fields["hostLeaseRef"]),
-                host_lease_generation=int(
-                    required_host_fields["hostLeaseGeneration"]
-                ),
-                omnigent_host_id=str(required_host_fields["omnigentHostId"]),
-                host_harness_attestation_ref=host_context.get(
-                    "hostHarnessAttestationRef"
-                ),
-                exact_host_capability_decision_ref=host_context.get(
-                    "exactHostCapabilityDecisionRef"
-                ),
-                workspace_resolution_ref=host_context.get(
-                    "workspaceResolutionRef"
-                ),
-                model_option_attestation_ref=host_context.get(
-                    "modelOptionAttestationRef"
-                ),
-                skill_delivery_attestation_ref=host_context.get(
-                    "skillDeliveryAttestationRef"
-                ),
-            )
-            await turn_commands.bind_runtime_authority(
-                session_id=command_claim.session_id,
-                execution_plan_ref=plan.planRef,
-                runtime_binding_ref=binding.runtimeBindingRef,
-            )
+                if missing:
+                    raise HarnessPlatformError(
+                        "host realization omitted exact runtime-binding authority: "
+                        + ", ".join(missing),
+                        code=(
+                            HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT
+                        ),
+                    )
+                binding = await binding_store.update_with_host(
+                    binding.runtimeBindingRef,
+                    host_binding_ref=str(required_host_fields["hostBindingRef"]),
+                    host_lease_ref=str(required_host_fields["hostLeaseRef"]),
+                    host_lease_generation=int(
+                        required_host_fields["hostLeaseGeneration"]
+                    ),
+                    omnigent_host_id=str(required_host_fields["omnigentHostId"]),
+                    host_harness_attestation_ref=host_context.get(
+                        "hostHarnessAttestationRef"
+                    ),
+                    exact_host_capability_decision_ref=host_context.get(
+                        "exactHostCapabilityDecisionRef"
+                    ),
+                    workspace_resolution_ref=host_context.get(
+                        "workspaceResolutionRef"
+                    ),
+                    model_option_attestation_ref=host_context.get(
+                        "modelOptionAttestationRef"
+                    ),
+                    skill_delivery_attestation_ref=host_context.get(
+                        "skillDeliveryAttestationRef"
+                    ),
+                )
+                await turn_commands.bind_runtime_authority(
+                    session_id=command_claim.session_id,
+                    execution_plan_ref=plan.planRef,
+                    runtime_binding_ref=binding.runtimeBindingRef,
+                )
             enriched = self._bind_host_to_request(
                 request,
                 host_context,
+                plan=plan,
+                binding=binding,
                 runtime_binding_ref=binding.runtimeBindingRef,
             )
             result = await dependencies.execution_driver(enriched)
@@ -346,7 +375,6 @@ class GenericOmnigentHostRealizer:
                         "bridgeSessionId": metadata.get("bridgeSessionId"),
                         "externalStateRef": metadata.get("externalStateRef"),
                         "captureManifestRef": metadata.get("captureManifestRef"),
-                        "effectiveLaunchRef": binding.hostHarnessAttestationRef,
                         "executionProfileRef": plan.payload.agentProfileSnapshotRef,
                         "launchPolicyRef": plan.payload.launchPolicyRef,
                         "executionPlanRef": plan.planRef,
@@ -374,6 +402,7 @@ class GenericOmnigentHostRealizer:
             from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 
             await turn_commands.settle(
+                workflow_id=workflow_id,
                 idempotency_key=request.idempotency_key,
                 outcome=ControlPlaneOutcome.APPLIED,
                 provider_receipt_id=provider_session_id or None,
@@ -389,6 +418,7 @@ class GenericOmnigentHostRealizer:
 
             try:
                 await turn_commands.settle(
+                    workflow_id=workflow_id,
                     idempotency_key=request.idempotency_key,
                     outcome=ControlPlaneOutcome.DELIVERY_UNKNOWN,
                 )
@@ -436,6 +466,8 @@ class GenericOmnigentHostRealizer:
         request: AgentExecutionRequest,
         host_context: dict[str, Any],
         *,
+        plan: OmnigentExecutionPlanEnvelope,
+        binding: Any,
         runtime_binding_ref: str,
     ) -> AgentExecutionRequest:
         """Build the secret-free authorization block consumed by the driver."""
@@ -449,11 +481,27 @@ class GenericOmnigentHostRealizer:
         )
         session["workspace"] = str(host_context.get("workspacePath"))
         omnigent["session"] = session
-        omnigent["_moonmindProfileAuthorization"] = {
+        primary_lease = binding.providerLeases.get("primary-model")
+        profile_authorization = {
             "hostClassRef": host_context.get("hostClassRef"),
             "launchPolicyRef": host_context.get("launchPolicyRef"),
             "executionRealizerRef": self.ref,
+            "executionPlanRef": plan.planRef,
+            "runtimeBindingRef": runtime_binding_ref,
+            "endpointRef": plan.payload.endpointRef,
+            "hostBindingRef": binding.hostBindingRef,
+            "hostLeaseRef": binding.hostLeaseRef,
+            "omnigentHostId": binding.omnigentHostId,
         }
+        if primary_lease is not None:
+            profile_authorization.update(
+                {
+                    "providerProfileId": primary_lease.providerProfileRef,
+                    "providerLeaseRef": primary_lease.providerLeaseRef,
+                    "credentialGeneration": primary_lease.credentialGeneration,
+                }
+            )
+        omnigent["_moonmindProfileAuthorization"] = profile_authorization
         parameters["omnigent"] = omnigent
         parameters["runtimeBindingRef"] = runtime_binding_ref
         return request.model_copy(update={"parameters": parameters})

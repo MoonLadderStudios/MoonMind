@@ -31,10 +31,12 @@ def omnigent_session_workflow_id(session_id: str) -> str:
     return f"omnigent-session:{session_id}"
 
 
-def canonical_turn_command_key(idempotency_key: str) -> str:
+def canonical_turn_command_key(workflow_id: str, idempotency_key: str) -> str:
     """Return the workflow-scoped durable key for one instruction delivery."""
 
-    return f"omnigent-turn-command:{idempotency_key}"
+    return "omnigent-turn-command:" + compute_digest(
+        ["workflow", workflow_id, idempotency_key]
+    )
 
 
 def canonical_turn_claim_token(command_key: str) -> str:

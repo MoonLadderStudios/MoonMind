@@ -32,7 +32,12 @@ from moonmind.workflows.temporal.remediation_workspace_head import (
     advance_head,
     freeze_attempt_input,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
+    RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+    RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
+    MoonMindRunWorkflow,
+)
 from tests.unit.api.routers.test_executions import (
     _build_execution_record,
     _override_user_dependencies,
@@ -136,7 +141,36 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     app.dependency_overrides[_get_service] = lambda: service
     app.dependency_overrides[get_temporal_client] = AsyncMock
     _override_user_dependencies(app, is_superuser=False)
-    with TestClient(app) as client:
+    profile_snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "omnigent-codex",
+        "executionProfileRef": "omnigent-host-codex",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "codex-native-ui",
+        "document": {
+            "endpointRef": "default",
+            "harness": "codex-native",
+            "model": {"model": "gpt-5"},
+            "capture": {},
+            "rag": {},
+            "publish": {},
+            "workspace": {},
+        },
+    }
+    with patch(
+        "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
+        AsyncMock(return_value=profile_snapshot),
+    ), patch(
+        "api_service.api.routers.executions.compile_and_persist_execution_authority",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                planRef="omnigent-execution-plan:sha256:" + "b" * 64
+            )
+        ),
+    ), TestClient(app) as client:
         response = client.post("/api/executions", json={
             "type": "workflow",
             "payload": {
@@ -170,6 +204,14 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
         return_value=SimpleNamespace(
             workflow_id="mm:wf-3480", run_id="run-1", namespace="default"
         ),
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda patch_id: patch_id
+        in {
+            RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
+            RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+            RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
+        },
     ):
         compiled = compiler._build_agent_execution_request(
             node_inputs={
@@ -179,7 +221,6 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
                         "executionProfileRef"
                     ],
                 },
-                "omnigent": {"harness": "codex-native"},
             },
             node_id="initial-implementation",
             tool_name="omnigent",
@@ -188,7 +229,15 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     assert compiled.agent_kind == "external"
     assert compiled.agent_id == "omnigent"
     assert compiled.execution_profile_ref == "omnigent-codex"
-    assert compiled.parameters["omnigent"] == {"harness": "codex-native"}
+    assert compiled.parameters["executionPlanRef"].startswith(
+        "omnigent-execution-plan:sha256:"
+    )
+    assert compiled.parameters["omnigent"]["executionTargetRef"] == (
+        "omnigent-host-codex"
+    )
+    assert compiled.parameters["omnigent"]["agent"]["harnessOverride"] == (
+        "codex-native"
+    )
     assert compiled.step_execution.workflow_id == "mm:wf-3480"
 
     artifacts = _CheckpointStore(tmp_path / "artifacts")

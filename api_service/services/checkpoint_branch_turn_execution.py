@@ -1030,6 +1030,7 @@ class CheckpointBranchTurnExecutionOwner:
             await self._start_claimed_turn(branch=branch, turn=turn, binding=binding)
             if canonical_claim.outcome is ControlPlaneOutcome.APPLIED:
                 await source_command.settle(
+                    workflow_id=checkpoint.omnigent.workflow_id,
                     idempotency_key=turn.idempotency_key,
                     outcome=ControlPlaneOutcome.APPLIED,
                     result_ref=str(turn.step_execution_manifest_ref or "") or None,
@@ -1346,6 +1347,7 @@ class CheckpointBranchTurnExecutionOwner:
         await self._session.commit()
         await self._start_claimed_turn(branch=branch, turn=claimed, binding=binding)
         await source_command.settle(
+            workflow_id=checkpoint.omnigent.workflow_id,
             idempotency_key=turn.idempotency_key,
             outcome=ControlPlaneOutcome.APPLIED,
             result_ref=manifest_ref,

@@ -366,6 +366,21 @@ async def _try_generic_realizer_dispatch(
                 providerErrorCode="OMNIGENT_EXECUTION_PLAN_UNAVAILABLE",
                 retryRecommendation="retry_transient_upstream",
             )
+        from moonmind.omnigent.harness_platform.execution_plan import (
+            bind_runtime_request_authority,
+        )
+
+        bound_plan = bind_runtime_request_authority(
+            persisted,
+            resolved_skillset_ref=request.resolved_skillset_ref,
+            model=params.get("model"),
+            effort=params.get("effort") if "effort" in params else None,
+        )
+        if bound_plan.planRef != persisted.planRef:
+            bound_plan = await plan_store.persist(bound_plan)
+            params = {**params, "executionPlanRef": bound_plan.planRef}
+            request = request.model_copy(update={"parameters": params})
+            persisted = bound_plan
         if realizer_registry is None:
             from moonmind.omnigent.realizers.registry import get_default_registry
 
