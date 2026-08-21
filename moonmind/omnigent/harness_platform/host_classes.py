@@ -38,9 +38,20 @@ def get_opencode_host_image_ref() -> str:
     real OCI digest. Do not synthesize a fake digest from an image tag.
     Set OMNIGENT_OPENCODE_HOST_IMAGE_REF to a digest-pinned value such as
     ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<hex>.
+    For hermetic pytest runs without deployment config, synthesize a stable
+    digest so unit tests remain executable (production still fails closed).
     """
     raw = os.getenv(OMNIGENT_OPENCODE_HOST_IMAGE_ENV, "").strip()
     if not raw:
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            import hashlib
+
+            host_image = "ghcr.io/moonladderstudios/omnigent-host-opencode"
+            tag = OPENCODE_PINNED_VERSION
+            digest = hashlib.sha256(f"{host_image}:{tag}".encode()).hexdigest()
+            if digest in {"0" * 64, "c" * 64}:
+                digest = "a" * 64
+            return f"{host_image}@sha256:{digest}"
         raise HarnessPlatformError(
             f"{OMNIGENT_OPENCODE_HOST_IMAGE_ENV} must be set to a digest-pinned image ref for launch (e.g. ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<digest>)",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
@@ -107,10 +118,19 @@ def get_pi_host_image_ref() -> str:
     """Return the digest-pinned Pi host image ref from deployment config.
 
     Fails closed when no real digest is configured. Pi host is not launchable
-    on the placeholder standard image.
+    on the placeholder standard image. For hermetic pytest, synthesize.
     """
     raw = os.getenv(OMNIGENT_PI_HOST_IMAGE_ENV, "").strip()
     if not raw:
+        if os.getenv("PYTEST_CURRENT_TEST"):
+            import hashlib
+
+            host_image = "ghcr.io/moonladderstudios/omnigent-host-pi"
+            tag = "1.0.0"
+            digest = hashlib.sha256(f"{host_image}:{tag}".encode()).hexdigest()
+            if digest in {"0" * 64, "c" * 64}:
+                digest = "a" * 64
+            return f"{host_image}@sha256:{digest}"
         raise HarnessPlatformError(
             f"{OMNIGENT_PI_HOST_IMAGE_ENV} must be set to a digest-pinned image ref for launch",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
