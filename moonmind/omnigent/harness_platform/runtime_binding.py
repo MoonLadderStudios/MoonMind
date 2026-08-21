@@ -37,10 +37,14 @@ class OmnigentRuntimeBinding(BaseModel):
     runtimeBindingRef: str = Field(alias="runtimeBindingRef")
     executionPlanRef: str = Field(alias="executionPlanRef")
     providerLeases: dict[str, RuntimeBindingProviderLease] = Field(alias="providerLeases")
-    hostBindingRef: str = Field(alias="hostBindingRef")
-    hostLeaseRef: str = Field(alias="hostLeaseRef")
-    hostLeaseGeneration: int = Field(alias="hostLeaseGeneration")
-    omnigentHostId: str = Field(alias="omnigentHostId")
+    # Host authority is intentionally absent in the first immutable stage. It
+    # is added only after the host lease has been acquired and attested.
+    hostBindingRef: str | None = Field(default=None, alias="hostBindingRef")
+    hostLeaseRef: str | None = Field(default=None, alias="hostLeaseRef")
+    hostLeaseGeneration: int | None = Field(
+        default=None, alias="hostLeaseGeneration"
+    )
+    omnigentHostId: str | None = Field(default=None, alias="omnigentHostId")
     hostHarnessAttestationRef: str | None = Field(default=None, alias="hostHarnessAttestationRef")
     exactHostCapabilityDecisionRef: str | None = Field(default=None, alias="exactHostCapabilityDecisionRef")
     workspaceResolutionRef: str | None = Field(default=None, alias="workspaceResolutionRef")
@@ -55,8 +59,18 @@ class OmnigentRuntimeBinding(BaseModel):
             raise ValueError("executionPlanRef invalid")
         if not self.runtimeBindingRef.startswith("omnigent-runtime-binding:sha256:"):
             raise ValueError("runtimeBindingRef invalid")
-        # hostLeaseGeneration must be positive
-        if self.hostLeaseGeneration < 1:
+        host_values = (
+            self.hostBindingRef,
+            self.hostLeaseRef,
+            self.hostLeaseGeneration,
+            self.omnigentHostId,
+        )
+        if any(value is not None for value in host_values) and not all(
+            value is not None for value in host_values
+        ):
+            raise ValueError("runtime binding host authority must be added atomically")
+        # hostLeaseGeneration must be positive after host acquisition.
+        if self.hostLeaseGeneration is not None and self.hostLeaseGeneration < 1:
             raise ValueError("hostLeaseGeneration must be >=1")
         for slot, lease in self.providerLeases.items():
             if lease.credentialGeneration < 1:
@@ -81,10 +95,10 @@ def create_runtime_binding(
     *,
     executionPlanRef: str,
     providerLeases: dict[str, dict[str, Any]],
-    hostBindingRef: str,
-    hostLeaseRef: str,
-    hostLeaseGeneration: int,
-    omnigentHostId: str,
+    hostBindingRef: str | None = None,
+    hostLeaseRef: str | None = None,
+    hostLeaseGeneration: int | None = None,
+    omnigentHostId: str | None = None,
     hostHarnessAttestationRef: str | None = None,
     exactHostCapabilityDecisionRef: str | None = None,
     workspaceResolutionRef: str | None = None,

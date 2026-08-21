@@ -1853,6 +1853,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "effectiveLaunchRef": effective_launch["snapshotRef"],
                 "executionProfileRef": effective_launch["executionProfileRef"],
                 "launchPolicyRef": effective_launch["launchPolicyRef"],
+                "executionPlanRef": str(
+                    (request.parameters or {}).get("executionPlanRef") or ""
+                ).strip()
+                or None,
                 # The full attestation includes the compiled launch-policy
                 # boundary and is already durable behind this reference. Keep
                 # the workflow result plane reference-only so terminal evidence

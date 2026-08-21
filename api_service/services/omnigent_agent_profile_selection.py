@@ -345,6 +345,105 @@ async def resolve_agent_profile_snapshot(
     return snapshot
 
 
+async def resolve_default_agent_profile_snapshot(
+    session: AsyncSession,
+    *,
+    provider_profile_ref: str | None,
+    launch_policy_ref: str | None,
+    consumer_type: str,
+    consumer_id: str,
+    user: User | None,
+) -> dict[str, Any]:
+    """Resolve the deployment-managed default into explicit launch authority.
+
+    The default is selected only at API admission.  The returned immutable
+    snapshot is then compiled into the same plan as an explicitly authored
+    Agent Profile, so workers never repeat default/profile resolution.
+    """
+
+    profile = await session.scalar(
+        select(OmnigentAgentProfile)
+        .where(OmnigentAgentProfile.default_for_runtime.is_(True))
+        .limit(1)
+    )
+    if profile is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "default Omnigent Agent Profile is unavailable",
+        )
+    if profile.state != "active" or profile.active_version is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "default Omnigent Agent Profile is not launch ready",
+        )
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == profile.profile_id,
+            OmnigentAgentProfileVersion.version == profile.active_version,
+        )
+    )
+    if version is None or not isinstance(version.document, Mapping):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "default Omnigent Agent Profile version is unavailable",
+        )
+    selected_provider_ref = str(provider_profile_ref or "").strip()
+    if not selected_provider_ref:
+        requirements = version.document.get("providerRequirements") or {}
+        query = (
+            select(ManagedAgentProviderProfile)
+            .where(
+                ManagedAgentProviderProfile.enabled.is_(True),
+                ManagedAgentProviderProfile.runtime_id
+                == requirements.get("runtimeId"),
+                ManagedAgentProviderProfile.credential_source
+                == requirements.get("credentialSource"),
+                ManagedAgentProviderProfile.runtime_materialization_mode
+                == requirements.get("materializationMode"),
+            )
+            .order_by(
+                ManagedAgentProviderProfile.is_default.desc(),
+                ManagedAgentProviderProfile.priority.desc(),
+                ManagedAgentProviderProfile.profile_id.asc(),
+            )
+        )
+        if requirements.get("providerIds"):
+            query = query.where(
+                ManagedAgentProviderProfile.provider_id.in_(
+                    requirements["providerIds"]
+                )
+            )
+        candidates = list((await session.scalars(query)).all())
+        selected = next(
+            (item for item in candidates if provider_profile_launch_ready(item)),
+            None,
+        )
+        if selected is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "no launch-ready Provider Profile matches the default Omnigent "
+                "Agent Profile",
+            )
+        selected_provider_ref = selected.profile_id
+    selection = {
+        "profileId": profile.profile_id,
+        "version": profile.active_version,
+        "providerProfileRef": selected_provider_ref,
+        **(
+            {"launchPolicyRef": str(launch_policy_ref).strip()}
+            if str(launch_policy_ref or "").strip()
+            else {}
+        ),
+    }
+    return await resolve_agent_profile_snapshot(
+        session,
+        selection=selection,
+        consumer_type=consumer_type,
+        consumer_id=consumer_id,
+        user=user,
+    )
+
+
 async def refresh_managed_bootstrap_snapshot(
     session: AsyncSession,
     *,
@@ -468,4 +567,5 @@ __all__ = [
     "compile_agent_profile_snapshot_parameters",
     "refresh_managed_bootstrap_snapshot",
     "resolve_agent_profile_snapshot",
+    "resolve_default_agent_profile_snapshot",
 ]

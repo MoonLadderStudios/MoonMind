@@ -4626,27 +4626,49 @@ def test_create_task_shaped_execution_preserves_omnigent_selection(
 ) -> None:
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    snapshot = {
+        "profileId": "default",
+        "version": 1,
+        "digest": "sha256:" + "1" * 64,
+        "providerProfileRef": "codex-oauth-profile",
+        "executionProfileRef": "on-demand-docker",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "codex-native-ui",
+        "document": {"model": {}, "rag": {}, "capture": {}, "workspace": {}},
+    }
+    plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
 
-    response = test_client.post(
-        "/api/executions",
-        json={
-            "type": "workflow",
-            "payload": {
-                "targetRuntime": "omnigent",
-                "omnigent": {
-                    "executionTargetRef": "on-demand-docker",
-                    "launchPolicyRef": "codex-on-demand@1",
-                },
-                "workflow": {
-                    "instructions": "Run through Omnigent.",
-                    "runtime": {
-                        "mode": "omnigent",
-                        "executionProfileRef": "codex-oauth-profile",
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "api_service.api.routers.executions.compile_and_persist_execution_authority",
+            new=AsyncMock(return_value=SimpleNamespace(planRef=plan_ref)),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "omnigent": {
+                        "executionTargetRef": "on-demand-docker",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run through Omnigent.",
+                        "runtime": {
+                            "mode": "omnigent",
+                            "executionProfileRef": "codex-oauth-profile",
+                        },
                     },
                 },
             },
-        },
-    )
+        )
 
     assert response.status_code == 201, response.text
     initial_parameters = service.create_execution.await_args.kwargs[
@@ -4661,6 +4683,7 @@ def test_create_task_shaped_execution_preserves_omnigent_selection(
         "mode": "omnigent",
         "executionProfileRef": "codex-oauth-profile",
     }
+    assert initial_parameters["executionPlanRef"] == plan_ref
 
 
 def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
@@ -4687,9 +4710,20 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
     }
 
     profile_resolver = AsyncMock(return_value=snapshot)
-    with patch(
-        "api_service.api.routers.executions.resolve_agent_profile_snapshot",
-        new=profile_resolver,
+    authority_compiler = AsyncMock(
+        return_value=SimpleNamespace(
+            planRef="omnigent-execution-plan:sha256:" + "b" * 64
+        )
+    )
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            new=profile_resolver,
+        ),
+        patch(
+            "api_service.api.routers.executions.compile_and_persist_execution_authority",
+            new=authority_compiler,
+        ),
     ):
         response = test_client.post(
             "/api/executions",
@@ -4723,6 +4757,15 @@ def test_create_execution_keeps_resolved_agent_profile_out_of_authored_omnigent(
         "initial_parameters"
     ]
     assert initial_parameters["agentProfileSnapshot"] == snapshot
+    assert initial_parameters["executionPlanRef"] == (
+        "omnigent-execution-plan:sha256:" + "b" * 64
+    )
+    assert authority_compiler.await_args.kwargs["workflow_id"].startswith("mm:")
+    assert (
+        authority_compiler.await_args.kwargs["workflow_parameters"]
+        ["agentProfileSnapshot"]
+        == snapshot
+    )
     assert initial_parameters["profileId"] == "codex-openai-oauth"
     assert initial_parameters["omnigent"] == {
         "executionTargetRef": "omnigent-codex@1",
@@ -6322,26 +6365,48 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
 
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    snapshot = {
+        "profileId": "default",
+        "version": 1,
+        "digest": "sha256:" + "2" * 64,
+        "providerProfileRef": "codex-oauth-profile",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "codex-native-ui",
+        "document": {"model": {}, "rag": {}, "capture": {}, "workspace": {}},
+    }
+    plan_ref = "omnigent-execution-plan:sha256:" + "b" * 64
 
-    response = test_client.post(
-        "/api/executions",
-        json={
-            "type": "task",
-            "payload": {
-                "repository": "MoonLadderStudios/MoonMind",
-                "targetRuntime": "omnigent",
-                "omnigent": {
-                    "executionTargetRef": "omnigent-codex@1",
-                    "launchPolicyRef": "codex-on-demand@1",
-                },
-                "task": {
-                    "instructions": "Make the bounded deterministic change.",
-                    "git": {"branch": "main"},
-                    "runtime": {"mode": "omnigent"},
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "api_service.api.routers.executions.compile_and_persist_execution_authority",
+            new=AsyncMock(return_value=SimpleNamespace(planRef=plan_ref)),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "omnigent",
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-codex@1",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "task": {
+                        "instructions": "Make the bounded deterministic change.",
+                        "git": {"branch": "main"},
+                        "runtime": {"mode": "omnigent"},
+                    },
                 },
             },
-        },
-    )
+        )
 
     assert response.status_code == 201
     initial_parameters = service.create_execution.await_args.kwargs[
@@ -6358,6 +6423,7 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
     assert initial_parameters["instructions"] == (
         "Make the bounded deterministic change."
     )
+    assert initial_parameters["executionPlanRef"] == plan_ref
     serialized = json.dumps(initial_parameters)
     assert all(
         forbidden not in serialized

@@ -20,7 +20,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from moonmind.omnigent.harness_platform.execution_plan import OmnigentExecutionPlanEnvelope
+from moonmind.omnigent.harness_platform.execution_plan import (
+    OmnigentExecutionPlanEnvelope,
+    execution_support_identity,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 
@@ -75,7 +78,13 @@ class CodexProfileBoundRealizer:
                 run_store=run_store,
                 artifact_gateway=artifact_gateway,
             )
-            return await coordinator.execute(request)
+            result = await coordinator.execute(request)
+            return await self._bind_result_authority(
+                request=request,
+                plan=plan,
+                result=result,
+                session_factory=session_factory,
+            )
 
         async with httpx.AsyncClient() as http_client:
             omnigent_client = OmnigentHttpClient(
@@ -99,12 +108,95 @@ class CodexProfileBoundRealizer:
                 execution_runner=run_omnigent_execution,
                 artifact_gateway=artifact_gateway,
             )
-            return await coordinator.execute(request)
+            result = await coordinator.execute(request)
+            return await self._bind_result_authority(
+                request=request,
+                plan=plan,
+                result=result,
+                session_factory=session_factory,
+            )
+
+    async def _bind_result_authority(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        result: AgentRunResult,
+        session_factory: Any,
+    ) -> AgentRunResult:
+        """Project the proven Codex lane into the common runtime binding."""
+
+        request_plan_ref = str(
+            (request.parameters or {}).get("executionPlanRef") or ""
+        ).strip()
+        if request_plan_ref != plan.planRef:
+            from moonmind.omnigent.harness_platform.failures import (
+                HarnessPlatformError,
+                HarnessPlatformFailure,
+            )
+
+            raise HarnessPlatformError(
+                "Codex request does not name the admitted execution plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        metadata = dict(result.metadata or {})
+        metadata["executionPlanRef"] = plan.planRef
+        metadata["supportCombinationIdentity"] = execution_support_identity(plan)
+        capture = dict(metadata.get("omnigentCheckpointCapture") or {})
+        if capture:
+            capture["executionPlanRef"] = plan.planRef
+        required = {
+            "providerProfileId",
+            "providerLeaseRef",
+            "credentialGeneration",
+            "credentialRef",
+            "hostBindingRef",
+            "hostLeaseRef",
+            "hostLeaseGeneration",
+            "omnigentHostId",
+        }
+        if required.issubset(capture) and all(capture.get(key) for key in required):
+            from moonmind.omnigent.harness_platform.stores import (
+                DbRuntimeBindingStore,
+            )
+
+            store = DbRuntimeBindingStore(session_factory)
+            binding = await store.create_initial(
+                execution_plan_ref=plan.planRef,
+                provider_leases={
+                    "primary-model": {
+                        "providerProfileRef": str(capture["providerProfileId"]),
+                        "providerLeaseRef": str(capture["providerLeaseRef"]),
+                        "credentialGeneration": int(capture["credentialGeneration"]),
+                        "credentialRuntimeRef": str(capture["credentialRef"]),
+                    }
+                },
+            )
+            binding = await store.update_with_host(
+                binding.runtimeBindingRef,
+                host_binding_ref=str(capture["hostBindingRef"]),
+                host_lease_ref=str(capture["hostLeaseRef"]),
+                host_lease_generation=int(capture["hostLeaseGeneration"]),
+                omnigent_host_id=str(capture["omnigentHostId"]),
+            )
+            provider_session_id = str(capture.get("omnigentSessionId") or "").strip()
+            if provider_session_id:
+                binding = await store.update_with_session(
+                    binding.runtimeBindingRef,
+                    omnigent_session_id=provider_session_id,
+                )
+            metadata["runtimeBindingRef"] = binding.runtimeBindingRef
+            capture["runtimeBindingRef"] = binding.runtimeBindingRef
+        if capture:
+            metadata["omnigentCheckpointCapture"] = capture
+        return result.model_copy(update={"metadata": metadata})
 
     async def reconcile(
         self,
         plan_ref: str,
         runtime_binding_ref: str | None,
+        *,
+        command_authority: dict[str, object],
     ) -> None:
         # Janitor delegates to existing cleanup; no-op for now
         return None

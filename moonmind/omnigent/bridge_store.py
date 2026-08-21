@@ -432,6 +432,64 @@ class OmnigentBridgeSessionStore:
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
 
+    async def claim_canonical_turn_command(
+        self,
+        *,
+        row: Any,
+        command_type: str,
+        idempotency_key: str,
+        payload_digest: str,
+    ) -> Any:
+        """Claim the shared #3701 session/turn/command authority.
+
+        The bridge store supplies only persistence composition.  Turn semantics
+        remain in the transport-neutral control-plane application service.
+        """
+
+        from moonmind.omnigent.control_plane.turn_commands import (
+            CanonicalSessionBootstrap,
+            CanonicalTurnCommandService,
+        )
+
+        launch = dict(row.effective_launch_snapshot_json or {})
+
+        return await CanonicalTurnCommandService(self._session_factory).claim(
+            workflow_id=str(row.moonmind_workflow_id),
+            provider_session_ref=str(row.omnigent_session_id or ""),
+            chat_binding_id=str(row.chat_binding_id or "") or None,
+            command_type=command_type,
+            idempotency_key=idempotency_key,
+            payload_digest=payload_digest,
+            step_execution_id=str(row.step_execution_id or "") or None,
+            bootstrap=CanonicalSessionBootstrap(
+                provider=str(row.provider),
+                step_execution_id=str(row.step_execution_id or row.bridge_session_id),
+                agent_run_id=str(row.moonmind_agent_run_id),
+                source_idempotency_key=str(row.idempotency_key),
+                execution_plan_ref=str(launch.get("executionPlanRef") or "")
+                or None,
+            ),
+        )
+
+    async def settle_canonical_turn_command(
+        self,
+        *,
+        idempotency_key: str,
+        outcome: Any,
+        provider_receipt_id: str | None = None,
+        result_ref: str | None = None,
+    ) -> Any:
+        from moonmind.omnigent.control_plane.turn_commands import (
+            CanonicalTurnCommandService,
+        )
+
+        return await CanonicalTurnCommandService(self._session_factory).settle(
+            idempotency_key=idempotency_key,
+            outcome=outcome,
+            provider_receipt_id=provider_receipt_id,
+            result_ref=result_ref,
+        )
+
     async def list_embedded_host_readiness(self) -> list[dict[str, Any]]:
         """Return bounded, non-secret readiness for active embedded host leases."""
         from api_service.db.models import OmnigentOAuthHostLeaseRecord

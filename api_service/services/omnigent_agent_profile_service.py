@@ -12,10 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentUpstreamAgentProjection
 
-# Generic harness support (Phase 5): synchronized catalog + trust records own launchability.
-# Only harnesses with a declared Host Class and approved materializer are launchable.
-# Keep explicit allowlist minimal; qwen/claude remain quarantined until Host Class exists.
-_SUPPORTED_HARNESSES = {"codex-native", "opencode-native", "pi-native"}
 _MAX_INVENTORY = 500
 _INVENTORY_FRESHNESS_TTL = timedelta(minutes=5)
 _METADATA_TEXT_LIMIT = 512
@@ -136,6 +132,10 @@ async def synchronize_upstream_inventory(
     now: datetime | None = None,
 ) -> int:
     """Upsert one bounded last-known projection and mark disappearances unavailable."""
+    from moonmind.omnigent.harness_platform.admission import (
+        HARNESS_ADMISSION_REGISTRATIONS,
+    )
+
     observed_at = now or datetime.now(timezone.utc)
     rows = list(inventory[:_MAX_INVENTORY])
     seen: set[str] = set()
@@ -153,7 +153,7 @@ async def synchronize_upstream_inventory(
             if isinstance(capabilities, list)
             else set()
         )
-        compatible = harness in _SUPPORTED_HARNESSES or (
+        compatible = harness in HARNESS_ADMISSION_REGISTRATIONS or (
             not harness and "codex-native" in capability_values
         )
         projection = await session.get(OmnigentUpstreamAgentProjection, projection_id)

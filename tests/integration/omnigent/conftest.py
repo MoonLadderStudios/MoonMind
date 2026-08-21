@@ -27,14 +27,21 @@ from api_service.db.models import (
     OmnigentChatBindingAlias,
     OmnigentCleanupAuthority,
     OmnigentCommand,
+    OmnigentExecutionPlanRecord,
     OmnigentObservation,
     OmnigentReconciliationDecision,
+    OmnigentRuntimeBindingRecord,
     OmnigentSession,
     OmnigentTurnAttempt,
 )
 from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
 
 _CONTROL_PLANE_TABLES = [
+    # MoonLadderStudios/MoonMind#3701: the canonical session now has foreign
+    # keys to the immutable admission authority, so PostgreSQL integration
+    # fixtures must exercise those real handoff tables too.
+    OmnigentExecutionPlanRecord.__table__,
+    OmnigentRuntimeBindingRecord.__table__,
     OmnigentSession.__table__,
     OmnigentTurnAttempt.__table__,
     OmnigentObservation.__table__,

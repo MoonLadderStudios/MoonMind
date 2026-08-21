@@ -42,6 +42,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+    RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
     RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
@@ -56,6 +57,70 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH,
     MoonMindRunWorkflow,
 )
+
+
+def test_omnigent_request_propagates_only_admitted_execution_plan_ref() -> None:
+    workflow = MoonMindRunWorkflow()
+    plan_ref = "omnigent-execution-plan:sha256:" + "4" * 64
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:execution-plan-authority",
+        run_id="run-1",
+        parent=None,
+    )
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH
+            ),
+        ),
+    ):
+        request = workflow._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "omnigent"}},
+            node_id="omnigent",
+            tool_name="auto",
+            workflow_parameters={"executionPlanRef": plan_ref},
+        )
+
+    assert request.parameters["executionPlanRef"] == plan_ref
+
+
+def test_omnigent_request_rejects_step_plan_substitution() -> None:
+    workflow = MoonMindRunWorkflow()
+    plan_ref = "omnigent-execution-plan:sha256:" + "4" * 64
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:execution-plan-authority",
+        run_id="run-1",
+        parent=None,
+    )
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH
+            ),
+        ),
+        pytest.raises(ValueError, match="executionPlanRef conflicts"),
+    ):
+        workflow._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "omnigent"},
+                "executionPlanRef": "omnigent-execution-plan:sha256:" + "5" * 64,
+            },
+            node_id="omnigent",
+            tool_name="auto",
+            workflow_parameters={"executionPlanRef": plan_ref},
+        )
 
 
 def test_auto_publish_compiles_execution_bound_terminal_contract() -> None:

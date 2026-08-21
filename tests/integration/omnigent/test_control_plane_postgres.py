@@ -15,6 +15,10 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from api_service.db.models import (
+    OmnigentExecutionPlanRecord,
+    OmnigentRuntimeBindingRecord,
+)
 from moonmind.omnigent.control_plane import (
     ConflictingSessionAuthorityError,
     ControlPlaneOutcome,
@@ -46,6 +50,78 @@ async def test_postgres_scope_uniqueness_fails_closed(pg_store) -> None:
                 moonmind_workflow_id="wf-1",
                 provider="codex",
                 provider_session_ref="psess-1",
+            )
+
+
+@pytest.mark.asyncio
+async def test_postgres_session_advances_immutable_runtime_binding_stages(
+    pg_store,
+) -> None:
+    """MoonLadderStudios/MoonMind#3701 authority handoff is DB-enforced."""
+
+    plan_ref = "omnigent-execution-plan:sha256:" + "3" * 64
+    credential_ref = "omnigent-runtime-binding:sha256:" + "4" * 64
+    host_ref = "omnigent-runtime-binding:sha256:" + "5" * 64
+    alternate_host_ref = "omnigent-runtime-binding:sha256:" + "6" * 64
+    async with pg_store._session_factory() as session:
+        session.add(
+            OmnigentExecutionPlanRecord(
+                plan_ref=plan_ref,
+                schema_version="moonmind.omnigent-execution-plan.v1",
+                payload_json={},
+                harness_id="opencode-native",
+                harness_implementation_ref="core:omnigent@1",
+                host_class_ref="omnigent-opencode@1",
+                launch_policy_ref="omnigent-on-demand@1",
+                execution_realizer_ref="generic-omnigent-host@1",
+            )
+        )
+        for ref, state in (
+            (credential_ref, "credentials_acquired"),
+            (host_ref, "host_acquired"),
+            (alternate_host_ref, "host_acquired"),
+        ):
+            session.add(
+                OmnigentRuntimeBindingRecord(
+                    runtime_binding_ref=ref,
+                    execution_plan_ref=plan_ref,
+                    state=state,
+                    provider_leases_json={},
+                )
+            )
+        await session.commit()
+
+    async with pg_store.transaction() as repos:
+        created = await repos.sessions.create(
+            session_id="s-authority",
+            moonmind_workflow_id="wf-authority",
+            provider="omnigent",
+            execution_plan_ref=plan_ref,
+        )
+        credentials = await repos.sessions.bind_runtime_authority(
+            "s-authority",
+            expected_revision=created.revision,
+            expected_fencing_generation=created.fencing_generation,
+            execution_plan_ref=plan_ref,
+            runtime_binding_ref=credential_ref,
+        )
+        host = await repos.sessions.bind_runtime_authority(
+            "s-authority",
+            expected_revision=credentials.revision,
+            expected_fencing_generation=credentials.fencing_generation,
+            execution_plan_ref=plan_ref,
+            runtime_binding_ref=host_ref,
+        )
+
+    assert host.runtime_binding_ref == host_ref
+    with pytest.raises(ConflictingSessionAuthorityError):
+        async with pg_store.transaction() as repos:
+            await repos.sessions.bind_runtime_authority(
+                "s-authority",
+                expected_revision=host.revision,
+                expected_fencing_generation=host.fencing_generation,
+                execution_plan_ref=plan_ref,
+                runtime_binding_ref=alternate_host_ref,
             )
 
 

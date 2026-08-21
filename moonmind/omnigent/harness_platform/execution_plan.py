@@ -16,6 +16,10 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+from moonmind.omnigent.harness_platform.support import (
+    SupportKeyPayload,
+    compute_support_combination_key,
+)
 
 
 class ModelConfig(BaseModel):
@@ -51,9 +55,35 @@ class OmnigentExecutionPlanPayload(BaseModel):
     capturePolicyRef: str | None = Field(default=None, alias="capturePolicyRef")
     policySnapshotRef: str = Field(alias="policySnapshotRef")
     supportCombinationKey: str = Field(alias="supportCombinationKey")
+    # Added as optional for replay compatibility with execution plans admitted
+    # before MoonLadderStudios/MoonMind#3701 recorded the complete support
+    # identity. New admissions always populate it.
+    supportIdentity: SupportKeyPayload | None = Field(
+        default=None, alias="supportIdentity"
+    )
 
     @model_validator(mode="after")
     def validate_no_forbidden(self) -> "OmnigentExecutionPlanPayload":
+        if self.supportIdentity is not None:
+            if (
+                compute_support_combination_key(self.supportIdentity)
+                != self.supportCombinationKey
+            ):
+                raise ValueError(
+                    "supportCombinationKey does not match supportIdentity"
+                )
+            pinned = self.supportIdentity
+            if (
+                pinned.harnessImplementationRef != self.harnessImplementationRef
+                or pinned.hostClassRef != self.hostClassRef
+                or pinned.launchPolicyRef != self.launchPolicyRef
+                or pinned.executionRealizerRef != self.executionRealizerRef
+                or pinned.modelConfigDigest
+                != self.modelConfig.modelConfigDigest
+            ):
+                raise ValueError(
+                    "supportIdentity differs from admitted execution authority"
+                )
         forbidden_keys = {
             "credentialGeneration", "providerLeaseRef", "hostId", "hostLeaseRef",
             "volumeName", "hostBindingRef", "planRef", "credentials", "secretBody",
@@ -147,6 +177,27 @@ def verify_execution_plan_envelope(envelope: dict[str, Any] | OmnigentExecutionP
     # Verify without mutation: canonicalize only payload and compare
     parsed = OmnigentExecutionPlanEnvelope.model_validate(envelope)
     return parsed
+
+
+def execution_support_identity(
+    envelope: OmnigentExecutionPlanEnvelope,
+) -> dict[str, Any]:
+    """Project exact, secret-free support evidence from admitted authority."""
+
+    identity = envelope.payload.supportIdentity
+    if identity is None:
+        # Replay-visible plans admitted before the complete identity was
+        # embedded remain readable, but cannot be mistaken for current
+        # combination-qualified acceptance evidence.
+        return {
+            "supportCombinationKey": envelope.payload.supportCombinationKey,
+            "identityComplete": False,
+        }
+    return {
+        **identity.model_dump(by_alias=True, mode="json"),
+        "supportCombinationKey": envelope.payload.supportCombinationKey,
+        "identityComplete": True,
+    }
 
 
 def forbidden_plan_check(payload: dict[str, Any]) -> None:

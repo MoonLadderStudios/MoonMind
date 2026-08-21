@@ -83,9 +83,16 @@ def get_default_registry() -> OmnigentExecutionRealizerRegistry:
         init_error = exc
 
     try:
+        from moonmind.omnigent.realizers.composition import (
+            build_generic_realizer_dependencies,
+        )
         from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
 
-        registry.register(GenericOmnigentHostRealizer())
+        registry.register(
+            GenericOmnigentHostRealizer(
+                dependency_factory=build_generic_realizer_dependencies
+            )
+        )
     except Exception as exc:  # pragma: no cover
         init_error = exc
 

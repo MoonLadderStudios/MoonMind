@@ -18,6 +18,7 @@ from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
+    resolve_default_agent_profile_snapshot,
 )
 
 
@@ -63,6 +64,8 @@ class _Session:
 
     async def scalar(self, statement):
         entity = statement.column_descriptions[0].get("entity")
+        if entity is OmnigentAgentProfile:
+            return self.profile
         if entity is OmnigentAgentProfileVersion:
             return self.version
         if entity is ManagedAgentProviderProfile:
@@ -156,6 +159,24 @@ async def test_resolver_persists_exact_version_digest_and_effective_overrides():
     assert isinstance(usage, OmnigentAgentProfileUsage)
     assert usage.consumer_type == "checkpoint"
     assert usage.effective_snapshot == snapshot
+
+
+@pytest.mark.asyncio
+async def test_default_resolver_freezes_default_and_explicit_provider_at_admission():
+    session = _Session()
+
+    snapshot = await resolve_default_agent_profile_snapshot(
+        session,
+        provider_profile_ref="oauth-team",
+        launch_policy_ref="on-demand@1",
+        consumer_type="workflow",
+        consumer_id="workflow-default-1",
+        user=SimpleNamespace(id=uuid4()),
+    )
+
+    assert snapshot["profileId"] == "team-codex"
+    assert snapshot["providerProfileRef"] == "oauth-team"
+    assert snapshot["launchPolicyRef"] == "on-demand@1"
 
 
 @pytest.mark.asyncio

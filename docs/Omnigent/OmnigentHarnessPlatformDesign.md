@@ -1686,7 +1686,37 @@ The design is realized when:
 29. Omnigent can be the preselected execution provider while Codex remains the default proven Agent Profile.
 30. Direct runtimes remain available only according to their existing rollback and retirement contracts.
 
-## 33. Document authority and future promotion
+## 33. Enforced module dependency boundaries
+
+The settled control plane uses the following one-way ownership boundaries:
+
+| Boundary | Owned modules | May depend on | Must not depend on |
+| --- | --- | --- | --- |
+| Pure reconciliation and authority values | `omnigent/reconciler`, `control_plane/records.py`, `control_plane/identities.py`, immutable harness-platform value modules | Python and validation libraries, other pure value modules | API, SQL, Temporal, HTTP, process, container, filesystem, or environment adapters |
+| Application coordination | `control_plane/turn_commands.py`, `realizers/base.py`, `realizers/generic_host.py` | Pure contracts and injected repository/runtime capabilities | FastAPI, SQLAlchemy, Temporal clients, HTTP clients, Docker clients, or provider-specific harness selection |
+| Persistence | `control_plane/repositories.py`, `harness_platform/stores.py` | Pure records and database models | Router or provider-transport policy |
+| Provider transport and host lifecycle | bridge/execute adapters, `host_runtime.py`, `realizers/runtime_authority.py` | Application requests, Provider Profile and host interfaces | UI facade policy or plan recompilation |
+| Composition | `realizers/composition.py`, worker activity adapters | Every concrete capability needed to assemble a supported realizer | Harness-name selection or alternate authority semantics |
+| UI facade | API routers and WebSocket adapters | Application services and projections | Direct persistence mutation, provider identity selection, host lifecycle, or credential materialization |
+| Evidence and publication | conformance, acceptance, timeline, and publication adapters | Immutable plan/binding/session refs and observed artifacts | Replacement plan, session, or lifecycle authority |
+
+Dependency direction is from outer adapters toward application coordination and
+pure contracts. Pure modules never import infrastructure. Generic application
+coordination receives infrastructure through the composition boundary and does
+not branch on `codex-native`, `opencode-native`, `pi-native`, Provider Profile
+ids, or model vendors. Deterministic session and turn identities have one owner,
+`control_plane/identities.py`; callers import those functions rather than
+creating alternate authority vocabulary.
+
+The unit architecture contract parses imports and identity definitions. It
+fails when framework or infrastructure imports leak into declared pure or
+application modules, when generic coordination gains a harness-name branch, or
+when canonical identity functions acquire another definition. The existing
+Codex realizer is an explicit replay-visible legacy adapter and remains outside
+the generic-application rule until its evidence-qualified retirement gate
+allows removal.
+
+## 34. Document authority and future promotion
 
 This design owns the target generic harness-platform model.
 
