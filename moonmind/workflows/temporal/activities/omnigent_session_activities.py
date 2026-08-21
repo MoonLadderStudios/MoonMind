@@ -1313,6 +1313,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
     finally:
         await http_client.aclose()
     host_id = str(preflight["hostId"])
+    harness_authority = preflight.get("harnessAuthority")
     bridge = await bridge_store.bind_profile_authorization(
         request=agent_request,
         endpoint_ref=binding.endpoint_ref,
@@ -1324,6 +1325,15 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         omnigent_host_id=host_id,
         effective_launch_snapshot=effective_launch,
     )
+    if effective_launch.get("executionRealizerRef") == "generic-omnigent-host@1":
+        if not isinstance(harness_authority, Mapping):
+            raise ValueError(
+                "generic Omnigent host preflight omitted immutable harness authority"
+            )
+        bridge = await bridge_store.bind_harness_authority(
+            request=agent_request,
+            harness_authority=harness_authority,
+        )
     if lease.status == "starting":
         lease = await hosts.transition_host_lease(
             lease.lease_id,
@@ -1352,6 +1362,11 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
                 "hostHarness": str(effective_launch["harness"]),
                 "endpointRef": binding.endpoint_ref,
                 "effectiveLaunchRef": str(effective_launch["snapshotRef"]),
+                **(
+                    {"harnessAuthority": dict(harness_authority)}
+                    if isinstance(harness_authority, Mapping)
+                    else {}
+                ),
                 "egressAttestation": preflight.get("egressAttestation"),
                 "egressEvidenceRef": preflight.get("egressEvidenceRef"),
             },

@@ -38,9 +38,37 @@ def _capabilities(role: str) -> list[dict[str, object]]:
     ]
 
 
+def _compiled_ui_surface() -> dict[str, object]:
+    body: dict[str, object] = {
+        "routeLiterals": [
+            {
+                "pathPattern": "/v1/info",
+                "sourceFile": "assets/index.js",
+                "literalDigest": "sha256:" + "8" * 64,
+                "classification": "scoped_transport_adapter",
+                "resolution": "exact_method_path_allowlist",
+                "resolvedRoutes": [
+                    {
+                        "method": "GET",
+                        "path": "/v1/info",
+                        "routeKey": "GET /v1/info",
+                    }
+                ],
+                "unknownBehavior": "omnigent_chat_transport_unsupported",
+            }
+        ],
+        "routeLiteralCount": 1,
+        "classifiedRouteLiteralCount": 1,
+    }
+    body["digest"] = "sha256:" + sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return body
+
+
 def _passing_report(**overrides) -> dict[str, object]:
     route_inventory = {
-        "schemaVersion": "moonmind.omnigent.native-ui-route-inventory/v3",
+        "schemaVersion": "moonmind.omnigent.native-ui-route-inventory/v4",
         "artifactDigests": {
             "omnigent": "git:" + "1" * 40,
             "ui": "sha256:" + "2" * 64,
@@ -48,6 +76,22 @@ def _passing_report(**overrides) -> dict[str, object]:
             "host": "sha256:" + "4" * 64,
             "harnessImplementation": "sha256:" + "5" * 64,
             "moonmindFacade": "sha256:" + "6" * 64,
+        },
+        "artifactProvenance": {
+            "sourceMode": "running_images",
+            "generationBoundary": "inside_pinned_omnigent_server_image",
+            "compiledUiDigest": "sha256:" + "7" * 64,
+            "deployableImages": {
+                "omnigentServer": "omnigent-server@sha256:" + "8" * 64,
+                "omnigentHost": "omnigent-host@sha256:" + "9" * 64,
+                "moonmindFacade": f"ghcr.io/moonladderstudios/moonmind@{SERVER_DIGEST}",
+            },
+            "inImageArtifactDigests": {
+                "omnigentHost": "sha256:" + "4" * 64,
+                "moonmindFacade": "sha256:" + "6" * 64,
+                "moonmindHarness": "sha256:" + "a" * 64,
+            },
+            "compiledUiNetworkSurface": _compiled_ui_surface(),
         },
         "routes": [
             {
@@ -92,6 +136,16 @@ def _passing_report(**overrides) -> dict[str, object]:
         "classifiedRouteCount": 1,
         "unclassifiedRouteCount": 0,
     }
+    classification_body = {
+        key: value
+        for key, value in route_inventory.items()
+        if key != "artifactProvenance"
+    }
+    route_inventory["classificationDigest"] = "sha256:" + sha256(
+        json.dumps(
+            classification_body, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
     route_inventory["inventoryDigest"] = "sha256:" + sha256(
         json.dumps(route_inventory, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -322,6 +376,40 @@ def test_route_inventory_digest_drift_fails_exact_artifact_gate() -> None:
     )
 
 
+def test_checkout_route_inventory_cannot_satisfy_exact_artifact_gate() -> None:
+    report = _passing_report()
+    report["routeInventory"]["artifactProvenance"] = {
+        "sourceMode": "checkout",
+        "generationBoundary": "reviewed_checkout_fixture",
+        "compiledUiDigest": None,
+        "deployableImages": {},
+    }
+    report["routeInventory"].pop("inventoryDigest")
+    report["routeInventory"].pop("classificationDigest")
+    classification_body = {
+        key: value
+        for key, value in report["routeInventory"].items()
+        if key != "artifactProvenance"
+    }
+    report["routeInventory"]["classificationDigest"] = "sha256:" + sha256(
+        json.dumps(classification_body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    report["routeInventory"]["inventoryDigest"] = "sha256:" + sha256(
+        json.dumps(
+            report["routeInventory"], sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+
+    projection = evaluate_exact_artifact_conformance(
+        report, required_digests=REQUIRED_DIGESTS
+    )
+
+    assert any(
+        failure["code"] == "route_inventory_provenance_invalid"
+        for failure in projection["failures"]
+    )
+
+
 def test_unjoined_ui_network_call_fails_exact_artifact_gate() -> None:
     report = _passing_report()
     report["routeInventory"]["uiRouteReferences"][0]["join"] = "fail_closed"
@@ -341,9 +429,12 @@ def test_unclassified_delegated_ui_call_fails_exact_artifact_gate() -> None:
     report["routeInventory"]["uiDelegatedNetworkCalls"] = [
         {
             "networkApi": "hostFetch",
+            "method": "GET",
+            "pathPattern": "/{path:path}",
             "sourceFile": "omnigent/web/src/lib/api.ts",
             "sourceLine": 2,
             "classification": "unscoped_upstream_fallback",
+            "resolution": "exact_method_path_allowlist",
             "argumentDigest": "sha256:" + "7" * 64,
             "unknownBehavior": "omnigent_chat_transport_unsupported",
         }
@@ -356,6 +447,93 @@ def test_unclassified_delegated_ui_call_fails_exact_artifact_gate() -> None:
 
     assert any(
         failure["code"] == "route_inventory_unclassified"
+        for failure in projection["failures"]
+    )
+
+
+def test_health_ui_reference_is_part_of_the_exact_route_inventory() -> None:
+    report = _passing_report()
+    report["routeInventory"]["routes"][0]["routeKey"] = "GET /health"
+    report["routeInventory"]["uiRouteReferences"][0].update(
+        {"routeKey": "GET /health", "path": "/health"}
+    )
+    compiled_surface = report["routeInventory"]["artifactProvenance"][
+        "compiledUiNetworkSurface"
+    ]
+    compiled_literal = compiled_surface["routeLiterals"][0]
+    compiled_literal["pathPattern"] = "/health"
+    compiled_literal["resolvedRoutes"][0].update(
+        {"path": "/health", "routeKey": "GET /health"}
+    )
+    compiled_surface.pop("digest")
+    compiled_surface["digest"] = "sha256:" + sha256(
+        json.dumps(compiled_surface, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    report["routeInventory"].pop("classificationDigest")
+    report["routeInventory"].pop("inventoryDigest")
+    classification_body = {
+        key: value
+        for key, value in report["routeInventory"].items()
+        if key != "artifactProvenance"
+    }
+    report["routeInventory"]["classificationDigest"] = "sha256:" + sha256(
+        json.dumps(
+            classification_body, sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+    report["routeInventory"]["inventoryDigest"] = "sha256:" + sha256(
+        json.dumps(
+            report["routeInventory"], sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+
+    projection = evaluate_exact_artifact_conformance(
+        report, required_digests=REQUIRED_DIGESTS
+    )
+
+    assert projection["verdict"] == "passed", projection["failures"]
+
+
+def test_inventory_without_compiled_ui_network_surface_fails() -> None:
+    report = _passing_report()
+    del report["routeInventory"]["artifactProvenance"][
+        "compiledUiNetworkSurface"
+    ]
+    report["routeInventory"].pop("inventoryDigest")
+    report["routeInventory"]["inventoryDigest"] = "sha256:" + sha256(
+        json.dumps(
+            report["routeInventory"], sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+
+    projection = evaluate_exact_artifact_conformance(
+        report, required_digests=REQUIRED_DIGESTS
+    )
+
+    assert any(
+        failure["code"] == "route_inventory_provenance_invalid"
+        for failure in projection["failures"]
+    )
+
+
+def test_inventory_without_in_image_byte_attestations_fails() -> None:
+    report = _passing_report()
+    del report["routeInventory"]["artifactProvenance"][
+        "inImageArtifactDigests"
+    ]
+    report["routeInventory"].pop("inventoryDigest")
+    report["routeInventory"]["inventoryDigest"] = "sha256:" + sha256(
+        json.dumps(
+            report["routeInventory"], sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+
+    projection = evaluate_exact_artifact_conformance(
+        report, required_digests=REQUIRED_DIGESTS
+    )
+
+    assert any(
+        failure["code"] == "route_inventory_provenance_invalid"
         for failure in projection["failures"]
     )
 

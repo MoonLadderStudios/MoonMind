@@ -166,7 +166,12 @@ where the protected tier is required.
   `omnigent-exact-artifact` job in `.github/workflows/pytest-unit-tests.yml`
   runs for every affected PR on standard Docker-enabled merge infrastructure
   with no protected credentials. It builds the exact deployable image and tests
-  that immutable artifact through its real entrypoints:
+  that immutable artifact through its real entrypoints. It also builds the
+  pinned stock Omnigent server and host images, generates the reviewed route
+  inventory inside the server image from its baked source and compiled web
+  bundle, and rejects the inventory unless source digests observed inside the
+  host and MoonMind facade images match the classified bytes:
+
   - the in-image capability probe (`tools/omnigent_exact_artifact_probe.py`,
     which proves Uvicorn resolves an installed WebSocket implementation so a
     #3697-style drop fails closed);
@@ -180,9 +185,18 @@ where the protected tier is required.
   - a restart of the deployable process against the schema it just migrated;
   - worker task-queue and readiness advertisement against a real Temporal
     server, which the worker must connect to before it can report ready; and
-  - a browser capture proving the compiled native UI baked into the image is
-    fetched from the deployable origin, renders from its injected boot payload,
-    and issues no root `/v1/*` or cross-origin upstream request.
+  - a browser capture proving the compiled MoonMind hosted shell baked into the
+    image is fetched from the deployable origin, renders from its injected boot
+    payload, and issues no root `/v1/*` or cross-origin upstream request;
+  - deterministic stock UI/server route extraction, method-aware joining of
+    every route literal observed in the exact compiled stock UI (with unknown
+    literals classified fail closed), exact host/facade byte attestation, and
+    classification-drift comparison against the reviewed inventory fixture; and
+  - the inventory, HTTP/SSE/WebSocket, mutation/reconnect, generic-authority,
+    resource-harvest, and post-cleanup historical-read contracts executed from
+    a CI-only derivative whose `/app` facade digest must equal the deployable
+    image. The derivative adds only locked test dependencies and is neither
+    published nor deployed.
 
   The image is referenced by its immutable content id for every `docker run`
   (a locally built image has no registry repo digest, so `name@sha256:<id>` is

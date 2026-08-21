@@ -5015,6 +5015,7 @@ async def _dispatch_workflow_chat_facade(
     if (
         operation.name != "stream_events"
         and facade is None
+        and not serve_durable_terminal_snapshot
         and not serve_durable_resource
     ):
         raise WorkflowChatFacadeError(

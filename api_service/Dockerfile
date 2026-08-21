@@ -269,6 +269,19 @@ COPY --from=frontend-builder /build/api_service/static/workflow_console/ /opt/mo
 RUN chmod +x /app/api_service/entrypoint.sh && \
     sed -i 's/\r$//' /app/api_service/entrypoint.sh
 
+# CI-only derivative of the exact production filesystem. It adds the locked
+# test runner but does not replace or overlay /app, so imports exercise the
+# same production bytes as api-runtime while tests remain mounted read-only at
+# /probe. This image is ephemeral and is never published or deployed.
+FROM runtime-base AS exact-artifact-test-runtime
+COPY --from=python-requirements /deps/requirements-tests.txt /tmp/requirements-tests.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --disable-pip-version-check -r /tmp/requirements-tests.txt \
+    && rm -f /tmp/requirements-tests.txt
+ENV HOME=/home/app \
+    PYTHONPATH=/app:/probe
+USER app
+
 FROM runtime-base AS worker-runtime
 EXPOSE 8000
 CMD ["/app/api_service/entrypoint.sh"]

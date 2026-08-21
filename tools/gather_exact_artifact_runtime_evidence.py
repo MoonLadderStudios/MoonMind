@@ -56,6 +56,7 @@ def build_runtime_evidence(
     server: Sequence[Mapping[str, Any]],
     worker: Sequence[Mapping[str, Any]],
     ui: Sequence[Mapping[str, Any]],
+    route_inventory: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Assemble and secret-scan the runtime evidence document.
 
@@ -68,6 +69,7 @@ def build_runtime_evidence(
             "worker": [dict(entry) for entry in worker],
             "ui": [dict(entry) for entry in ui],
         },
+        "routeInventory": dict(route_inventory),
     }
     try:
         assert_secret_free(evidence)
@@ -113,6 +115,12 @@ def main(argv: list[str] | None = None) -> int:
         "before it can advertise readiness, so this is not optional.",
     )
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument(
+        "--route-inventory",
+        required=True,
+        type=Path,
+        help="Inventory generated inside the pinned stock Omnigent server image.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -122,7 +130,15 @@ def main(argv: list[str] | None = None) -> int:
             database_url=args.database_url,
             temporal_address=args.temporal_address,
         )
-        evidence = build_runtime_evidence(server=server, worker=worker, ui=ui)
+        inventory = json.loads(args.route_inventory.read_text(encoding="utf-8"))
+        if not isinstance(inventory, Mapping):
+            raise ValueError("route inventory must be a JSON object")
+        evidence = build_runtime_evidence(
+            server=server,
+            worker=worker,
+            ui=ui,
+            route_inventory=inventory,
+        )
     except (ConformanceContractError, RuntimeError, OSError, ValueError) as exc:
         print(f"::error::runtime evidence could not be gathered: {exc}")
         return 2

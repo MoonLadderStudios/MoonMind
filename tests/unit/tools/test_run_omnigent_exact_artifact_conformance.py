@@ -6,6 +6,7 @@ Source issue: MoonLadderStudios/MoonMind#3710.
 from __future__ import annotations
 
 import json
+from hashlib import sha256
 
 import pytest
 
@@ -34,6 +35,61 @@ def _signals(role: str) -> list[dict[str, object]]:
     ]
 
 
+def _compiled_ui_surface(inventory: dict[str, object]) -> dict[str, object]:
+    reference = inventory["uiRouteReferences"][0]
+    body: dict[str, object] = {
+        "routeLiterals": [
+            {
+                "pathPattern": reference["path"],
+                "sourceFile": "assets/index.js",
+                "literalDigest": "sha256:" + "2" * 64,
+                "classification": "scoped_transport_adapter",
+                "resolution": "exact_method_path_allowlist",
+                "resolvedRoutes": [
+                    {
+                        "method": reference["method"],
+                        "path": reference["path"],
+                        "routeKey": reference["routeKey"],
+                    }
+                ],
+                "unknownBehavior": "omnigent_chat_transport_unsupported",
+            }
+        ],
+        "routeLiteralCount": 1,
+        "classifiedRouteLiteralCount": 1,
+    }
+    body["digest"] = "sha256:" + sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return body
+
+
+def _exact_route_inventory() -> dict[str, object]:
+    inventory = json.loads(driver.ROUTE_INVENTORY_FIXTURE.read_text(encoding="utf-8"))
+    artifact_digests = inventory["artifactDigests"]
+    inventory["artifactProvenance"] = {
+        "sourceMode": "running_images",
+        "generationBoundary": "inside_pinned_omnigent_server_image",
+        "compiledUiDigest": "sha256:" + "d" * 64,
+        "deployableImages": {
+            "omnigentServer": "omnigent-server@sha256:" + "e" * 64,
+            "omnigentHost": "omnigent-host@sha256:" + "f" * 64,
+            "moonmindFacade": IMAGES["server"],
+        },
+        "inImageArtifactDigests": {
+            "omnigentHost": artifact_digests["host"],
+            "moonmindFacade": artifact_digests["moonmindFacade"],
+            "moonmindHarness": "sha256:" + "1" * 64,
+        },
+        "compiledUiNetworkSurface": _compiled_ui_surface(inventory),
+    }
+    inventory.pop("inventoryDigest", None)
+    inventory["inventoryDigest"] = "sha256:" + sha256(
+        json.dumps(inventory, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return inventory
+
+
 def test_require_docker_fails_loud_when_missing(monkeypatch) -> None:
     monkeypatch.setattr(driver.shutil, "which", lambda _name: None)
     with pytest.raises(driver.DriverError):
@@ -54,6 +110,7 @@ def test_assemble_report_merges_runtime_over_in_image() -> None:
     }
     runtime_evidence = {
         "capabilities": {role: _signals(role) for role in REQUIRED_CAPABILITIES},
+        "routeInventory": _exact_route_inventory(),
         "secretScan": {"status": "passed"},
     }
     report = driver.assemble_report(
@@ -102,6 +159,7 @@ def test_assembled_report_carries_no_unexercised_provider_execution() -> None:
         in_image_probes={},
         runtime_evidence={
             "capabilities": {role: _signals(role) for role in REQUIRED_CAPABILITIES},
+            "routeInventory": _exact_route_inventory(),
             "secretScan": {"status": "passed"},
             # Even if an upstream document carried one, the driver must not
             # promote an unexercised claim into the gate's report.
@@ -110,6 +168,21 @@ def test_assembled_report_carries_no_unexercised_provider_execution() -> None:
     )
 
     assert "fakeProviderExecution" not in report
+
+
+def test_assemble_report_rejects_checkout_inventory() -> None:
+    inventory = _exact_route_inventory()
+    inventory["artifactProvenance"]["sourceMode"] = "checkout"
+    with pytest.raises(driver.DriverError, match="not exact-image evidence"):
+        driver.assemble_report(
+            images=IMAGES,
+            source_commit=COMMIT,
+            in_image_probes={},
+            runtime_evidence={
+                "capabilities": {},
+                "routeInventory": inventory,
+            },
+        )
 
 
 def test_in_image_probe_runs_the_locally_resolvable_content_id() -> None:

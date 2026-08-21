@@ -8,17 +8,35 @@ unchanged-host observations, then compare only MoonMind-facing projections.
 
 from __future__ import annotations
 
+import copy
 import json
+from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import httpx
 import pytest
 import pytest_asyncio
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from api_service.api.routers.omnigent_bridge import (
+    WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
+    _get_bridge_proxy,
+    _get_bridge_store,
+    _get_create_embedded_facade,
+    _get_execution_service,
+    _require_bridge_enabled,
+    workflow_chat_router,
+)
+from api_service.api.routers.retrieval_gateway import get_capability_registry
+from api_service.auth_providers import get_current_user
 from api_service.db.models import Base, OmnigentBridgeSession
+from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_EMBEDDED,
+    HOST_PROTOCOL_MODE_PROXY,
     parse_bridge_config,
 )
 from moonmind.omnigent.bridge_embedded import (
@@ -28,6 +46,7 @@ from moonmind.omnigent.bridge_embedded import (
 )
 from moonmind.omnigent.bridge_events import build_omnigent_bridge_event
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from tests.helpers.omnigent_conformance import (
@@ -183,6 +202,10 @@ class _ResourceChannel:
                 ]
             },
             "/v1/sessions/embedded-session/resources/environments/default/filesystem/src/app.py": b"print('fake')\n",
+            (
+                "/v1/sessions/embedded-session/resources/environments/default/"
+                "filesystem/README.md"
+            ): b"# captured\n",
             "/v1/sessions/embedded-session/resources/environments/default/diff/src/app.py": b"diff --git a/src/app.py b/src/app.py\n",
             "/v1/sessions/embedded-session/resources/files": {
                 "items": [{"id": "file-1", "filename": "session.log"}]
@@ -198,6 +221,12 @@ class _ResourceChannel:
                     }
                 ],
                 "has_more": False,
+            },
+            "/v1/sessions/embedded-session/resources/terminals/terminal-main": {
+                "id": "terminal-main",
+                "session_id": "embedded-session",
+                "status": "exited",
+                "metadata": {"exit_code": 0},
             },
         }
 
@@ -349,3 +378,254 @@ async def test_workflow_detail_terminal_envelope_projects_embedded_lifecycle_out
     ]
     assert "binding_token" not in encoded.lower()
     assert "root-secret" not in encoded
+
+
+async def test_harvest_cleanup_then_every_historical_facade_resource_is_readable(
+    store,
+    session_factory,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise capture -> cleanup -> scoped HTTP reads with real persistence."""
+
+    monkeypatch.chdir(tmp_path)
+    request = _request("embedded")
+    row = await _session(store, "embedded", "embedded-session")
+    grants = dict.fromkeys(CAPABILITY_NAMES, True)
+    launch = {
+        "snapshotRef": "omnigent-launch:sha256:" + "3" * 64,
+        "executionProfileRef": "agent-profile://codex/versions/1",
+        "executionProfileDigest": "sha256:agent",
+        "launchPolicyRef": "codex-static@1",
+        "agentProfileCapabilities": grants,
+        "capabilities": grants,
+        "sessionStateCapabilities": grants,
+        "policyAuthority": {
+            "policyId": "codex-static",
+            "policyVersion": 1,
+            "policyRef": "codex-static@1",
+            "policyDigest": "sha256:policy",
+            "snapshotRef": "artifact://policy",
+            "validation": {"valid": True},
+        },
+    }
+    await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="embedded",
+        provider_profile_id="profile-1",
+        provider_lease_id="provider-lease-1",
+        credential_generation=1,
+        host_binding_ref="binding-1",
+        host_lease_ref="host-lease-1",
+        omnigent_host_id="host-1",
+        effective_launch_snapshot=launch,
+    )
+    created = await store.record_session_created(
+        "embedded",
+        session_id="embedded-session",
+        capabilities=grants,
+        session_status="active",
+    )
+    await store.mark_embedded_runner_state(
+        "embedded",
+        state="runner_identity_bound",
+        code="authenticated_runner_identity_bound",
+    )
+    await store.mark_embedded_runner_state(
+        "embedded", state="runner_tunnel_waiting", code="runner_tunnel_pending"
+    )
+    await store.mark_embedded_runner_state(
+        "embedded", state="runner_tunnel_ready", code="runner_tunnel_authenticated"
+    )
+    await store.mark_prepared("embedded", digest="digest-1", marker="marker-1")
+    await store.mark_posting("embedded")
+    await store.mark_posted(
+        "embedded", response={"pending_id": "pending-1", "item_id": "item-1"}
+    )
+    event = build_omnigent_bridge_event(
+        payload={
+            "type": "response.output",
+            "status": "running",
+            "text": "captured transcript item",
+        },
+        sequence=1,
+        request=request,
+        omnigent_session_id="embedded-session",
+        bridge_session_id=created.bridge_session_id,
+    ).event
+    await store.append_events(created.bridge_session_id, [event])
+    async with session_factory() as session:
+        persisted = await session.get(OmnigentBridgeSession, row.bridge_session_id)
+        persisted.omnigent_host_id = "host-1"
+        persisted.omnigent_runner_id = "runner-1"
+        await session.commit()
+
+    gateway = LocalOmnigentArtifactGateway()
+    facade = OmnigentEmbeddedHostProtocolFacade(
+        run_store=store,
+        config=_config(),
+        host_channels=_ResourceChannel(),
+        artifact_gateway=gateway,
+    )
+    harvested = await facade.harvest_session("embedded-session")
+    assert harvested["status"] == "completed"
+
+    # The production cleanup owners remove both live authorities only after the
+    # artifact-backed projection and final transcript snapshot are durable.
+    await store.mark_terminal("embedded", status="completed")
+    await store.record_provider_session_deleted("embedded-session")
+    cleaned = await store.record_terminal_cleanup(
+        host_lease_ref="host-lease-1",
+        completed=True,
+        code="host_cleanup_completed",
+        lease_released=True,
+    )
+    assert cleaned is not None
+    assert cleaned.final_snapshot_ref
+    terminal_group = next(
+        group
+        for group in cleaned.terminal_refs["resourceProjection"]["groups"]
+        if group["groupKey"] == "terminals"
+    )
+    assert terminal_group["resources"]
+
+    owner_id = uuid4()
+
+    async def describe_execution(_workflow_id: str):
+        return SimpleNamespace(owner_id=owner_id)
+
+    app = FastAPI()
+    app.include_router(
+        workflow_chat_router,
+        prefix=WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
+    )
+    app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
+        id=owner_id,
+        email="owner@example.test",
+        is_superuser=False,
+    )
+    app.dependency_overrides[_get_execution_service] = lambda: SimpleNamespace(
+        describe_execution=describe_execution
+    )
+    app.dependency_overrides[_get_bridge_store] = lambda: store
+    app.dependency_overrides[_get_bridge_proxy] = lambda: None
+    app.dependency_overrides[_get_create_embedded_facade] = lambda: None
+    app.dependency_overrides[get_capability_registry] = lambda: SimpleNamespace(
+        has_live_session_authority=lambda *_args, **_kwargs: False,
+        revoke_scope=lambda *_args, **_kwargs: [],
+    )
+    app.dependency_overrides[_require_bridge_enabled] = lambda: SimpleNamespace(
+        host_protocol_mode=HOST_PROTOCOL_MODE_PROXY
+    )
+    binding = created.chat_binding_id
+    assert binding
+    root = (
+        f"{WORKFLOW_CHAT_BINDINGS_MOUNT_PATH}/{binding}/omnigent/"
+        f"v1/sessions/{binding}"
+    )
+    paths = {
+        "snapshot": root,
+        "transcript": root + "/items",
+        "changed": root + "/resources/environments/default/changes",
+        "workspace": root + "/resources/environments/default/filesystem",
+        "workspace_file": (
+            root + "/resources/environments/default/filesystem/src/app.py"
+        ),
+        "diff": root + "/resources/environments/default/diff/src/app.py",
+        "session_files": root + "/resources/files",
+        "session_file": root + "/resources/files/file-1/content",
+        "terminals": root + "/resources/terminals",
+        "terminal": root + "/resources/terminals/terminal-main",
+    }
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        responses = {name: await client.get(path) for name, path in paths.items()}
+        traversal = await client.get(
+            root + "/resources/environments/default/filesystem/%252e%252e/secret"
+        )
+        foreign_binding = await client.get(
+            paths["snapshot"].replace(binding, "foreign-binding")
+        )
+        unknown = await client.get(root + "/unknown-stock-route")
+
+    response_statuses = {
+        name: response.status_code for name, response in responses.items()
+    }
+    assert response_statuses == {name: 200 for name in paths}, {
+        name: response.text for name, response in responses.items()
+    }
+    assert responses["transcript"].json()["data"][0]["text"] == (
+        "captured transcript item"
+    )
+    assert responses["workspace_file"].content == b"print('fake')\n"
+    assert responses["diff"].content.startswith(b"diff --git")
+    assert responses["session_file"].content == b"session file evidence\n"
+    assert responses["terminal"].json()["id"] == "terminal-main"
+    assert "embedded-session" not in "".join(response.text for response in responses.values())
+    assert traversal.status_code in {403, 404}
+    assert foreign_binding.status_code == 404
+    assert unknown.status_code == 404
+
+    # Deleting a captured body proves the facade reports a stable unavailable
+    # result instead of reviving the provider or falling through upstream.
+    session_artifact = next(
+        path
+        for path in tmp_path.glob(
+            "var/artifacts/omnigent/**/output.omnigent.session_files/**/*"
+        )
+        if path.is_file() and not path.name.endswith(".metadata.json")
+    )
+    session_artifact.unlink()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        missing = await client.get(paths["session_file"])
+    assert missing.status_code == 503
+    assert missing.json()["detail"]["code"] == (
+        "omnigent_bridge_terminal_evidence_unavailable"
+    )
+
+    oversized_ref = await gateway.write_bytes(
+        request=request,
+        name="output.omnigent.workspace_files/oversized.bin",
+        payload=b"bounded fixture",
+        link_type="output.omnigent.workspace_file",
+    )
+    async with session_factory() as session:
+        persisted = await session.get(OmnigentBridgeSession, row.bridge_session_id)
+        terminal_refs = copy.deepcopy(persisted.terminal_refs)
+        workspace_group = next(
+            group
+            for group in terminal_refs["resourceProjection"]["groups"]
+            if group["groupKey"] == "workspace_files"
+        )
+        workspace_group["resources"].append(
+            {
+                "path": "oversized.bin",
+                "artifactRef": oversized_ref,
+                "sizeBytes": 10 * 1024 * 1024 + 1,
+                "contentType": "application/octet-stream",
+            }
+        )
+        persisted.terminal_refs = terminal_refs
+        await session.commit()
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        oversized = await client.get(
+            root + "/resources/environments/default/filesystem/oversized.bin"
+        )
+    assert oversized.status_code == 413
+
+    async def describe_as_foreign_owner(_workflow_id: str):
+        return SimpleNamespace(owner_id=uuid4())
+
+    app.dependency_overrides[_get_execution_service] = lambda: SimpleNamespace(
+        describe_execution=describe_as_foreign_owner
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        unauthorized = await client.get(paths["snapshot"])
+    assert unauthorized.status_code == 404

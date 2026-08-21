@@ -764,20 +764,30 @@ class OmnigentEmbeddedHostProtocolFacade:
         # proxy capture.  These documents are derived from the compact durable
         # projection, never from provider-native paths or live access tokens.
         durable_snapshot = await self.get_session(session_id)
+        durable_events = await self._run_store.list_events(row.bridge_session_id)
+        transcript_items = [
+            {
+                "id": event.event_id,
+                "type": event.event_type,
+                "status": event.normalized_status,
+                **({"text": event.text_preview} if event.text_preview else {}),
+            }
+            for event in durable_events[-1000:]
+        ]
+        captured_snapshot = {**durable_snapshot, "items": transcript_items}
         if "initialSnapshotRef" not in refs:
             refs["initialSnapshotRef"] = await write_required_json(
                 request=request,
                 name="runtime.omnigent.initial_snapshot.json",
-                payload={**durable_snapshot, "capturePhase": "initial"},
+                payload={**captured_snapshot, "capturePhase": "initial"},
                 link_type="runtime.omnigent.initial_snapshot",
             )
         refs["finalSnapshotRef"] = await write_required_json(
             request=request,
             name="output.omnigent.final_snapshot.json",
-            payload={**durable_snapshot, "capturePhase": "final"},
+            payload={**captured_snapshot, "capturePhase": "final"},
             link_type="output.omnigent.final_snapshot",
         )
-        durable_events = await self._run_store.list_events(row.bridge_session_id)
         bounded_log = [
             {
                 "sequence": event.sequence,
@@ -914,6 +924,7 @@ class OmnigentEmbeddedHostProtocolFacade:
         await self._run_store.attach_capture_evidence(
             row.bridge_session_id,
             capture_manifest_ref=manifest_ref,
+            final_snapshot_ref=refs["finalSnapshotRef"],
             resource_projection_ref=projection_ref,
             evidence_completeness=evidence_status,
             resource_projection=projection,

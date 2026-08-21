@@ -48,10 +48,6 @@ from moonmind.omnigent.exact_artifact_conformance import (  # noqa: E402
     ExactArtifactConformanceError,
     evaluate_exact_artifact_conformance,
 )
-from moonmind.omnigent.native_ui_route_inventory import (  # noqa: E402
-    generate_native_ui_route_inventory,
-)
-
 IN_IMAGE_PROBE = "tools/omnigent_exact_artifact_probe.py"
 IN_IMAGE_ROLES = ("server", "worker")
 
@@ -160,7 +156,6 @@ def assemble_report(
     source_commit: str,
     in_image_probes: Mapping[str, Sequence[Mapping[str, Any]]],
     runtime_evidence: Mapping[str, Any],
-    route_inventory: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the exact-artifact report from probe + runtime evidence.
 
@@ -171,13 +166,22 @@ def assemble_report(
     runtime_caps = runtime_evidence.get("capabilities") or {}
     if not isinstance(runtime_caps, Mapping):
         raise DriverError("runtime evidence capabilities must be an object")
+    route_inventory = runtime_evidence.get("routeInventory")
+    if not isinstance(route_inventory, Mapping):
+        raise DriverError(
+            "runtime evidence must include the inventory generated inside the "
+            "pinned Omnigent server image"
+        )
+    provenance = route_inventory.get("artifactProvenance")
+    if not isinstance(provenance, Mapping) or provenance.get("sourceMode") != (
+        "running_images"
+    ):
+        raise DriverError("runtime route inventory is not exact-image evidence")
     return {
         "sourceCommit": source_commit,
         "images": dict(images),
         "capabilities": _merge_capabilities(in_image_probes, runtime_caps),
-        "routeInventory": dict(
-            route_inventory or generate_native_ui_route_inventory(REPO_ROOT)
-        ),
+        "routeInventory": dict(route_inventory),
         "secretScan": runtime_evidence.get("secretScan") or {"status": "unknown"},
     }
 
@@ -186,7 +190,11 @@ def load_required_route_inventory_digest(path: Path = ROUTE_INVENTORY_FIXTURE) -
     """Load the reviewed inventory digest checked into the repository."""
 
     document = json.loads(path.read_text(encoding="utf-8"))
-    digest = document.get("inventoryDigest") if isinstance(document, Mapping) else None
+    digest = (
+        document.get("classificationDigest")
+        if isinstance(document, Mapping)
+        else None
+    )
     if not isinstance(digest, str) or not digest.startswith("sha256:"):
         raise DriverError("reviewed route inventory fixture has no valid digest")
     return digest

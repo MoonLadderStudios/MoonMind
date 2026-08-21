@@ -13,6 +13,8 @@ import pytest
 
 from moonmind.omnigent.native_ui_route_inventory import (
     INVENTORY_SCHEMA_VERSION,
+    NativeUiRouteInventoryError,
+    exact_artifact_role_digest,
     generate_native_ui_route_inventory,
 )
 
@@ -58,6 +60,98 @@ def test_inventory_binds_every_required_exact_artifact() -> None:
         "moonmindFacade",
     }:
         assert inventory["artifactDigests"][key].startswith("sha256:")
+
+    assert exact_artifact_role_digest(_REPO_ROOT, "omnigent_host") == (
+        inventory["artifactDigests"]["host"]
+    )
+    assert exact_artifact_role_digest(_REPO_ROOT, "moonmind_facade") == (
+        inventory["artifactDigests"]["moonmindFacade"]
+    )
+
+
+def test_running_image_inventory_requires_matching_in_image_bytes(tmp_path) -> None:
+    reviewed = generate_native_ui_route_inventory(_REPO_ROOT)
+    compiled_ui = tmp_path / "compiled-ui"
+    compiled_ui.mkdir()
+    (compiled_ui / "index.html").write_text("compiled stock UI", encoding="utf-8")
+    (compiled_ui / "app.js").write_text(
+        'fetch("/v1/info")',
+        encoding="utf-8",
+    )
+    observed = {
+        "omnigentHost": reviewed["artifactDigests"]["host"],
+        "moonmindFacade": reviewed["artifactDigests"]["moonmindFacade"],
+        "moonmindHarness": exact_artifact_role_digest(
+            _REPO_ROOT, "moonmind_harness"
+        ),
+    }
+    images = {
+        "omnigentServer": "omnigent-server@sha256:" + "1" * 64,
+        "omnigentHost": "omnigent-host@sha256:" + "2" * 64,
+        "moonmindFacade": "moonmind@sha256:" + "3" * 64,
+    }
+
+    generated = generate_native_ui_route_inventory(
+        _REPO_ROOT,
+        compiled_ui_root=compiled_ui,
+        deployable_images=images,
+        observed_artifact_digests=observed,
+    )
+    assert generated["artifactProvenance"]["sourceMode"] == "running_images"
+    assert generated["artifactProvenance"]["inImageArtifactDigests"] == observed
+    compiled_surface = generated["artifactProvenance"]["compiledUiNetworkSurface"]
+    assert compiled_surface["routeLiteralCount"] == 1
+    assert compiled_surface["routeLiterals"][0]["resolvedRoutes"] == [
+        {"method": "GET", "path": "/v1/info", "routeKey": "GET /v1/info"}
+    ]
+
+    with pytest.raises(
+        NativeUiRouteInventoryError,
+        match="in-image source bytes do not match",
+    ):
+        generate_native_ui_route_inventory(
+            _REPO_ROOT,
+            compiled_ui_root=compiled_ui,
+            deployable_images=images,
+            observed_artifact_digests={
+                **observed,
+                "moonmindFacade": "sha256:" + "4" * 64,
+            },
+        )
+
+
+def test_compiled_ui_unknown_route_literal_is_stably_fail_closed(tmp_path) -> None:
+    reviewed = generate_native_ui_route_inventory(_REPO_ROOT)
+    compiled_ui = tmp_path / "compiled-ui"
+    compiled_ui.mkdir()
+    (compiled_ui / "app.js").write_text(
+        'fetch("/v1/new-unclassified-route")',
+        encoding="utf-8",
+    )
+    observed = {
+        "omnigentHost": reviewed["artifactDigests"]["host"],
+        "moonmindFacade": reviewed["artifactDigests"]["moonmindFacade"],
+        "moonmindHarness": exact_artifact_role_digest(
+            _REPO_ROOT, "moonmind_harness"
+        ),
+    }
+    generated = generate_native_ui_route_inventory(
+        _REPO_ROOT,
+        compiled_ui_root=compiled_ui,
+        deployable_images={
+            "omnigentServer": "omnigent-server@sha256:" + "1" * 64,
+            "omnigentHost": "omnigent-host@sha256:" + "2" * 64,
+            "moonmindFacade": "moonmind@sha256:" + "3" * 64,
+        },
+        observed_artifact_digests=observed,
+    )
+
+    literal = generated["artifactProvenance"]["compiledUiNetworkSurface"][
+        "routeLiterals"
+    ][0]
+    assert literal["classification"] == "stable_unsupported_route"
+    assert literal["resolution"] == "reject_before_upstream"
+    assert "resolvedRoutes" not in literal
 
 
 def test_every_exact_stock_route_has_one_explicit_classification() -> None:
@@ -145,14 +239,91 @@ def test_every_ui_network_call_is_method_aware_and_exactly_joined() -> None:
     assert delegated
     assert inventory["uiDelegatedCallCount"] == len(delegated)
     assert {call["classification"] for call in delegated} <= {
-        "outside_binding_auth_fail_closed",
-        "scoped_transport_adapter_then_exact_route_gate",
+        "stable_unsupported_route",
+        "scoped_transport_adapter",
     }
+    assert all(call["method"] for call in delegated)
+    assert all(call["pathPattern"].startswith("/") for call in delegated)
+    assert all(
+        call["resolution"]
+        in {"reject_before_upstream", "exact_method_path_allowlist"}
+        for call in delegated
+    )
+    assert all(
+        call.get("resolvedRoutes")
+        if call["classification"] == "scoped_transport_adapter"
+        else call["resolution"] == "reject_before_upstream"
+        for call in delegated
+    )
     assert all(call["argumentDigest"].startswith("sha256:") for call in delegated)
     assert all(
         call["unknownBehavior"] == "omnigent_chat_transport_unsupported"
         for call in delegated
     )
+
+
+def test_literal_default_environment_variants_join_the_scoped_facade() -> None:
+    inventory = generate_native_ui_route_inventory(_REPO_ROOT)
+    by_key = {route["routeKey"]: route for route in inventory["routes"]}
+    references = inventory["uiRouteReferences"]
+
+    expected = {
+        "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/changes",
+        (
+            "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/"
+            "diff/{relative_path:path}"
+        ),
+        (
+            "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/"
+            "filesystem/{relative_path:path}"
+        ),
+        (
+            "PUT /v1/sessions/{session_id}/resources/environments/{environment_id}/"
+            "filesystem/{relative_path:path}"
+        ),
+    }
+    assert all(by_key[key]["classification"] == "binding_scoped" for key in expected)
+    for key in expected:
+        assert by_key[key]["pathConstraints"] == {
+            "environment_id": {
+                "allowedLiterals": ["default"],
+                "otherValuesBehavior": "omnigent_chat_transport_unsupported",
+            }
+        }
+    environment_references = [
+        reference
+        for reference in references
+        if "/resources/environments/default/" in reference["path"]
+    ]
+    assert environment_references
+    assert all("{default_environment_id}" not in item["path"] for item in references)
+    assert all(
+        item["join"] == "exact_stock_route" for item in environment_references
+    )
+
+
+def test_health_is_an_exact_stock_ui_reference() -> None:
+    inventory = generate_native_ui_route_inventory(_REPO_ROOT)
+
+    health = [
+        reference
+        for reference in inventory["uiRouteReferences"]
+        if reference["path"] == "/health"
+    ]
+    assert health == [
+        {
+            "classification": "binding_scoped",
+            "facadeOperation": "liveness",
+            "join": "exact_stock_route",
+            "method": "GET",
+            "networkApi": "authenticatedFetch",
+            "path": "/health",
+            "routeKey": "GET /health",
+            "sourceFile": "omnigent/web/src/hooks/useRunnerHealth.ts",
+            "sourceLine": 95,
+            "unsupportedBehavior": "not_applicable",
+        }
+    ]
 
 
 def test_websocket_message_classes_come_from_exact_ui_and_server_sources() -> None:

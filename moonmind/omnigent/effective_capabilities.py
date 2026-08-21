@@ -191,25 +191,21 @@ def _authority_reason(authority: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _validate_harness_authority(
-    row: Any, metadata: Mapping[str, Any], launch: Mapping[str, Any]
+def validate_harness_authority_envelope(
+    raw: Any,
+    *,
+    launch: Mapping[str, Any],
+    current_host: Any = None,
+    current_session: Any = None,
 ) -> str | None:
-    """Validate optional generic-harness plan/binding/attestation authority.
+    """Validate generic plan/binding/attestation joins at a runtime boundary.
 
-    Existing profile-bound realizers do not persist this generic envelope and
-    continue through the established authority path. Once ``harnessAuthority``
-    is present, every referenced immutable object becomes mandatory and must
-    join exactly at the current host and provider session boundary.
+    This public validator is shared by the durable writer and the capability
+    reader.  A malformed or stale envelope therefore cannot be persisted and a
+    previously valid envelope still fails closed if host/session authority later
+    changes.
     """
 
-    generic_realizer = _text(launch.get("executionRealizerRef")) == (
-        "generic-omnigent-host@1"
-    )
-    if "harnessAuthority" not in metadata:
-        if generic_realizer or _text(launch.get("executionPlanRef")):
-            return "harness_authority_invalid"
-        return None
-    raw = metadata.get("harnessAuthority")
     if not isinstance(raw, Mapping):
         return "harness_authority_invalid"
     try:
@@ -267,18 +263,38 @@ def _validate_harness_authority(
         ):
             raise ValueError("required exact-host capability mismatch")
 
-        current_host = _text(getattr(row, "omnigent_host_id", None))
-        current_session = _text(getattr(row, "omnigent_session_id", None))
-        if current_host and (
-            binding.omnigentHostId != current_host
-            or attestation.hostId != current_host
+        host_id = _text(current_host)
+        session_id = _text(current_session)
+        if host_id and (
+            binding.omnigentHostId != host_id
+            or attestation.hostId != host_id
         ):
             raise ValueError("current host authority mismatch")
-        if current_session and binding.omnigentSessionId != current_session:
+        if session_id and binding.omnigentSessionId != session_id:
             raise ValueError("current session authority mismatch")
     except (KeyError, TypeError, ValueError):
         return "harness_authority_invalid"
     return None
+
+
+def _validate_harness_authority(
+    row: Any, metadata: Mapping[str, Any], launch: Mapping[str, Any]
+) -> str | None:
+    """Validate optional generic authority while preserving Codex authority."""
+
+    generic_realizer = _text(launch.get("executionRealizerRef")) == (
+        "generic-omnigent-host@1"
+    )
+    if "harnessAuthority" not in metadata:
+        if generic_realizer or _text(launch.get("executionPlanRef")):
+            return "harness_authority_invalid"
+        return None
+    return validate_harness_authority_envelope(
+        metadata.get("harnessAuthority"),
+        launch=launch,
+        current_host=getattr(row, "omnigent_host_id", None),
+        current_session=getattr(row, "omnigent_session_id", None),
+    )
 
 
 def resolve_effective_capabilities(

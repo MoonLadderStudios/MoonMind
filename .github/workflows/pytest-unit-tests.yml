@@ -562,6 +562,30 @@ jobs:
           tags: moonmind-exact-artifact:candidate
           # A local single-arch image so its digest is the immutable artifact
           # under test.
+      - name: Build the CI-only exact-artifact test runtime
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: api_service/Dockerfile
+          target: exact-artifact-test-runtime
+          load: true
+          tags: moonmind-exact-artifact-test:candidate
+      - name: Build the pinned stock Omnigent server image
+        uses: docker/build-push-action@v6
+        with:
+          context: omnigent
+          file: omnigent/deploy/docker/Dockerfile
+          target: runtime
+          load: true
+          tags: omnigent-exact-server:candidate
+      - name: Build the pinned exact Omnigent host image
+        uses: docker/build-push-action@v6
+        with:
+          context: omnigent
+          file: omnigent/deploy/docker/Dockerfile
+          target: host
+          load: true
+          tags: omnigent-exact-host:candidate
       - name: Resolve the immutable image identity
         id: digest
         shell: bash
@@ -580,6 +604,106 @@ jobs:
           echo "ref=moonmind-exact-artifact@sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "digest=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
           echo "runnable=sha256:${DIGEST}" >> "$GITHUB_OUTPUT"
+          OMNIGENT_SERVER_ID="$(docker image inspect omnigent-exact-server:candidate --format '{{ .Id }}')"
+          OMNIGENT_HOST_ID="$(docker image inspect omnigent-exact-host:candidate --format '{{ .Id }}')"
+          OMNIGENT_SERVER_DIGEST="${OMNIGENT_SERVER_ID#sha256:}"
+          OMNIGENT_HOST_DIGEST="${OMNIGENT_HOST_ID#sha256:}"
+          echo "omnigent_server_runnable=sha256:${OMNIGENT_SERVER_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "omnigent_host_runnable=sha256:${OMNIGENT_HOST_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "omnigent_server_ref=omnigent-exact-server@sha256:${OMNIGENT_SERVER_DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "omnigent_host_ref=omnigent-exact-host@sha256:${OMNIGENT_HOST_DIGEST}" >> "$GITHUB_OUTPUT"
+      - name: Generate route inventory inside the exact stock server image
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/omnigent-exact-artifact
+          OMNIGENT_REVISION="$(git -C omnigent rev-parse HEAD)"
+          OMNIGENT_HOST_SOURCE_DIGEST="$(docker run --rm \
+            -e PYTHONPATH=/probe \
+            -v "$PWD:/probe:ro" \
+            --entrypoint python \
+            "${{ steps.digest.outputs.omnigent_host_runnable }}" \
+            /probe/tools/probe_omnigent_route_artifact.py \
+            --role omnigent_host --root /build)"
+          MOONMIND_FACADE_SOURCE_DIGEST="$(docker run --rm \
+            -e PYTHONPATH=/app \
+            -v "$PWD:/probe:ro" \
+            --entrypoint python \
+            "${{ steps.digest.outputs.runnable }}" \
+            /probe/tools/probe_omnigent_route_artifact.py \
+            --role moonmind_facade --root /app)"
+          MOONMIND_HARNESS_SOURCE_DIGEST="$(docker run --rm \
+            -e PYTHONPATH=/app \
+            -v "$PWD:/probe:ro" \
+            --entrypoint python \
+            "${{ steps.digest.outputs.runnable }}" \
+            /probe/tools/probe_omnigent_route_artifact.py \
+            --role moonmind_harness --root /app)"
+          for digest in \
+            "$OMNIGENT_HOST_SOURCE_DIGEST" \
+            "$MOONMIND_FACADE_SOURCE_DIGEST" \
+            "$MOONMIND_HARNESS_SOURCE_DIGEST"; do
+            if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Exact artifact source probe returned an invalid digest"
+              exit 1
+            fi
+          done
+          docker run --rm \
+            -e PYTHONPATH=/probe \
+            -v "$PWD:/probe:ro" \
+            -v "$PWD/artifacts/omnigent-exact-artifact:/evidence" \
+            --entrypoint python \
+            "${{ steps.digest.outputs.omnigent_server_runnable }}" \
+            /probe/tools/generate_omnigent_route_inventory.py \
+            --source-root /build \
+            --facade-root /probe \
+            --omnigent-revision "$OMNIGENT_REVISION" \
+            --compiled-ui-root /build/omnigent/server/static/web-ui \
+            --omnigent-server-image "${{ steps.digest.outputs.omnigent_server_ref }}" \
+            --omnigent-host-image "${{ steps.digest.outputs.omnigent_host_ref }}" \
+            --moonmind-facade-image "${{ steps.digest.outputs.ref }}" \
+            --observed-omnigent-host-digest "$OMNIGENT_HOST_SOURCE_DIGEST" \
+            --observed-moonmind-facade-digest "$MOONMIND_FACADE_SOURCE_DIGEST" \
+            --observed-moonmind-harness-digest "$MOONMIND_HARNESS_SOURCE_DIGEST" \
+            --output /evidence/route-inventory.json
+      - name: Exercise exact production bytes through the inventory-driven contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPLOYED_FACADE_DIGEST="$(docker run --rm \
+            -e PYTHONPATH=/app \
+            -v "$PWD:/probe:ro" \
+            --entrypoint python \
+            "${{ steps.digest.outputs.runnable }}" \
+            /probe/tools/probe_omnigent_route_artifact.py \
+            --role moonmind_facade --root /app)"
+          TEST_FACADE_DIGEST="$(docker run --rm \
+            -e PYTHONPATH=/app \
+            -v "$PWD:/probe:ro" \
+            --entrypoint python \
+            moonmind-exact-artifact-test:candidate \
+            /probe/tools/probe_omnigent_route_artifact.py \
+            --role moonmind_facade --root /app)"
+          if [[ "$DEPLOYED_FACADE_DIGEST" != "$TEST_FACADE_DIGEST" ]]; then
+            echo "::error::Exact-artifact test runtime does not contain the deployed facade bytes"
+            exit 1
+          fi
+          docker run --rm \
+            -e MOONMIND_FORCE_LOCAL_TESTS=1 \
+            -e PYTHONPATH=/app:/probe \
+            -v "$PWD:/probe:ro" \
+            --workdir /tmp \
+            --entrypoint python \
+            moonmind-exact-artifact-test:candidate \
+            -m pytest -q --tb=short \
+            /probe/tests/unit/omnigent/test_exact_artifact_conformance.py \
+            /probe/tests/unit/omnigent/test_native_ui_compat.py \
+            /probe/tests/unit/api/routers/test_omnigent_workflow_chat.py \
+            /probe/tests/unit/api/routers/test_omnigent_workflow_chat_ws.py \
+            /probe/tests/integration/omnigent/test_native_ui_route_inventory.py \
+            /probe/tests/integration/omnigent/test_generic_harness_authority_persistence.py \
+            /probe/tests/integration/omnigent/test_embedded_projection_conformance.py \
+            /probe/tests/integration/omnigent/test_execute_fake_server.py
       - name: Start Temporal for the worker readiness probe
         shell: bash
         run: |
@@ -630,6 +754,7 @@ jobs:
             --image "${{ steps.digest.outputs.runnable }}" \
             --database-url "$DATABASE_URL" \
             --temporal-address 127.0.0.1:7233 \
+            --route-inventory artifacts/omnigent-exact-artifact/route-inventory.json \
             --output runtime-evidence.json
       - name: Evaluate exact deployable-artifact conformance
         shell: bash

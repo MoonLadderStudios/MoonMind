@@ -235,6 +235,34 @@ def test_frontend_workflow_does_not_upload_dashboard_dist() -> None:
     assert "dashboard-dist" not in workflow_text
 
 
+def test_exact_artifact_job_executes_contracts_from_deployed_app_bytes() -> None:
+    workflow = _load_workflow()
+    steps = workflow["jobs"]["omnigent-exact-artifact"]["steps"]
+    test_build = next(
+        step
+        for step in steps
+        if step.get("name") == "Build the CI-only exact-artifact test runtime"
+    )
+    assert test_build["with"]["target"] == "exact-artifact-test-runtime"
+    journey = next(
+        step["run"]
+        for step in steps
+        if step.get("name")
+        == "Exercise exact production bytes through the inventory-driven contracts"
+    )
+    assert "DEPLOYED_FACADE_DIGEST" in journey
+    assert "PYTHONPATH=/app:/probe" in journey
+    assert "test_native_ui_route_inventory.py" in journey
+    assert "test_generic_harness_authority_persistence.py" in journey
+    assert "test_embedded_projection_conformance.py" in journey
+
+    dockerfile = (REPO_ROOT / "api_service" / "Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    assert "FROM runtime-base AS exact-artifact-test-runtime" in dockerfile
+    assert "PYTHONPATH=/app:/probe" in dockerfile
+
+
 def test_unit_fast_physically_ignores_heavy_collection_paths() -> None:
     command = _run_command("unit-fast", "Run selected unit suite")
 

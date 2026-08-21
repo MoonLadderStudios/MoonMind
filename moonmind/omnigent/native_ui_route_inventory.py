@@ -29,7 +29,7 @@ from moonmind.omnigent.native_ui_compat import (
     route_policy,
 )
 
-INVENTORY_SCHEMA_VERSION = "moonmind.omnigent.native-ui-route-inventory/v3"
+INVENTORY_SCHEMA_VERSION = "moonmind.omnigent.native-ui-route-inventory/v4"
 
 _HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete"})
 _ROUTE_METHODS = _HTTP_METHODS | {"websocket"}
@@ -48,10 +48,27 @@ _UI_FUNCTION = re.compile(
 _TYPE_COMPARISON = re.compile(
     r"(?:msg|control)\.get\([\"']type[\"']\)\s*(?:==|!=)\s*[\"']([^\"']+)"
 )
+_UI_ROUTE_LITERAL = re.compile(
+    r'''(?P<quote>["'`])'''
+    r'''(?P<body>/(?:v1(?:/|\\/)|health)(?:\\.|(?!\1).)*?)'''
+    r'''(?P=quote)'''
+)
 
 _SERVER_ROUTE_ROOT = Path("omnigent/omnigent/server/routes")
 _SERVER_APP = Path("omnigent/omnigent/server/app.py")
 _UI_ROOT = Path("omnigent/web/src")
+_FACADE_ARTIFACT_PATHS = (
+    "moonmind/omnigent/native_ui_compat.py",
+    "moonmind/omnigent/native_ui_route_inventory.py",
+    "moonmind/omnigent/workflow_chat_facade.py",
+    "moonmind/omnigent/effective_capabilities.py",
+    "moonmind/omnigent/bridge_artifacts.py",
+    "moonmind/omnigent/bridge_config.py",
+    "moonmind/omnigent/bridge_embedded.py",
+    "moonmind/omnigent/bridge_store.py",
+    "moonmind/workflows/adapters/omnigent_client.py",
+    "api_service/api/routers/omnigent_bridge.py",
+)
 
 
 class NativeUiRouteInventoryError(ValueError):
@@ -83,12 +100,27 @@ def _python_files(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*.py") if path.is_file())
 
 
+def exact_artifact_role_digest(root: str | Path, role: str) -> str:
+    """Digest one role's exact in-image files using inventory semantics."""
+
+    resolved = Path(root).resolve()
+    if role == "omnigent_host":
+        paths = _python_files(resolved / "omnigent/omnigent/host")
+    elif role == "moonmind_facade":
+        paths = [resolved / path for path in _FACADE_ARTIFACT_PATHS]
+    elif role == "moonmind_harness":
+        paths = _python_files(resolved / "moonmind/omnigent/harness_platform")
+    else:
+        raise NativeUiRouteInventoryError(f"unknown exact artifact role: {role}")
+    return _file_digest(resolved, paths)
+
+
 def _ui_files(root: Path) -> list[Path]:
     return sorted(
         path
         for path in root.rglob("*")
         if path.is_file()
-        and path.suffix in {".ts", ".tsx", ".js", ".jsx"}
+        and path.suffix in {".ts", ".tsx", ".js", ".jsx", ".mjs"}
         and ".test." not in path.name
         and ".spec." not in path.name
     )
@@ -220,6 +252,14 @@ def _sample_path(path: str) -> str:
             return "binding-1"
         if name == "terminal_id":
             return "terminal-1"
+        if name == "environment_id":
+            # The scoped facade intentionally exposes only the stock UI's
+            # build-time default environment.  Sampling another value would
+            # classify the whole parameterized server declaration fail-closed,
+            # even though its literal ``default`` variant is served.  The
+            # resulting inventory entry carries the constraint explicitly so
+            # every other environment id still fails closed.
+            return "default"
         if name in {"path", "relative_path", "file_path", "res_path"}:
             return "sample/path.txt"
         return "sample"
@@ -289,6 +329,12 @@ def _classify_route(route: dict[str, Any]) -> dict[str, Any]:
         policy["requiredCapability"] = matched.capability
         policy["readOnly"] = not matched.mutation
         facade_operation = matched.name
+    path_constraints: dict[str, Any] = {}
+    if matched is not None and "{environment_id}" in route["path"]:
+        path_constraints["environment_id"] = {
+            "allowedLiterals": ["default"],
+            "otherValuesBehavior": CODE_TRANSPORT_UNSUPPORTED,
+        }
     return {
         key: value
         for key, value in {
@@ -301,6 +347,7 @@ def _classify_route(route: dict[str, Any]) -> dict[str, Any]:
             "handlerDigest": route["handlerDigest"],
             "classification": classification,
             "facadeOperation": facade_operation,
+            "pathConstraints": path_constraints,
             **policy,
             "responseContract": {
                 "declaredStatusCodes": list(route["declaredStatusCodes"]),
@@ -425,7 +472,31 @@ def _parameter_name(expression: str) -> str:
     return re.sub(r"(?<!^)(?=[A-Z])", "_", selected).lower()
 
 
-def _template_route_text(value: str) -> str | None:
+def _javascript_string_literal(value: str) -> str | None:
+    """Return one plain JavaScript string literal's value."""
+
+    candidate = value.strip()
+    if len(candidate) < 2 or candidate[0] not in {"'", '"', "`"}:
+        return None
+    if candidate[-1] != candidate[0] or "${" in candidate:
+        return None
+    try:
+        # JSON handles double-quoted literals.  ``ast.literal_eval`` covers the
+        # single-quoted form used by TypeScript without executing source.
+        if candidate[0] == '"':
+            parsed = json.loads(candidate)
+        elif candidate[0] == "'":
+            parsed = ast.literal_eval(candidate)
+        else:
+            parsed = candidate[1:-1]
+    except (ValueError, SyntaxError, json.JSONDecodeError):
+        return None
+    return parsed if isinstance(parsed, str) else None
+
+
+def _template_route_text(
+    value: str, *, constants: dict[str, str] | None = None
+) -> str | None:
     quote = value[0]
     if len(value) < 2 or quote not in {"'", '"', "`"} or value[-1] != quote:
         return None
@@ -461,6 +532,12 @@ def _template_route_text(value: str) -> str | None:
         if depth:
             return None
         interpolation = raw[start + 2 : index - 1].strip()
+        if constants and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", interpolation):
+            literal = constants.get(interpolation)
+            if literal is not None:
+                output.append(literal)
+                cursor = index
+                continue
         name = _parameter_name(interpolation)
         # Optional suffix templates describe two exact stock routes: the base
         # collection and its path-addressed variant.  The path variant is the
@@ -479,7 +556,9 @@ def _template_route_text(value: str) -> str | None:
     return "".join(output).replace("\\/", "/")
 
 
-def _javascript_route_value(expression: str) -> str | None:
+def _javascript_route_value(
+    expression: str, *, constants: dict[str, str] | None = None
+) -> str | None:
     """Resolve a route expression made only from string/template literals."""
 
     value = expression.strip()
@@ -513,7 +592,7 @@ def _javascript_route_value(expression: str) -> str | None:
             cursor += 1
         else:
             return None
-        part = _template_route_text(value[start:cursor])
+        part = _template_route_text(value[start:cursor], constants=constants)
         if part is None:
             return None
         parts.append(part)
@@ -525,7 +604,7 @@ def _javascript_route_value(expression: str) -> str | None:
             return None
         cursor += 1
     raw = "".join(parts).split("?", 1)[0]
-    return raw if raw.startswith(("/v1/", "/health")) else None
+    return raw if raw.startswith("/") else None
 
 
 def _javascript_statement(source: str, start: int) -> str:
@@ -587,7 +666,9 @@ def _javascript_block(source: str, open_brace: int) -> str:
     return ""
 
 
-def _function_route_values(source: str) -> dict[str, str]:
+def _function_route_values(
+    source: str, *, constants: dict[str, str] | None = None
+) -> dict[str, str]:
     """Resolve route-only builder functions used as network-call arguments."""
 
     functions: dict[str, str] = {}
@@ -597,7 +678,13 @@ def _function_route_values(source: str) -> dict[str, str]:
             route
             for assignment in _UI_CONST_ASSIGNMENT.finditer(body)
             if (expression := _javascript_statement(body, assignment.end()))
-            and (route := _javascript_route_value(expression)) is not None
+            and (
+                route := _javascript_route_value(
+                    expression,
+                    constants=constants,
+                )
+            )
+            is not None
         }
         if len(values) == 1:
             functions[function.group("name")] = values.pop()
@@ -733,15 +820,31 @@ def _ui_route_references(
     delegated: dict[tuple[str, int, str], dict[str, Any]] = {}
     for path in _ui_files(repo_root / _UI_ROOT):
         source = _strip_javascript_comments(path.read_text(encoding="utf-8"))
-        constants = {
+        assignments = {
             match.group("name"): expression
             for match in _UI_CONST_ASSIGNMENT.finditer(source)
-            if (
-                expression := _javascript_statement(source, match.end())
-            )
-            and _javascript_route_value(expression) is not None
+            if (expression := _javascript_statement(source, match.end()))
         }
-        function_routes = _function_route_values(source)
+        literal_constants = {
+            name: literal
+            for name, expression in assignments.items()
+            if (literal := _javascript_string_literal(expression)) is not None
+        }
+        route_constants = {
+            name: route
+            for name, expression in assignments.items()
+            if (
+                route := _javascript_route_value(
+                    expression,
+                    constants=literal_constants,
+                )
+            )
+            is not None
+        }
+        function_routes = _function_route_values(
+            source,
+            constants=literal_constants,
+        )
         for match in _UI_NETWORK_CALL.finditer(source):
             name = match.group("name")
             if name == "WebSocket" and not match.group("constructor"):
@@ -750,39 +853,6 @@ def _ui_route_references(
             if call is None:
                 continue
             first_argument, full_call = call
-            route_path = _javascript_route_value(first_argument)
-            if route_path is None and re.fullmatch(
-                r"[A-Za-z_$][A-Za-z0-9_$]*", first_argument
-            ):
-                route_path = _javascript_route_value(constants.get(first_argument, ""))
-            if route_path is None:
-                function_call = re.fullmatch(
-                    r"(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*\(.*\)",
-                    first_argument,
-                    re.DOTALL,
-                )
-                if function_call:
-                    route_path = function_routes.get(function_call.group("name"))
-            if route_path is None:
-                source_file = path.relative_to(repo_root).as_posix()
-                source_line = source.count("\n", 0, match.start()) + 1
-                classification = (
-                    "outside_binding_auth_fail_closed"
-                    if first_argument.lstrip().startswith(
-                        ('"/auth', "'/auth", "`/auth")
-                    )
-                    else "scoped_transport_adapter_then_exact_route_gate"
-                )
-                delegated[(source_file, source_line, name)] = {
-                    "networkApi": name,
-                    "sourceFile": source_file,
-                    "sourceLine": source_line,
-                    "classification": classification,
-                    "argumentDigest": "sha256:"
-                    + sha256(first_argument.encode()).hexdigest(),
-                    "unknownBehavior": CODE_TRANSPORT_UNSUPPORTED,
-                }
-                continue
             method_match = re.search(
                 r"\bmethod\s*:\s*[\"'](GET|POST|PUT|PATCH|DELETE)[\"']",
                 full_call,
@@ -795,6 +865,66 @@ def _ui_route_references(
                 if method_match
                 else "GET"
             )
+            route_path = _javascript_route_value(
+                first_argument,
+                constants=literal_constants,
+            )
+            if route_path is None and re.fullmatch(
+                r"[A-Za-z_$][A-Za-z0-9_$]*", first_argument
+            ):
+                route_path = route_constants.get(first_argument)
+            if route_path is None:
+                function_call = re.fullmatch(
+                    r"(?P<name>[A-Za-z_$][A-Za-z0-9_$]*)\s*\(.*\)",
+                    first_argument,
+                    re.DOTALL,
+                )
+                if function_call:
+                    route_path = function_routes.get(function_call.group("name"))
+            if route_path is None:
+                source_file = path.relative_to(repo_root).as_posix()
+                source_line = source.count("\n", 0, match.start()) + 1
+                parameter = _parameter_name(first_argument)
+                classification = (
+                    "stable_unsupported_route"
+                    if first_argument.lstrip().startswith(
+                        ('"/auth', "'/auth", "`/auth")
+                    )
+                    else "scoped_transport_adapter"
+                )
+                delegated[(source_file, source_line, name)] = {
+                    "networkApi": name,
+                    "method": method,
+                    "pathPattern": f"/{{{parameter}:path}}",
+                    "sourceFile": source_file,
+                    "sourceLine": source_line,
+                    "classification": classification,
+                    "resolution": (
+                        "reject_before_upstream"
+                        if classification == "stable_unsupported_route"
+                        else "resolve_at_call_site_then_exact_route_gate"
+                    ),
+                    "argumentDigest": "sha256:"
+                    + sha256(first_argument.encode()).hexdigest(),
+                    "unknownBehavior": CODE_TRANSPORT_UNSUPPORTED,
+                }
+                continue
+            if not route_path.startswith(("/v1/", "/health")):
+                source_file = path.relative_to(repo_root).as_posix()
+                source_line = source.count("\n", 0, match.start()) + 1
+                delegated[(source_file, source_line, name)] = {
+                    "networkApi": name,
+                    "method": method,
+                    "pathPattern": route_path,
+                    "sourceFile": source_file,
+                    "sourceLine": source_line,
+                    "classification": "stable_unsupported_route",
+                    "resolution": "reject_before_upstream",
+                    "argumentDigest": "sha256:"
+                    + sha256(first_argument.encode()).hexdigest(),
+                    "unknownBehavior": CODE_TRANSPORT_UNSUPPORTED,
+                }
+                continue
             matched_route = _stock_route_for_ui_reference(
                 method=method,
                 path=route_path,
@@ -811,6 +941,7 @@ def _ui_route_references(
                     else f"{method} {route_path}"
                 ),
                 "method": method,
+                "networkApi": name,
                 "path": route_path,
                 "sourceFile": source_file,
                 "sourceLine": source_line,
@@ -827,45 +958,209 @@ def _ui_route_references(
                     else CODE_TRANSPORT_UNSUPPORTED
                 ),
             }
+    reference_values = [references[key] for key in sorted(references)]
+    for call in delegated.values():
+        if call["classification"] != "scoped_transport_adapter":
+            continue
+        candidates = [
+            reference
+            for reference in reference_values
+            if (
+                reference["networkApi"] == call["networkApi"]
+                or call["method"] == reference["method"] == "WEBSOCKET"
+            )
+        ]
+        resolved_routes = [
+            {
+                "method": reference["method"],
+                "path": reference["path"],
+                "routeKey": reference["routeKey"],
+            }
+            for reference in candidates
+        ]
+        if not resolved_routes:
+            # A dynamic adapter with no statically resolved caller has no
+            # authority to reach upstream merely because its argument happens
+            # to look like a path at runtime.
+            call["classification"] = "stable_unsupported_route"
+            call["resolution"] = "reject_before_upstream"
+        else:
+            call["resolution"] = "exact_method_path_allowlist"
+            call["resolvedRoutes"] = resolved_routes
     return (
-        [references[key] for key in sorted(references)],
+        reference_values,
         [delegated[key] for key in sorted(delegated)],
     )
 
 
-def _artifact_digests(repo_root: Path) -> dict[str, str]:
+def _compiled_ui_route_observations(
+    compiled_root: Path,
+    *,
+    stock_routes: list[dict[str, Any]],
+    source_references: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Classify route literals observed in the exact deployed UI bundle.
+
+    Production bundling renames local variables and transport wrappers, so the
+    compiled bytes cannot reliably preserve a method beside every route
+    literal.  Each literal is therefore joined back to the method-aware source
+    call sites from the same pinned server image through the independently
+    parsed stock route key.  A literal with no such join remains explicit
+    fail-closed evidence instead of gaining upstream authority by resemblance.
+    """
+
+    joined_source_keys = {
+        str(reference.get("routeKey"))
+        for reference in source_references
+        if reference.get("join") == "exact_stock_route"
+    }
+    observations: dict[tuple[str, str], dict[str, Any]] = {}
+    for path in _ui_files(compiled_root):
+        source = _strip_javascript_comments(path.read_text(encoding="utf-8"))
+        for match in _UI_ROUTE_LITERAL.finditer(source):
+            literal = match.group("quote") + match.group("body") + match.group("quote")
+            route_path = _template_route_text(literal)
+            if route_path is None:
+                continue
+            route_path = route_path.split("?", 1)[0].replace("\\/", "/")
+            allowlist: list[dict[str, str]] = []
+            for route in stock_routes:
+                if route["routeKey"] not in joined_source_keys:
+                    continue
+                matched = _stock_route_for_ui_reference(
+                    method=route["method"],
+                    path=route_path,
+                    routes=[route],
+                )
+                if matched is not None:
+                    allowlist.append(
+                        {
+                            "method": route["method"],
+                            "path": route_path,
+                            "routeKey": route["routeKey"],
+                        }
+                    )
+            source_file = path.relative_to(compiled_root).as_posix()
+            key = (source_file, route_path)
+            observations[key] = {
+                "pathPattern": route_path,
+                "sourceFile": source_file,
+                "literalDigest": "sha256:"
+                + sha256(match.group(0).encode()).hexdigest(),
+                "classification": (
+                    "scoped_transport_adapter"
+                    if allowlist
+                    else "stable_unsupported_route"
+                ),
+                "resolution": (
+                    "exact_method_path_allowlist"
+                    if allowlist
+                    else "reject_before_upstream"
+                ),
+                **({"resolvedRoutes": allowlist} if allowlist else {}),
+                "unknownBehavior": CODE_TRANSPORT_UNSUPPORTED,
+            }
+    route_literals = [observations[key] for key in sorted(observations)]
+    if not route_literals:
+        raise NativeUiRouteInventoryError(
+            "compiled stock UI contains no observable route literals"
+        )
+    body = {
+        "routeLiterals": route_literals,
+        "routeLiteralCount": len(route_literals),
+        "classifiedRouteLiteralCount": len(route_literals),
+    }
+    body["digest"] = _canonical_digest(body)
+    return body
+
+
+def _artifact_digests(
+    repo_root: Path,
+    *,
+    facade_root: Path,
+    omnigent_revision: str | None,
+) -> dict[str, str]:
     omnigent = repo_root / "omnigent"
     server_files = _python_files(omnigent / "omnigent/server")
-    host_files = _python_files(omnigent / "omnigent/host")
-    harness_files = _python_files(
-        omnigent / "omnigent/runtime/harnesses"
-    ) + _python_files(repo_root / "moonmind/omnigent/harness_platform")
-    facade_files = [
-        repo_root / "moonmind/omnigent/native_ui_compat.py",
-        repo_root / "moonmind/omnigent/native_ui_route_inventory.py",
-        repo_root / "moonmind/omnigent/workflow_chat_facade.py",
-        repo_root / "moonmind/omnigent/effective_capabilities.py",
-        repo_root / "moonmind/omnigent/bridge_artifacts.py",
-        repo_root / "moonmind/omnigent/bridge_config.py",
-        repo_root / "moonmind/omnigent/bridge_embedded.py",
-        repo_root / "moonmind/omnigent/bridge_store.py",
-        repo_root / "moonmind/workflows/adapters/omnigent_client.py",
-        repo_root / "api_service/api/routers/omnigent_bridge.py",
-    ]
+    stock_harness_files = _python_files(omnigent / "omnigent/runtime/harnesses")
+    moonmind_harness_digest = exact_artifact_role_digest(
+        facade_root, "moonmind_harness"
+    )
+    # Namespace each half before combining so checkout generation and in-image
+    # generation produce the same digest despite using different filesystem
+    # roots for the MoonMind classifier.
+    harness_digest = _canonical_digest(
+        {
+            "omnigent": _file_digest(repo_root, stock_harness_files),
+            "moonmind": moonmind_harness_digest,
+        }
+    )
+    revision = omnigent_revision or _git_revision(omnigent)
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise NativeUiRouteInventoryError("pinned Omnigent revision is invalid")
     return {
-        "omnigent": "git:" + _git_revision(omnigent),
+        "omnigent": "git:" + revision,
         "ui": _file_digest(repo_root, _ui_files(omnigent / "web/src")),
         "server": _file_digest(repo_root, server_files),
-        "host": _file_digest(repo_root, host_files),
-        "harnessImplementation": _file_digest(repo_root, harness_files),
-        "moonmindFacade": _file_digest(repo_root, facade_files),
+        "host": exact_artifact_role_digest(repo_root, "omnigent_host"),
+        "harnessImplementation": harness_digest,
+        "moonmindFacade": exact_artifact_role_digest(
+            facade_root, "moonmind_facade"
+        ),
     }
 
 
-def generate_native_ui_route_inventory(repo_root: str | Path) -> dict[str, Any]:
-    """Generate the deterministic exact-stock inventory for ``repo_root``."""
+def generate_native_ui_route_inventory(
+    repo_root: str | Path,
+    *,
+    facade_root: str | Path | None = None,
+    omnigent_revision: str | None = None,
+    compiled_ui_root: str | Path | None = None,
+    deployable_images: dict[str, str] | None = None,
+    observed_artifact_digests: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Generate a deterministic inventory from checkout or in-image bytes.
+
+    The reviewed fixture uses the checkout mode for human review.  The required
+    exact-artifact gate supplies ``compiled_ui_root`` and all three immutable
+    deployable image identities while running this generator *inside* the
+    pinned stock server image.  Keeping those modes explicit prevents the CI
+    driver from silently substituting checkout sources for deployed bytes.
+    """
 
     root = Path(repo_root).resolve()
+    facade = Path(facade_root or root).resolve()
+    compiled_root = (
+        Path(compiled_ui_root).resolve() if compiled_ui_root is not None else None
+    )
+    image_refs = dict(deployable_images or {})
+    observed_digests = dict(observed_artifact_digests or {})
+    running_image_mode = compiled_root is not None or bool(image_refs)
+    if running_image_mode:
+        required_roles = {"omnigentServer", "omnigentHost", "moonmindFacade"}
+        if set(image_refs) != required_roles:
+            raise NativeUiRouteInventoryError(
+                "in-image inventory requires exact server, host, and facade images"
+            )
+        if compiled_root is None or not compiled_root.is_dir():
+            raise NativeUiRouteInventoryError(
+                "in-image inventory requires the compiled stock UI directory"
+            )
+        for role, image_ref in image_refs.items():
+            if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image_ref):
+                raise NativeUiRouteInventoryError(
+                    f"{role} image must be digest-pinned"
+                )
+        expected_observed_roles = {
+            "omnigentHost",
+            "moonmindFacade",
+            "moonmindHarness",
+        }
+        if set(observed_digests) != expected_observed_roles:
+            raise NativeUiRouteInventoryError(
+                "in-image inventory requires host, facade, and harness byte "
+                "attestations"
+            )
     stock_routes = _stock_routes(root)
     websocket_protocols = [
         _websocket_protocol(route.copy(), repo_root=root)
@@ -882,10 +1177,52 @@ def generate_native_ui_route_inventory(repo_root: str | Path) -> dict[str, Any]:
         root,
         stock_routes=stock_routes,
     )
+    artifact_digests = _artifact_digests(
+        root,
+        facade_root=facade,
+        omnigent_revision=omnigent_revision,
+    )
+    if running_image_mode:
+        expected_observed = {
+            "omnigentHost": artifact_digests["host"],
+            "moonmindFacade": artifact_digests["moonmindFacade"],
+            "moonmindHarness": exact_artifact_role_digest(
+                facade, "moonmind_harness"
+            ),
+        }
+        if observed_digests != expected_observed:
+            raise NativeUiRouteInventoryError(
+                "in-image source bytes do not match the classified artifacts"
+            )
+    compiled_ui_observations = (
+        _compiled_ui_route_observations(
+            compiled_root,
+            stock_routes=stock_routes,
+            source_references=ui_references,
+        )
+        if compiled_root is not None
+        else None
+    )
     body: dict[str, Any] = {
         "schemaVersion": INVENTORY_SCHEMA_VERSION,
         "sourceIssue": "MoonLadderStudios/MoonMind#3635",
-        "artifactDigests": _artifact_digests(root),
+        "artifactDigests": artifact_digests,
+        "artifactProvenance": {
+            "sourceMode": "running_images" if running_image_mode else "checkout",
+            "generationBoundary": (
+                "inside_pinned_omnigent_server_image"
+                if running_image_mode
+                else "reviewed_checkout_fixture"
+            ),
+            "compiledUiDigest": (
+                _file_digest(compiled_root, compiled_root.rglob("*"))
+                if compiled_root is not None
+                else None
+            ),
+            "deployableImages": image_refs,
+            "inImageArtifactDigests": observed_digests,
+            "compiledUiNetworkSurface": compiled_ui_observations,
+        },
         "routes": classified,
         "sseProtocols": sse_protocols,
         "uiDelegatedNetworkCalls": ui_delegated_calls,
@@ -897,6 +1234,10 @@ def generate_native_ui_route_inventory(repo_root: str | Path) -> dict[str, Any]:
     }
     body["uiDelegatedCallCount"] = len(body["uiDelegatedNetworkCalls"])
     body["uiReferenceCount"] = len(body["uiRouteReferences"])
+    classification_body = {
+        key: value for key, value in body.items() if key != "artifactProvenance"
+    }
+    body["classificationDigest"] = _canonical_digest(classification_body)
     body["inventoryDigest"] = _canonical_digest(body)
     return body
 
@@ -904,5 +1245,6 @@ def generate_native_ui_route_inventory(repo_root: str | Path) -> dict[str, Any]:
 __all__ = [
     "INVENTORY_SCHEMA_VERSION",
     "NativeUiRouteInventoryError",
+    "exact_artifact_role_digest",
     "generate_native_ui_route_inventory",
 ]

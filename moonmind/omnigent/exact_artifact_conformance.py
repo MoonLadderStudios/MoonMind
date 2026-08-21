@@ -220,6 +220,7 @@ def evaluate_exact_artifact_conformance(
         )
     else:
         inventory_digest = route_inventory.get("inventoryDigest")
+        classification_digest = route_inventory.get("classificationDigest")
         artifact_digests = route_inventory.get("artifactDigests")
         route_count = route_inventory.get("routeCount")
         classified_count = route_inventory.get("classifiedRouteCount")
@@ -265,9 +266,27 @@ def evaluate_exact_artifact_conformance(
                         "exact stock route inventory content does not match its digest",
                     )
                 )
+        classification_body = {
+            key: value
+            for key, value in route_inventory.items()
+            if key
+            not in {"artifactProvenance", "classificationDigest", "inventoryDigest"}
+        }
+        expected_classification_digest = "sha256:" + sha256(
+            json.dumps(
+                classification_body, sort_keys=True, separators=(",", ":")
+            ).encode()
+        ).hexdigest()
+        if classification_digest != expected_classification_digest:
+            failures.append(
+                GateFailure(
+                    "route_inventory_classification_digest_invalid",
+                    "exact stock route classification does not match its digest",
+                )
+            )
         if (
             required_route_inventory_digest is not None
-            and inventory_digest != required_route_inventory_digest
+            and classification_digest != required_route_inventory_digest
         ):
             failures.append(
                 GateFailure(
@@ -275,19 +294,106 @@ def evaluate_exact_artifact_conformance(
                     "exact stock route inventory changed without an admitted classification",
                 )
             )
-        if not isinstance(artifact_digests, Mapping) or set(artifact_digests) != set(
-            _ROUTE_ARTIFACT_ROLES
-        ):
+        artifact_digests_valid = isinstance(artifact_digests, Mapping) and set(
+            artifact_digests
+        ) == set(_ROUTE_ARTIFACT_ROLES)
+        if not artifact_digests_valid:
             failures.append(
                 GateFailure(
                     "route_inventory_artifacts_invalid",
                     "route inventory is not bound to every required exact artifact",
                 )
             )
-        elif not _GIT_DIGEST.fullmatch(str(artifact_digests.get("omnigent") or "")) or any(
-            not _DIGEST.fullmatch(str(artifact_digests.get(role) or ""))
-            for role in _ROUTE_ARTIFACT_ROLES
-            if role != "omnigent"
+        provenance = route_inventory.get("artifactProvenance")
+        deployable_images = (
+            provenance.get("deployableImages")
+            if isinstance(provenance, Mapping)
+            else None
+        )
+        in_image_artifact_digests = (
+            provenance.get("inImageArtifactDigests")
+            if isinstance(provenance, Mapping)
+            else None
+        )
+        compiled_ui_surface = (
+            provenance.get("compiledUiNetworkSurface")
+            if isinstance(provenance, Mapping)
+            else None
+        )
+        compiled_ui_literals = (
+            compiled_ui_surface.get("routeLiterals")
+            if isinstance(compiled_ui_surface, Mapping)
+            else None
+        )
+        compiled_ui_surface_body = (
+            {
+                key: value
+                for key, value in compiled_ui_surface.items()
+                if key != "digest"
+            }
+            if isinstance(compiled_ui_surface, Mapping)
+            else {}
+        )
+        expected_compiled_ui_surface_digest = "sha256:" + sha256(
+            json.dumps(
+                compiled_ui_surface_body,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        compiled_ui_surface_valid = (
+            isinstance(compiled_ui_surface, Mapping)
+            and isinstance(compiled_ui_literals, list)
+            and bool(compiled_ui_literals)
+            and compiled_ui_surface.get("routeLiteralCount")
+            == len(compiled_ui_literals)
+            and compiled_ui_surface.get("classifiedRouteLiteralCount")
+            == len(compiled_ui_literals)
+            and compiled_ui_surface.get("digest")
+            == expected_compiled_ui_surface_digest
+        )
+        provenance_valid = (
+            isinstance(provenance, Mapping)
+            and provenance.get("sourceMode") == "running_images"
+            and provenance.get("generationBoundary")
+            == "inside_pinned_omnigent_server_image"
+            and _DIGEST.fullmatch(str(provenance.get("compiledUiDigest") or ""))
+            and isinstance(deployable_images, Mapping)
+            and set(deployable_images)
+            == {"omnigentServer", "omnigentHost", "moonmindFacade"}
+            and all(
+                _DIGEST_REF.fullmatch(str(image_ref or ""))
+                for image_ref in deployable_images.values()
+            )
+            and deployable_images.get("moonmindFacade") == images.get("server")
+            and isinstance(in_image_artifact_digests, Mapping)
+            and set(in_image_artifact_digests)
+            == {"omnigentHost", "moonmindFacade", "moonmindHarness"}
+            and all(
+                _DIGEST.fullmatch(str(value or ""))
+                for value in in_image_artifact_digests.values()
+            )
+            and artifact_digests_valid
+            and in_image_artifact_digests.get("omnigentHost")
+            == artifact_digests.get("host")
+            and in_image_artifact_digests.get("moonmindFacade")
+            == artifact_digests.get("moonmindFacade")
+            and compiled_ui_surface_valid
+        )
+        if not provenance_valid:
+            failures.append(
+                GateFailure(
+                    "route_inventory_provenance_invalid",
+                    "route inventory was not generated from the exact running image set",
+                )
+            )
+        if artifact_digests_valid and (
+            not _GIT_DIGEST.fullmatch(str(artifact_digests.get("omnigent") or ""))
+            or any(
+                not _DIGEST.fullmatch(str(artifact_digests.get(role) or ""))
+                for role in _ROUTE_ARTIFACT_ROLES
+                if role != "omnigent"
+            )
         ):
             failures.append(
                 GateFailure(
@@ -356,7 +462,10 @@ def evaluate_exact_artifact_conformance(
             and ui_reference_count == len(ui_references)
             and all(
                 isinstance(reference, Mapping)
-                and str(reference.get("path") or "").startswith("/v1/")
+                and (
+                    str(reference.get("path") or "").startswith("/v1/")
+                    or reference.get("path") == "/health"
+                )
                 and reference.get("method") in {
                     "GET",
                     "POST",
@@ -387,9 +496,34 @@ def evaluate_exact_artifact_conformance(
                 }
                 and call.get("classification")
                 in {
-                    "outside_binding_auth_fail_closed",
-                    "scoped_transport_adapter_then_exact_route_gate",
+                    "stable_unsupported_route",
+                    "scoped_transport_adapter",
                 }
+                and call.get("method")
+                in {"GET", "POST", "PUT", "PATCH", "DELETE", "WEBSOCKET"}
+                and str(call.get("pathPattern") or "").startswith("/")
+                and call.get("resolution")
+                in {
+                    "reject_before_upstream",
+                    "exact_method_path_allowlist",
+                }
+                and (
+                    call.get("resolution") == "reject_before_upstream"
+                    or (
+                        isinstance(call.get("resolvedRoutes"), list)
+                        and bool(call.get("resolvedRoutes"))
+                        and all(
+                            isinstance(resolved, Mapping)
+                            and resolved.get("method")
+                            in {"GET", "POST", "PUT", "PATCH", "DELETE", "WEBSOCKET"}
+                            and str(resolved.get("path") or "").startswith(
+                                ("/v1/", "/health")
+                            )
+                            and resolved.get("routeKey") in set(route_keys)
+                            for resolved in call["resolvedRoutes"]
+                        )
+                    )
+                )
                 and _DIGEST.fullmatch(str(call.get("argumentDigest") or ""))
                 and call.get("unknownBehavior")
                 == "omnigent_chat_transport_unsupported"
@@ -397,6 +531,44 @@ def evaluate_exact_artifact_conformance(
                 and isinstance(call.get("sourceLine"), int)
                 and call["sourceLine"] > 0
                 for call in ui_delegated_calls
+            )
+            and all(
+                isinstance(observation, Mapping)
+                and str(observation.get("pathPattern") or "").startswith(
+                    ("/v1/", "/health")
+                )
+                and observation.get("classification")
+                in {"stable_unsupported_route", "scoped_transport_adapter"}
+                and observation.get("resolution")
+                in {"reject_before_upstream", "exact_method_path_allowlist"}
+                and (
+                    observation.get("resolution") == "reject_before_upstream"
+                    or (
+                        isinstance(observation.get("resolvedRoutes"), list)
+                        and bool(observation.get("resolvedRoutes"))
+                        and all(
+                            isinstance(resolved, Mapping)
+                            and resolved.get("method")
+                            in {
+                                "GET",
+                                "POST",
+                                "PUT",
+                                "PATCH",
+                                "DELETE",
+                                "WEBSOCKET",
+                            }
+                            and resolved.get("routeKey") in set(route_keys)
+                            for resolved in observation["resolvedRoutes"]
+                        )
+                    )
+                )
+                and _DIGEST.fullmatch(
+                    str(observation.get("literalDigest") or "")
+                )
+                and observation.get("unknownBehavior")
+                == "omnigent_chat_transport_unsupported"
+                and observation.get("sourceFile")
+                for observation in compiled_ui_literals or ()
             )
         )
         if (
@@ -417,6 +589,7 @@ def evaluate_exact_artifact_conformance(
         route_projection = {
             "schemaVersion": route_inventory.get("schemaVersion"),
             "inventoryDigest": inventory_digest,
+            "classificationDigest": classification_digest,
             "artifactDigests": dict(artifact_digests or {}),
             "routeCount": route_count,
             "classifiedRouteCount": classified_count,

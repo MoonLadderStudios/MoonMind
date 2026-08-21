@@ -1072,6 +1072,59 @@ class OmnigentBridgeSessionStore:
             await session.refresh(stored)
             return _detached(session, stored)
 
+    async def bind_harness_authority(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        harness_authority: Mapping[str, Any],
+    ) -> OmnigentBridgeSession:
+        """Persist validated generic runtime authority before facade admission.
+
+        The bridge row is the production authority consumed by HTTP, SSE, and
+        WebSocket capability checks.  This writer accepts only a fully joined
+        plan/binding/attestation/decision envelope and is immutable on retry.
+        """
+
+        from moonmind.omnigent.effective_capabilities import (
+            validate_harness_authority_envelope,
+        )
+
+        try:
+            canonical = json.loads(
+                json.dumps(
+                    dict(harness_authority),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+        except (TypeError, ValueError) as exc:
+            raise OmnigentIdempotencyError(
+                "generic harness authority is not serializable"
+            ) from exc
+        async with self._session_factory() as session:
+            row = await self._require(session, request.idempotency_key)
+            launch = dict(row.effective_launch_snapshot_json or {})
+            invalid = validate_harness_authority_envelope(
+                canonical,
+                launch=launch,
+                current_host=row.omnigent_host_id,
+                current_session=row.omnigent_session_id,
+            )
+            if invalid:
+                raise OmnigentIdempotencyError(invalid)
+            metadata = dict(row.metadata_ or {})
+            existing = metadata.get("harnessAuthority")
+            if existing is not None and existing != canonical:
+                raise OmnigentIdempotencyError(
+                    "bridge generic harness authority is already bound"
+                )
+            if existing is None:
+                metadata["harnessAuthority"] = canonical
+                row.metadata_ = metadata
+                await session.commit()
+            await session.refresh(row)
+            return _detached(session, row)
+
     async def bind_egress_cleanup_authority(
         self,
         *,
@@ -2971,6 +3024,7 @@ class OmnigentBridgeSessionStore:
         bridge_session_id: str,
         *,
         capture_manifest_ref: str,
+        final_snapshot_ref: str,
         resource_projection_ref: str,
         evidence_completeness: str,
         resource_projection: Mapping[str, Any],
@@ -2984,10 +3038,12 @@ class OmnigentBridgeSessionStore:
             )
             row = result.scalar_one()
             row.capture_manifest_ref = str(capture_manifest_ref)[:1024]
+            row.final_snapshot_ref = str(final_snapshot_ref)[:1024]
             refs = dict(row.terminal_refs or {})
             refs.update(
                 {
                     "captureManifestRef": str(capture_manifest_ref)[:1024],
+                    "finalSnapshotRef": str(final_snapshot_ref)[:1024],
                     "resourceProjectionRef": str(resource_projection_ref)[:1024],
                     "resourceProjection": dict(resource_projection),
                     "evidenceCompleteness": str(evidence_completeness)[:64],

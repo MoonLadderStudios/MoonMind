@@ -11,6 +11,7 @@ from moonmind.omnigent.effective_capabilities import (
     resolve_bridge_row_capabilities,
     resolve_effective_capabilities,
 )
+from moonmind.omnigent.generic_opencode_runtime import build_generic_harness_authority
 from moonmind.omnigent.harness_platform.attestation import (
     HostHarnessAttestation,
     compute_attestation_ref,
@@ -145,14 +146,12 @@ def _generic_harness_authority(*, session_id: str = "provider-session"):
         exactHostCapabilityDecisionRef=decision_ref,
         omnigentSessionId=session_id,
     )
-    return {
-        "executionPlan": plan.model_dump(by_alias=True, mode="json"),
-        "runtimeBinding": binding.model_dump(by_alias=True, mode="json"),
-        "hostHarnessAttestation": attestation.model_dump(by_alias=True, mode="json"),
-        "exactHostCapabilityDecision": exact_decision.model_dump(
-            by_alias=True, mode="json"
-        ),
-    }
+    return build_generic_harness_authority(
+        execution_plan=plan,
+        runtime_binding=binding,
+        host_attestation=attestation,
+        exact_host_decision=exact_decision,
+    )
 
 
 def _resolve(**overrides):

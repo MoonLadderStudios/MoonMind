@@ -432,7 +432,9 @@ def test_docs_only_change_never_selects_omnigent_gate() -> None:
         "tools/start-worker.sh",
         # The exact-artifact gate implementation itself.
         "moonmind/omnigent/exact_artifact_conformance.py",
+        "tools/gather_exact_artifact_runtime_evidence.py",
         "tools/omnigent_exact_artifact_probe.py",
+        "tools/probe_omnigent_route_artifact.py",
         "tools/run_omnigent_exact_artifact_conformance.py",
         "tools/generate_omnigent_route_inventory.py",
     ],

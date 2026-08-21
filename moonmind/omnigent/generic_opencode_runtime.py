@@ -21,6 +21,13 @@ from moonmind.omnigent.harness_platform.attestation import (
     HostHarnessAttestation,
     validate_opencode_exact_host_preflight,
 )
+from moonmind.omnigent.harness_platform.capabilities import (
+    ExactHostCapabilityDecision,
+)
+from moonmind.omnigent.harness_platform.execution_plan import (
+    OmnigentExecutionPlanEnvelope,
+)
+from moonmind.omnigent.harness_platform.runtime_binding import OmnigentRuntimeBinding
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessCatalogSnapshot,
     HarnessTrustRecord,
@@ -152,8 +159,66 @@ def verify_and_cleanup_opencode_credential(
     return {"verified": verified, "cleaned": cleaned}
 
 
+def build_generic_harness_authority(
+    *,
+    execution_plan: OmnigentExecutionPlanEnvelope | dict[str, Any],
+    runtime_binding: OmnigentRuntimeBinding | dict[str, Any],
+    host_attestation: HostHarnessAttestation | dict[str, Any],
+    exact_host_decision: ExactHostCapabilityDecision | dict[str, Any],
+) -> dict[str, Any]:
+    """Build the canonical persisted authority from production runtime objects."""
+
+    from moonmind.omnigent.effective_capabilities import (
+        validate_harness_authority_envelope,
+    )
+
+    plan = (
+        execution_plan
+        if isinstance(execution_plan, OmnigentExecutionPlanEnvelope)
+        else OmnigentExecutionPlanEnvelope.model_validate(execution_plan)
+    )
+    binding = (
+        runtime_binding
+        if isinstance(runtime_binding, OmnigentRuntimeBinding)
+        else OmnigentRuntimeBinding.model_validate(runtime_binding)
+    )
+    attestation = (
+        host_attestation
+        if isinstance(host_attestation, HostHarnessAttestation)
+        else HostHarnessAttestation.model_validate(host_attestation)
+    )
+    decision = (
+        exact_host_decision
+        if isinstance(exact_host_decision, ExactHostCapabilityDecision)
+        else ExactHostCapabilityDecision.model_validate(exact_host_decision)
+    )
+    authority = {
+        "executionPlan": plan.model_dump(by_alias=True, mode="json"),
+        "runtimeBinding": binding.model_dump(by_alias=True, mode="json"),
+        "hostHarnessAttestation": attestation.model_dump(
+            by_alias=True, mode="json"
+        ),
+        "exactHostCapabilityDecision": decision.model_dump(
+            by_alias=True, mode="json"
+        ),
+    }
+    invalid = validate_harness_authority_envelope(
+        authority,
+        launch={
+            "executionPlanRef": plan.planRef,
+            "executionRealizerRef": plan.payload.executionRealizerRef,
+        },
+        current_host=binding.omnigentHostId,
+        current_session=binding.omnigentSessionId,
+    )
+    if invalid:
+        raise ValueError(invalid)
+    return authority
+
+
 __all__ = [
     "compile_opencode_execution_plan",
+    "build_generic_harness_authority",
     "materialize_opencode_credential_for_host",
     "preflight_opencode_host",
     "verify_and_cleanup_opencode_credential",
