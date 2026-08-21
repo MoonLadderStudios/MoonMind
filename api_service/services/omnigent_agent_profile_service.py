@@ -12,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentUpstreamAgentProjection
 
-_SUPPORTED_HARNESSES = {"codex-native"}
+# Generic harness support (Phase 5): synchronized catalog + trust records own launchability.
+# Only harnesses with a declared Host Class and approved materializer are launchable.
+# Keep explicit allowlist minimal; qwen/claude remain quarantined until Host Class exists.
+_SUPPORTED_HARNESSES = {"codex-native", "opencode-native", "pi-native"}
 _MAX_INVENTORY = 500
 _INVENTORY_FRESHNESS_TTL = timedelta(minutes=5)
 _METADATA_TEXT_LIMIT = 512

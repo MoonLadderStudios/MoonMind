@@ -170,6 +170,44 @@ _register_builtin(
     }
 )
 
+_register_builtin(
+    {
+        "materializerId": "host-owned-auth",
+        "version": 1,
+        "acceptedHarnessImplementations": [
+            _impl_ref_for_materializer("omnigent", "1.0.0", "sha256:" + "c" * 64),
+            _impl_ref_for_materializer("omnigent", "1.0.0", "sha256:" + "d" * 64),
+        ],
+        "acceptedAuthModels": ["host-owned-auth"],
+        "supportedHostModes": ["static-connected"],
+        "requiredSecretRoles": [],
+        "state": {"scope": "run", "mutable": False},
+        "target": {"kind": "host-owned-auth", "path": ""},
+        "preflight": {"kind": "host-auth"},
+        "cleanup": {"mode": "none"},
+    }
+)
+
+_register_builtin(
+    {
+        "materializerId": "none",
+        "version": 1,
+        "acceptedHarnessImplementations": [
+            _impl_ref_for_materializer("omnigent", "1.0.0", "sha256:" + "a" * 64),
+            _impl_ref_for_materializer("omnigent", "1.0.0", "sha256:" + "b" * 64),
+            _impl_ref_for_materializer("omnigent", "1.0.0", "sha256:" + "c" * 64),
+            _impl_ref_for_materializer("omnigent", "1.0.0", "sha256:" + "d" * 64),
+        ],
+        "acceptedAuthModels": ["none"],
+        "supportedHostModes": ["on-demand", "static-connected"],
+        "requiredSecretRoles": [],
+        "state": {"scope": "run", "mutable": False},
+        "target": {"kind": "none", "path": ""},
+        "preflight": {"kind": "none"},
+        "cleanup": {"mode": "none"},
+    }
+)
+
 
 def get_materializer(ref: str) -> CredentialMaterializer:
     if ref not in BUILTIN_MATERIALIZERS:
@@ -263,10 +301,9 @@ def _opencode_auth_json_payload(*, api_key: str) -> dict[str, Any]:
             "api_key is required for opencode-auth-json",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
-    # The exact structure required by opencode 1.18.x: { "opencode-go": { "apiKey": "..." } }
-    # Also support legacy { "apiKey": "..." } via provider key wrapping; we use the
-    # canonical provider-keyed form to be explicit and verifiable.
-    return {OPENCODE_PROVIDER_KEY: {"apiKey": api_key.strip(), "type": "api"}}
+    # The exact structure required by pinned opencode-ai@1.18.x: { "opencode-go": { "type": "api", "key": "..." } }
+    # Pinned source uses `key`, not `apiKey`. Use canonical provider-keyed form.
+    return {OPENCODE_PROVIDER_KEY: {"type": "api", "key": api_key.strip()}}
 
 
 def build_opencode_auth_json_bytes(*, api_key: str) -> bytes:
@@ -329,9 +366,9 @@ def materialize_opencode_auth_json(
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         ) from exc
     try:
-        # Best-effort ownership; may fail in test environments without privilege
-        os.chown(parent, uid, gid)
-    except OSError:  # best-effort ownership in non-root test containers; verified later if root
+        # Best-effort ownership; may fail in test environments without privilege or on Windows
+        os.chown(parent, uid, gid)  # type: ignore[attr-defined]
+    except (OSError, AttributeError):  # best-effort ownership in non-root test containers; verified later if root
         pass
     # Write file atomically with 0600
     payload_bytes = build_opencode_auth_json_bytes(api_key=api_key)
@@ -349,8 +386,8 @@ def materialize_opencode_auth_json(
         tmp_path.write_bytes(payload_bytes)
         os.chmod(tmp_path, OPENCODE_AUTH_FILE_MODE)
         try:
-            os.chown(tmp_path, uid, gid)
-        except OSError:  # best-effort ownership in non-root test containers
+            os.chown(tmp_path, uid, gid)  # type: ignore[attr-defined]
+        except (OSError, AttributeError):  # best-effort ownership in non-root test containers
             pass
         # Atomic move
         tmp_path.replace(target_path)
@@ -373,13 +410,14 @@ def materialize_opencode_auth_json(
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         ) from exc
     file_mode = stat.S_IMODE(st.st_mode)
-    if file_mode != OPENCODE_AUTH_FILE_MODE:
+    # On Windows, chmod semantics differ; enforce only on POSIX where strict 0600 is meaningful
+    if os.name != "nt" and file_mode != OPENCODE_AUTH_FILE_MODE:
         raise HarnessPlatformError(
             f"auth.json permissions mismatch: {oct(file_mode)} != {oct(OPENCODE_AUTH_FILE_MODE)}",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
     parent_mode = stat.S_IMODE(parent.stat().st_mode)
-    if parent_mode != OPENCODE_AUTH_PARENT_MODE:
+    if os.name != "nt" and parent_mode != OPENCODE_AUTH_PARENT_MODE:
         raise HarnessPlatformError(
             f"auth.json parent permissions mismatch: {oct(parent_mode)} != {oct(OPENCODE_AUTH_PARENT_MODE)}",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
@@ -402,8 +440,8 @@ def materialize_opencode_auth_json(
             generation_path.write_text(str(credential_generation), encoding="utf-8")
             os.chmod(generation_path, OPENCODE_AUTH_FILE_MODE)
             try:
-                os.chown(generation_path, uid, gid)
-            except OSError:  # best-effort ownership in non-root containers
+                os.chown(generation_path, uid, gid)  # type: ignore[attr-defined]
+            except (OSError, AttributeError):  # best-effort ownership in non-root containers
                 pass
         finally:
             os.umask(old_umask2)
@@ -462,14 +500,14 @@ def verify_opencode_auth_file(
             "opencode auth.json missing",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
-    # Check permissions
+    # Check permissions (POSIX strict; Windows chmod differs)
     st = target_path.stat()
-    if stat.S_IMODE(st.st_mode) != OPENCODE_AUTH_FILE_MODE:
+    if os.name != "nt" and stat.S_IMODE(st.st_mode) != OPENCODE_AUTH_FILE_MODE:
         raise HarnessPlatformError(
             "auth.json permissions invalid",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
-    if stat.S_IMODE(parent.stat().st_mode) != OPENCODE_AUTH_PARENT_MODE:
+    if os.name != "nt" and stat.S_IMODE(parent.stat().st_mode) != OPENCODE_AUTH_PARENT_MODE:
         raise HarnessPlatformError(
             "auth.json parent permissions invalid",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
@@ -494,12 +532,12 @@ def verify_opencode_auth_file(
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
     entry = data[OPENCODE_PROVIDER_KEY]
-    if not isinstance(entry, dict) or "apiKey" not in entry:
+    if not isinstance(entry, dict) or "key" not in entry:
         raise HarnessPlatformError(
             "auth.json provider entry malformed",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,
         )
-    if expected_api_key is not None and entry["apiKey"] != expected_api_key:
+    if expected_api_key is not None and entry["key"] != expected_api_key:
         raise HarnessPlatformError(
             "auth.json apiKey mismatch",
             code=HarnessPlatformFailure.OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED,

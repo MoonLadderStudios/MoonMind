@@ -149,6 +149,36 @@ class OmnigentHttpClient:
     async def get_agent(self, agent_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/api/agents/{quote(agent_id, safe='')}")
 
+    async def list_harnesses(self) -> list[dict[str, Any]]:
+        """List harnesses from Omnigent catalog (generic, harness-neutral)."""
+        data = await self._request("GET", "/v1/harnesses")
+        if isinstance(data, list):
+            return [dict(item) for item in data if isinstance(item, Mapping)]
+        if isinstance(data, Mapping) and isinstance(data.get("harnesses"), list):
+            return [dict(item) for item in data["harnesses"] if isinstance(item, Mapping)]
+        if isinstance(data, Mapping) and isinstance(data.get("data"), list):
+            return [dict(item) for item in data["data"] if isinstance(item, Mapping)]
+        raise OmnigentClientError(
+            "Omnigent harness catalog has an unsupported response shape",
+            response_body=data,
+            failure_class="integration_error",
+        )
+
+    async def get_host(self, host_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/v1/hosts/{quote(host_id, safe='')}")
+
+    async def get_host_model_options(self, host_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/v1/hosts/{quote(host_id, safe='')}/model-options")
+
+    async def detect_host_credentials(self, host_id: str) -> dict[str, Any]:
+        return await self._request("GET", f"/v1/hosts/{quote(host_id, safe='')}/credentials/detect")
+
+    async def store_host_credential(self, host_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return await self._request("POST", f"/v1/hosts/{quote(host_id, safe='')}/credentials", json=dict(payload))
+
+    async def install_host_harness(self, host_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+        return await self._request("POST", f"/v1/hosts/{quote(host_id, safe='')}/harnesses/install", json=dict(payload))
+
     async def list_hosts(self) -> list[dict[str, Any]]:
         data = await self._request("GET", "/v1/hosts")
         if isinstance(data, list):
