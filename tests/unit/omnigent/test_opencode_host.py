@@ -49,7 +49,17 @@ from moonmind.omnigent.harness_platform.materializers import (
 )
 
 
+def _ensure_opencode_env(valid: str = "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "a" * 64) -> str:
+    """Ensure OMNIGENT_OPENCODE_HOST_IMAGE_REF is set for tests that require a real digest."""
+    os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = valid
+    # Clear alternative image/tag overrides that would no longer be consulted
+    os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE", None)
+    os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_TAG", None)
+    return valid
+
+
 def _make_attestation(host_class_ref="omnigent-opencode@1", version="1.18.11"):
+    _ensure_opencode_env()
     hc = get_opencode_host_class()
     return HostHarnessAttestation.model_validate(
         {
@@ -70,12 +80,14 @@ def _make_attestation(host_class_ref="omnigent-opencode@1", version="1.18.11"):
 
 
 def test_opencode_host_class_is_dedicated():
+    valid = _ensure_opencode_env()
     hc = get_opencode_host_class()
     assert hc.ref == "omnigent-opencode@1"
     assert hc.imageRef.startswith("ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:")
-    # Default image ref is now derived from OMNIGENT_OPENCODE_HOST_IMAGE/TAG, not the fabricated c*64 placeholder
+    # Must be the real digest-pinned REF, not fabricated c*64 placeholder
     assert hc.imageRef != OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT
     assert hc.imageRef == get_opencode_host_image_ref()
+    assert hc.imageRef == valid
     # Only opencode-native, not codex
     harness_ids = {e.harnessId for e in hc.declaredHarnessImplementations}
     assert harness_ids == {"opencode-native"}
@@ -121,18 +133,18 @@ def test_opencode_version_supported_range():
 
 
 def test_opencode_image_ref_fail_closed():
-    # Default without env consults OMNIGENT_OPENCODE_HOST_IMAGE/TAG and returns executable digest-pinned ref
+    # Missing REF must fail closed (no synthetic digest from image:tag)
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE", None)
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_TAG", None)
-    default_ref = get_opencode_host_image_ref()
-    assert default_ref.startswith("ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:")
-    assert default_ref != OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT
-    # Custom host image/tag is consulted
+    with pytest.raises(HarnessPlatformError) as exc:
+        get_opencode_host_image_ref()
+    assert exc.value.code == HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH
+    # Even custom image/tag without REF must still fail closed (no synthesis)
     os.environ["OMNIGENT_OPENCODE_HOST_IMAGE"] = "ghcr.io/custom/opencode-host"
     os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_TAG"] = "1.18.11"
-    custom_ref = get_opencode_host_image_ref()
-    assert custom_ref.startswith("ghcr.io/custom/opencode-host@sha256:")
+    with pytest.raises(HarnessPlatformError):
+        get_opencode_host_image_ref()
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE", None)
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_TAG", None)
     # Placeholder c*64 also fails closed now
@@ -161,9 +173,11 @@ def test_opencode_auth_json_bytes_structure():
     payload_bytes = build_opencode_auth_json_bytes(api_key=key)
     payload = json.loads(payload_bytes)
     assert OPENCODE_PROVIDER_KEY in payload
-    assert payload[OPENCODE_PROVIDER_KEY]["apiKey"] == key
-    # Ensure no extra secret leakage in structure
-    assert "apiKey" in payload[OPENCODE_PROVIDER_KEY]
+    assert payload[OPENCODE_PROVIDER_KEY]["key"] == key
+    assert payload[OPENCODE_PROVIDER_KEY]["type"] == "api"
+    # Must NOT use legacy apiKey after Phase 0 correction
+    assert "apiKey" not in payload[OPENCODE_PROVIDER_KEY]
+    assert payload == {OPENCODE_PROVIDER_KEY: {"type": "api", "key": key}}
 
 
 def test_materializer_writes_file_with_correct_perms_and_ownership():
@@ -182,15 +196,19 @@ def test_materializer_writes_file_with_correct_perms_and_ownership():
     assert handle["accessMode"] == "read-only"
     assert handle["materializerRef"] == "opencode-auth-json@1"
     assert handle["credentialGeneration"] == 7
-    # File exists with correct perms
+    # File exists with correct perms (Windows chmod differs; check only on POSIX)
     target = Path(tmp) / OPENCODE_AUTH_TARGET_PATH.lstrip("/")
     assert target.exists()
-    assert stat.S_IMODE(target.stat().st_mode) == OPENCODE_AUTH_FILE_MODE
-    parent = target.parent
-    assert stat.S_IMODE(parent.stat().st_mode) == OPENCODE_AUTH_PARENT_MODE
+    if os.name != "nt":
+        assert stat.S_IMODE(target.stat().st_mode) == OPENCODE_AUTH_FILE_MODE
+        parent = target.parent
+        assert stat.S_IMODE(parent.stat().st_mode) == OPENCODE_AUTH_PARENT_MODE
+    else:
+        parent = target.parent
     # Verify content without leaking
     data = json.loads(target.read_bytes())
-    assert data[OPENCODE_PROVIDER_KEY]["apiKey"] == key
+    assert data[OPENCODE_PROVIDER_KEY]["key"] == key
+    assert "apiKey" not in data[OPENCODE_PROVIDER_KEY]
     # Cleanup
     cleanup_result = cleanup_opencode_auth(host_root=tmp, provider_profile_ref="opencode-go-default", credential_generation=7)
     assert cleanup_result["removedFile"] is True
@@ -297,6 +315,7 @@ def test_exact_host_preflight_success():
 
 
 def test_exact_host_preflight_fails_when_opencode_missing():
+    _ensure_opencode_env()
     hc = get_opencode_host_class()
     att = HostHarnessAttestation.model_validate(
         {
@@ -326,6 +345,7 @@ def test_exact_host_preflight_fails_when_opencode_missing():
 
 
 def test_exact_host_preflight_fails_on_version_outside_range():
+    _ensure_opencode_env()
     hc = get_opencode_host_class()
     att = _make_attestation(version="1.19.0")
     with pytest.raises(HarnessPlatformError) as exc:
@@ -340,6 +360,7 @@ def test_exact_host_preflight_fails_on_version_outside_range():
 
 
 def test_exact_host_preflight_fails_when_harness_not_opencode():
+    _ensure_opencode_env()
     hc = get_opencode_host_class()
     att = HostHarnessAttestation.model_validate(
         {
@@ -369,6 +390,7 @@ def test_exact_host_preflight_fails_when_harness_not_opencode():
 
 
 def test_exact_host_preflight_with_credential_file():
+    _ensure_opencode_env()
     tmp = tempfile.mkdtemp()
     key = "sk-opencode-preflight-cred-1234567890"
     materialize_opencode_auth_json(api_key=key, provider_profile_ref="p", provider_lease_ref="l", credential_generation=5, host_root=tmp)

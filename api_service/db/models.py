@@ -3930,3 +3930,157 @@ def _register_workflow_model_dependencies() -> None:
     import_module("moonmind.workflows.automation.models")
 
 _register_workflow_model_dependencies()
+
+
+# ---------------------------------------------------------------------------
+# Generic Omnigent execution plan and runtime binding persistence
+# Source: docs/Omnigent/OmnigentHarnessPlatformDesign.md §§16-17
+# Plan is secret-free, digest-addressed, persisted before provider leases.
+# Runtime binding is fenced, staged, acquired-generations + exact-host
+# attestation, immutable core after commitment.
+# ---------------------------------------------------------------------------
+
+
+class OmnigentExecutionPlanRecord(Base):
+    """Durable, immutable, secret-free execution plan envelope.
+
+    The planRef is digest-addressed from canonical payload bytes; retries
+    load the same plan via planRef. No workflow input may author
+    executionRealizerRef – it is trusted planner selection only.
+    """
+
+    __tablename__ = "omnigent_execution_plans"
+    __table_args__ = (
+        Index("ix_omnigent_execution_plans_created", "created_at"),
+        Index("ix_omnigent_execution_plans_harness", "harness_id"),
+    )
+
+    plan_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    agent_profile_snapshot_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    credential_binding_set_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    harness_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    harness_implementation_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    host_class_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    launch_policy_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    execution_realizer_ref: Mapped[str] = mapped_column(String(64), nullable=False)
+    support_combination_key: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    created_by: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+
+class OmnigentRuntimeBindingRecord(Base):
+    """Fenced runtime binding aggregate (staged).
+
+    Immutable core: planRef, provider profile selections, acquired
+    generations, materializer selections. Mutable lifecycle is stored via
+    control-plane aggregates; this record snapshots the latest fenced state
+    plus digests for terminal evidence.
+    """
+
+    __tablename__ = "omnigent_runtime_bindings"
+    __table_args__ = (
+        Index("ix_omnigent_runtime_bindings_plan", "execution_plan_ref"),
+        Index("ix_omnigent_runtime_bindings_host", "omnigent_host_id"),
+        Index("ix_omnigent_runtime_bindings_session", "omnigent_session_id"),
+    )
+
+    runtime_binding_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    execution_plan_ref: Mapped[str] = mapped_column(String(255), ForeignKey("omnigent_execution_plans.plan_ref", ondelete="CASCADE"), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    fencing_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="credentials_acquired", server_default=text("'credentials_acquired'"))
+    provider_leases_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    host_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_generation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    session_id: Mapped[Optional[str]] = mapped_column("omnigent_session_id", String(255), nullable=True)
+    credential_runtime_handles_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    attestation_refs_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    cleanup_authority_refs_json: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class OmnigentHostBindingRecordV2(Base):
+    """Generic host binding (post-OAuth): supports any HostClass + harness.
+
+    Preserves old OmnigentOAuthHostBindingRecord for codex-profile-bound@1.
+    """
+
+    __tablename__ = "omnigent_host_bindings_v2"
+    __table_args__ = (
+        UniqueConstraint("binding_id", name="uq_omnigent_host_binding_v2_id"),
+        Index("ix_omnigent_host_bindings_v2_class", "host_class_ref"),
+        Index("ix_omnigent_host_bindings_v2_harness", "harness_id"),
+    )
+
+    binding_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    host_class_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    launch_policy_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    harness_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    harness_implementation_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    execution_plan_ref: Mapped[Optional[str]] = mapped_column(String(255), ForeignKey("omnigent_execution_plans.plan_ref", ondelete="SET NULL"), nullable=True)
+    provider_profile_refs_json: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class OmnigentHostLeaseRecordV2(Base):
+    """Generic host lease (on-demand or static-connected) with fencing."""
+
+    __tablename__ = "omnigent_host_leases_v2"
+    __table_args__ = (
+        Index("ix_omnigent_host_leases_v2_binding", "binding_id"),
+        Index("ix_omnigent_host_leases_v2_host", "omnigent_host_id"),
+        Index("ix_omnigent_host_leases_v2_status", "status"),
+    )
+
+    lease_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    binding_id: Mapped[str] = mapped_column(String(255), ForeignKey("omnigent_host_bindings_v2.binding_id", ondelete="CASCADE"), nullable=False)
+    host_class_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="allocating")
+    omnigent_host_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    host_lease_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class OmnigentCredentialRuntimeRecord(Base):
+    """Durable credential materialization evidence (secret-free)."""
+
+    __tablename__ = "omnigent_credential_runtimes"
+    __table_args__ = (
+        Index("ix_omnigent_credential_runtimes_profile", "provider_profile_ref"),
+        Index("ix_omnigent_credential_runtimes_materializer", "materializer_ref"),
+    )
+
+    credential_runtime_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
+    provider_profile_ref: Mapped[str] = mapped_column(String(128), nullable=False)
+    provider_lease_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    credential_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    materializer_ref: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    access_mode: Mapped[str] = mapped_column(String(32), nullable=False)
+    cleanup_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    attestation_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class OmnigentCredentialBindingSetRecord(Base):
+    """Versioned credential-binding sets (immutable per version)."""
+
+    __tablename__ = "omnigent_credential_binding_sets"
+    __table_args__ = (
+        UniqueConstraint("binding_set_id", "version", name="uq_omnigent_binding_set_version"),
+        Index("ix_omnigent_binding_sets_id", "binding_set_id"),
+    )
+
+    binding_set_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    digest: Mapped[str] = mapped_column(String(80), nullable=False)
+    canonical_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    ref: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

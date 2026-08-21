@@ -30,47 +30,73 @@ OPENCODE_SUPPORTED_RANGE = ">=1.17.7,<1.19.0"
 def get_opencode_host_image_ref() -> str:
     """Return the digest-pinned OpenCode host image ref from deployment config.
 
-    Fails closed when only a mutable tag is configured for production launch
-    authority (issue §11). When OMNIGENT_OPENCODE_HOST_IMAGE_REF is omitted,
-    the resolver consults OMNIGENT_OPENCODE_HOST_IMAGE and
-    OMNIGENT_OPENCODE_HOST_IMAGE_TAG so the default path remains executable
-    and exercises the same production image resolution (per AGENTS.md default
-    contract). For hermetic tests without any env, synthesizes a stable
-    digest-pinned ref from image:tag instead of the fabricated c*64 placeholder.
+    Fails closed when no real digest-pinned REF is configured. A Host Class
+    becomes launchable only after the deployment has resolved and recorded a
+    real OCI digest. Do not synthesize a fake digest from an image tag.
+    Set OMNIGENT_OPENCODE_HOST_IMAGE_REF to a digest-pinned value such as
+    ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<hex>.
     """
     raw = os.getenv(OMNIGENT_OPENCODE_HOST_IMAGE_ENV, "").strip()
-    if raw:
-        if not _IMAGE_RE.fullmatch(raw):
-            raise HarnessPlatformError(
-                f"{OMNIGENT_OPENCODE_HOST_IMAGE_ENV} must be digest-pinned (got {raw!r})",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
-        if raw.endswith("0" * 64) or raw.endswith("c" * 64):
-            raise HarnessPlatformError(
-                f"{OMNIGENT_OPENCODE_HOST_IMAGE_ENV} digest must not be placeholder",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
-        return raw
-    # Default path: consult image + tag so omitted REF still yields executable ref
-    host_image = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE", "").strip() or "ghcr.io/moonladderstudios/omnigent-host-opencode"
-    tag = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_TAG", "").strip() or OPENCODE_PINNED_VERSION
-    # Synthesize a stable digest-pinned ref from image:tag for local/hermetic default;
-    # production should set OMNIGENT_OPENCODE_HOST_IMAGE_REF to a real GHCR digest for exact attestation.
-    import hashlib
-
-    digest = hashlib.sha256(f"{host_image}:{tag}".encode()).hexdigest()
-    # Avoid placeholder digests that would be rejected if supplied explicitly
-    if digest in {"0" * 64, "c" * 64}:
-        digest = "a" * 64
-    return f"{host_image}@sha256:{digest}"
+    if not raw:
+        raise HarnessPlatformError(
+            f"{OMNIGENT_OPENCODE_HOST_IMAGE_ENV} must be set to a digest-pinned image ref for launch (e.g. ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<digest>)",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    if not _IMAGE_RE.fullmatch(raw):
+        raise HarnessPlatformError(
+            f"{OMNIGENT_OPENCODE_HOST_IMAGE_ENV} must be digest-pinned (got {raw!r})",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    if raw.endswith("0" * 64) or raw.endswith("c" * 64):
+        raise HarnessPlatformError(
+            f"{OMNIGENT_OPENCODE_HOST_IMAGE_ENV} digest must not be placeholder",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    return raw
 
 
 def get_opencode_host_class() -> HostClass:
-    """Convenience for the dedicated OpenCode host class (omnigent-opencode@1)."""
-    # Defined early for import convenience; actual lookup after registry init
-    from typing import TYPE_CHECKING as _TC  # noqa: F401
+    """Convenience for the dedicated OpenCode host class (omnigent-opencode@1).
 
-    # Defer to get_host_class after registry populated
+    Fails closed when no real image digest is configured. This enforces
+    Phase 0 requirement that omnigent-opencode@1 is unavailable without a real
+    OCI digest and without a generic realizer (checked separately).
+    """
+    # Ensure lazy registration is attempted before lookup
+    if "omnigent-opencode@1" not in HOST_CLASSES:
+        registered = _try_register_opencode_host_class()
+        if registered is None:
+            # Attempt to surface the underlying image-config error as host-class-unavailable
+            try:
+                get_opencode_host_image_ref()
+            except HarnessPlatformError as exc:
+                raise HarnessPlatformError(
+                    f"host class omnigent-opencode@1 unavailable: {exc}",
+                    code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+                ) from exc
+            raise HarnessPlatformError(
+                "host class omnigent-opencode@1 unavailable: no real image digest",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+            )
+    # Also validate that current env still matches stored ref; prevents stale synthetic usage
+    if "omnigent-opencode@1" in HOST_CLASSES:
+        try:
+            current_ref = get_opencode_host_image_ref()
+        except HarnessPlatformError as exc:
+            raise HarnessPlatformError(
+                f"host class omnigent-opencode@1 unavailable: {exc}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+            ) from exc
+        stored = HOST_CLASSES["omnigent-opencode@1"]
+        if stored.imageRef != current_ref:
+            # Allow re-registering when env changes (tests)
+            _try_register_opencode_host_class()
+            stored = HOST_CLASSES.get("omnigent-opencode@1")
+            if stored is None or stored.imageRef != current_ref:
+                raise HarnessPlatformError(
+                    f"host class omnigent-opencode@1 image mismatch: stored {stored.imageRef if stored else 'missing'} != current {current_ref}",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                )
     return get_host_class("omnigent-opencode@1")
 
 
@@ -178,9 +204,14 @@ register_host_class(
                 "implementationRef": _impl_ref("omnigent", "1.0.0", "sha256:" + "e" * 64),
                 "runtimeDependencies": [],
             },
+            {
+                "harnessId": "pi-native",
+                "implementationRef": _impl_ref("omnigent", "1.0.0", "sha256:" + "c" * 64),
+                "runtimeDependencies": [],
+            },
         ],
         "integrationModes": ["native-tui", "native-server", "cli-subprocess", "sdk-in-process"],
-        "materializerRefs": ["codex-oauth-home@1", "opencode-auth-json@1", "omnigent-provider-config@1"],
+        "materializerRefs": ["codex-oauth-home@1", "opencode-auth-json@1", "omnigent-provider-config@1", "host-owned-auth@1", "none@1"],
         "features": {
             "git": True,
             "tmux": True,
@@ -198,12 +229,17 @@ register_host_class(
 # Dedicated harness-specific OpenCode host (issue §1, §6)
 # This is the first explicit harness-specific Host Class realization.
 # It contains only opencode-native, not Codex or other harnesses.
-register_host_class(
-    {
+# Host Class becomes launchable only after deployment has resolved a real
+# digest-pinned image. Registration is lazy and fail-closed when no real
+# digest is configured.
+
+
+def _opencode_host_class_data(image_ref: str) -> dict[str, object]:
+    return {
         "schemaVersion": "moonmind.omnigent-host-class.v1",
         "hostClassId": "omnigent-opencode",
         "version": 1,
-        "imageRef": get_opencode_host_image_ref(),
+        "imageRef": image_ref,
         "omnigentVersion": "1.0.0",
         "omnigentBuildDigest": "sha256:" + "b" * 64,
         "architectures": ["linux/amd64", "linux/arm64"],
@@ -229,7 +265,38 @@ register_host_class(
         },
         "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
     }
-)
+
+
+def _try_register_opencode_host_class() -> HostClass | None:
+    """Attempt to register omnigent-opencode@1 from current env.
+
+    Returns the HostClass if a real digest is configured, otherwise None
+    (launchable check will fail closed). This keeps import side-effects
+    bounded and allows hermetic tests to set OMNIGENT_OPENCODE_HOST_IMAGE_REF
+    before first use rather than requiring it at import time.
+    """
+    try:
+        image_ref = get_opencode_host_image_ref()
+    except HarnessPlatformError:
+        return None
+    # Idempotent registration
+    if "omnigent-opencode@1" in HOST_CLASSES:
+        existing = HOST_CLASSES["omnigent-opencode@1"]
+        if existing.imageRef == image_ref:
+            return existing
+        # Re-registration with different digest requires new version; for now
+        # allow update when env changes (e.g., tests setting different digest)
+        # by overwriting – the HostClass is immutable per version, but tests
+        # need to simulate different deployments.
+        HOST_CLASSES.pop("omnigent-opencode@1", None)
+    return register_host_class(_opencode_host_class_data(image_ref))
+
+
+# Attempt registration at import; allow missing env (fail-closed later)
+try:
+    _try_register_opencode_host_class()
+except Exception:
+    pass
 
 register_host_class(
     {
@@ -265,11 +332,47 @@ register_host_class(
 
 
 def get_host_class(ref: str) -> HostClass:
+    # Lazy registration for omnigent-opencode@1 (Phase 0: requires real digest)
+    if ref == "omnigent-opencode@1" and ref not in HOST_CLASSES:
+        registered = _try_register_opencode_host_class()
+        if registered is not None:
+            return registered
+        # Still unavailable -> surface image-config error as host-class-unavailable
+        try:
+            get_opencode_host_image_ref()
+        except HarnessPlatformError as exc:
+            raise HarnessPlatformError(
+                f"host class {ref} unavailable: {exc}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+            ) from exc
+        raise HarnessPlatformError(
+            f"host class {ref} unavailable",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+        )
     if ref not in HOST_CLASSES:
         raise HarnessPlatformError(
             f"host class {ref} unavailable",
             code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
         )
+    # For omnigent-opencode@1, ensure stored image still matches current env
+    if ref == "omnigent-opencode@1":
+        try:
+            current_ref = get_opencode_host_image_ref()
+        except HarnessPlatformError as exc:
+            raise HarnessPlatformError(
+                f"host class {ref} unavailable: {exc}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+            ) from exc
+        stored = HOST_CLASSES[ref]
+        if stored.imageRef != current_ref:
+            # Re-register if env changed (tests vary digest)
+            updated = _try_register_opencode_host_class()
+            if updated is None or updated.imageRef != current_ref:
+                raise HarnessPlatformError(
+                    f"host class {ref} image mismatch",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                )
+            return updated
     return HOST_CLASSES[ref]
 
 

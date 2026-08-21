@@ -12,7 +12,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentUpstreamAgentProjection
 
-_SUPPORTED_HARNESSES = {"codex-native"}
+# Generic harness support (Phase 5): synchronized catalog + trust records own launchability,
+# not a hard-coded codex-only allowlist. Keep explicit allowlist for now but expand to
+# all approved harnesses; future catalog-driven trust will replace display-name matching.
+_SUPPORTED_HARNESSES = {"codex-native", "opencode-native", "pi-native", "qwen-native", "claude-native"}
 _MAX_INVENTORY = 500
 _INVENTORY_FRESHNESS_TTL = timedelta(minutes=5)
 _METADATA_TEXT_LIMIT = 512
