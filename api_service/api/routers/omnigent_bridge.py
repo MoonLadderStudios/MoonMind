@@ -160,6 +160,7 @@ from moonmind.omnigent.workflow_chat_facade import (
     CODE_UNSUPPORTED_MEDIA_TYPE,
     WorkflowChatFacadeError,
     assert_no_identity_substitution,
+    canonical_turn_source_for_event,
     is_read_only,
     match_facade_operation,
     required_capability_for_event,
@@ -3569,6 +3570,156 @@ def _mutation_preconditions(body: Mapping[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _control_plane_store() -> Any:
+    """Bind the canonical control-plane store used for turn admission.
+
+    Kept as one explicit module-level seam rather than a request-scoped
+    dependency: the canonical turn boundary is reached from HTTP handlers,
+    WebSocket frames, and the shared claim helper alike, and all of them must
+    resolve the same canonical authority.
+    """
+
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+
+    return OmnigentControlPlaneStore(async_session_maker)
+
+
+async def _admit_canonical_turn(
+    *,
+    row: Any,
+    event_type: str,
+    actor: str,
+    idempotency_key: str,
+    payload_digest: str,
+) -> None:
+    """Route a turn-submitting Workflow Chat mutation through the canonical boundary.
+
+    Native Workflow Chat is not an independent submission authority (#3707): a
+    message, steering action, or approval response is a canonical
+    ``OmnigentTurnAttempt`` plus a fenced ``omnigent.submit_turn`` command on the
+    one canonical session that owns the chat binding. The bridge control journal
+    remains the transport receipt; it is no longer the authority that decides
+    whether new work may be submitted.
+
+    Authority and transport stay separate here. This helper establishes the
+    canonical authority for the submission; the bridge forward remains the
+    transport for bindings whose provider session the bridge still owns, so a
+    turn is never submitted to the provider twice. When the durable supervisor
+    owns the session it submits the admitted turn itself, driven by the
+    ``active_turn_attempt_id`` this admission binds.
+
+    Non-turn controls (interrupt, stop, clear, harvest, cleanup) are not turns
+    and pass through untouched. A binding with no canonical session row is a
+    pre-canonical legacy session: it stays on the legacy path rather than being
+    silently migrated to a new supervisor outside the #3712 handoff contract.
+
+    A refused admission raises before the bridge claim, so a cross-user,
+    cross-binding, stale-revision, changed-authority, terminal-session, or
+    cleanup-racing submission never reaches the provider.
+    """
+
+    source = canonical_turn_source_for_event(event_type)
+    if source is None:
+        return
+    chat_binding_id = str(getattr(row, "chat_binding_id", "") or "").strip()
+    if not chat_binding_id:
+        return
+
+    from moonmind.omnigent.control_plane import (
+        CanonicalTurnRequest,
+        CanonicalTurnService,
+        TurnIdempotencyConflictError,
+        compute_digest,
+    )
+    from moonmind.omnigent.turn_contracts import (
+        OmnigentTurnSource,
+        RuntimeAuthorityEvidence,
+        TurnDisposition,
+    )
+
+    store = _control_plane_store()
+    async with store.transaction() as repos:
+        session = await repos.sessions.get_by_chat_binding(chat_binding_id)
+    if session is None:
+        return
+
+    producer = (
+        "omnigent.workflow_chat.approval_response"
+        if source is OmnigentTurnSource.APPROVAL_RESPONSE
+        else "omnigent.workflow_chat.steering"
+        if source is OmnigentTurnSource.STEERING
+        else "omnigent.workflow_chat.http"
+    )
+    # The chat facade observes the binding's live provider/host/credential
+    # authority; terminality, historical-read state, and cleanup authority are
+    # read from durable rows by the service itself.
+    evidence = RuntimeAuthorityEvidence(
+        providerSessionAttached=bool(session.provider_session_ref),
+        providerSessionResumable=session.terminal_state is None,
+        hostAttached=bool(session.host_binding_ref),
+        hostLeaseActive=bool(session.host_lease_ref),
+        credentialLeaseActive=session.credential_generation is not None,
+        providerProfileGenerationCurrent=(
+            session.provider_profile_generation is not None
+        ),
+        workspaceAvailable=True,
+    )
+    # The turn attempt is identified by the caller's logical request identity,
+    # not by the payload digest: two distinct requests that happen to carry the
+    # same body must remain two turns, and one request retried must remain one.
+    turn_attempt_id = f"turn-{compute_digest(idempotency_key)[:32]}"
+    # The durable instruction reference is the bridge control record that holds
+    # this submission, which is the same reference the mutation audit records.
+    instruction_ref = (
+        f"omnigent-bridge-event://{getattr(row, 'bridge_session_id', '')}/"
+        f"workflow-chat-control/{idempotency_key}"
+    )
+    service = CanonicalTurnService(store)
+    try:
+        result = await service.submit_turn(
+            CanonicalTurnRequest(
+                producer=producer,
+                session_id=session.session_id,
+                turn_attempt_id=turn_attempt_id,
+                idempotency_key=idempotency_key,
+                instruction_ref=instruction_ref,
+                source=source,
+                actor_id=actor,
+                chat_binding_id=chat_binding_id,
+                parent_turn_attempt_id=session.active_turn_attempt_id,
+                evidence=evidence,
+            )
+        )
+    except TurnIdempotencyConflictError as exc:
+        # The same key was reused for a different logical turn. Report the same
+        # typed idempotency conflict the bridge journal reports, so the caller
+        # sees one behaviour whichever authority detects the reuse first.
+        raise WorkflowChatFacadeError(
+            "This Idempotency-Key was already used for a different message.",
+            failure_class="user_error",
+            status_code=status.HTTP_409_CONFLICT,
+            code=CODE_IDEMPOTENCY_CONFLICT,
+        ) from exc
+    if result.admitted:
+        return
+    read_only_dispositions = {
+        TurnDisposition.BRANCH_REQUIRED,
+        TurnDisposition.NEW_SESSION_REQUIRED,
+    }
+    code = (
+        CODE_SESSION_READ_ONLY
+        if result.disposition in read_only_dispositions
+        else CODE_OPERATION_DENIED
+    )
+    raise WorkflowChatFacadeError(
+        "This Workflow Chat submission was not admitted by the canonical "
+        f"Omnigent turn boundary ({result.disposition.value}).",
+        failure_class="user_error",
+        status_code=status.HTTP_409_CONFLICT,
+        code=code,
+    )
+
+
 async def _claim_facade_message(
     *,
     store: OmnigentBridgeSessionStore,
@@ -3595,6 +3746,18 @@ async def _claim_facade_message(
     silently drop the changed message. Such a conflict fails closed with a
     distinct, redacted error rather than returning ``False``.
     """
+
+    # Canonical turn admission runs first (#3707): a turn-submitting control is
+    # admitted, journalled, and fenced on the canonical session before the bridge
+    # control journal records a transport claim, so the bridge can never become a
+    # second submission authority.
+    await _admit_canonical_turn(
+        row=row,
+        event_type=event_type,
+        actor=actor,
+        idempotency_key=idempotency_key,
+        payload_digest=payload_digest,
+    )
 
     event_identity = f"workflow-chat-message:{idempotency_key}"
     now = request_time or datetime.now(tz=UTC).isoformat()
@@ -4373,10 +4536,18 @@ async def _dispatch_native_ui_http(
             )
         provider_session_id = fresh_provider
         request_time = datetime.now(tz=UTC).isoformat()
+        # ``post_event`` is the native event-posting route: whether it submits a
+        # turn depends on the composer event type in the body, not on the route
+        # name. Passing the body's event type keeps this route on the same
+        # canonical turn boundary as the typed composer endpoint (#3707) instead
+        # of becoming a second submission path.
+        claim_event_type = route.name
+        if route.name == "post_event" and isinstance(parsed_body, Mapping):
+            claim_event_type = str(parsed_body.get("type") or route.name)
         claimed = await _claim_facade_message(
             store=store,
             row=fresh_row,
-            event_type=route.name,
+            event_type=claim_event_type,
             actor=str(user.id),
             idempotency_key=effective_key,
             payload_digest=scan_evidence.payload_digest,

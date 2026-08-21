@@ -747,6 +747,7 @@ class OmnigentTurnAttempt(Base):
         ),
         Index("ix_omnigent_turn_attempts_session", "session_id"),
         Index("ix_omnigent_turn_attempts_state", "state"),
+        Index("ix_omnigent_turn_attempts_source", "session_id", "turn_source"),
     )
 
     turn_attempt_id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -761,8 +762,12 @@ class OmnigentTurnAttempt(Base):
 
     # Step Execution and remediation / continuation lineage.
     step_execution_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    lineage_kind: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="instruction", server_default="instruction"
+    # Closed, versioned canonical turn source (#3707). The value is always a
+    # member of ``moonmind.omnigent.turn_contracts.OmnigentTurnSource``; the
+    # repository fails closed on anything else, so a new submission path cannot
+    # invent its own source kind.
+    turn_source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="initial", server_default="initial"
     )
     parent_turn_attempt_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     remediation_of_turn_attempt_id: Mapped[Optional[str]] = mapped_column(
@@ -772,6 +777,17 @@ class OmnigentTurnAttempt(Base):
     # Request idempotency + instruction digest (attempt-owned).
     idempotency_key: Mapped[str] = mapped_column(String(512), nullable=False)
     instruction_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    # Immutable execution authority the turn was admitted against (#3707). A
+    # turn records -- and can never replace -- the plan and runtime binding it
+    # was bound to, so changed authority is provable after the fact.
+    execution_plan_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    runtime_binding_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    authority_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Session revision the submitter observed at admission time.
+    expected_session_revision: Mapped[Optional[int]] = mapped_column(
+        Integer, nullable=True
+    )
 
     # Provider marker + provider turn / item identity.
     provider_marker: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

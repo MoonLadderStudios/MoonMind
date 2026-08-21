@@ -30,7 +30,6 @@ from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
-    OmnigentRecoveryMode,
     materialize_cold_restore_inputs,
     recovery_mode,
     validate_branch_identity,
@@ -38,6 +37,7 @@ from moonmind.omnigent.checkpoints import (
     validate_restore_material,
 )
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
+from moonmind.omnigent.turn_contracts import TurnDisposition
 from moonmind.omnigent.effective_capabilities import (
     CAPABILITY_NAMES,
     adapt_provider_capabilities,
@@ -3010,7 +3010,7 @@ def test_checkpoint_live_reattach_requires_every_original_authority() -> None:
             session_valid=True,
             first_message_consistent=True,
         )
-        == OmnigentRecoveryMode.LIVE_REATTACH
+        == TurnDisposition.LIVE_REATTACH
     )
     assert (
         recovery_mode(
@@ -3025,7 +3025,7 @@ def test_checkpoint_live_reattach_requires_every_original_authority() -> None:
             session_valid=True,
             first_message_consistent=True,
         )
-        == OmnigentRecoveryMode.COLD_RESTORE
+        == TurnDisposition.COLD_RESTORE
     )
 
 

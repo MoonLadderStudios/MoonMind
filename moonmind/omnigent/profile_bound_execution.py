@@ -29,12 +29,12 @@ from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
-    OmnigentRecoveryMode,
     OmnigentRestoreMaterial,
     materialize_cold_restore_inputs,
     recovery_mode,
     validate_cold_restore_target,
 )
+from moonmind.omnigent.turn_contracts import TurnDisposition
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.control_plane import spans as control_plane_spans
@@ -2437,7 +2437,17 @@ class OmnigentProfileBoundExecutionCoordinator:
             session_valid=session_valid,
             first_message_consistent=first_message_consistent,
         )
-        if mode == OmnigentRecoveryMode.LIVE_REATTACH:
+        if mode is TurnDisposition.BRANCH_REQUIRED:
+            raise ValueError(
+                "checkpoint resume requires an explicit branch: live reattach "
+                "authority is gone and no artifact-backed restore evidence exists"
+            )
+        if mode is TurnDisposition.RESUME_UNAVAILABLE:
+            raise ValueError(
+                "checkpoint resume is unavailable: neither live reattach nor "
+                "artifact-backed cold restore has complete evidence"
+            )
+        if mode is TurnDisposition.LIVE_REATTACH:
             if request.execution_profile_ref != checkpoint.provider_profile_id:
                 raise ValueError("live reattach Provider Profile mismatch")
             profile = await self._resolve_profile(checkpoint.provider_profile_id)

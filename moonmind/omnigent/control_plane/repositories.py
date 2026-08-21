@@ -31,6 +31,11 @@ from api_service.db.models import (
     OmnigentTurnAttempt,
 )
 
+from moonmind.omnigent.turn_contracts import (
+    OmnigentTurnSource,
+    resolve_turn_source,
+)
+
 from . import metrics, spans, telemetry
 from .records import (
     ALIAS_STATE_ACTIVE,
@@ -168,10 +173,14 @@ def _turn_record(row: OmnigentTurnAttempt) -> TurnAttemptRecord:
         idempotency_key=row.idempotency_key,
         schema_version=row.schema_version,
         step_execution_id=row.step_execution_id,
-        lineage_kind=row.lineage_kind,
+        turn_source=row.turn_source,
         parent_turn_attempt_id=row.parent_turn_attempt_id,
         remediation_of_turn_attempt_id=row.remediation_of_turn_attempt_id,
         instruction_digest=row.instruction_digest,
+        execution_plan_ref=row.execution_plan_ref,
+        runtime_binding_ref=row.runtime_binding_ref,
+        authority_digest=row.authority_digest,
+        expected_session_revision=row.expected_session_revision,
         provider_marker=row.provider_marker,
         provider_turn_id=row.provider_turn_id,
         provider_item_id=row.provider_item_id,
@@ -1086,18 +1095,35 @@ class TurnAttemptRepository(_RepositoryBase):
         turn_attempt_id: str,
         session_id: str,
         idempotency_key: str,
-        lineage_kind: str = "instruction",
+        turn_source: str,
         step_execution_id: Optional[str] = None,
         parent_turn_attempt_id: Optional[str] = None,
         remediation_of_turn_attempt_id: Optional[str] = None,
         instruction_digest: Optional[str] = None,
+        execution_plan_ref: Optional[str] = None,
+        runtime_binding_ref: Optional[str] = None,
+        authority_digest: Optional[str] = None,
+        expected_session_revision: Optional[int] = None,
         provider_marker: Optional[str] = None,
         state: str = TURN_STATE_PREPARED,
     ) -> TurnAttemptRecord:
+        """Create (or idempotently resolve) one canonical turn attempt.
+
+        ``turn_source`` is mandatory and validated against the closed, versioned
+        vocabulary in :mod:`moonmind.omnigent.turn_contracts` (#3707): a producer
+        cannot record an unnamed or invented source kind. Logical turn identity
+        is ``(session_id, turn_source, instruction_digest)`` under the caller's
+        idempotency key, so a duplicate browser or controller request reuses the
+        same logical turn while a key reused for a *different* logical turn fails
+        closed.
+        """
+
+        source = resolve_turn_source(turn_source).value
         existing = await self.get_by_idempotency_key(idempotency_key)
         if existing is not None:
             if (
                 existing.session_id == session_id
+                and existing.turn_source == source
                 and existing.instruction_digest == instruction_digest
             ):
                 return existing
@@ -1110,11 +1136,15 @@ class TurnAttemptRepository(_RepositoryBase):
             turn_attempt_id=turn_attempt_id,
             session_id=session_id,
             idempotency_key=idempotency_key,
-            lineage_kind=lineage_kind,
+            turn_source=source,
             step_execution_id=step_execution_id,
             parent_turn_attempt_id=parent_turn_attempt_id,
             remediation_of_turn_attempt_id=remediation_of_turn_attempt_id,
             instruction_digest=instruction_digest,
+            execution_plan_ref=execution_plan_ref,
+            runtime_binding_ref=runtime_binding_ref,
+            authority_digest=authority_digest,
+            expected_session_revision=expected_session_revision,
             provider_marker=provider_marker,
             state=state,
         )
@@ -2644,7 +2674,7 @@ class OmnigentControlPlaneStore:
                 turn_attempt_id=first_turn_attempt_id,
                 session_id=session_id,
                 idempotency_key=first_turn_idempotency_key,
-                lineage_kind="initial",
+                turn_source=OmnigentTurnSource.INITIAL.value,
                 step_execution_id=step_execution_id,
                 instruction_digest=instruction_digest,
             )

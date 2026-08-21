@@ -2,7 +2,12 @@
 
 The generic platform uses canonical Omnigent control-plane aggregates:
 - OmnigentSession owns immutable refs, runtime-binding ref, session authority, fencing generations
-- OmnigentTurnAttempt owns idempotency, cannot replace plan/binding
+- Turn attempts own idempotency and cannot replace plan/binding. Their canonical
+  shape is ``moonmind.omnigent.control_plane.records.TurnAttemptRecord`` and the
+  only way to create one is the canonical turn-command boundary in
+  ``moonmind.omnigent.control_plane.turn_service`` (#3707). This module
+  deliberately declares no second turn-attempt model: a parallel shape without a
+  canonical turn source would itself be an alternate submission path.
 - OmnigentObservation records bounded evidence, full payloads remain artifact-backed
 - OmnigentCommand journals side effects
 
@@ -124,17 +129,6 @@ class OmnigentSessionAggregate(BaseModel):
     observedState: str = Field(alias="observedState")
     revision: int = Field(ge=1)
     fencingGeneration: int = Field(alias="fencingGeneration")
-
-
-class OmnigentTurnAttempt(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    attemptId: str = Field(alias="attemptId")
-    sessionId: str = Field(alias="sessionId")
-    requestDigest: str = Field(alias="requestDigest")
-    # Cannot replace plan or runtime binding, cannot terminalize
-    planRef: str = Field(alias="planRef")
-    runtimeBindingRef: str = Field(alias="runtimeBindingRef")
 
 
 class OmnigentObservation(BaseModel):

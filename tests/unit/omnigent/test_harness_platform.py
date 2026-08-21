@@ -8,6 +8,8 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from moonmind.omnigent.control_plane.records import TurnAttemptRecord
+from moonmind.omnigent.turn_contracts import OmnigentTurnSource
 from moonmind.omnigent.harness_platform.agent_profile import (
     BundleSource,
     OmnigentAgentProfileV2,
@@ -524,7 +526,13 @@ def test_support_identity_includes_model_and_realizer():
 
 # AC 20: Fenced Omnigent control plane owns session and side-effect journal
 def test_control_plane_owns_session_journal():
-    from moonmind.omnigent.harness_platform.lifecycle import OmnigentSessionAggregate, OmnigentTurnAttempt
+    from moonmind.omnigent.harness_platform import lifecycle
+    from moonmind.omnigent.harness_platform.lifecycle import OmnigentSessionAggregate
+
+    # The generic harness platform must not declare a second turn-attempt shape:
+    # the canonical aggregate and the only path that creates one live in the
+    # control plane (#3707).
+    assert not hasattr(lifecycle, "OmnigentTurnAttempt")
     session = OmnigentSessionAggregate.model_validate(
         {
             "sessionId": "sess_1",
@@ -542,16 +550,17 @@ def test_control_plane_owns_session_journal():
     )
     assert session.revision == 1
     assert session.fencingGeneration == 7
-    attempt = OmnigentTurnAttempt.model_validate(
-        {
-            "attemptId": "attempt_1",
-            "sessionId": "sess_1",
-            "requestDigest": "sha256:" + "e" * 64,
-            "planRef": session.executionPlanRef,
-            "runtimeBindingRef": session.runtimeBindingRef,
-        }
+    attempt = TurnAttemptRecord(
+        turn_attempt_id="attempt_1",
+        session_id="sess_1",
+        idempotency_key="idem-1",
+        turn_source=OmnigentTurnSource.REPOSITORY_CONTINUATION.value,
+        instruction_digest="sha256:" + "e" * 64,
+        execution_plan_ref=session.executionPlanRef,
+        runtime_binding_ref=session.runtimeBindingRef,
     )
-    assert attempt.planRef == session.executionPlanRef
+    assert attempt.execution_plan_ref == session.executionPlanRef
+    assert attempt.turn_source == "repository_continuation"
 
 # AC 21: Adding approved harness does not require new branch in generic lifecycle coordinator
 def test_adding_harness_no_new_branch():

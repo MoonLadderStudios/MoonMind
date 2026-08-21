@@ -163,10 +163,33 @@ def test_signal_contract_carries_only_safe_ids_and_refs() -> None:
         requestId="request-1",
         observationRef="art_observation_1",
         turnAttemptId="turn-2",
+        turnSource="workflow_chat",
         reasonCode="operator_reconcile",
         observedAt=datetime(2026, 8, 18, tzinfo=UTC),
     )
     assert signal.request_id == "request-1"
+    assert signal.turn_source == "workflow_chat"
+
+    # The turn source is a closed vocabulary (#3707): an invented source kind
+    # cannot reach the supervisor even through a well-formed signal.
+    with pytest.raises(ValidationError):
+        OmnigentSessionSignal(
+            requestId="request-3",
+            turnAttemptId="turn-3",
+            turnSource="continuation",
+        )
+
+    # A continuation must name the source that authorized it.
+    supervisor = MoonMindOmnigentSessionWorkflow()
+    supervisor._initialize(_workflow_input())
+    with pytest.raises(ValueError):
+        supervisor.submit_authorized_turn(
+            OmnigentSessionSignal(
+                requestId="request-4",
+                turnAttemptId="turn-4",
+                instructionRef="art_instruction_4",
+            )
+        )
 
     with pytest.raises(ValidationError):
         OmnigentSessionSignal(
@@ -426,6 +449,7 @@ def test_workflow_exposes_typed_wakes_controls_and_compact_query() -> None:
             requestId="turn-2-request",
             turnAttemptId="turn-2",
             instructionRef="art_instruction_2",
+            turnSource="repository_continuation",
         )
     )
     supervisor.cancel_or_interrupt_requested(

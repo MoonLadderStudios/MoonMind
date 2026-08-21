@@ -11,6 +11,7 @@ credentials, and forwards only to the server-resolved provider session.
 from __future__ import annotations
 
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import Mock
@@ -21,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
+from api_service.api.routers import omnigent_bridge
 from api_service.api.routers.omnigent_bridge import (
     WORKFLOW_CHAT_BINDINGS_MOUNT_PATH,
     _get_bridge_proxy,
@@ -392,6 +394,36 @@ def _fake_registry() -> SimpleNamespace:
     return SimpleNamespace(
         has_live_session_authority=Mock(return_value=False),
         revoke_scope=Mock(return_value=[]),
+    )
+
+
+class _NoCanonicalSessionRepos:
+    """Control-plane repositories for a binding with no canonical session row.
+
+    These tests cover pre-canonical (legacy) bridge bindings, so the canonical
+    turn boundary correctly finds no canonical session and leaves the legacy
+    path untouched. Router-level coverage of an *admitted* canonical turn lives
+    in ``test_omnigent_canonical_turn_router.py``.
+    """
+
+    class _Sessions:
+        @staticmethod
+        async def get_by_chat_binding(chat_binding_id: str) -> None:
+            return None
+
+    sessions = _Sessions()
+
+
+class _NoCanonicalSessionStore:
+    @asynccontextmanager
+    async def transaction(self):
+        yield _NoCanonicalSessionRepos()
+
+
+@pytest.fixture(autouse=True)
+def _legacy_control_plane(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        omnigent_bridge, "_control_plane_store", _NoCanonicalSessionStore
     )
 
 

@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable, Literal, Mapping
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+# Recovery selection uses the one canonical, evidence-gated decision boundary
+# shared with the canonical turn-command path (#3707): live reattach, cold
+# restore, branch, new session, and unavailable are members of a single
+# vocabulary rather than separate per-caller enums.
+from moonmind.omnigent.turn_contracts import TurnDisposition
 
 # ``WorkspaceLocator`` lives in ``moonmind.schemas``, whose package ``__init__``
 # imports ``moonmind.schemas.temporal_models``, which in turn imports this module
@@ -37,11 +42,6 @@ _ARTIFACT_FIELDS = {
     "instructionRef",
     "contextRef",
 }
-
-
-class OmnigentRecoveryMode(str, Enum):
-    LIVE_REATTACH = "live_reattach"
-    COLD_RESTORE = "cold_restore"
 
 
 class OmnigentCheckpointValidation(BaseModel):
@@ -436,8 +436,16 @@ def recovery_mode(
     host_registered: bool,
     session_valid: bool,
     first_message_consistent: bool,
-) -> OmnigentRecoveryMode:
-    """Select live reattach only when every original authority is still valid."""
+) -> TurnDisposition:
+    """Select the one typed recovery disposition from checkpoint evidence.
+
+    Live reattach requires *every* original runtime authority to still be
+    current. Cold restore requires artifact-backed checkpoint and workspace
+    evidence, so it is never selected merely because live reattach failed -- a
+    destroyed host-local path is not restore evidence. When neither path has
+    evidence, the caller gets an explicit branch or unavailable decision instead
+    of a cold restore that cannot succeed (#3707).
+    """
 
     provider_active = bool(provider_lease and provider_lease.get("active"))
     provider_ref_matches = bool(
@@ -478,8 +486,15 @@ def recovery_mode(
             checkpoint.omnigent_session_id,
         )
     ):
-        return OmnigentRecoveryMode.LIVE_REATTACH
-    return OmnigentRecoveryMode.COLD_RESTORE
+        return TurnDisposition.LIVE_REATTACH
+    if (
+        checkpoint.validation.valid
+        and checkpoint.validation.workspace_cold_restore_available
+    ):
+        return TurnDisposition.COLD_RESTORE
+    if checkpoint.validation.branch_creation_available:
+        return TurnDisposition.BRANCH_REQUIRED
+    return TurnDisposition.RESUME_UNAVAILABLE
 
 
 def validate_cold_restore_target(
@@ -522,7 +537,7 @@ __all__ = [
     "CandidateWorkspaceAuthority",
     "OmnigentCheckpointIdentity",
     "OmnigentCheckpointValidation",
-    "OmnigentRecoveryMode",
+    "TurnDisposition",
     "OmnigentRestoreMaterial",
     "materialize_cold_restore_inputs",
     "recovery_mode",

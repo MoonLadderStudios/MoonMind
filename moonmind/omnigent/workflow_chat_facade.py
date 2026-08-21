@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from moonmind.omnigent.bridge_proxy import OmnigentBridgeError
+from moonmind.omnigent.turn_contracts import OmnigentTurnSource
 
 # Coarse session statuses that make a binding read-only. A read-only binding
 # still serves transcript/resource reads but rejects every mutation before any
@@ -402,6 +403,39 @@ def required_capability_for_event(event_type: str | None) -> str:
     return _SUPPORTED_COMPOSER_EVENTS.get(raw, CAP_CONTROL_UNSUPPORTED)
 
 
+# --- Canonical turn sources for Workflow Chat mutations (#3707) ---------------
+# Only the composer events that submit *new work* are turns. Interrupt, stop,
+# clear, harvest, and cleanup change session lifecycle or evidence and are not
+# turn submissions, so they must not create a turn attempt. The keys are
+# composer *event types* (and the elicitation/approval resolution controls named
+# like their route), never route or WebSocket-frame names: a route that posts
+# events must resolve the event type from its body before asking. Every entry
+# maps onto the closed vocabulary in
+# :mod:`moonmind.omnigent.turn_contracts`; nothing else may.
+_TURN_SUBMITTING_COMPOSER_EVENTS: dict[str, OmnigentTurnSource] = {
+    "message": OmnigentTurnSource.WORKFLOW_CHAT,
+    "user.message": OmnigentTurnSource.WORKFLOW_CHAT,
+    "steering": OmnigentTurnSource.STEERING,
+    "resolve_elicitation": OmnigentTurnSource.APPROVAL_RESPONSE,
+    "resolve_approval": OmnigentTurnSource.APPROVAL_RESPONSE,
+}
+
+
+def canonical_turn_source_for_event(
+    event_type: str | None,
+) -> OmnigentTurnSource | None:
+    """Return the canonical turn source a composer event submits, if any.
+
+    ``None`` means the control is not a turn submission and must not create a
+    canonical turn attempt. A turn-submitting control always resolves to exactly
+    one closed-vocabulary source, so native Workflow Chat cannot become an
+    independent submission authority (#3707).
+    """
+
+    raw = str(event_type or "").strip().lower()
+    return _TURN_SUBMITTING_COMPOSER_EVENTS.get(raw)
+
+
 # --- Identity-substitution guard (OB-§4.2 steps 4-5, brief §3) ----------------
 # Structural keys that name an upstream/topology/authority identity the browser
 # must never be able to inject through path, query, body, or header. A message
@@ -594,6 +628,7 @@ __all__ = [
     "assert_no_identity_substitution",
     "is_read_only",
     "match_facade_operation",
+    "canonical_turn_source_for_event",
     "recompute_capabilities",
     "required_capability_for_event",
 ]

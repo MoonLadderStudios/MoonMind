@@ -33,6 +33,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
+from moonmind.omnigent.turn_contracts import OmnigentTurnSource
 
 from .records import compute_digest
 from .repositories import ControlPlaneRepositories
@@ -105,7 +106,7 @@ class PlannedTurnAttempt:
     session_id: str
     bridge_session_id: str
     idempotency_key: str
-    lineage_kind: str
+    turn_source: str
 
 
 @dataclass
@@ -264,14 +265,18 @@ async def plan_backfill(session: AsyncSession) -> BackfillPlan:
         )
 
         for index, member in enumerate(members):
-            lineage = "initial" if index == 0 else "continuation"
+            lineage = (
+                OmnigentTurnSource.INITIAL.value
+                if index == 0
+                else OmnigentTurnSource.REPOSITORY_CONTINUATION.value
+            )
             plan.turn_attempts.append(
                 PlannedTurnAttempt(
                     turn_attempt_id=_turn_attempt_id(member.bridge_session_id),
                     session_id=session_id,
                     bridge_session_id=member.bridge_session_id,
                     idempotency_key=member.idempotency_key,
-                    lineage_kind=lineage,
+                    turn_source=lineage,
                 )
             )
             plan.preserved_evidence_rows += 1
@@ -398,7 +403,7 @@ async def run_backfill(
                     turn_attempt_id=planned_turn.turn_attempt_id,
                     session_id=planned_turn.session_id,
                     idempotency_key=planned_turn.idempotency_key,
-                    lineage_kind=planned_turn.lineage_kind,
+                    turn_source=planned_turn.turn_source,
                 )
                 report.turn_attempts_written += 1
 

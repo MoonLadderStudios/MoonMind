@@ -853,6 +853,7 @@ async def omnigent_persist_signal_intents_activity(
         OmnigentControlPlaneStore,
         RevisionConflictError,
         compute_digest,
+        recorded_authority_from_session,
     )
 
     request = OmnigentPersistSignalsRequest.model_validate(payload)
@@ -886,9 +887,11 @@ async def omnigent_persist_signal_intents_activity(
             elif kind == "submit_authorized_continuation":
                 turn_id = str(signal.get("turnAttemptId") or "").strip()
                 instruction_ref = str(signal.get("instructionRef") or "").strip()
+                turn_source = str(signal.get("turnSource") or "").strip()
                 turn = await repos.turn_attempts.get(turn_id) if turn_id else None
                 already_applied = already_applied and bool(
                     turn is not None
+                    and turn.turn_source == turn_source
                     and session.active_turn_attempt_id == turn_id
                     and session.metadata.get(f"turnInstructionRef:{turn_id}")
                     == instruction_ref
@@ -929,15 +932,31 @@ async def omnigent_persist_signal_intents_activity(
                 turn_id = str(signal.get("turnAttemptId") or "").strip()
                 instruction_ref = str(signal.get("instructionRef") or "").strip()
                 request_id = str(signal.get("requestId") or "").strip()
-                if not turn_id or not instruction_ref or not request_id:
+                turn_source = str(signal.get("turnSource") or "").strip()
+                if (
+                    not turn_id
+                    or not instruction_ref
+                    or not request_id
+                    or not turn_source
+                ):
                     raise ValueError("continuation signal is missing compact authority")
+                # The source kind is the one the canonical turn boundary
+                # admitted (#3707); the supervisor never substitutes a default
+                # lineage of its own, so remediation, chat, steering, approval
+                # responses, and checkpoint resumes stay distinguishable in
+                # durable authority.
+                recorded_authority = recorded_authority_from_session(session)
                 await repos.turn_attempts.create(
                     turn_attempt_id=turn_id,
                     session_id=request.session_id,
                     idempotency_key=request_id,
-                    lineage_kind="continuation",
+                    turn_source=turn_source,
                     parent_turn_attempt_id=session.active_turn_attempt_id,
                     instruction_digest=compute_digest(instruction_ref),
+                    execution_plan_ref=recorded_authority.execution_plan_ref,
+                    runtime_binding_ref=recorded_authority.runtime_binding_ref,
+                    authority_digest=recorded_authority.authority_digest,
+                    expected_session_revision=session.revision,
                 )
                 session = await repos.sessions.update_lifecycle(
                     request.session_id,

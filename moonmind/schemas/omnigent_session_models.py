@@ -150,6 +150,10 @@ class OmnigentSessionSignal(_OmnigentSessionModel):
     observation_ref: str | None = Field(None, alias="observationRef")
     instruction_ref: str | None = Field(None, alias="instructionRef")
     turn_attempt_id: str | None = Field(None, alias="turnAttemptId", max_length=255)
+    # Closed, versioned canonical turn source (#3707). A continuation signal
+    # must name the source kind that authorized it; the vocabulary is validated
+    # here so an unknown source can never reach durable authority.
+    turn_source: str | None = Field(None, alias="turnSource", max_length=32)
     reason_code: str | None = Field(None, alias="reasonCode", max_length=128)
     provider_epoch: str | None = Field(None, alias="providerEpoch", max_length=255)
     observed_at: datetime | None = Field(None, alias="observedAt")
@@ -160,6 +164,17 @@ class OmnigentSessionSignal(_OmnigentSessionModel):
         if value is None:
             return None
         return _require_artifact_ref(value, field_name=info.field_name)
+
+    @field_validator("turn_source")
+    @classmethod
+    def _validate_turn_source(cls, value: str | None) -> str | None:
+        """Fail closed on a source outside the canonical vocabulary (#3707)."""
+
+        if value is None:
+            return None
+        from moonmind.omnigent.turn_contracts import resolve_turn_source
+
+        return resolve_turn_source(value).value
 
 
 class OmnigentResolveIntentRequest(_OmnigentSessionModel):

@@ -934,9 +934,23 @@ class MoonMindOmnigentSessionWorkflow:
 
     @workflow.signal(name="submit_authorized_continuation")
     def submit_authorized_turn(self, payload: OmnigentSessionSignal) -> None:
-        if not payload.turn_attempt_id or not payload.instruction_ref:
+        """Accept one turn already admitted by the canonical turn boundary.
+
+        The supervisor never derives a source kind of its own (#3707): the
+        signal must name the closed-vocabulary source that authorized it, so a
+        continuation, remediation, chat message, steering action, approval
+        response, or checkpoint resume is distinguishable in durable authority
+        without changing the command, fencing, or terminality model.
+        """
+
+        if (
+            not payload.turn_attempt_id
+            or not payload.instruction_ref
+            or not payload.turn_source
+        ):
             raise ValueError(
-                "authorized continuation requires turnAttemptId and instructionRef"
+                "authorized continuation requires turnAttemptId, instructionRef, "
+                "and turnSource"
             )
         self._turn_attempt_count += 1
         self._queue_signal_intent("submit_authorized_continuation", payload)

@@ -332,19 +332,33 @@ class SessionRecord:
 
 @dataclass(frozen=True)
 class TurnAttemptRecord:
-    """One logical turn: instruction, initial message, continuation, steering,
-    or remediation. Owns request idempotency; never owns chat-binding
-    authority."""
+    """One logical turn from exactly one canonical source.
+
+    Owns request idempotency and the immutable execution authority it was
+    admitted against; never owns chat-binding authority. ``turn_source`` is the
+    closed, versioned vocabulary from #3707 -- source kind changes
+    authorization, evidence, and policy but never the command, idempotency,
+    fencing, observation, or terminality model.
+    """
 
     turn_attempt_id: str
     session_id: str
     idempotency_key: str
     schema_version: int = CURRENT_SCHEMA_VERSION
     step_execution_id: Optional[str] = None
-    lineage_kind: str = "instruction"
+    #: Closed, versioned canonical turn source (#3707). Values are members of
+    #: :class:`moonmind.omnigent.turn_contracts.OmnigentTurnSource`; the
+    #: repository fails closed on anything outside that vocabulary.
+    turn_source: str = "initial"
     parent_turn_attempt_id: Optional[str] = None
     remediation_of_turn_attempt_id: Optional[str] = None
     instruction_digest: Optional[str] = None
+    #: Immutable execution authority the turn was admitted against (#3707).
+    execution_plan_ref: Optional[str] = None
+    runtime_binding_ref: Optional[str] = None
+    authority_digest: Optional[str] = None
+    #: Session revision the submitter observed when the turn was admitted.
+    expected_session_revision: Optional[int] = None
     provider_marker: Optional[str] = None
     provider_turn_id: Optional[str] = None
     provider_item_id: Optional[str] = None

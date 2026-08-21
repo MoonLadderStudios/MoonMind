@@ -178,6 +178,7 @@ async def test_unique_turn_idempotency_identity(store) -> None:
             session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
         )
         await repos.turn_attempts.create(
+            turn_source="initial",
             turn_attempt_id="t1",
             session_id="s1",
             idempotency_key="idem-1",
@@ -187,6 +188,7 @@ async def test_unique_turn_idempotency_identity(store) -> None:
     with pytest.raises(TurnIdempotencyConflictError):
         async with store.transaction() as repos:
             await repos.turn_attempts.create(
+                turn_source="initial",
                 turn_attempt_id="t2",
                 session_id="s1",
                 idempotency_key="idem-1",
@@ -579,6 +581,7 @@ async def test_turn_writes_require_active_supervisor_generation(store) -> None:
             session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
         )
         turn = await repos.turn_attempts.create(
+            turn_source="initial",
             turn_attempt_id="t1",
             session_id="s1",
             idempotency_key="turn-1",
@@ -635,6 +638,7 @@ async def test_attempt_terminality_is_separate_from_session_terminality(store) -
             session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
         )
         await repos.turn_attempts.create(
+            turn_source="initial",
             turn_attempt_id="t1", session_id="s1", idempotency_key="idem-1"
         )
         await repos.turn_attempts.mark_terminal(
@@ -715,7 +719,7 @@ async def test_continuation_turn_reuses_session_without_new_binding(store) -> No
         first_turn_idempotency_key="idem-1",
     )
     assert session.chat_binding_id == "cb-1"
-    assert first_turn.lineage_kind == "initial"
+    assert first_turn.turn_source == "initial"
 
     # A remediation/continuation turn reuses the canonical session and cannot
     # allocate another chat binding (the repo/model expose no such affordance).
@@ -724,7 +728,7 @@ async def test_continuation_turn_reuses_session_without_new_binding(store) -> No
             turn_attempt_id="t2",
             session_id="s1",
             idempotency_key="idem-2",
-            lineage_kind="continuation",
+            turn_source="repository_continuation",
             parent_turn_attempt_id="t1",
         )
         refreshed = await repos.sessions.get("s1")
@@ -797,7 +801,7 @@ async def test_backfill_one_row(session_factory) -> None:
     report = await run_backfill(session_factory, dry_run=False)
     assert report.sessions_written == 1
     assert report.turn_attempts_written == 1
-    assert report.plan.turn_attempts[0].lineage_kind == "initial"
+    assert report.plan.turn_attempts[0].turn_source == "initial"
 
     store = OmnigentControlPlaneStore(session_factory)
     async with store.transaction() as repos:
@@ -831,9 +835,9 @@ async def test_backfill_seven_rows_one_provider_session(session_factory) -> None
     # Seven bridge rows collapse to one canonical session authority.
     assert report.sessions_written == 1
     assert report.turn_attempts_written == 7
-    lineages = [t.lineage_kind for t in report.plan.turn_attempts]
+    lineages = [t.turn_source for t in report.plan.turn_attempts]
     assert lineages.count("initial") == 1
-    assert lineages.count("continuation") == 6
+    assert lineages.count("repository_continuation") == 6
 
     session_id = report.plan.sessions[0].session_id
     store = OmnigentControlPlaneStore(session_factory)
@@ -1014,9 +1018,11 @@ async def test_bounded_diagnostic_queries(store) -> None:
             session_id="s1", moonmind_workflow_id="wf-1", provider="codex"
         )
         await repos.turn_attempts.create(
+            turn_source="initial",
             turn_attempt_id="t1", session_id="s1", idempotency_key="idem-1"
         )
         await repos.turn_attempts.create(
+            turn_source="initial",
             turn_attempt_id="t2", session_id="s1", idempotency_key="idem-2"
         )
         # Two event observations and one snapshot; latest_for_session must return

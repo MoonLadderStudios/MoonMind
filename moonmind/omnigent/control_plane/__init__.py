@@ -103,6 +103,16 @@ from .records import (
     UnknownSchemaVersionError,
     compute_digest,
 )
+from .turn_service import (
+    CanonicalTurnRequest,
+    CanonicalTurnResult,
+    CanonicalTurnService,
+    CanonicalTurnServiceError,
+    IMMUTABLE_AUTHORITY_METADATA_KEY,
+    TURN_INSTRUCTION_METADATA_PREFIX,
+    TurnProducerNotRegisteredError,
+    recorded_authority_from_session,
+)
 from .repositories import (
     ChatBindingAliasRepository,
     CleanupAuthorityRepository,
@@ -210,4 +220,13 @@ __all__ = [
     "ReadinessInputs",
     "ReadinessState",
     "evaluate_admission_readiness",
+    # canonical turn-command boundary (#3707)
+    "CanonicalTurnRequest",
+    "CanonicalTurnResult",
+    "CanonicalTurnService",
+    "CanonicalTurnServiceError",
+    "IMMUTABLE_AUTHORITY_METADATA_KEY",
+    "TURN_INSTRUCTION_METADATA_PREFIX",
+    "TurnProducerNotRegisteredError",
+    "recorded_authority_from_session",
 ]

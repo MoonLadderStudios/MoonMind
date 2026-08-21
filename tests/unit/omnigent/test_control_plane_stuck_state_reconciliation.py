@@ -82,6 +82,7 @@ async def _seed_stuck_session(
             provider_profile_id="profile-secret-identity",
         )
         await repos.turn_attempts.create(
+            turn_source="initial",
             turn_attempt_id=turn_id,
             session_id=session_id,
             idempotency_key=f"turn-idempotency-{session_id}",
@@ -443,6 +444,7 @@ async def test_service_level_detector_matrix_covers_every_durable_condition(
     await create_session(1)
     async with store.transaction() as repos:
         await repos.turn_attempts.create(
+            turn_source="initial",
             turn_attempt_id="matrix-turn-1",
             session_id="matrix-1",
             idempotency_key="matrix-turn-1",
@@ -471,6 +473,7 @@ async def test_service_level_detector_matrix_covers_every_durable_condition(
     await create_session(4)
     async with store.transaction() as repos:
         await repos.turn_attempts.create(
+            turn_source="initial",
             turn_attempt_id="matrix-turn-4", session_id="matrix-4",
             idempotency_key="matrix-turn-4",
         )
@@ -613,6 +616,7 @@ async def test_service_response_matrix_is_bounded_idempotent_and_fenced(
         )
         if needs_turn:
             await repos.turn_attempts.create(
+                turn_source="initial",
                 turn_attempt_id=turn_id,
                 session_id=session_id,
                 idempotency_key=f"turn-key-{reason.value}",
