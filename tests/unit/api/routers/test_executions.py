@@ -4626,27 +4626,42 @@ def test_create_task_shaped_execution_preserves_omnigent_selection(
 ) -> None:
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    snapshot = {
+        "profileId": "default",
+        "version": 1,
+        "digest": "sha256:" + "1" * 64,
+        "providerProfileRef": "codex-oauth-profile",
+        "executionProfileRef": "on-demand-docker",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "codex-native-ui",
+        "document": {"model": {}, "rag": {}, "capture": {}, "workspace": {}},
+    }
 
-    response = test_client.post(
-        "/api/executions",
-        json={
-            "type": "workflow",
-            "payload": {
-                "targetRuntime": "omnigent",
-                "omnigent": {
-                    "executionTargetRef": "on-demand-docker",
-                    "launchPolicyRef": "codex-on-demand@1",
-                },
-                "workflow": {
-                    "instructions": "Run through Omnigent.",
-                    "runtime": {
-                        "mode": "omnigent",
-                        "executionProfileRef": "codex-oauth-profile",
+    with patch(
+        "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
+        new=AsyncMock(return_value=snapshot),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "omnigent": {
+                        "executionTargetRef": "on-demand-docker",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run through Omnigent.",
+                        "runtime": {
+                            "mode": "omnigent",
+                            "executionProfileRef": "codex-oauth-profile",
+                        },
                     },
                 },
             },
-        },
-    )
+        )
 
     assert response.status_code == 201, response.text
     initial_parameters = service.create_execution.await_args.kwargs[
@@ -6322,26 +6337,41 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
 
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
+    test_client.app.dependency_overrides[get_async_session] = _empty_session_override
+    snapshot = {
+        "profileId": "default",
+        "version": 1,
+        "digest": "sha256:" + "2" * 64,
+        "providerProfileRef": "codex-oauth-profile",
+        "executionProfileRef": "omnigent-codex@1",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "codex-native-ui",
+        "document": {"model": {}, "rag": {}, "capture": {}, "workspace": {}},
+    }
 
-    response = test_client.post(
-        "/api/executions",
-        json={
-            "type": "task",
-            "payload": {
-                "repository": "MoonLadderStudios/MoonMind",
-                "targetRuntime": "omnigent",
-                "omnigent": {
-                    "executionTargetRef": "omnigent-codex@1",
-                    "launchPolicyRef": "codex-on-demand@1",
-                },
-                "task": {
-                    "instructions": "Make the bounded deterministic change.",
-                    "git": {"branch": "main"},
-                    "runtime": {"mode": "omnigent"},
+    with patch(
+        "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
+        new=AsyncMock(return_value=snapshot),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "task",
+                "payload": {
+                    "repository": "MoonLadderStudios/MoonMind",
+                    "targetRuntime": "omnigent",
+                    "omnigent": {
+                        "executionTargetRef": "omnigent-codex@1",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "task": {
+                        "instructions": "Make the bounded deterministic change.",
+                        "git": {"branch": "main"},
+                        "runtime": {"mode": "omnigent"},
+                    },
                 },
             },
-        },
-    )
+        )
 
     assert response.status_code == 201
     initial_parameters = service.create_execution.await_args.kwargs[

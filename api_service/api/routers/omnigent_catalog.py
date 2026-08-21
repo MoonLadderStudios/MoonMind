@@ -48,7 +48,7 @@ from moonmind.config.container_backend_settings import (
 )
 from moonmind.config.settings import settings
 from moonmind.omnigent.bridge_config import HOST_PROTOCOL_MODE_EMBEDDED
-from moonmind.omnigent.bridge_store import (
+from moonmind.omnigent.control_plane.identities import (
     EGRESS_CLEANUP_AUTHORITY_KEY,
     EGRESS_CLEANUP_AUTHORITY_VERSION,
 )

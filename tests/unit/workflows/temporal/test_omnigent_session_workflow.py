@@ -1022,6 +1022,7 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
             return session
 
         async def bind_runtime_authority(self, _session_id: str, **_kwargs: object):
+            captured["boundRuntimeAuthority"] = dict(_kwargs)
             return session
 
     class FakeStore:
@@ -1040,12 +1041,17 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
             )
 
     class FakeDbSession:
+        reads = 0
+
         async def get(self, _model: object, _profile_id: str) -> object:
+            type(self).reads += 1
             return SimpleNamespace(
                 enabled=True,
                 auth_state="connected",
                 runtime_id="codex_cli",
-                credential_generation=4,
+                credential_generation=(
+                    3 if type(self).reads == 1 else 4
+                ),
             )
 
         async def __aenter__(self):
@@ -1110,3 +1116,4 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
     )
     assert safe["workflowId"] == omnigent_session_workflow_id("oms_123")
     assert "canonicalSessionId" not in safe
+    assert captured["boundRuntimeAuthority"]["credential_generation"] == 4  # type: ignore[index]

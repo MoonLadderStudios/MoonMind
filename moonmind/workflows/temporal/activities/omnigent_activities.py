@@ -320,15 +320,24 @@ async def _resolve_live_recovery_authority(
 async def _try_generic_realizer_dispatch(
     request: AgentExecutionRequest,
     *,
-    artifact_gateway: Any,
-    run_store: Any,
+    plan_store: Any | None = None,
+    realizer_registry: Any | None = None,
+    artifact_gateway: Any | None = None,
+    run_store: Any | None = None,
 ) -> AgentRunResult | None:
-    """Plan and dispatch a generic selection without harness-specific branches."""
+    """Load or plan immutable generic authority, then dispatch its realizer.
+
+    A normal product request may already carry ``executionPlanRef``. The v2
+    authoring path instead carries an immutable ``agentProfileRef`` and is
+    compiled through the production planning service. Harness identities never
+    steer this Activity.
+    """
 
     params = request.parameters if isinstance(request.parameters, dict) else {}
     omnigent = (
         params.get("omnigent") if isinstance(params.get("omnigent"), dict) else {}
     )
+    plan_ref = str(params.get("executionPlanRef") or "").strip()
     has_profile_ref = isinstance(omnigent.get("agentProfileRef"), dict)
     inline_profile = any(
         isinstance(value, dict)
@@ -341,8 +350,10 @@ async def _try_generic_realizer_dispatch(
     )
     # The immutable Agent Profile selection is the dispatch discriminator.
     # Harness names are catalog data and must never steer Temporal dispatch.
-    selects_generic = has_profile_ref or inline_profile
-    if not selects_generic:
+    attempted_generic = has_profile_ref or inline_profile or bool(
+        params.get("_genericHarnessTest") or omnigent.get("_genericHarnessTest")
+    )
+    if not plan_ref and not attempted_generic:
         return None
 
     from moonmind.omnigent.harness_platform.failures import (
@@ -352,7 +363,7 @@ async def _try_generic_realizer_dispatch(
     )
     from moonmind.omnigent.settings import generic_host_enabled
 
-    if not generic_host_enabled():
+    if not generic_host_enabled() and not plan_ref:
         return AgentRunResult(
             summary="Generic Omnigent host execution is not enabled for this deployment.",
             failureClass="configuration_error",
@@ -362,17 +373,65 @@ async def _try_generic_realizer_dispatch(
 
     try:
         from api_service.db.base import async_session_maker
-        from moonmind.omnigent.production import (
-            build_generic_omnigent_execution_services,
-        )
+        if plan_ref:
+            if plan_store is None:
+                from moonmind.omnigent.harness_platform.stores import (
+                    DbExecutionPlanStore,
+                )
 
-        services = build_generic_omnigent_execution_services(
-            session_factory=async_session_maker,
-            artifact_gateway=artifact_gateway,
-            run_store=run_store,
-        )
-        plan = await services.planning_service.plan(request)
-        realizer = services.realizer_registry.require(plan.payload.executionRealizerRef)
+                plan_store = DbExecutionPlanStore(async_session_maker)
+            plan = await plan_store.load(plan_ref)
+            if plan is None:
+                return AgentRunResult(
+                    summary="admitted Omnigent execution plan is unavailable",
+                    failureClass="integration_error",
+                    providerErrorCode="OMNIGENT_EXECUTION_PLAN_UNAVAILABLE",
+                    retryRecommendation="retry_transient_upstream",
+                )
+            from moonmind.omnigent.harness_platform.execution_plan import (
+                bind_runtime_request_authority,
+            )
+
+            plan = bind_runtime_request_authority(
+                plan,
+                resolved_skillset_ref=request.resolved_skillset_ref,
+                model=params.get("model"),
+                effort=params.get("effort") if "effort" in params else None,
+            )
+            if plan.planRef != plan_ref:
+                plan = await plan_store.persist(plan)
+                params = {**params, "executionPlanRef": plan.planRef}
+                request = request.model_copy(update={"parameters": params})
+        else:
+            if inline_profile and not has_profile_ref:
+                return AgentRunResult(
+                    summary="generic Omnigent execution requires an immutable Agent Profile ref",
+                    failureClass="configuration_error",
+                    providerErrorCode=(
+                        HarnessPlatformFailure.OMNIGENT_AGENT_PROFILE_INVALID.value
+                    ),
+                    retryRecommendation="select_immutable_agent_profile",
+                )
+            from moonmind.omnigent.production import (
+                build_generic_omnigent_execution_services,
+            )
+
+            services = build_generic_omnigent_execution_services(
+                session_factory=async_session_maker,
+                artifact_gateway=artifact_gateway,
+                run_store=run_store,
+            )
+            plan = await services.planning_service.plan(request)
+            params = {**params, "executionPlanRef": plan.planRef}
+            request = request.model_copy(update={"parameters": params})
+            if realizer_registry is None:
+                realizer_registry = services.realizer_registry
+
+        if realizer_registry is None:
+            from moonmind.omnigent.realizers.registry import get_default_registry
+
+            realizer_registry = get_default_registry()
+        realizer = realizer_registry.require(plan.payload.executionRealizerRef)
         return await realizer.execute(request, plan)
     except HarnessPlatformError as exc:
         code = str(exc.code)

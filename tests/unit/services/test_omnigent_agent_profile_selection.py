@@ -19,6 +19,7 @@ from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
+    resolve_default_agent_profile_snapshot,
 )
 
 
@@ -87,12 +88,16 @@ class _Session:
         )
         self.usage = None
         self.added = []
+        self.statements = []
 
     async def get(self, model, key):
         return self.profile if model is OmnigentAgentProfile else None
 
     async def scalar(self, statement):
+        self.statements.append(statement)
         entity = statement.column_descriptions[0].get("entity")
+        if entity is OmnigentAgentProfile:
+            return self.profile
         if entity is OmnigentAgentProfileVersion:
             return self.version
         if entity is ManagedAgentProviderProfile:
@@ -212,6 +217,89 @@ async def test_resolver_rejects_a_stale_authored_profile_digest():
             user=SimpleNamespace(id=uuid4()),
         )
     assert caught.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_default_resolver_freezes_default_and_explicit_provider_at_admission():
+    session = _Session()
+
+    snapshot = await resolve_default_agent_profile_snapshot(
+        session,
+        provider_profile_ref="oauth-team",
+        launch_policy_ref="on-demand@1",
+        consumer_type="workflow",
+        consumer_id="workflow-default-1",
+        user=SimpleNamespace(id=uuid4()),
+    )
+
+    assert snapshot["profileId"] == "team-codex"
+    assert snapshot["providerProfileRef"] == "oauth-team"
+    assert snapshot["launchPolicyRef"] == "on-demand@1"
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_selection_is_scoped_to_requesting_user():
+    session = _Session()
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    await resolve_agent_profile_snapshot(
+        session,
+        selection={
+            "profileId": "team-codex",
+            "version": 2,
+            "providerProfileRef": "oauth-team",
+        },
+        consumer_type="workflow",
+        consumer_id="workflow-owner-scope",
+        user=user,
+    )
+
+    provider_queries = [
+        statement
+        for statement in session.statements
+        if statement.column_descriptions[0].get("entity")
+        is ManagedAgentProviderProfile
+    ]
+    assert len(provider_queries) == 1
+    sql = str(provider_queries[0])
+    assert "owner_user_id IS NULL" in sql
+    assert "owner_user_id =" in sql
+
+
+@pytest.mark.asyncio
+async def test_idempotent_default_resolution_reuses_exact_profile_usage():
+    session = _Session()
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+    first = await resolve_default_agent_profile_snapshot(
+        session,
+        provider_profile_ref="oauth-team",
+        launch_policy_ref="on-demand@1",
+        consumer_type="workflow",
+        consumer_id="workflow-idempotent-default",
+        user=user,
+    )
+    session.usage = session.added.pop()
+
+    second = await resolve_default_agent_profile_snapshot(
+        session,
+        provider_profile_ref="oauth-team",
+        launch_policy_ref="on-demand@1",
+        consumer_type="workflow",
+        consumer_id="workflow-idempotent-default",
+        user=user,
+    )
+
+    assert second == first
+    assert second is not session.usage.effective_snapshot
+    assert session.added == []
+    provider_queries = [
+        str(statement)
+        for statement in session.statements
+        if statement.column_descriptions[0].get("entity")
+        is ManagedAgentProviderProfile
+    ]
+    assert provider_queries
+    assert all("owner_user_id IS NULL" in statement for statement in provider_queries)
 
 
 @pytest.mark.asyncio

@@ -20,6 +20,8 @@ from moonmind.omnigent.credential_materializers import (
     OmnigentCredentialProvisioningService,
     build_default_credential_materializer_registry,
 )
+from moonmind.omnigent.control_plane.repositories import OmnigentControlPlaneStore
+from moonmind.omnigent.control_plane.turn_commands import CanonicalTurnCommandService
 from moonmind.omnigent.execute import run_omnigent_execution
 from moonmind.omnigent.harness_platform.catalog_service import (
     DbHarnessCatalogRepository,
@@ -237,6 +239,9 @@ def build_generic_omnigent_execution_services(
         session_driver=session_driver,
         session_cleanup_service=OmnigentSessionCleanupService(client),
         artifact_gateway=artifacts,
+        turn_command_service=CanonicalTurnCommandService(
+            OmnigentControlPlaneStore(session_factory)
+        ),
     )
     registry = OmnigentExecutionRealizerRegistry()
     registry.register(CodexProfileBoundRealizer(session_factory=session_factory))

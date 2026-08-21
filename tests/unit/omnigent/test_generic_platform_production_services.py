@@ -813,6 +813,22 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
         await session_authority_sink.session_created("session-1")
         assert session_authority_sink.binding.omnigentSessionId == "session-1"
         assert request.parameters["omnigent"]["session"]["hostId"] == "host-1"
+        authorization = request.parameters["omnigent"][
+            "_moonmindProfileAuthorization"
+        ]
+        assert authorization["executionPlanRef"] == request.parameters[
+            "executionPlanRef"
+        ]
+        assert authorization["runtimeBindingRef"] == request.parameters[
+            "runtimeBindingRef"
+        ]
+        assert authorization["providerProfileId"] == "opencode-go-primary"
+        assert authorization["providerLeaseRef"] == (
+            "provider-profile-lease:lease-1"
+        )
+        assert authorization["credentialGeneration"] == 4
+        assert authorization["hostBindingRef"]
+        assert authorization["hostLeaseRef"]
         events.append("message-completed")
         return AgentRunResult(summary="done")
 
@@ -821,6 +837,15 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
             assert session_id == "session-1"
             events.append("session-drained")
             return {"sessionId": session_id, "stopped": True}
+
+    class TurnCommands:
+        async def claim(self, **kwargs):
+            assert kwargs["payload_digest"] == _plan("opencode-go/model").planRef
+            events.append("command-claimed")
+            return SimpleNamespace(owns_delivery=True)
+
+        async def settle(self, **kwargs):
+            events.append(f"command-settled:{kwargs['outcome'].value}")
 
     realizer = GenericOmnigentHostRealizer(
         runtime_binding_store=runtime_store,
@@ -831,11 +856,25 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
         planned_host_resolver=resolve_host,
         session_driver=session_driver,
         session_cleanup_service=SessionCleanup(),
+        turn_command_service=TurnCommands(),
     )
     result = await realizer.execute(_request(), _plan("opencode-go/model"))
 
     assert result.summary == "done"
-    assert events[-1] == "provider-released"
+    assert result.metadata["executionPlanRef"] == _plan(
+        "opencode-go/model"
+    ).planRef
+    assert result.metadata["runtimeBindingRef"].startswith(
+        "omnigent-runtime-binding:sha256:"
+    )
+    assert result.metadata["supportCombinationIdentity"][
+        "supportCombinationKey"
+    ] == _plan("opencode-go/model").payload.supportCombinationKey
+    assert events[-1] == "command-settled:applied"
+    assert events.index("command-claimed") < events.index("provider-acquired")
+    assert events.index("provider-released") < events.index(
+        "command-settled:applied"
+    )
     assert events.index("host-cleaned") < events.index("credentials-cleaned")
     assert events.index("credentials-cleaned") < events.index("provider-released")
 

@@ -1659,7 +1659,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
 
   it.each([
     ["deferred", "deferred_minutes", "Minutes from now", "5", { mode: "once" }],
-    ["once", "once", "Scheduled For", "2099-01-01T12:00", { mode: "once", scheduledFor: "2099-01-01T12:00:00.000Z" }],
+    ["once", "once", "Scheduled For", "2099-01-01T12:00", { mode: "once", scheduledFor: new Date("2099-01-01T12:00").toISOString() }],
     ["recurring", "recurring", "Cron Expression", "0 4 * * *", { mode: "recurring", cron: "0 4 * * *", timezone: "UTC" }],
   ])("preserves canonical Omnigent refs in %s schedule submissions", async (_label, mode, fieldLabel, fieldValue, expectedSchedule) => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

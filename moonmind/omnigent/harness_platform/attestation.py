@@ -384,7 +384,9 @@ def validate_opencode_exact_host_preflight(
             "opencode host not configured",
             code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
         )
-    # Generation fencing already checked via attestationGeneration; additionally ensure
+    # Credential-file I/O belongs to the outer trusted materializer adapter.
+    # This pure validator receives only its secret-free generation evidence.
+    # Generation fencing is already checked via attestationGeneration; additionally ensure
     # the credential generation matches materialized handle if provided
     # Enforce required Skill delivery ref if caller requested it
     if requiredSkillDeliveryRef is not None:

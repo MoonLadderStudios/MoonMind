@@ -18,6 +18,7 @@ from api_service.services.checkpoint_branch_turn_execution import (
     build_branch_turn_execution_identity,
 )
 from moonmind.omnigent.checkpoints import CandidateWorkspaceAuthority
+from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 from moonmind.omnigent.profile_bound_execution import (
     OmnigentProfileBoundExecutionCoordinator,
 )
@@ -59,6 +60,7 @@ class _Session:
 def _authority_graph():
     turn = SimpleNamespace(
         branch_turn_id="turn-1",
+        idempotency_key="checkpoint-branch-turn:turn-1",
         branch_id="branch-1",
         parent_turn_id=None,
         source_checkpoint_ref="artifact://source-checkpoint",
@@ -126,6 +128,13 @@ def _authority_graph():
     )
     omnigent = SimpleNamespace(
         idempotency_key="source-message",
+        workflow_id="source-workflow",
+        step_execution_id="source-step-execution-1",
+        bridge_session_id="source-bridge-1",
+        omnigent_session_id="source-provider-session-1",
+        execution_plan_ref=(
+            "omnigent-execution-plan:sha256:" + "9" * 64
+        ),
         launch_policy_ref="policy-1@1",
         source_branch="main",
         publication_state="none",
@@ -320,11 +329,21 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
 ) -> None:
     session = _Session()
     client = SimpleNamespace()
+    turn_commands = SimpleNamespace(
+        claim_with_repositories=AsyncMock(
+            side_effect=[
+                SimpleNamespace(outcome=ControlPlaneOutcome.APPLIED),
+                SimpleNamespace(outcome=ControlPlaneOutcome.ALREADY_APPLIED),
+            ]
+        ),
+        settle=AsyncMock(),
+    )
     owner = CheckpointBranchTurnExecutionOwner(
         session,  # type: ignore[arg-type]
         principal="service:test",
         client=client,  # type: ignore[arg-type]
         artifact_service=SimpleNamespace(),  # type: ignore[arg-type]
+        turn_command_service=turn_commands,
     )
     branch, turn, binding, source, checkpoint, profile, policy = _authority_graph()
     branch.diagnostics["runtimeSelection"]["agentProfileSnapshot"] = {
@@ -389,7 +408,7 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
     )
 
     assert events == ["claim", "start"]
-    assert session.commit.await_count == 1
+    assert session.commit.await_count == 2
     assert launched.created_step_execution_id == (
         "checkpoint-branch-turn:turn-1:branch-turn-turn-1:implement:execution:1"
     )
@@ -412,6 +431,9 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
     assert request["parameters"]["effort"] == "medium"
     assert request["parameters"]["maxBudgetUsd"] == 2.5
     assert request["parameters"]["agentProfile"]["profileId"] == "agent-profile-1"
+    assert request["parameters"]["executionPlanRef"] == (
+        "omnigent-execution-plan:sha256:" + "9" * 64
+    )
     assert request["parameters"]["omnigent"]["executionTargetRef"] == "profile-1"
     assert "artifact://remediation/context" in request["inputRefs"]
     assert "artifact://remediation/context" in request["stepExecution"][
@@ -428,7 +450,9 @@ async def test_owner_allocates_and_claims_canonical_omnigent_request_before_star
         intent={"idempotencyKey": "authorized-recovery-operation"},
     )
     assert events == ["claim", "start", "start"]
-    assert owner._validate_source_authority.await_count == 1
+    assert owner._validate_source_authority.await_count == 2
+    assert session.commit.await_count == 3
+    turn_commands.settle.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -709,6 +733,7 @@ async def test_owner_rejects_stored_authority_mismatches_before_artifact_or_runt
         ("launch_policy", "launch_policy_mismatch"),
         ("provider_profile", "provider_profile_mismatch"),
         ("execution_profile", "execution_profile_mismatch"),
+        ("execution_plan", "execution_plan_mismatch"),
         ("credential_generation", "credential_generation_changed"),
         ("profile_readiness", "provider_profile_not_ready"),
         ("repository_baseline", "repository_baseline_mismatch"),
@@ -773,6 +798,10 @@ async def test_owner_rejects_complete_authority_mismatch_matrix_before_mutation(
         selection["providerProfileRef"] = "profile-other"
     elif case == "execution_profile":
         selection["executionProfileRef"] = "profile-other"
+    elif case == "execution_plan":
+        selection["executionPlanRef"] = (
+            "omnigent-execution-plan:sha256:" + "8" * 64
+        )
     elif case == "credential_generation":
         session.profile.credential_generation = 2
     elif case == "profile_readiness":

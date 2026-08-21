@@ -6,7 +6,7 @@ import copy
 from typing import Any, Mapping
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import (
@@ -26,6 +26,18 @@ from api_service.services.provider_profile_readiness import (
 )
 
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
+
+
+def _provider_profile_visibility_filter(user: User | None) -> Any | None:
+    """Return the SQL visibility boundary shared by explicit/default selection."""
+
+    user_id = getattr(user, "id", None)
+    if user_id is None or bool(getattr(user, "is_superuser", False)):
+        return None
+    return or_(
+        ManagedAgentProviderProfile.owner_user_id.is_(None),
+        ManagedAgentProviderProfile.owner_user_id == user_id,
+    )
 
 
 def _enforce_override_ceilings(
@@ -321,9 +333,14 @@ async def resolve_agent_profile_snapshot(
             "agentProfile.providerProfileRef is required",
         )
     if is_v2:
-        compatible_provider = await session.get(
-            ManagedAgentProviderProfile, requested_provider_profile
+        provider_query = select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.enabled.is_(True),
+            ManagedAgentProviderProfile.profile_id == requested_provider_profile,
         )
+        visibility_filter = _provider_profile_visibility_filter(user)
+        if visibility_filter is not None:
+            provider_query = provider_query.where(visibility_filter)
+        compatible_provider = await session.scalar(provider_query.limit(1))
         accepted_provider_ids = {
             str(provider_id)
             for slot in document.get("credentialSlots", [])
@@ -346,6 +363,9 @@ async def resolve_agent_profile_snapshot(
             == requirements["materializationMode"],
             ManagedAgentProviderProfile.profile_id == requested_provider_profile,
         )
+        visibility_filter = _provider_profile_visibility_filter(user)
+        if visibility_filter is not None:
+            provider_query = provider_query.where(visibility_filter)
         if requirements.get("providerIds"):
             provider_query = provider_query.where(
                 ManagedAgentProviderProfile.provider_id.in_(requirements["providerIds"])
@@ -406,13 +426,25 @@ async def resolve_agent_profile_snapshot(
         "upstreamSnapshot": upstream_snapshot,
         "validationResult": version.validation_result,
     }
-    if replace_existing_usage:
-        usage = await session.scalar(
-            select(OmnigentAgentProfileUsage).where(
-                OmnigentAgentProfileUsage.consumer_type == consumer_type,
-                OmnigentAgentProfileUsage.consumer_id == consumer_id,
-            )
+    usage = await session.scalar(
+        select(OmnigentAgentProfileUsage).where(
+            OmnigentAgentProfileUsage.consumer_type == consumer_type,
+            OmnigentAgentProfileUsage.consumer_id == consumer_id,
         )
+    )
+    if usage is not None and not replace_existing_usage:
+        if (
+            usage.profile_id != profile_id
+            or usage.version != version.version
+            or usage.digest != version.digest
+            or usage.effective_snapshot != snapshot
+        ):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Agent Profile usage conflicts with the existing consumer authority",
+            )
+        return copy.deepcopy(dict(usage.effective_snapshot))
+    if replace_existing_usage:
         if usage is None:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
@@ -435,6 +467,108 @@ async def resolve_agent_profile_snapshot(
         )
     await session.flush()
     return snapshot
+
+
+async def resolve_default_agent_profile_snapshot(
+    session: AsyncSession,
+    *,
+    provider_profile_ref: str | None,
+    launch_policy_ref: str | None,
+    consumer_type: str,
+    consumer_id: str,
+    user: User | None,
+) -> dict[str, Any]:
+    """Resolve the deployment-managed default into explicit launch authority.
+
+    The default is selected only at API admission.  The returned immutable
+    snapshot is then compiled into the same plan as an explicitly authored
+    Agent Profile, so workers never repeat default/profile resolution.
+    """
+
+    profile = await session.scalar(
+        select(OmnigentAgentProfile)
+        .where(OmnigentAgentProfile.default_for_runtime.is_(True))
+        .limit(1)
+    )
+    if profile is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "default Omnigent Agent Profile is unavailable",
+        )
+    if profile.state != "active" or profile.active_version is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "default Omnigent Agent Profile is not launch ready",
+        )
+    version = await session.scalar(
+        select(OmnigentAgentProfileVersion).where(
+            OmnigentAgentProfileVersion.profile_id == profile.profile_id,
+            OmnigentAgentProfileVersion.version == profile.active_version,
+        )
+    )
+    if version is None or not isinstance(version.document, Mapping):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "default Omnigent Agent Profile version is unavailable",
+        )
+    selected_provider_ref = str(provider_profile_ref or "").strip()
+    if not selected_provider_ref:
+        requirements = version.document.get("providerRequirements") or {}
+        query = (
+            select(ManagedAgentProviderProfile)
+            .where(
+                ManagedAgentProviderProfile.enabled.is_(True),
+                ManagedAgentProviderProfile.runtime_id
+                == requirements.get("runtimeId"),
+                ManagedAgentProviderProfile.credential_source
+                == requirements.get("credentialSource"),
+                ManagedAgentProviderProfile.runtime_materialization_mode
+                == requirements.get("materializationMode"),
+            )
+            .order_by(
+                ManagedAgentProviderProfile.is_default.desc(),
+                ManagedAgentProviderProfile.priority.desc(),
+                ManagedAgentProviderProfile.profile_id.asc(),
+            )
+        )
+        visibility_filter = _provider_profile_visibility_filter(user)
+        if visibility_filter is not None:
+            query = query.where(visibility_filter)
+        if requirements.get("providerIds"):
+            query = query.where(
+                ManagedAgentProviderProfile.provider_id.in_(
+                    requirements["providerIds"]
+                )
+            )
+        candidates = list((await session.scalars(query)).all())
+        selected = next(
+            (item for item in candidates if provider_profile_launch_ready(item)),
+            None,
+        )
+        if selected is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "no launch-ready Provider Profile matches the default Omnigent "
+                "Agent Profile",
+            )
+        selected_provider_ref = selected.profile_id
+    selection = {
+        "profileId": profile.profile_id,
+        "version": profile.active_version,
+        "providerProfileRef": selected_provider_ref,
+        **(
+            {"launchPolicyRef": str(launch_policy_ref).strip()}
+            if str(launch_policy_ref or "").strip()
+            else {}
+        ),
+    }
+    return await resolve_agent_profile_snapshot(
+        session,
+        selection=selection,
+        consumer_type=consumer_type,
+        consumer_id=consumer_id,
+        user=user,
+    )
 
 
 async def refresh_managed_bootstrap_snapshot(
@@ -560,4 +694,5 @@ __all__ = [
     "compile_agent_profile_snapshot_parameters",
     "refresh_managed_bootstrap_snapshot",
     "resolve_agent_profile_snapshot",
+    "resolve_default_agent_profile_snapshot",
 ]

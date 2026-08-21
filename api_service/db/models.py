@@ -718,6 +718,8 @@ class OmnigentSession(Base):
         ),
         Index("ix_omnigent_sessions_workflow", "moonmind_workflow_id"),
         Index("ix_omnigent_sessions_deadline", "next_reconciliation_deadline"),
+        Index("ix_omnigent_sessions_execution_plan", "execution_plan_ref"),
+        Index("ix_omnigent_sessions_runtime_binding", "runtime_binding_ref"),
     )
 
     session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
@@ -748,6 +750,22 @@ class OmnigentSession(Base):
     # Immutable intent ref and digest.
     intent_ref: Mapped[Optional[str]] = mapped_column(String(1024), nullable=True)
     intent_digest: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+
+    # Immutable admitted execution authority plus one stable, CAS-fenced
+    # runtime-binding identity. Mutable lifecycle evidence advances inside the
+    # binding aggregate without changing this reference.
+    execution_plan_ref: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey("omnigent_execution_plans.plan_ref", ondelete="RESTRICT"),
+        nullable=True,
+    )
+    runtime_binding_ref: Mapped[Optional[str]] = mapped_column(
+        String(255),
+        ForeignKey(
+            "omnigent_runtime_bindings.binding_id", ondelete="RESTRICT"
+        ),
+        nullable=True,
+    )
 
     # Desired / observed / reconciled lifecycle state.
     desired_state: Mapped[str] = mapped_column(

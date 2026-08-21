@@ -7,6 +7,7 @@ the existing Omnigent session driver owns provider interaction after creation.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Awaitable, Callable
 
 from moonmind.omnigent.credential_materializers import (
@@ -15,6 +16,7 @@ from moonmind.omnigent.credential_materializers import (
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
+    execution_support_identity,
 )
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
@@ -27,6 +29,9 @@ from moonmind.omnigent.runtime_bindings import (
     stable_binding_id,
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+
+
+logger = logging.getLogger(__name__)
 
 
 def _execution_identity(request: AgentExecutionRequest) -> tuple[str, str]:
@@ -55,6 +60,7 @@ class GenericOmnigentHostRealizer:
         session_driver: Callable[..., Awaitable[AgentRunResult]],
         session_cleanup_service: Any,
         artifact_gateway: Any | None = None,
+        turn_command_service: Any | None = None,
     ) -> None:
         dependencies = (
             runtime_binding_store,
@@ -80,17 +86,117 @@ class GenericOmnigentHostRealizer:
         self._session_driver = session_driver
         self._session_cleanup = session_cleanup_service
         self._artifacts = artifact_gateway
+        self._turn_commands = turn_command_service
 
     async def execute(
         self,
         request: AgentExecutionRequest,
         plan: OmnigentExecutionPlanEnvelope,
     ) -> AgentRunResult:
+        """Fence one canonical delivery command around the generic lifecycle."""
+
         if plan.payload.executionRealizerRef != self.ref:
             raise HarnessPlatformError(
                 f"plan realizer {plan.payload.executionRealizerRef} != {self.ref}",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
             )
+        completed = await self._runtime_bindings.get(
+            stable_binding_id(
+                execution_plan_ref=plan.planRef,
+                idempotency_key=request.idempotency_key,
+            )
+        )
+        if completed is not None and completed.state is RuntimeBindingState.cleaned:
+            if completed.terminalResult is None:
+                raise HarnessPlatformError(
+                    "cleaned generic execution has no durable terminal result",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
+            return AgentRunResult.model_validate(completed.terminalResult)
+
+        command_claim = None
+        workflow_id, step_execution_id = _execution_identity(request)
+        if self._turn_commands is not None:
+            from moonmind.omnigent.control_plane.turn_commands import (
+                CanonicalSessionBootstrap,
+            )
+
+            command_claim = await self._turn_commands.claim(
+                workflow_id=workflow_id,
+                provider_session_ref="",
+                chat_binding_id=None,
+                command_type="execute_admitted_plan",
+                idempotency_key=request.idempotency_key,
+                payload_digest=plan.planRef,
+                step_execution_id=step_execution_id,
+                bootstrap=CanonicalSessionBootstrap(
+                    provider="omnigent",
+                    step_execution_id=step_execution_id,
+                    agent_run_id=request.correlation_id,
+                    source_idempotency_key=request.idempotency_key,
+                    execution_plan_ref=plan.planRef,
+                ),
+            )
+            if not command_claim.owns_delivery:
+                raise HarnessPlatformError(
+                    "canonical turn command is already settled or owned; reconciliation is required",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
+        try:
+            result = await self._execute_lifecycle(request, plan)
+        except BaseException:
+            if command_claim is not None:
+                from moonmind.omnigent.control_plane.records import (
+                    ControlPlaneOutcome,
+                )
+
+                try:
+                    await self._turn_commands.settle(
+                        workflow_id=workflow_id,
+                        idempotency_key=request.idempotency_key,
+                        outcome=ControlPlaneOutcome.DELIVERY_UNKNOWN,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to park generic Omnigent command as delivery unknown"
+                    )
+            raise
+        if command_claim is not None:
+            from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+
+            try:
+                await self._turn_commands.settle(
+                    workflow_id=workflow_id,
+                    idempotency_key=request.idempotency_key,
+                    outcome=ControlPlaneOutcome.APPLIED,
+                    provider_receipt_id=str(
+                        (result.metadata or {}).get("omnigentSessionId") or ""
+                    )
+                    or None,
+                    result_ref=str(
+                        (result.metadata or {}).get("externalStateRef") or ""
+                    )
+                    or None,
+                )
+            except Exception:
+                logger.exception(
+                    "Generic Omnigent command settlement remains pending"
+                )
+                result = result.model_copy(
+                    update={
+                        "metadata": {
+                            **(result.metadata or {}),
+                            "canonicalCommandSettlementDeferred": True,
+                        }
+                    }
+                )
+        return result
+
+    async def _execute_lifecycle(
+        self,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+    ) -> AgentRunResult:
         prior = await self._runtime_bindings.get(
             stable_binding_id(
                 execution_plan_ref=plan.planRef,
@@ -331,6 +437,18 @@ class GenericOmnigentHostRealizer:
                 session_authority_sink=sink,
             )
             binding = sink.binding
+            result = result.model_copy(
+                update={
+                    "metadata": {
+                        **(result.metadata or {}),
+                        "executionPlanRef": plan.planRef,
+                        "runtimeBindingRef": binding.bindingId,
+                        "supportCombinationIdentity": execution_support_identity(
+                            plan
+                        ),
+                    }
+                }
+            )
             binding = await self._update_binding(
                 binding,
                 updates={
@@ -422,6 +540,18 @@ class GenericOmnigentHostRealizer:
                 result = await self._session_driver(
                     self._bind_exact_host(request, plan, host_context, current),
                     session_authority_sink=sink,
+                )
+                result = result.model_copy(
+                    update={
+                        "metadata": {
+                            **(result.metadata or {}),
+                            "executionPlanRef": plan.planRef,
+                            "runtimeBindingRef": sink.binding.bindingId,
+                            "supportCombinationIdentity": (
+                                execution_support_identity(plan)
+                            ),
+                        }
+                    }
                 )
                 current = await self._update_binding(
                     sink.binding,
@@ -595,13 +725,39 @@ class GenericOmnigentHostRealizer:
             }
         )
         omnigent["session"] = session
-        omnigent["_moonmindProfileAuthorization"] = {
+        primary_lease = binding.providerLeases.get("primary-model")
+        if primary_lease is None and binding.providerLeases:
+            primary_lease = binding.providerLeases[
+                sorted(binding.providerLeases)[0]
+            ]
+        profile_authorization = {
             "hostClassRef": plan.payload.hostClassRef,
             "launchPolicyRef": plan.payload.launchPolicyRef,
             "executionRealizerRef": self.ref,
+            "executionPlanRef": plan.planRef,
+            "runtimeBindingRef": binding.bindingId,
             "runtimeBindingId": binding.bindingId,
+            "hostBindingRef": binding.hostBindingRef,
+            "hostLeaseRef": binding.hostLeaseRef,
+            "endpointRef": plan.payload.endpointRef,
+            "omnigentHostId": host_id,
         }
+        if primary_lease is not None:
+            profile_authorization.update(
+                {
+                    "providerProfileId": primary_lease.get(
+                        "providerProfileRef"
+                    ),
+                    "providerLeaseRef": primary_lease.get("providerLeaseRef"),
+                    "credentialGeneration": primary_lease.get(
+                        "credentialGeneration"
+                    ),
+                }
+            )
+        omnigent["_moonmindProfileAuthorization"] = profile_authorization
         parameters["omnigent"] = omnigent
+        parameters["executionPlanRef"] = plan.planRef
+        parameters["runtimeBindingRef"] = binding.bindingId
         return request.model_copy(update={"parameters": parameters})
 
     async def reconcile(self, plan_ref: str, runtime_binding_ref: str | None) -> None:

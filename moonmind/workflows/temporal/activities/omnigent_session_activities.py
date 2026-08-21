@@ -157,6 +157,16 @@ async def omnigent_evaluate_session_admission_activity(
     from moonmind.config.settings import settings
 
     request = OmnigentSessionAdmissionRequest.model_validate(payload)
+    plan = None
+    if request.execution_plan_ref:
+        from api_service.db.base import async_session_maker
+        from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+
+        plan = await DbExecutionPlanStore(async_session_maker).load(
+            request.execution_plan_ref
+        )
+        if plan is None:
+            raise ValueError("admitted Omnigent execution plan is unavailable")
     flags = settings.feature_flags
     mode = flags.omnigent_session_supervisor_admission_mode
     generation = str(flags.omnigent_session_supervisor_generation or "").strip()
@@ -175,7 +185,16 @@ async def omnigent_evaluate_session_admission_activity(
 
     admitted = True
     reason = "enabled"
-    if generation != OMNIGENT_SESSION_FEATURE_GENERATION:
+    effective_mode = mode
+    if plan is not None:
+        # Normal-product admission already persisted exact immutable authority.
+        # It must not depend on a legacy rollout flag whose omission could route
+        # the same request into a parallel lifecycle.
+        effective_mode = "enabled"
+        if plan.payload.executionRealizerRef != "codex-profile-bound@1":
+            admitted = False
+            reason = "realizer_managed_lifecycle"
+    elif generation != OMNIGENT_SESSION_FEATURE_GENERATION:
         admitted = False
         reason = "feature_generation_mismatch"
     elif mode == "disabled":
@@ -195,7 +214,7 @@ async def omnigent_evaluate_session_admission_activity(
     return OmnigentSessionAdmissionDecision(
         admitted=admitted,
         reasonCode=reason,
-        admissionMode=mode,
+        admissionMode=effective_mode,
         admittedFeatureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
     ).model_dump(mode="json", by_alias=True)
 
@@ -215,7 +234,73 @@ async def _load_intent_request(
     raw_request = payload.get("request")
     if not isinstance(raw_request, Mapping):
         raise ValueError("compiled execution intent is missing request authority")
-    return AgentExecutionRequest.model_validate(raw_request)
+    agent_request = AgentExecutionRequest.model_validate(raw_request)
+    plan_ref = str(
+        (agent_request.parameters or {}).get("executionPlanRef") or ""
+    ).strip()
+    if not plan_ref:
+        return agent_request
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
+
+    plan = await DbExecutionPlanStore(async_session_maker).load(plan_ref)
+    if plan is None:
+        raise ValueError("admitted Omnigent execution plan is unavailable")
+    if plan.payload.executionRealizerRef != "codex-profile-bound@1":
+        raise ValueError(
+            "Codex session Activities cannot consume a different execution realizer"
+        )
+    provider_profile_ref = str(
+        plan.payload.credentialBindings["primary-model"].get(
+            "providerProfileRef"
+        )
+        or ""
+    )
+    if agent_request.execution_profile_ref != provider_profile_ref:
+        raise ValueError("Provider Profile differs from admitted execution plan")
+    parameters = agent_request.parameters or {}
+    for field_name, planned in (
+        ("model", plan.payload.modelConfig.qualifiedId),
+        ("effort", plan.payload.modelConfig.effort),
+    ):
+        requested = parameters.get(field_name)
+        if requested is not None and requested != planned:
+            raise ValueError(f"{field_name} differs from admitted execution plan")
+    return agent_request
+
+
+async def _session_execution_authority_metadata(session: Any) -> dict[str, Any]:
+    """Project exact admitted/runtime authority into every terminal result."""
+
+    plan_ref = str(getattr(session, "execution_plan_ref", None) or "").strip()
+    if not plan_ref:
+        return {}
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        execution_support_identity,
+    )
+    from moonmind.omnigent.harness_platform.stores import (
+        DbExecutionPlanStore,
+    )
+    from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
+
+    plan = await DbExecutionPlanStore(async_session_maker).load(plan_ref)
+    if plan is None:
+        raise ValueError("canonical session execution plan is unavailable")
+    metadata = {
+        "executionPlanRef": plan.planRef,
+        "supportCombinationIdentity": execution_support_identity(plan),
+    }
+    binding_ref = str(getattr(session, "runtime_binding_ref", None) or "").strip()
+    if binding_ref:
+        binding = await DbRuntimeBindingStore(async_session_maker).get(binding_ref)
+        if binding is None or binding.executionPlanRef != plan.planRef:
+            raise ValueError(
+                "canonical session runtime binding conflicts with its execution plan"
+            )
+        metadata["runtimeBindingRef"] = binding.bindingId
+    return metadata
 
 
 async def omnigent_resolve_intent_activity(
@@ -295,6 +380,10 @@ async def omnigent_resolve_intent_activity(
                 compatibility_profile=resolved.compatibility_version,
                 intent_ref=intent_ref,
                 intent_digest=intent_digest,
+                execution_plan_ref=str(
+                    (request.parameters or {}).get("executionPlanRef") or ""
+                ).strip()
+                or None,
                 instruction_digest=compute_digest(request.instruction_ref or ""),
                 metadata={
                     "featureGeneration": resolved.admitted_feature_generation,
@@ -1006,9 +1095,8 @@ async def omnigent_ensure_provider_profile_lease_activity(
         workflow_id=request.session_id,
         step_execution_id=request.session_id,
     )
-    lease = await ProviderProfileLeaseClient(
-        TemporalClientAdapter()
-    ).acquire_execution_lease(
+    lease_client = ProviderProfileLeaseClient(TemporalClientAdapter())
+    lease = await lease_client.acquire_execution_lease(
         runtime_id=runtime_id,
         profile_id=profile_id,
         owner_id=owner_id,
@@ -1027,6 +1115,30 @@ async def omnigent_ensure_provider_profile_lease_activity(
             "ownerIsWorkflow": False,
         },
     )
+    # The plan selects the Provider Profile but the binding records the
+    # generation acquired under its lease. Re-read after acquisition so a
+    # pre-lease observation cannot become runtime authority.
+    try:
+        async with async_session_maker() as session:
+            acquired_profile = await session.get(
+                ManagedAgentProviderProfile, profile_id
+            )
+        if acquired_profile is None or not acquired_profile.enabled:
+            raise ValueError("Provider Profile became unavailable after acquisition")
+        acquired_runtime_id = str(
+            getattr(
+                acquired_profile.runtime_id,
+                "value",
+                acquired_profile.runtime_id,
+            )
+        )
+        if acquired_runtime_id != runtime_id:
+            raise ValueError("Provider Profile runtime changed during acquisition")
+        acquired_generation = int(acquired_profile.credential_generation)
+    except Exception:
+        await lease_client.release_lease(lease)
+        raise
+    execution_plan_ref = getattr(session_authority, "execution_plan_ref", None)
     async with store.transaction() as repos:
         updated = await repos.sessions.bind_runtime_authority(
             request.session_id,
@@ -1036,7 +1148,8 @@ async def omnigent_ensure_provider_profile_lease_activity(
             provider_profile_generation=(
                 session_authority.provider_profile_generation
             ),
-            credential_generation=int(profile.credential_generation),
+            credential_generation=acquired_generation,
+            execution_plan_ref=execution_plan_ref,
             metadata_patch={
                 "providerLeaseRef": lease.lease_id,
                 "providerLeaseOwnerId": lease.owner_id,
@@ -1347,6 +1460,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
             host_lease_ref=lease.lease_id,
             host_lease_generation=session.host_lease_generation,
             credential_generation=lease.credential_generation,
+            execution_plan_ref=session.execution_plan_ref,
             metadata_patch={
                 "omnigentHostRef": host_id,
                 "hostHarness": str(effective_launch["harness"]),
@@ -1399,12 +1513,15 @@ async def omnigent_ensure_provider_session_activity(
             raise ValueError(
                 "provider session exists without matching bridge authority"
             )
-        if session.metadata.get("bridgeSessionRef") != bridge.bridge_session_id:
+        if (
+            session.metadata.get("bridgeSessionRef") != bridge.bridge_session_id
+        ):
             async with store.transaction() as repos:
                 session = await repos.sessions.bind_runtime_authority(
                     request.session_id,
                     expected_revision=session.revision,
                     expected_fencing_generation=request.fencing_generation,
+                    execution_plan_ref=session.execution_plan_ref,
                     metadata_patch={"bridgeSessionRef": bridge.bridge_session_id},
                 )
         settled = await _settle_command(request)
@@ -1485,6 +1602,7 @@ async def omnigent_ensure_provider_session_activity(
             request.session_id,
             expected_revision=attached.revision,
             expected_fencing_generation=attached.fencing_generation,
+            execution_plan_ref=attached.execution_plan_ref,
             metadata_patch={"bridgeSessionRef": bridge.bridge_session_id},
         )
     settled = await _settle_command(request)
@@ -2192,6 +2310,9 @@ async def omnigent_persist_failure_activity(
     status = request.status
     if command is not None and command.delivery_ambiguous:
         status = "delivery_unknown"
+    execution_authority_metadata = await _session_execution_authority_metadata(
+        session
+    )
 
     existing_ref = str(session.metadata.get(evidence_metadata_key) or "").strip()
     if existing_ref:
@@ -2261,6 +2382,7 @@ async def omnigent_persist_failure_activity(
             {
                 "cleanupOwner": _JANITOR_OWNER,
                 "janitorRequired": True,
+                **execution_authority_metadata,
             }
         )
         result = primary_result.model_copy(update={"metadata": metadata})
@@ -2272,6 +2394,7 @@ async def omnigent_persist_failure_activity(
                 "omnigentSessionStatus": status,
                 "primaryOmnigentSessionStatus": primary_terminal.status,
                 "reasonCode": request.reason_code,
+                **execution_authority_metadata,
             }
         )
         result = primary_result.model_copy(
@@ -2295,6 +2418,7 @@ async def omnigent_persist_failure_activity(
                 "canonicalSessionId": request.session_id,
                 "omnigentSessionStatus": status,
                 "reasonCode": request.reason_code,
+                **execution_authority_metadata,
                 **(
                     {
                         "cleanupOwner": _JANITOR_OWNER,
@@ -2613,6 +2737,7 @@ async def omnigent_publish_workspace_activity(
             "chatBindingId": session.chat_binding_id,
             "terminalState": session.terminal_state,
             "publicationEvidenceRef": publication_ref,
+            **(await _session_execution_authority_metadata(session)),
         },
     )
     terminal = OmnigentSessionTerminalResult(status=status, result=result)

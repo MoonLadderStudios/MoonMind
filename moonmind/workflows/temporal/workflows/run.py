@@ -711,6 +711,9 @@ RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH = (
 )
 RUN_OMNIGENT_GENERIC_AGENT_PROFILE_V2_PATCH = "run-omnigent-generic-agent-profile-v2"
 RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH = "run-omnigent-stock-agent-identity-v1"
+RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH = (
+    "run-omnigent-execution-plan-ref-v1"
+)
 RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH = (
     "run-agent-required-capabilities-propagation-v1"
 )
@@ -949,7 +952,8 @@ def _worker_capability_unavailable_error(
 
 
 MM_STARTED_AT_SEARCH_ATTRIBUTE = "mm_started_at"
-_PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code")
+_OMNIGENT_PROVIDER_RUNTIME_IDS = frozenset({"codex_cli", "opencode"})
+_PROFILE_SYNC_RUNTIME_IDS = ("codex_cli", "claude_code", "opencode")
 _MANAGED_AGENT_IDS = frozenset(
     {
         "claude",
@@ -19178,6 +19182,32 @@ class MoonMindRunWorkflow:
                 param_val = workflow_parameters.get(param_key)
             if param_val is not None:
                 parameters[param_key] = param_val
+        if (
+            agent_id == "omnigent"
+            and self._workflow_patch_enabled(
+                RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH
+            )
+            and isinstance(workflow_parameters, Mapping)
+        ):
+            admitted_plan_ref = str(
+                workflow_parameters.get("executionPlanRef") or ""
+            ).strip()
+            if admitted_plan_ref:
+                if not admitted_plan_ref.startswith(
+                    "omnigent-execution-plan:sha256:"
+                ):
+                    raise ValueError("workflow.executionPlanRef is invalid")
+                for source_name, source in (
+                    ("node.runtime", runtime_block),
+                    ("node", node_inputs),
+                ):
+                    supplied = str(source.get("executionPlanRef") or "").strip()
+                    if supplied and supplied != admitted_plan_ref:
+                        raise ValueError(
+                            f"{source_name}.executionPlanRef conflicts with "
+                            "the admitted workflow executionPlanRef"
+                        )
+                parameters["executionPlanRef"] = admitted_plan_ref
         if repository_operation:
             if repository_operation not in {"read", "write"}:
                 raise ValueError(
@@ -20528,7 +20558,7 @@ class MoonMindRunWorkflow:
                 child_runtime_id = self._managed_runtime_id(agent_id or "")
                 compatible_runtime_ids = {child_runtime_id}
                 if child_runtime_id == "omnigent":
-                    compatible_runtime_ids.add("codex_cli")
+                    compatible_runtime_ids.update(_OMNIGENT_PROVIDER_RUNTIME_IDS)
                 if compatible_runtime_ids.isdisjoint(
                     str(item).strip() for item in authoritative_runtime_ids
                 ):
@@ -20553,7 +20583,7 @@ class MoonMindRunWorkflow:
         child_runtime_id = self._managed_runtime_id(agent_id)
         compatible_runtime_ids = {child_runtime_id}
         if child_runtime_id == "omnigent":
-            compatible_runtime_ids.add("codex_cli")
+            compatible_runtime_ids.update(_OMNIGENT_PROVIDER_RUNTIME_IDS)
         if runtime_id not in compatible_runtime_ids:
             if self._workflow_is_replaying():
                 return profile_id

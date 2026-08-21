@@ -71,7 +71,6 @@ from moonmind.omnigent.harness_platform.support import (
 def select_execution_realizer(
     *,
     harness_id: str,
-    agent_profile: OmnigentAgentProfileV2,
     is_codex: bool = False,
 ) -> str:
     """Select versioned execution realizer (section 6: executionRealizerRef is trusted planner only)."""
@@ -309,7 +308,6 @@ def compile_execution_plan(
     # Otherwise select via trusted policy
     trusted_realizer = select_execution_realizer(
         harness_id=profile.harness.id,
-        agent_profile=profile,
         is_codex=(profile.harness.id == "codex-native"),
     )
     if (
@@ -469,6 +467,9 @@ def compile_execution_plan(
             "capturePolicyRef": capture_policy_ref,
             "policySnapshotRef": policy_snapshot_ref,
             "supportCombinationKey": support_key,
+            "supportIdentity": support_payload.model_dump(
+                by_alias=True, mode="json"
+            ),
         }
     )
 
