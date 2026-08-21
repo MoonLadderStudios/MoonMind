@@ -222,7 +222,7 @@ class GenericOmnigentHostRealizer:
 
             # Best-effort cleanup for opencode; other materializers have their own cleanup
             cleanup_opencode_auth(host_root="/")
-        except Exception:
+        except Exception:  # best-effort cleanup, ignore
             pass
         # 3. Release Provider Profile leases last (capacityScopeRef, not harness runtime)
         # In production, this goes via ProviderProfileLeaseClient.release()
