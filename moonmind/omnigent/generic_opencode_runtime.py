@@ -14,6 +14,8 @@ validate_opencode_exact_host_preflight have non-test callers).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -216,9 +218,133 @@ def build_generic_harness_authority(
     return authority
 
 
+def build_preflight_generic_harness_authority(
+    *,
+    preflight_evidence: Mapping[str, Any],
+    effective_launch: Mapping[str, Any],
+    host_binding_ref: str,
+    host_lease_ref: str,
+    host_lease_generation: int,
+    provider_profile_id: str,
+    provider_lease_ref: str,
+    credential_generation: int,
+    current_host_id: str,
+    current_session_id: str | None = None,
+    now: datetime | None = None,
+    max_attestation_age_seconds: int = 600,
+) -> dict[str, Any]:
+    """Validate and join exact generic-host evidence at the attach boundary.
+
+    The exact host publishes the four immutable inputs under its bounded
+    ``harnessAuthority`` registration field.  The runtime owner, rather than
+    the host, binds those inputs to the current launch, host/profile leases,
+    and fencing generation before the facade may consume them.
+    """
+
+    if effective_launch.get("executionRealizerRef") != "generic-omnigent-host@1":
+        raise ValueError("generic harness authority requires the generic realizer")
+    launch_plan_ref = str(effective_launch.get("executionPlanRef") or "").strip()
+    if not launch_plan_ref:
+        raise ValueError("generic launch omitted its immutable execution plan ref")
+    if isinstance(host_lease_generation, bool) or host_lease_generation < 1:
+        raise ValueError("generic host lease generation must be fenced")
+
+    try:
+        plan = OmnigentExecutionPlanEnvelope.model_validate(
+            preflight_evidence["executionPlan"]
+        )
+        runtime_binding = OmnigentRuntimeBinding.model_validate(
+            preflight_evidence["runtimeBinding"]
+        )
+        attestation = HostHarnessAttestation.model_validate(
+            preflight_evidence["hostHarnessAttestation"]
+        )
+        decision = ExactHostCapabilityDecision.model_validate(
+            preflight_evidence["exactHostCapabilityDecision"]
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("generic host preflight authority is malformed") from exc
+
+    if plan.planRef != launch_plan_ref:
+        raise ValueError("generic host execution plan does not match the launch")
+    if plan.payload.endpointRef != str(effective_launch.get("endpointRef") or ""):
+        raise ValueError("generic host execution plan endpoint is stale")
+    if plan.payload.launchPolicyRef != str(
+        effective_launch.get("launchPolicyRef") or ""
+    ):
+        raise ValueError("generic host execution plan policy is stale")
+    policy_authority = effective_launch.get("policyAuthority")
+    if not isinstance(policy_authority, Mapping) or (
+        plan.payload.policySnapshotRef
+        != str(policy_authority.get("snapshotRef") or "")
+    ):
+        raise ValueError("generic host execution plan policy snapshot is stale")
+    if plan.payload.harnessId != str(effective_launch.get("harness") or ""):
+        raise ValueError("generic host execution plan harness is stale")
+    if runtime_binding.hostBindingRef != host_binding_ref:
+        raise ValueError("generic runtime binding does not match the host binding")
+    if runtime_binding.hostLeaseRef != host_lease_ref:
+        raise ValueError("generic runtime binding does not match the host lease")
+    if runtime_binding.hostLeaseGeneration != host_lease_generation:
+        raise ValueError("generic runtime binding host generation is stale")
+    if (
+        runtime_binding.omnigentHostId != current_host_id
+        or attestation.hostId != current_host_id
+    ):
+        raise ValueError("generic host authority does not match the attached host")
+    if runtime_binding.omnigentSessionId != current_session_id:
+        raise ValueError("generic runtime binding does not match the attached session")
+
+    matching_provider_leases = [
+        lease
+        for lease in runtime_binding.providerLeases.values()
+        if lease.providerProfileRef == provider_profile_id
+    ]
+    if not matching_provider_leases or any(
+        lease.providerLeaseRef != provider_lease_ref
+        or lease.credentialGeneration != credential_generation
+        or not lease.credentialRuntimeRef.strip()
+        for lease in matching_provider_leases
+    ):
+        raise ValueError("generic runtime binding provider lease is stale")
+
+    if attestation.attestationGeneration != host_lease_generation:
+        raise ValueError("generic host attestation generation is stale")
+    if attestation.hostImageRef != str(effective_launch.get("hostImageRef") or ""):
+        raise ValueError("generic host attestation image is stale")
+    if attestation.observedAt.tzinfo is None:
+        raise ValueError("generic host attestation timestamp is not timezone-aware")
+    observed_at = attestation.observedAt.astimezone(UTC)
+    age_seconds = ((now or datetime.now(UTC)) - observed_at).total_seconds()
+    if age_seconds < 0 or age_seconds > max_attestation_age_seconds:
+        raise ValueError("generic host attestation is stale or future-dated")
+
+    authority = build_generic_harness_authority(
+        execution_plan=plan,
+        runtime_binding=runtime_binding,
+        host_attestation=attestation,
+        exact_host_decision=decision,
+    )
+
+    from moonmind.omnigent.effective_capabilities import (
+        validate_harness_authority_envelope,
+    )
+
+    invalid = validate_harness_authority_envelope(
+        authority,
+        launch=effective_launch,
+        current_host=current_host_id,
+        current_session=current_session_id,
+    )
+    if invalid:
+        raise ValueError(invalid)
+    return authority
+
+
 __all__ = [
     "compile_opencode_execution_plan",
     "build_generic_harness_authority",
+    "build_preflight_generic_harness_authority",
     "materialize_opencode_credential_for_host",
     "preflight_opencode_host",
     "verify_and_cleanup_opencode_credential",

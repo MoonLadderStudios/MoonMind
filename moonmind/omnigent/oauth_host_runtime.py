@@ -533,6 +533,7 @@ class OmnigentOAuthHostRuntime:
         github_token: str | None = None,
         github_mutation_required: bool = False,
         effective_launch: Mapping[str, Any] | None = None,
+        host_lease_generation: int | None = None,
         repository_source: str = "",
         repository_provider: str = "",
         repository_connection_ref: str = "",
@@ -843,6 +844,44 @@ class OmnigentOAuthHostRuntime:
                     f"registered host does not advertise {adapter['harness']}",
                     code=HostPreflightFailure.HARNESS_UNAVAILABLE.value,
                 )
+            harness_authority: dict[str, Any] | None = None
+            if launch.get("executionRealizerRef") == "generic-omnigent-host@1":
+                raw_authority = host.get("harnessAuthority")
+                if not isinstance(raw_authority, Mapping):
+                    raise OmnigentOAuthHostError(
+                        "generic host registration omitted immutable harness authority",
+                        code="OMNIGENT_HARNESS_AUTHORITY_INVALID",
+                    )
+                if (
+                    not isinstance(host_lease_generation, int)
+                    or isinstance(host_lease_generation, bool)
+                ):
+                    raise OmnigentOAuthHostError(
+                        "generic host preflight omitted its lease fence",
+                        code="OMNIGENT_HARNESS_AUTHORITY_INVALID",
+                    )
+                try:
+                    from moonmind.omnigent.generic_opencode_runtime import (
+                        build_preflight_generic_harness_authority,
+                    )
+
+                    harness_authority = build_preflight_generic_harness_authority(
+                        preflight_evidence=raw_authority,
+                        effective_launch=launch,
+                        host_binding_ref=binding.binding_ref,
+                        host_lease_ref=host_lease.lease_id,
+                        host_lease_generation=host_lease_generation,
+                        provider_profile_id=binding.provider_profile_id,
+                        provider_lease_ref=host_lease.provider_lease_id,
+                        credential_generation=host_lease.credential_generation,
+                        current_host_id=host_id,
+                        current_session_id=host_lease.omnigent_session_id,
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise OmnigentOAuthHostError(
+                        "generic host registration supplied invalid harness authority",
+                        code="OMNIGENT_HARNESS_AUTHORITY_INVALID",
+                    ) from exc
             mounted_tool_evidence = await self._preflight_mounted_tools(
                 binding=binding,
                 host_lease=host_lease,
@@ -880,6 +919,8 @@ class OmnigentOAuthHostRuntime:
             validated["egressAttestation"] = result["egressAttestation"]
             validated["workspaceResolution"] = dict(self._last_workspace_evidence)
             validated["egressEvidenceRef"] = launch_ref
+            if harness_authority is not None:
+                validated["harnessAuthority"] = harness_authority
             return validated
         except (Exception, asyncio.CancelledError) as exc:
             evidence = prepared_host_evidence()

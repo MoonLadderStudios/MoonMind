@@ -1275,6 +1275,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
                 )
             ),
             effective_launch=effective_launch,
+            host_lease_generation=session.host_lease_generation,
             repository_source=repository_source,
             repository_provider=str(
                 (agent_request.workspace_spec or {}).get("provider") or ""

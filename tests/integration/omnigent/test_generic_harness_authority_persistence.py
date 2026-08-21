@@ -3,6 +3,13 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import pytest_asyncio
@@ -10,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import Base, OmnigentBridgeSession
+from api_service.services.omnigent_policies import bootstrap_document
 from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     OmnigentIdempotencyError,
@@ -18,9 +26,48 @@ from moonmind.omnigent.effective_capabilities import (
     CAPABILITY_NAMES,
     resolve_bridge_row_capabilities,
 )
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-from tests.unit.omnigent.test_effective_capabilities import (
-    _generic_harness_authority,
+from moonmind.omnigent.generic_opencode_runtime import (
+    build_generic_harness_authority,
+)
+from moonmind.omnigent.harness_platform.attestation import (
+    HostHarnessAttestation,
+    compute_attestation_ref,
+)
+from moonmind.omnigent.harness_platform.capabilities import (
+    ClassAdmissionDecision,
+    ExactHostCapabilityDecision,
+    compute_class_admission_ref,
+    compute_exact_host_capability_decision_ref,
+)
+from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
+from moonmind.omnigent.harness_platform.execution_plan import (
+    create_execution_plan_envelope,
+)
+from moonmind.omnigent.harness_platform.runtime_binding import create_runtime_binding
+from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
+from moonmind.omnigent.oauth_hosts import (
+    OmnigentOAuthHostError,
+    OmnigentOAuthHostRepository,
+)
+from moonmind.omnigent.policies import compile_policy_snapshot
+from moonmind.omnigent.profile_bound_execution import (
+    _compile_persisted_effective_launch,
+)
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AuthVolumeRef,
+    CredentialMountRef,
+    OmnigentHostLease,
+    OmnigentOAuthHostBinding,
+)
+from moonmind.security.egress import (
+    EGRESS_CONFIG_DIGEST,
+    ENFORCER_IMPLEMENTATION,
+    EgressAttestation,
+    OMNIGENT_EGRESS_PROFILE,
+)
+from moonmind.workflows.temporal.activities import (
+    omnigent_session_activities,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.integration_ci, pytest.mark.asyncio]
@@ -32,6 +79,142 @@ def _request() -> AgentExecutionRequest:
         agentId="omnigent",
         correlationId="generic-authority-workflow",
         idempotencyKey="generic-authority-session",
+        workspaceSpec={
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "generic-authority-workspace",
+            }
+        },
+    )
+
+
+def _preflight_evidence(
+    *,
+    observed_at: datetime | None = None,
+    host_binding_ref: str = "host-binding:1",
+    host_lease_ref: str = "host-lease:1",
+    host_lease_generation: int = 1,
+    provider_profile_id: str = "provider-1",
+    provider_lease_ref: str = "provider-lease-1",
+    credential_generation: int = 4,
+    session_id: str | None = "provider-session",
+    launch_policy_ref: str = "codex-on-demand@1",
+    policy_snapshot_ref: str = "policy:sha256:" + "6" * 64,
+    host_image_ref: str = "example.invalid/host@sha256:" + "8" * 64,
+) -> dict:
+    """Build exact-host evidence only through production schema constructors."""
+
+    implementation = HarnessImplementationIdentity.model_validate(
+        {
+            "sourceKind": "core",
+            "package": "omnigent",
+            "version": "1.0.0",
+            "digest": "sha256:" + "a" * 64,
+            "pluginEntryPoint": None,
+        }
+    )
+    plan = create_execution_plan_envelope(
+        {
+            "endpointRef": "default",
+            "agentProfileSnapshotRef": "agent-profile:sha256:" + "1" * 64,
+            "harnessCatalogRef": "harness-catalog:sha256:" + "2" * 64,
+            "harnessId": "codex-native",
+            "harnessImplementationRef": implementation.implementation_ref(),
+            "agentSource": {"kind": "upstream", "upstreamId": "agent-1"},
+            "credentialBindingSetRef": "credential-bindings:sha256:" + "3" * 64,
+            "credentialBindings": {},
+            "hostClassRef": "omnigent-codex-current@1",
+            "launchPolicyRef": launch_policy_ref,
+            "executionRealizerRef": "generic-omnigent-host@1",
+            "model": {
+                "qualifiedId": "openai/test",
+                "effort": None,
+                "routeRef": "codex",
+                "normalizedOptions": {},
+                "modelConfigDigest": "sha256:" + "4" * 64,
+            },
+            "resolvedSkills": {},
+            "classAdmissionDecision": {
+                "requiredSatisfied": ["interrupt"],
+                "preferredSatisfied": [],
+                "degraded": [],
+                "unknown": [],
+            },
+            "runtimeValidationRequirements": ["exact-harness-implementation"],
+            "workspaceIntentRef": "workspace-intent:sha256:" + "5" * 64,
+            "policySnapshotRef": policy_snapshot_ref,
+            "supportCombinationKey": "support:sha256:" + "7" * 64,
+        }
+    )
+    attestation_payload = {
+        "hostId": "host-1",
+        "hostClassRef": "omnigent-codex-current@1",
+        "hostImageRef": host_image_ref,
+        "omnigentVersion": "1.0.0",
+        "omnigentBuildDigest": "sha256:" + "9" * 64,
+        "harnessId": "codex-native",
+        "harnessImplementation": implementation.model_dump(
+            by_alias=True, mode="json"
+        ),
+        "runtimeDependencies": [],
+        "configured": True,
+        "capabilities": {"interrupt": True},
+        "attestationGeneration": host_lease_generation,
+        "observedAt": observed_at or datetime.now(UTC),
+    }
+    attestation = HostHarnessAttestation.model_validate(attestation_payload)
+    attestation_payload["attestationRef"] = compute_attestation_ref(attestation)
+    attestation = HostHarnessAttestation.model_validate(attestation_payload)
+    class_decision = ClassAdmissionDecision.model_validate(
+        plan.payload.classAdmissionDecision
+    )
+    exact_decision = ExactHostCapabilityDecision.model_validate(
+        {
+            "classAdmissionRef": compute_class_admission_ref(class_decision),
+            "exactHostAttested": True,
+            "requiredSatisfied": ["interrupt"],
+            "missingRequired": [],
+            "degraded": [],
+        }
+    )
+    decision_ref = compute_exact_host_capability_decision_ref(exact_decision)
+    runtime_binding = create_runtime_binding(
+        executionPlanRef=plan.planRef,
+        providerLeases={
+            "primary-model": {
+                "providerProfileRef": provider_profile_id,
+                "providerLeaseRef": provider_lease_ref,
+                "credentialGeneration": credential_generation,
+                "credentialRuntimeRef": "codex_auth_volume",
+            }
+        },
+        hostBindingRef=host_binding_ref,
+        hostLeaseRef=host_lease_ref,
+        hostLeaseGeneration=host_lease_generation,
+        omnigentHostId="host-1",
+        hostHarnessAttestationRef=attestation.attestationRef,
+        exactHostCapabilityDecisionRef=decision_ref,
+        omnigentSessionId=session_id,
+    )
+    return {
+        "executionPlan": plan.model_dump(by_alias=True, mode="json"),
+        "runtimeBinding": runtime_binding.model_dump(by_alias=True, mode="json"),
+        "hostHarnessAttestation": attestation.model_dump(
+            by_alias=True, mode="json"
+        ),
+        "exactHostCapabilityDecision": exact_decision.model_dump(
+            by_alias=True, mode="json"
+        ),
+    }
+
+
+def _generic_harness_authority() -> dict:
+    evidence = _preflight_evidence()
+    return build_generic_harness_authority(
+        execution_plan=evidence["executionPlan"],
+        runtime_binding=evidence["runtimeBinding"],
+        host_attestation=evidence["hostHarnessAttestation"],
+        exact_host_decision=evidence["exactHostCapabilityDecision"],
     )
 
 
@@ -57,6 +240,108 @@ def _launch(authority: dict) -> dict:
             "validation": {"valid": True},
         },
     }
+
+
+def _with_launch_digest(payload: dict) -> dict:
+    launch = dict(payload)
+    launch.pop("snapshotRef", None)
+    canonical = json.dumps(launch, sort_keys=True, separators=(",", ":"))
+    launch["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
+        canonical.encode()
+    ).hexdigest()
+    return launch
+
+
+def _production_launch_and_evidence() -> tuple[dict, dict, dict]:
+    policy = compile_policy_snapshot(
+        policy_id="codex-on-demand",
+        version=1,
+        document=bootstrap_document(
+            host_mode="on_demand_docker",
+            execution_profile_ref="omnigent-codex@1",
+            server_image_ref="example.invalid/server@sha256:" + "1" * 64,
+            host_image_ref="example.invalid/host@sha256:" + "2" * 64,
+        ),
+        validation={"valid": True, "diagnostics": []},
+    )
+    launch = _compile_persisted_effective_launch(
+        policy,
+        provider_profile_id="provider-1",
+    )
+    evidence = _preflight_evidence(
+        launch_policy_ref=launch["launchPolicyRef"],
+        policy_snapshot_ref=launch["policyAuthority"]["snapshotRef"],
+        host_image_ref=launch["hostImageRef"],
+    )
+    plan_ref = evidence["executionPlan"]["planRef"]
+    launch.update(
+        {
+            "executionPlanRef": plan_ref,
+            "executionRealizerRef": "generic-omnigent-host@1",
+        }
+    )
+    return policy, _with_launch_digest(launch), evidence
+
+
+def _host_binding(launch: dict) -> OmnigentOAuthHostBinding:
+    return OmnigentOAuthHostBinding(
+        bindingRef="host-binding:1",
+        providerProfileId="provider-1",
+        endpointRef="default",
+        harness="codex-native",
+        credentialMountRef=CredentialMountRef(
+            authVolumeRef=AuthVolumeRef(
+                providerProfileId="provider-1",
+                runtimeId="codex_cli",
+                providerId="openai",
+                volumeRef="codex_auth_volume",
+                credentialGeneration=4,
+                ownerUserId="user-1",
+            ),
+            targetPath="/home/app/.codex",
+            runtimeUid=1000,
+            runtimeGid=1000,
+        ),
+        hostLaunchProfileRef="codex-on-demand@1",
+        executionProfileRef="omnigent-codex@1",
+        launchPolicyRef="codex-on-demand@1",
+        effectiveLaunchSnapshot=launch,
+    )
+
+
+def _host_lease() -> OmnigentHostLease:
+    now = datetime.now(UTC)
+    return OmnigentHostLease(
+        leaseId="host-lease:1",
+        providerProfileId="provider-1",
+        providerLeaseId="provider-lease-1",
+        bindingRef="host-binding:1",
+        credentialGeneration=4,
+        containerName="generic-authority-host",
+        omnigentHostId="host-1",
+        omnigentSessionId="provider-session",
+        status="ready",
+        acquiredAt=now,
+        lastHeartbeatAt=now,
+        expiresAt=now + timedelta(hours=1),
+    )
+
+
+def _egress_attestation() -> EgressAttestation:
+    return EgressAttestation(
+        profileRef=OMNIGENT_EGRESS_PROFILE.ref,
+        profileDigest=OMNIGENT_EGRESS_PROFILE.digest,
+        enforcerImplementation=ENFORCER_IMPLEMENTATION,
+        backendRef="container-backend",
+        networkRef=OMNIGENT_EGRESS_PROFILE.network_ref,
+        gatewayRef=OMNIGENT_EGRESS_PROFILE.gateway_ref,
+        appliedRuleDigest="sha256:" + "b" * 64,
+        configDigest=EGRESS_CONFIG_DIGEST,
+        gatewayImageDigest="sha256:" + "c" * 64,
+        healthResult="healthy",
+        validatedAt=datetime.now(UTC),
+        validationResult="passed",
+    )
 
 
 @pytest_asyncio.fixture
@@ -95,11 +380,16 @@ async def persisted(tmp_path):
 
 
 async def test_production_writer_feeds_facade_capability_authority(persisted) -> None:
-    _store, _factory, _request_value, authority, row = persisted
+    store, _factory, request, authority, row = persisted
 
     assert row.metadata_["harnessAuthority"] == authority
+    retried = await store.bind_harness_authority(
+        request=request,
+        harness_authority=copy.deepcopy(authority),
+    )
+    assert retried.metadata_["harnessAuthority"] == authority
     decision = resolve_bridge_row_capabilities(
-        row,
+        retried,
         caller_capabilities=dict.fromkeys(CAPABILITY_NAMES, True),
     )
     assert all(decision.capabilities.values()), decision.disabled_reasons
@@ -134,3 +424,292 @@ async def test_persisted_authority_fails_closed_after_host_fence_changes(
     )
     assert set(decision.capabilities.values()) == {False}
     assert set(decision.disabled_reasons.values()) == {"harness_authority_invalid"}
+
+
+async def test_ensure_host_activity_persists_real_preflight_authority_for_facade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exercise preflight -> Activity -> bridge -> facade without store seeding."""
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/activity.db")
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    policy, launch, evidence = _production_launch_and_evidence()
+    binding = _host_binding(launch)
+    lease = _host_lease()
+    request = _request()
+    canonical_session = SimpleNamespace(
+        session_id="canonical-session",
+        revision=1,
+        fencing_generation=0,
+        host_lease_generation=1,
+        provider_profile_id="provider-1",
+        moonmind_workflow_id=request.correlation_id,
+        moonmind_agent_run_id="agent-run-1",
+        step_execution_id="step-1",
+        metadata={
+            "providerLeaseRef": "provider-lease-1",
+            "providerRuntimeId": "codex_cli",
+        },
+    )
+
+    class FakeSessions:
+        async def get(self, session_id: str):
+            assert session_id == canonical_session.session_id
+            return canonical_session
+
+        async def bind_runtime_authority(self, session_id: str, **kwargs):
+            assert session_id == canonical_session.session_id
+            assert kwargs["host_lease_generation"] == 1
+            canonical_session.revision += 1
+            canonical_session.metadata.update(kwargs["metadata_patch"])
+            return canonical_session
+
+    class FakeControlPlaneStore:
+        def __init__(self, _factory) -> None:
+            self.sessions = FakeSessions()
+
+        @asynccontextmanager
+        async def transaction(self):
+            yield SimpleNamespace(sessions=self.sessions)
+
+    class FakeHostRepository(OmnigentOAuthHostRepository):
+        def __init__(self, _factory) -> None:
+            self.lease = lease
+
+        async def get_binding_for_profile(self, profile_id: str):
+            assert profile_id == "provider-1"
+            return binding
+
+        async def create_or_get_host_lease(self, **kwargs):
+            assert kwargs["provider_lease_id"] == "provider-lease-1"
+            return self.lease
+
+        async def transition_host_lease(
+            self,
+            lease_id: str,
+            *,
+            expected_status: str,
+            new_status: str,
+            fields: dict | None = None,
+        ):
+            assert lease_id == self.lease.lease_id
+            assert self.lease.status == expected_status
+            updates = {"status": new_status}
+            if fields:
+                if "omnigent_host_id" in fields:
+                    updates["omnigent_host_id"] = fields["omnigent_host_id"]
+                if "bridge_session_id" in fields:
+                    updates["bridge_session_id"] = fields["bridge_session_id"]
+            self.lease = self.lease.model_copy(update=updates)
+            return self.lease
+
+    class FakePolicyService:
+        def __init__(self, _session) -> None:
+            pass
+
+        async def resolve_runtime_snapshot(self, policy_ref: str):
+            assert policy_ref == "codex-on-demand@1"
+            return policy
+
+    class FakeHttpClient:
+        async def aclose(self) -> None:
+            pass
+
+    runtime = OmnigentOAuthHostRuntime(client=object(), workspace_root=tmp_path)
+    runtime._prepare_skill_projection = AsyncMock(  # type: ignore[method-assign]
+        return_value=tmp_path / "skills"
+    )
+    runtime._attest_egress = AsyncMock(  # type: ignore[method-assign]
+        return_value=_egress_attestation()
+    )
+    runtime._prepare_workspace = AsyncMock(  # type: ignore[method-assign]
+        return_value=tmp_path / "workspace"
+    )
+    runtime._attest_server_image = AsyncMock(  # type: ignore[method-assign]
+        return_value={}
+    )
+    runtime._align_workspace_ownership = MagicMock()  # type: ignore[method-assign]
+    runtime._resolve_daemon_workspace_root = AsyncMock(  # type: ignore[method-assign]
+        return_value=None
+    )
+    runtime._prepare_daemon_runtime_scripts = MagicMock(  # type: ignore[method-assign]
+        return_value=tmp_path / "runtime-scripts"
+    )
+    runtime._launch_on_demand = AsyncMock()  # type: ignore[method-assign]
+    runtime._resolve_workload_attachment_identity = AsyncMock(  # type: ignore[method-assign]
+        return_value="generic-authority-host"
+    )
+    runtime._attest_launched_workload_egress = AsyncMock(  # type: ignore[method-assign]
+        return_value={}
+    )
+    runtime._publish_host_egress_evidence = AsyncMock(  # type: ignore[method-assign]
+        side_effect=["artifact://egress-pending", "artifact://egress-attested"]
+    )
+    runtime._exec_check = AsyncMock()  # type: ignore[method-assign]
+    runtime._exec_tools_check = AsyncMock()  # type: ignore[method-assign]
+    runtime._preflight_mounted_tools = AsyncMock(  # type: ignore[method-assign]
+        return_value={}
+    )
+    runtime._resolve_exact_host = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "id": "host-1",
+            "harnesses": ["codex-native"],
+            "harnessAuthority": evidence,
+        }
+    )
+
+    direct_kwargs = {
+        "binding": binding,
+        "host_lease": lease,
+        "workspace_key": "generic-authority-workflow:step-1",
+        "workspace_locator": {
+            "kind": "sandbox",
+            "workspaceId": "generic-authority-workspace",
+        },
+        "current_workflow_id": request.correlation_id,
+        "current_step_execution_id": "step-1",
+        "effective_launch": launch,
+        "host_lease_generation": 1,
+    }
+    for invalid in (
+        {"id": "host-1", "harnesses": ["codex-native"]},
+        {
+            "id": "host-1",
+            "harnesses": ["codex-native"],
+            "harnessAuthority": {
+                **copy.deepcopy(evidence),
+                "runtimeBinding": {
+                    **copy.deepcopy(evidence["runtimeBinding"]),
+                    "hostLeaseGeneration": 2,
+                },
+            },
+        },
+        {
+            "id": "host-1",
+            "harnesses": ["codex-native"],
+            "harnessAuthority": {
+                **copy.deepcopy(evidence),
+                "hostHarnessAttestation": {
+                    **copy.deepcopy(evidence["hostHarnessAttestation"]),
+                    "observedAt": (
+                        datetime.now(UTC) - timedelta(minutes=11)
+                    ).isoformat(),
+                },
+            },
+        },
+    ):
+        runtime._resolve_exact_host.return_value = invalid
+        with pytest.raises(OmnigentOAuthHostError) as exc_info:
+            await runtime.prepare_host(**direct_kwargs)
+        assert exc_info.value.code == "OMNIGENT_HARNESS_AUTHORITY_INVALID"
+
+    codex_launch = dict(launch)
+    codex_launch.pop("executionPlanRef")
+    codex_launch.pop("executionRealizerRef")
+    codex_launch = _with_launch_digest(codex_launch)
+    runtime._resolve_exact_host.return_value = {
+        "id": "host-1",
+        "harnesses": ["codex-native"],
+    }
+    codex_preflight = await runtime.prepare_host(
+        **{**direct_kwargs, "effective_launch": codex_launch}
+    )
+    assert "harnessAuthority" not in codex_preflight
+
+    async def fake_claim(_activity_request):
+        return SimpleNamespace(status="claimed"), True
+
+    async def fake_settle(_activity_request, **_kwargs):
+        return {"commandId": "command-1", "outcome": "applied"}
+
+    async def fake_load_intent(_activity_request):
+        return request
+
+    async def fake_client_context():
+        return FakeHttpClient(), object()
+
+    import api_service.db.base as db_base
+    import api_service.services.omnigent_policies as policy_module
+    import moonmind.omnigent.control_plane as control_plane_module
+    import moonmind.omnigent.oauth_host_runtime as runtime_module
+    import moonmind.omnigent.oauth_hosts as hosts_module
+
+    monkeypatch.setattr(db_base, "async_session_maker", factory)
+    monkeypatch.setattr(
+        control_plane_module,
+        "OmnigentControlPlaneStore",
+        FakeControlPlaneStore,
+    )
+    monkeypatch.setattr(policy_module, "OmnigentPolicyService", FakePolicyService)
+    monkeypatch.setattr(hosts_module, "OmnigentOAuthHostRepository", FakeHostRepository)
+    monkeypatch.setattr(
+        runtime_module,
+        "OmnigentOAuthHostRuntime",
+        lambda *, client: runtime,
+    )
+    monkeypatch.setattr(omnigent_session_activities, "_claim_command", fake_claim)
+    monkeypatch.setattr(omnigent_session_activities, "_settle_command", fake_settle)
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_load_intent_request",
+        fake_load_intent,
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_omnigent_client_context",
+        fake_client_context,
+    )
+    runtime._resolve_exact_host.return_value = {
+        "id": "host-1",
+        "harnesses": ["codex-native"],
+        "harnessAuthority": evidence,
+    }
+
+    activity_payload = {
+        "sessionId": canonical_session.session_id,
+        "compiledExecutionIntentRef": "artifact://intent",
+        "compiledExecutionIntentDigest": "sha256:" + "d" * 64,
+        "expectedRevision": 1,
+        "fencingGeneration": 0,
+        "commandId": "command-1",
+    }
+    result = await omnigent_session_activities.omnigent_ensure_host_activity(
+        activity_payload
+    )
+    assert result["hostLeaseGeneration"] == 1
+
+    bridge_store = OmnigentBridgeSessionStore(factory)
+    persisted = await bridge_store.get_existing(request.idempotency_key)
+    assert persisted is not None
+    assert persisted.metadata_["harnessAuthority"]["runtimeBinding"][
+        "hostLeaseGeneration"
+    ] == 1
+    first_authority = copy.deepcopy(persisted.metadata_["harnessAuthority"])
+    retry_result = await omnigent_session_activities.omnigent_ensure_host_activity(
+        activity_payload
+    )
+    assert retry_result["hostLeaseGeneration"] == 1
+    persisted = await bridge_store.get_existing(request.idempotency_key)
+    assert persisted is not None
+    assert persisted.metadata_["harnessAuthority"] == first_authority
+    assert runtime._publish_host_egress_evidence.await_count == 2
+
+    await bridge_store.attach_session(request.idempotency_key, "provider-session")
+    persisted = await bridge_store.record_session_created(
+        request.idempotency_key,
+        session_id="provider-session",
+        capabilities=dict.fromkeys(CAPABILITY_NAMES, True),
+        session_status="active",
+    )
+    facade = resolve_bridge_row_capabilities(
+        persisted,
+        caller_capabilities=dict.fromkeys(CAPABILITY_NAMES, True),
+    )
+    assert facade.capabilities["sendMessage"] is True, facade.disabled_reasons
+    assert "harness_authority_invalid" not in set(facade.disabled_reasons.values())
+
+    await engine.dispose()
