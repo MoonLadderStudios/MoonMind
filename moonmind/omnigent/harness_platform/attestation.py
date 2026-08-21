@@ -267,8 +267,6 @@ def validate_opencode_exact_host_preflight(
     # Additional OpenCode-specific checks
     expect_opencode_native: bool = True,
     expectedOpencodeVersion: str | None = OPENCODE_PINNED_VERSION,
-    verify_credential_file: bool = False,
-    credential_host_root: str | None = None,
     requiredSkillDeliveryRef: str | None = None,
     require_restricted_egress: bool = True,
 ) -> None:
@@ -348,15 +346,9 @@ def validate_opencode_exact_host_preflight(
             "opencode host not configured",
             code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
         )
-    # Credential file check (without printing contents)
-    if verify_credential_file:
-        from moonmind.omnigent.harness_platform.materializers import verify_opencode_auth_file
-
-        verify_opencode_auth_file(
-            host_root=credential_host_root or "/",
-            expected_generation=expectedCredentialGeneration,
-        )
-    # Generation fencing already checked via attestationGeneration; additionally ensure
+    # Credential-file I/O belongs to the outer trusted materializer adapter.
+    # This pure validator receives only its secret-free generation evidence.
+    # Generation fencing is already checked via attestationGeneration; additionally ensure
     # the credential generation matches materialized handle if provided
     # Enforce required Skill delivery ref if caller requested it
     if requiredSkillDeliveryRef is not None:

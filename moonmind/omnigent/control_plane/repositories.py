@@ -27,6 +27,7 @@ from api_service.db.models import (
     OmnigentCommand,
     OmnigentObservation,
     OmnigentReconciliationDecision,
+    OmnigentRuntimeBindingRecord,
     OmnigentSession,
     OmnigentTurnAttempt,
 )
@@ -132,6 +133,8 @@ def _session_record(row: OmnigentSession) -> SessionRecord:
         chat_binding_id=row.chat_binding_id,
         intent_ref=row.intent_ref,
         intent_digest=row.intent_digest,
+        execution_plan_ref=row.execution_plan_ref,
+        runtime_binding_ref=row.runtime_binding_ref,
         desired_state=row.desired_state,
         observed_state=row.observed_state,
         reconciled_state=row.reconciled_state,
@@ -321,6 +324,8 @@ class SessionRepository(_RepositoryBase):
         chat_binding_id: Optional[str] = None,
         intent_ref: Optional[str] = None,
         intent_digest: Optional[str] = None,
+        execution_plan_ref: Optional[str] = None,
+        runtime_binding_ref: Optional[str] = None,
         desired_state: str = "pending",
         provider_profile_id: Optional[str] = None,
         host_binding_ref: Optional[str] = None,
@@ -341,6 +346,8 @@ class SessionRepository(_RepositoryBase):
             chat_binding_id=chat_binding_id,
             intent_ref=intent_ref,
             intent_digest=intent_digest,
+            execution_plan_ref=execution_plan_ref,
+            runtime_binding_ref=runtime_binding_ref,
             desired_state=desired_state,
             provider_profile_id=provider_profile_id,
             host_binding_ref=host_binding_ref,
@@ -555,6 +562,8 @@ class SessionRepository(_RepositoryBase):
         credential_generation: Any = _UNSET,
         provider_profile_generation: Any = _UNSET,
         host_lease_generation: Any = _UNSET,
+        execution_plan_ref: Any = _UNSET,
+        runtime_binding_ref: Any = _UNSET,
         metadata_patch: Optional[dict[str, Any]] = None,
     ) -> SessionRecord:
         """Bind safe runtime refs under the supervisor revision/fence.
@@ -571,6 +580,47 @@ class SessionRepository(_RepositoryBase):
             raise ConflictingSessionAuthorityError(
                 f"Unknown canonical session {session_id!r}"
             )
+        if runtime_binding_ref is not _UNSET and runtime_binding_ref is not None:
+            binding = await self._session.get(
+                OmnigentRuntimeBindingRecord, runtime_binding_ref
+            )
+            if binding is None:
+                raise ConflictingSessionAuthorityError(
+                    f"Session {session_id!r} cannot bind unknown runtime authority"
+                )
+            intended_plan_ref = (
+                execution_plan_ref
+                if execution_plan_ref is not _UNSET
+                else row.execution_plan_ref
+            )
+            if (
+                intended_plan_ref is None
+                or binding.execution_plan_ref != intended_plan_ref
+            ):
+                raise ConflictingSessionAuthorityError(
+                    f"Session {session_id!r} runtime binding does not belong to "
+                    "its immutable execution plan"
+                )
+            if row.runtime_binding_ref not in {None, runtime_binding_ref}:
+                current_binding = await self._session.get(
+                    OmnigentRuntimeBindingRecord, row.runtime_binding_ref
+                )
+                if current_binding is None:
+                    raise ConflictingSessionAuthorityError(
+                        f"Session {session_id!r} lost its runtime binding authority"
+                    )
+                stage_rank = {
+                    "credentials_acquired": 1,
+                    "host_acquired": 2,
+                    "session_bound": 3,
+                }
+                if stage_rank.get(binding.state, 0) <= stage_rank.get(
+                    current_binding.state, 0
+                ):
+                    raise ConflictingSessionAuthorityError(
+                        f"Session {session_id!r} cannot replace or regress its "
+                        "runtime binding stage"
+                    )
         provided = {
             name: value
             for name, value in (
@@ -580,6 +630,7 @@ class SessionRepository(_RepositoryBase):
                 ("credential_generation", credential_generation),
                 ("provider_profile_generation", provider_profile_generation),
                 ("host_lease_generation", host_lease_generation),
+                ("execution_plan_ref", execution_plan_ref),
             )
             if value is not _UNSET
         }
@@ -590,7 +641,13 @@ class SessionRepository(_RepositoryBase):
                 (row.metadata_ or {}).get(key) == value
                 for key, value in metadata_patch.items()
             )
-        if already_applied and (provided or metadata_patch):
+        if runtime_binding_ref is not _UNSET:
+            already_applied = (
+                already_applied and row.runtime_binding_ref == runtime_binding_ref
+            )
+        if already_applied and (
+            provided or metadata_patch or runtime_binding_ref is not _UNSET
+        ):
             return _session_record(row)
         conflict = self._check_session_fence(
             row,
@@ -615,6 +672,10 @@ class SessionRepository(_RepositoryBase):
                     f"refusing {value!r}"
                 )
             setattr(row, name, value)
+        if runtime_binding_ref is not _UNSET:
+            # Runtime binding envelopes are immutable, digest-addressed stages;
+            # the session points at the latest stage for the same immutable plan.
+            row.runtime_binding_ref = runtime_binding_ref
         if metadata_patch:
             metadata = dict(row.metadata_ or {})
             for key, value in metadata_patch.items():
@@ -2619,6 +2680,7 @@ class OmnigentControlPlaneStore:
         compatibility_profile: Optional[str] = None,
         intent_ref: Optional[str] = None,
         intent_digest: Optional[str] = None,
+        execution_plan_ref: Optional[str] = None,
         instruction_digest: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
     ) -> tuple[SessionRecord, TurnAttemptRecord]:
@@ -2635,6 +2697,7 @@ class OmnigentControlPlaneStore:
                 compatibility_profile=compatibility_profile,
                 intent_ref=intent_ref,
                 intent_digest=intent_digest,
+                execution_plan_ref=execution_plan_ref,
                 metadata=metadata,
             )
             await repos.chat_binding_aliases.register(

@@ -108,6 +108,11 @@ def preflight_opencode_host(
     restricted egress before runner/session creation.
     """
     hc = get_opencode_host_class()
+    if credential_host_root is not None:
+        verify_opencode_auth_file(
+            host_root=credential_host_root,
+            expected_generation=expected_credential_generation,
+        )
     # Derive expected implementation from Host Class declaration for digest validation
     expected_impl = {
         "package": "omnigent",
@@ -124,8 +129,6 @@ def preflight_opencode_host(
         expectedOmnigentBuildDigest=hc.omnigentBuildDigest,
         expectedImplementation=expected_impl,
         expectedCredentialGeneration=expected_credential_generation,
-        verify_credential_file=credential_host_root is not None,
-        credential_host_root=credential_host_root,
         requiredSkillDeliveryRef=required_skill_delivery_ref,
         require_restricted_egress=True,
     )

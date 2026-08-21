@@ -83,7 +83,12 @@ from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
+    resolve_default_agent_profile_snapshot,
 )
+from moonmind.omnigent.harness_platform.admission import (
+    compile_and_persist_execution_authority,
+)
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from api_service.services.control_stop_continuation import (
     SqlControlStopContinuationRepository,
     TemporalControlStopContinuationStarter,
@@ -11134,14 +11139,21 @@ async def _create_execution_from_workflow_request(
     agent_profile_selection = payload.get("agentProfile")
     if agent_profile_selection is None and isinstance(runtime_payload, Mapping):
         agent_profile_selection = runtime_payload.get("agentProfile")
-    if agent_profile_selection is not None:
-        if canonical_target_runtime != "omnigent":
-            raise _invalid_workflow_request(
-                "agentProfile is supported only for targetRuntime='omnigent'."
-            )
-        if not isinstance(agent_profile_selection, Mapping):
+    if (
+        agent_profile_selection is not None
+        and canonical_target_runtime != "omnigent"
+    ):
+        raise _invalid_workflow_request(
+            "agentProfile is supported only for targetRuntime='omnigent'."
+        )
+    if canonical_target_runtime == "omnigent":
+        if agent_profile_selection is not None and not isinstance(
+            agent_profile_selection, Mapping
+        ):
             raise _invalid_workflow_request("agentProfile must be an object.")
-        agent_profile_selection = dict(agent_profile_selection)
+        explicit_agent_profile = agent_profile_selection is not None
+        if explicit_agent_profile:
+            agent_profile_selection = dict(agent_profile_selection)
         authored_omnigent = payload.get("omnigent")
         authored_launch_policy_ref = (
             str(authored_omnigent.get("launchPolicyRef") or "").strip()
@@ -11149,7 +11161,7 @@ async def _create_execution_from_workflow_request(
             else ""
         )
         selected_launch_policy_ref = str(
-            agent_profile_selection.get("launchPolicyRef") or ""
+            (agent_profile_selection or {}).get("launchPolicyRef") or ""
         ).strip()
         if (
             authored_launch_policy_ref
@@ -11159,17 +11171,32 @@ async def _create_execution_from_workflow_request(
             raise _invalid_workflow_request(
                 "agentProfile.launchPolicyRef must match omnigent.launchPolicyRef."
             )
-        if authored_launch_policy_ref:
+        if authored_launch_policy_ref and explicit_agent_profile:
             agent_profile_selection["launchPolicyRef"] = (
                 authored_launch_policy_ref
             )
-        profile_snapshot = await resolve_agent_profile_snapshot(
-            session,
-            selection=agent_profile_selection,
-            consumer_type=("remediation" if task_payload.get("remediation") else "workflow"),
-            consumer_id=reserved_workflow_id,
-            user=user,
+        consumer_type = (
+            "remediation" if task_payload.get("remediation") else "workflow"
         )
+        if explicit_agent_profile:
+            profile_snapshot = await resolve_agent_profile_snapshot(
+                session,
+                selection=agent_profile_selection,
+                consumer_type=consumer_type,
+                consumer_id=reserved_workflow_id,
+                user=user,
+            )
+        else:
+            profile_snapshot = await resolve_default_agent_profile_snapshot(
+                session,
+                provider_profile_ref=(
+                    raw_profile_id if _provider_profile is not None else None
+                ),
+                launch_policy_ref=authored_launch_policy_ref or None,
+                consumer_type=consumer_type,
+                consumer_id=reserved_workflow_id,
+                user=user,
+            )
         authored_execution_target_ref = (
             str(authored_omnigent.get("executionTargetRef") or "").strip()
             if isinstance(authored_omnigent, Mapping)
@@ -11190,6 +11217,25 @@ async def _create_execution_from_workflow_request(
             initial_parameters,
             snapshot=profile_snapshot,
         )
+        try:
+            execution_plan = await compile_and_persist_execution_authority(
+                session,
+                agent_profile_snapshot=profile_snapshot,
+                workflow_parameters=initial_parameters,
+                workflow_id=reserved_workflow_id,
+            )
+        except HarnessPlatformError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": str(exc.code),
+                    "message": str(exc),
+                },
+            ) from exc
+        # Only the digest-addressed ref crosses into workflow history. The plan
+        # row and execution record are committed together by create_execution
+        # before Temporal is started.
+        initial_parameters["executionPlanRef"] = execution_plan.planRef
 
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
@@ -17694,6 +17740,21 @@ async def rerun_execution(
         consumer_id=reserved_workflow_id,
         user=user,
     )
+    rerun_snapshot = initial_params.get("agentProfileSnapshot")
+    if isinstance(rerun_snapshot, Mapping):
+        try:
+            rerun_plan = await compile_and_persist_execution_authority(
+                session,
+                agent_profile_snapshot=rerun_snapshot,
+                workflow_parameters=initial_params,
+                workflow_id=reserved_workflow_id,
+            )
+        except HarnessPlatformError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"code": str(exc.code), "message": str(exc)},
+            ) from exc
+        initial_params["executionPlanRef"] = rerun_plan.planRef
 
     # Generate a new idempotency key based on the original workflow ID
     new_idempotency_key = f"rerun:{workflow_id}:{_uuid4()}"

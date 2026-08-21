@@ -44,6 +44,10 @@ from moonmind.omnigent.remediation_workspace import (
     RemediationWorkspaceOwner,
     SandboxRemediationWorkspaceOwner,
 )
+from moonmind.omnigent.repository_sources import (
+    RepositorySourceError,
+    normalize_repository_source,
+)
 from moonmind.omnigent.execution_profiles import (
     PROFILES,
     selection_from_request,
@@ -1853,6 +1857,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "effectiveLaunchRef": effective_launch["snapshotRef"],
                 "executionProfileRef": effective_launch["executionProfileRef"],
                 "launchPolicyRef": effective_launch["launchPolicyRef"],
+                "executionPlanRef": str(
+                    (request.parameters or {}).get("executionPlanRef") or ""
+                ).strip()
+                or None,
                 # The full attestation includes the compiled launch-policy
                 # boundary and is already durable behind this reference. Keep
                 # the workflow result plane reference-only so terminal evidence
@@ -2719,13 +2727,9 @@ class OmnigentProfileBoundExecutionCoordinator:
         source = cls._repository_source(request)
         if not source:
             return None
-        from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-
         try:
-            normalized, kind = OmnigentOAuthHostRuntime._normalize_repository_source(
-                source
-            )
-        except OmnigentOAuthHostError:
+            normalized, kind = normalize_repository_source(source)
+        except RepositorySourceError:
             return None
         return normalized if kind == "github_https" else None
 

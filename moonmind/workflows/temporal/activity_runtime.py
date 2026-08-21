@@ -15939,6 +15939,8 @@ class TemporalCheckpointActivities:
             effectiveLaunchRef=capture.get("effectiveLaunchRef"),
             executionProfileRef=capture["executionProfileRef"],
             launchPolicyRef=capture["launchPolicyRef"],
+            executionPlanRef=capture.get("executionPlanRef"),
+            runtimeBindingRef=capture.get("runtimeBindingRef"),
             policyId=capture.get("policyId"),
             policyVersion=capture.get("policyVersion"),
             policyRef=capture.get("policyRef"),

@@ -16,6 +16,10 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
+from moonmind.omnigent.repository_sources import (
+    RepositorySourceError,
+    normalize_repository_source,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.workspace_intent import (
     WORKSPACE_INTENT_LOCATOR_REQUIRED,
@@ -215,8 +219,7 @@ def _authored_publication_destination(
 def _classify_repository(source: str) -> str | None:
     """Classify an authored repository source through the canonical classifier.
 
-    Reuses ``OmnigentOAuthHostRuntime._normalize_repository_source`` — the single
-    materialization-layer authority for repository identity — so durable intent
+    Reuses the provider-neutral repository-source authority so durable intent
     and Workflow Detail can never diverge from how the workspace is actually
     cloned. That classifier resolves the ``owner/repo`` shorthand to
     ``github_https`` and matches GitHub on the exact URL host, avoiding the
@@ -227,14 +230,9 @@ def _classify_repository(source: str) -> str | None:
 
     if not source:
         return None
-    from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-    from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
-
     try:
-        _normalized, kind = OmnigentOAuthHostRuntime._normalize_repository_source(
-            source
-        )
-    except OmnigentOAuthHostError:
+        _normalized, kind = normalize_repository_source(source)
+    except RepositorySourceError:
         # An unsupported/unclassifiable authored source is treated as local so
         # bounded evidence redacts it rather than leaking a raw worker-local path.
         return "local"

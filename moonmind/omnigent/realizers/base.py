@@ -30,5 +30,7 @@ class OmnigentExecutionRealizer(Protocol):
         self,
         plan_ref: str,
         runtime_binding_ref: str | None,
+        *,
+        command_authority: dict[str, object],
     ) -> None:
         """Reconcile janitor/cleanup for a plan's runtime binding."""

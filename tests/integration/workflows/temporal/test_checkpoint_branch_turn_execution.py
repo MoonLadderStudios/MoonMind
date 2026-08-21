@@ -1369,7 +1369,7 @@ async def test_public_root_continue_and_fork_cross_the_real_execution_owner(
                     "/api/executions/mm:wf-public-owner/checkpoint-branches",
                     json=root_payload,
                 )
-                assert replayed_root.status_code == 201
+                assert replayed_root.status_code == 201, replayed_root.text
                 assert replayed_root.json()["branchId"] == root_branch_id
 
                 continue_payload = {
