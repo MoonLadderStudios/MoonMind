@@ -536,6 +536,7 @@ def _compile_persisted_effective_launch(
     *,
     provider_profile_id: str,
     follow_up_retrieval: Mapping[str, Any] | None = None,
+    generic_attach_contract: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Compile the sole launch carrier from persisted immutable authority."""
 
@@ -645,6 +646,15 @@ def _compile_persisted_effective_launch(
     payload["snapshotRef"] = "omnigent-launch:sha256:" + hashlib.sha256(
         canonical.encode()
     ).hexdigest()
+    if generic_attach_contract is not None:
+        from moonmind.omnigent.generic_opencode_runtime import (
+            bind_generic_harness_attach_contract,
+        )
+
+        return bind_generic_harness_attach_contract(
+            effective_launch=payload,
+            attach_contract=generic_attach_contract,
+        )
     return payload
 
 

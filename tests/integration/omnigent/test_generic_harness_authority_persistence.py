@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -27,7 +28,9 @@ from moonmind.omnigent.effective_capabilities import (
     resolve_bridge_row_capabilities,
 )
 from moonmind.omnigent.generic_opencode_runtime import (
+    GenericHostRuntimeObservation,
     build_generic_harness_authority,
+    create_generic_harness_attach_contract,
 )
 from moonmind.omnigent.harness_platform.attestation import (
     HostHarnessAttestation,
@@ -43,6 +46,7 @@ from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIden
 from moonmind.omnigent.harness_platform.execution_plan import (
     create_execution_plan_envelope,
 )
+from moonmind.omnigent.harness_platform.host_classes import get_host_class
 from moonmind.omnigent.harness_platform.runtime_binding import create_runtime_binding
 from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
 from moonmind.omnigent.oauth_hosts import (
@@ -66,6 +70,7 @@ from moonmind.security.egress import (
     EgressAttestation,
     OMNIGENT_EGRESS_PROFILE,
 )
+from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 from moonmind.workflows.temporal.activities import (
     omnigent_session_activities,
 )
@@ -109,7 +114,7 @@ def _preflight_evidence(
             "sourceKind": "core",
             "package": "omnigent",
             "version": "1.0.0",
-            "digest": "sha256:" + "a" * 64,
+            "digest": "sha256:" + "e" * 64,
             "pluginEntryPoint": None,
         }
     )
@@ -122,7 +127,12 @@ def _preflight_evidence(
             "harnessImplementationRef": implementation.implementation_ref(),
             "agentSource": {"kind": "upstream", "upstreamId": "agent-1"},
             "credentialBindingSetRef": "credential-bindings:sha256:" + "3" * 64,
-            "credentialBindings": {},
+            "credentialBindings": {
+                "primary-model": {
+                    "providerProfileRef": provider_profile_id,
+                    "materializerRef": "codex-oauth-home@1",
+                }
+            },
             "hostClassRef": "omnigent-codex-current@1",
             "launchPolicyRef": launch_policy_ref,
             "executionRealizerRef": "generic-omnigent-host@1",
@@ -253,6 +263,7 @@ def _with_launch_digest(payload: dict) -> dict:
 
 
 def _production_launch_and_evidence() -> tuple[dict, dict, dict]:
+    host_class = get_host_class("omnigent-codex-current@1")
     policy = compile_policy_snapshot(
         policy_id="codex-on-demand",
         version=1,
@@ -260,27 +271,29 @@ def _production_launch_and_evidence() -> tuple[dict, dict, dict]:
             host_mode="on_demand_docker",
             execution_profile_ref="omnigent-codex@1",
             server_image_ref="example.invalid/server@sha256:" + "1" * 64,
-            host_image_ref="example.invalid/host@sha256:" + "2" * 64,
+            host_image_ref=host_class.imageRef,
         ),
         validation={"valid": True, "diagnostics": []},
+    )
+    evidence = _preflight_evidence(
+        launch_policy_ref=policy["policyRef"],
+        policy_snapshot_ref=policy["snapshotRef"],
+        host_image_ref=host_class.imageRef,
+    )
+    attach_contract = create_generic_harness_attach_contract(
+        execution_plan=evidence["executionPlan"],
+        harness_implementation=evidence["hostHarnessAttestation"][
+            "harnessImplementation"
+        ],
     )
     launch = _compile_persisted_effective_launch(
         policy,
         provider_profile_id="provider-1",
+        generic_attach_contract=attach_contract.model_dump(
+            by_alias=True, mode="json"
+        ),
     )
-    evidence = _preflight_evidence(
-        launch_policy_ref=launch["launchPolicyRef"],
-        policy_snapshot_ref=launch["policyAuthority"]["snapshotRef"],
-        host_image_ref=launch["hostImageRef"],
-    )
-    plan_ref = evidence["executionPlan"]["planRef"]
-    launch.update(
-        {
-            "executionPlanRef": plan_ref,
-            "executionRealizerRef": "generic-omnigent-host@1",
-        }
-    )
-    return policy, _with_launch_digest(launch), evidence
+    return policy, launch, evidence
 
 
 def _host_binding(launch: dict) -> OmnigentOAuthHostBinding:
@@ -341,6 +354,22 @@ def _egress_attestation() -> EgressAttestation:
         healthResult="healthy",
         validatedAt=datetime.now(UTC),
         validationResult="passed",
+    )
+
+
+def _runtime_observation(
+    *, validated_at: datetime | None = None
+) -> GenericHostRuntimeObservation:
+    host_class = get_host_class("omnigent-codex-current@1")
+    return GenericHostRuntimeObservation(
+        workloadImageRef=host_class.imageRef,
+        workloadImageDigest="sha256:" + "2" * 64,
+        architecture="amd64",
+        attachmentIdentity="generic-authority-host",
+        networkIdentity="network-1",
+        endpointIdentity="endpoint-1",
+        validationResult="passed",
+        validatedAt=validated_at or datetime.now(UTC),
     )
 
 
@@ -437,7 +466,7 @@ async def test_ensure_host_activity_persists_real_preflight_authority_for_facade
         await connection.run_sync(Base.metadata.create_all)
     factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
-    policy, launch, evidence = _production_launch_and_evidence()
+    policy, launch, _evidence = _production_launch_and_evidence()
     binding = _host_binding(launch)
     lease = _host_lease()
     request = _request()
@@ -519,12 +548,32 @@ async def test_ensure_host_activity_persists_real_preflight_authority_for_facade
         async def aclose(self) -> None:
             pass
 
-    runtime = OmnigentOAuthHostRuntime(client=object(), workspace_root=tmp_path)
+    host_catalog = {
+        "host_id": "host-1",
+        "name": "generic-authority-host",
+        "owner": "user-1",
+        "status": "online",
+        "sandbox_provider": None,
+        "configured_harnesses": {"codex-native": True},
+        "gateway_inference": None,
+    }
+
+    async def stock_host_handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/v1/hosts"
+        return httpx.Response(200, json={"hosts": [host_catalog]})
+
+    stock_client = OmnigentHttpClient(
+        base_url="https://omnigent.test",
+        transport=httpx.MockTransport(stock_host_handler),
+    )
+    runtime = OmnigentOAuthHostRuntime(client=stock_client, workspace_root=tmp_path)
     runtime._prepare_skill_projection = AsyncMock(  # type: ignore[method-assign]
         return_value=tmp_path / "skills"
     )
+    runtime_egress = _egress_attestation()
     runtime._attest_egress = AsyncMock(  # type: ignore[method-assign]
-        return_value=_egress_attestation()
+        return_value=runtime_egress
     )
     runtime._prepare_workspace = AsyncMock(  # type: ignore[method-assign]
         return_value=tmp_path / "workspace"
@@ -544,7 +593,11 @@ async def test_ensure_host_activity_persists_real_preflight_authority_for_facade
         return_value="generic-authority-host"
     )
     runtime._attest_launched_workload_egress = AsyncMock(  # type: ignore[method-assign]
-        return_value={}
+        return_value=_runtime_observation(
+            validated_at=runtime_egress.validated_at
+        ).model_dump(
+            by_alias=True, mode="json"
+        )
     )
     runtime._publish_host_egress_evidence = AsyncMock(  # type: ignore[method-assign]
         side_effect=["artifact://egress-pending", "artifact://egress-attested"]
@@ -554,14 +607,6 @@ async def test_ensure_host_activity_persists_real_preflight_authority_for_facade
     runtime._preflight_mounted_tools = AsyncMock(  # type: ignore[method-assign]
         return_value={}
     )
-    runtime._resolve_exact_host = AsyncMock(  # type: ignore[method-assign]
-        return_value={
-            "id": "host-1",
-            "harnesses": ["codex-native"],
-            "harnessAuthority": evidence,
-        }
-    )
-
     direct_kwargs = {
         "binding": binding,
         "host_lease": lease,
@@ -575,46 +620,41 @@ async def test_ensure_host_activity_persists_real_preflight_authority_for_facade
         "effective_launch": launch,
         "host_lease_generation": 1,
     }
-    for invalid in (
-        {"id": "host-1", "harnesses": ["codex-native"]},
-        {
-            "id": "host-1",
-            "harnesses": ["codex-native"],
-            "harnessAuthority": {
-                **copy.deepcopy(evidence),
-                "runtimeBinding": {
-                    **copy.deepcopy(evidence["runtimeBinding"]),
-                    "hostLeaseGeneration": 2,
-                },
-            },
-        },
-        {
-            "id": "host-1",
-            "harnesses": ["codex-native"],
-            "harnessAuthority": {
-                **copy.deepcopy(evidence),
-                "hostHarnessAttestation": {
-                    **copy.deepcopy(evidence["hostHarnessAttestation"]),
-                    "observedAt": (
-                        datetime.now(UTC) - timedelta(minutes=11)
-                    ).isoformat(),
-                },
-            },
-        },
-    ):
-        runtime._resolve_exact_host.return_value = invalid
+
+    missing_contract = dict(launch)
+    missing_contract.pop("genericHarnessAttachContract")
+    missing_contract = _with_launch_digest(missing_contract)
+    tampered_plan = copy.deepcopy(launch)
+    tampered_plan["genericHarnessAttachContract"]["executionPlan"]["payload"][
+        "endpointRef"
+    ] = "tampered-endpoint"
+    tampered_plan = _with_launch_digest(tampered_plan)
+    for invalid_launch in (missing_contract, tampered_plan):
         with pytest.raises(OmnigentOAuthHostError) as exc_info:
-            await runtime.prepare_host(**direct_kwargs)
+            await runtime.prepare_host(
+                **{**direct_kwargs, "effective_launch": invalid_launch}
+            )
         assert exc_info.value.code == "OMNIGENT_HARNESS_AUTHORITY_INVALID"
+
+    runtime._attest_launched_workload_egress.return_value = (
+        _runtime_observation(
+            validated_at=datetime.now(UTC) - timedelta(minutes=11)
+        ).model_dump(by_alias=True, mode="json")
+    )
+    with pytest.raises(OmnigentOAuthHostError) as exc_info:
+        await runtime.prepare_host(**direct_kwargs)
+    assert exc_info.value.code == "OMNIGENT_HARNESS_AUTHORITY_INVALID"
+    runtime._attest_launched_workload_egress.return_value = (
+        _runtime_observation(
+            validated_at=runtime_egress.validated_at
+        ).model_dump(by_alias=True, mode="json")
+    )
 
     codex_launch = dict(launch)
     codex_launch.pop("executionPlanRef")
     codex_launch.pop("executionRealizerRef")
+    codex_launch.pop("genericHarnessAttachContract")
     codex_launch = _with_launch_digest(codex_launch)
-    runtime._resolve_exact_host.return_value = {
-        "id": "host-1",
-        "harnesses": ["codex-native"],
-    }
     codex_preflight = await runtime.prepare_host(
         **{**direct_kwargs, "effective_launch": codex_launch}
     )
@@ -663,12 +703,6 @@ async def test_ensure_host_activity_persists_real_preflight_authority_for_facade
         "_omnigent_client_context",
         fake_client_context,
     )
-    runtime._resolve_exact_host.return_value = {
-        "id": "host-1",
-        "harnesses": ["codex-native"],
-        "harnessAuthority": evidence,
-    }
-
     activity_payload = {
         "sessionId": canonical_session.session_id,
         "compiledExecutionIntentRef": "artifact://intent",

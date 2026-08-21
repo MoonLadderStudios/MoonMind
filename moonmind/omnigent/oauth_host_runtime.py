@@ -846,10 +846,10 @@ class OmnigentOAuthHostRuntime:
                 )
             harness_authority: dict[str, Any] | None = None
             if launch.get("executionRealizerRef") == "generic-omnigent-host@1":
-                raw_authority = host.get("harnessAuthority")
-                if not isinstance(raw_authority, Mapping):
+                attach_contract = launch.get("genericHarnessAttachContract")
+                if not isinstance(attach_contract, Mapping):
                     raise OmnigentOAuthHostError(
-                        "generic host registration omitted immutable harness authority",
+                        "generic launch omitted its immutable attach contract",
                         code="OMNIGENT_HARNESS_AUTHORITY_INVALID",
                     )
                 if (
@@ -866,7 +866,9 @@ class OmnigentOAuthHostRuntime:
                     )
 
                     harness_authority = build_preflight_generic_harness_authority(
-                        preflight_evidence=raw_authority,
+                        attach_contract=attach_contract,
+                        host_catalog_entry=host,
+                        workload_evidence=egress_evidence,
                         effective_launch=launch,
                         host_binding_ref=binding.binding_ref,
                         host_lease_ref=host_lease.lease_id,
@@ -874,12 +876,15 @@ class OmnigentOAuthHostRuntime:
                         provider_profile_id=binding.provider_profile_id,
                         provider_lease_ref=host_lease.provider_lease_id,
                         credential_generation=host_lease.credential_generation,
+                        credential_runtime_ref=(
+                            binding.credential_mount_ref.auth_volume_ref.volume_ref
+                        ),
                         current_host_id=host_id,
                         current_session_id=host_lease.omnigent_session_id,
                     )
                 except (TypeError, ValueError) as exc:
                     raise OmnigentOAuthHostError(
-                        "generic host registration supplied invalid harness authority",
+                        "generic host attach evidence could not establish authority",
                         code="OMNIGENT_HARNESS_AUTHORITY_INVALID",
                     ) from exc
             mounted_tool_evidence = await self._preflight_mounted_tools(
