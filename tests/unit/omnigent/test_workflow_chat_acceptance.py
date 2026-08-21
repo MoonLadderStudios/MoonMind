@@ -10,17 +10,26 @@ from pathlib import Path
 import pytest
 
 from moonmind.omnigent.conformance import ConformanceContractError
+from moonmind.omnigent.harness_platform.support import (
+    SupportKeyPayload,
+    compute_support_combination_key,
+)
 from moonmind.omnigent.native_ui_compat import compatibility_map
 from moonmind.omnigent.workflow_chat_acceptance import (
+    REQUIRED_BUNDLE_DIGESTS,
     REQUIRED_WORKFLOW_CHAT_ROWS,
     REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS,
     WORKFLOW_CHAT_ACCEPTANCE_ISSUE,
     WORKFLOW_CHAT_CASE_EVIDENCE_VERSION,
+    WORKFLOW_CHAT_COMBINATION_VERSION,
     WORKFLOW_CHAT_COMPATIBILITY_PROFILE,
     WORKFLOW_CHAT_PARENT_ISSUE,
+    WORKFLOW_CHAT_SCENARIO_VERSION,
     WORKFLOW_CHAT_SOURCE_RECORD_VERSION,
+    WorkflowChatCombination,
     build_workflow_chat_acceptance_manifest,
     validate_workflow_chat_acceptance_manifest,
+    workflow_chat_combinations,
 )
 
 NOW = datetime(2026, 8, 13, tzinfo=timezone.utc)
@@ -28,7 +37,13 @@ IMAGES = {
     "server": "ghcr.io/omnigent/server@sha256:" + "1" * 64,
     "host": "ghcr.io/omnigent/host@sha256:" + "2" * 64,
 }
+BUNDLE_DIGESTS = {
+    "dashboard": "sha256:" + "7" * 64,
+    "omnigentUi": "sha256:" + "8" * 64,
+}
 SCREENSHOT_EVIDENCE = b"secret-free protected screenshot evidence"
+ROW_NAMES = list(REQUIRED_WORKFLOW_CHAT_ROWS)
+PRIMARY_COMBINATION = "codex-on-demand-through-omnigent"
 
 
 def _write(path: Path, value: object) -> None:
@@ -55,87 +70,157 @@ def _route_path(route: dict[str, object]) -> str:
     return path
 
 
-def _request_ids(row_name: str, index: int) -> list[str]:
-    count = (
-        len(compatibility_map()["routes"]) + 1
-        if row_name == "scoped-transports-and-resources"
-        else 6
-    )
-    return [f"request-{index}-{item}" for item in range(count)]
+def _correlation(combination_id: str, row_index: int) -> dict[str, str]:
+    return {
+        "workflowId": f"workflow-{combination_id}",
+        "chatBindingId": f"binding-{combination_id}",
+        "bridgeSessionId": f"bridge-{combination_id}",
+        "providerSessionId": "provider-session-1",
+        "browserTraceId": f"browser-trace-{combination_id}-{row_index}",
+    }
+
+
+def _binding_identity(combination: WorkflowChatCombination) -> dict[str, object]:
+    fields: dict[str, object] = {
+        "omnigentServerBuildRef": "sha256:" + "b" * 64,
+        "omnigentHostBuildRef": "sha256:" + "b" * 64,
+        "harnessImplementationRef": (
+            "omnigent-harness-implementation:sha256:" + "a" * 64
+        ),
+        "vendorRuntimeRefs": ["opencode@1.18.11#sha256:" + "d" * 64],
+        "agentSourceRef": "agent-source:sha256:" + "c" * 64,
+        "materializerRefs": ["codex-oauth-home@1"],
+        "providerCompatibilityClass": "omnigent-provider-binding-set@1",
+        "hostClassRef": combination.host_class_ref,
+        "architecture": "linux/amd64",
+        "launchPolicyRef": combination.launch_policy_ref,
+        "modelConfigDigest": "sha256:" + "e" * 64,
+        "executionRealizerRef": combination.execution_realizer_ref,
+        "requiredCapabilitiesDigest": "sha256:" + "f" * 64,
+    }
+    return {
+        **fields,
+        "supportCombinationKey": compute_support_combination_key(
+            SupportKeyPayload.model_validate(fields)
+        ),
+        "providerProfileClass": "omnigent-codex-oauth-profile-class@1",
+    }
+
+
+def _request_ids(
+    row_name: str, combination_id: str, capability_count: int
+) -> list[str]:
+    if row_name == "scoped-transports-and-resources":
+        count = len(compatibility_map()["routes"]) + 1
+    elif row_name == "authority-and-security-denials":
+        count = 8 + capability_count
+    else:
+        count = 6
+    return [f"request-{combination_id}-{row_name}-{item}" for item in range(count)]
+
+
+def _browser_events(
+    row_name: str, combination_id: str, request_ids: list[str]
+) -> list[dict[str, object]]:
+    binding_id = f"binding-{combination_id}"
+    routes = compatibility_map()["routes"]
+    if row_name == "scoped-transports-and-resources":
+        transports = ["html"] + [str(route["transport"]) for route in routes]
+        paths = [f"/omnigent-ui/workflow-chat/{binding_id}"] + [
+            f"/api/workflow-chat-bindings/{binding_id}/omnigent/" + _route_path(route)
+            for route in routes
+        ]
+        methods = ["GET"] + [str(route["methods"][0]) for route in routes]
+        statuses = [200] + [
+            101 if str(route["transport"]) == "websocket" else 200 for route in routes
+        ]
+    else:
+        transports = ["html", "http", "sse", "websocket"] + [
+            "http" for _ in request_ids[4:]
+        ]
+        paths = [f"/omnigent-ui/workflow-chat/{binding_id}"] + [
+            f"/api/workflow-chat-bindings/{binding_id}/omnigent/health"
+            for _ in request_ids[1:]
+        ]
+        methods = ["GET"] * len(request_ids)
+        if row_name == "native-live-conversation":
+            paths[1] = "/api/executions"
+            methods[1] = "POST"
+            statuses = [201 if item == 1 else 101 if item == 3 else 200
+                        for item in range(len(request_ids))]
+        elif row_name == "authority-and-security-denials":
+            statuses = [
+                403 if item <= 6 else 503 if item == 7 else 200
+                for item in range(len(request_ids))
+            ]
+        else:
+            statuses = [
+                403 if item == 0 else 101 if item == 3 else 200
+                for item in range(len(request_ids))
+            ]
+    return [
+        {
+            "requestId": request_id,
+            "transport": transports[item],
+            "method": methods[item],
+            "path": paths[item],
+            "responseStatus": statuses[item],
+            "moonmindScoped": True,
+            "browserOriginated": True,
+        }
+        for item, request_id in enumerate(request_ids)
+    ]
 
 
 def _record_data(
-    record_type: str, row_name: str, index: int, root: Path
+    record_type: str,
+    row_name: str,
+    row_index: int,
+    combination: WorkflowChatCombination,
+    root: Path,
 ) -> dict[str, object]:
-    request_ids = _request_ids(row_name, index)
+    combination_id = combination.combination_id
+    correlation = _correlation(combination_id, row_index)
+    binding_id = correlation["chatBindingId"]
+    advertised = sorted(combination.advertised_capabilities)
+    request_ids = _request_ids(row_name, combination_id, len(advertised))
     common: dict[str, object] = {"requestIds": [request_ids[0]]}
     if record_type == "browserTrace":
-        if row_name == "scoped-transports-and-resources":
-            transports = ["html"] + [
-                str(route["transport"])
-                for route in compatibility_map()["routes"]
-            ]
-            route_paths = [
-                "/omnigent-ui/workflow-chat/binding-1"
-            ] + [
-                "/api/workflow-chat-bindings/binding-1/omnigent/"
-                + _route_path(route)
-                for route in compatibility_map()["routes"]
-            ]
-            methods = ["GET"] + [
-                str(route["methods"][0])
-                for route in compatibility_map()["routes"]
-            ]
-        else:
-            transports = ["html", "http", "sse", "websocket", "http", "http"]
-            route_paths = [
-                "/omnigent-ui/workflow-chat/binding-1"
-                if item == 0
-                else "/api/workflow-chat-bindings/binding-1/omnigent/health"
-                for item in range(len(request_ids))
-            ]
-            methods = ["GET"] * len(request_ids)
-        events = []
-        for item, (request_id, transport) in enumerate(
-            zip(request_ids, transports, strict=True)
-        ):
-            events.append(
-                {
-                    "requestId": request_id,
-                    "transport": transport,
-                    "method": methods[item],
-                    "path": route_paths[item],
-                    "responseStatus": (
-                        503
-                        if row_name == "authority-and-security-denials" and item == 5
-                        else 403
-                        if row_name == "authority-and-security-denials"
-                        or row_name == "terminal-evidence-and-continuation"
-                        and item == 0
-                        else 101
-                        if transport == "websocket"
-                        else 200
-                    ),
-                    "moonmindScoped": True,
-                    "browserOriginated": True,
-                }
-            )
         return {
             "requestIds": request_ids,
-            "route": "/workflows/workflow-1/chat",
-            "traceId": f"browser-trace-{index}",
+            "route": f"/workflows/{correlation['workflowId']}/chat",
+            "traceId": correlation["browserTraceId"],
             "directUpstreamRequestCount": 0,
             "exposedProviderFields": [],
             "screenshotSha256": "sha256:"
             + hashlib.sha256(SCREENSHOT_EVIDENCE).hexdigest(),
-            "networkEvents": events,
+            "networkEvents": _browser_events(row_name, combination_id, request_ids),
+        }
+    if record_type == "executionCreation":
+        return {
+            "requestIds": [request_ids[1]],
+            "createRequestId": request_ids[1],
+            "method": "POST",
+            "path": "/api/executions",
+            "createdThroughPublicApi": True,
+            "workflowId": correlation["workflowId"],
+            "resolvedBridgeSessionId": correlation["bridgeSessionId"],
+            "harnessId": combination.harness_id,
+            "executionRealizerRef": combination.execution_realizer_ref,
+            "launchPolicyRef": combination.launch_policy_ref,
+            "temporalWorkflowId": f"temporal-{combination_id}",
+            "temporalRunId": f"temporal-run-{combination_id}",
+            "temporalTaskQueue": "moonmind-omnigent",
+            "agentProfileSnapshotRef": "agent-profile-snapshot:sha256:" + "3" * 64,
+            "executionPlanRef": "omnigent-execution-plan:sha256:" + "4" * 64,
+            "providerProfileRef": "provider-profile:omnigent-codex",
         }
     if record_type == "bindingSnapshot":
         return {
             **common,
             "authoritative": True,
-            "resolvedBindingId": "binding-1",
-            "runId": "run-1",
+            "resolvedBindingId": binding_id,
+            "runId": f"run-{combination_id}",
             "state": "available",
             "readOnly": False,
             "capabilitiesDigest": "sha256:" + "4" * 64,
@@ -163,7 +248,7 @@ def _record_data(
                 "routeName": "native_ui_document",
                 "transport": "html",
                 "method": "GET",
-                "routePath": "omnigent-ui/workflow-chat/binding-1",
+                "routePath": f"omnigent-ui/workflow-chat/{binding_id}",
             }
         ] + [
             {
@@ -188,8 +273,8 @@ def _record_data(
                 {
                     **route,
                     "requestId": request_id,
-                    "bindingId": "binding-1",
-                    "providerSessionId": "provider-session-1",
+                    "bindingId": binding_id,
+                    "providerSessionId": correlation["providerSessionId"],
                     "authorized": True,
                     "serverResolvedTarget": True,
                     "reauthorized": request_id == reconnect_id,
@@ -213,15 +298,11 @@ def _record_data(
             ],
         }
     if record_type == "mutationReceipts":
-        mutating_route_names = {
-            str(route["name"])
-            for route in compatibility_map()["routes"]
-            if route["mutation"] is True
-        }
+        routes = compatibility_map()["routes"]
         mutation_ids = [
             request_ids[item + 1]
-            for item, route in enumerate(compatibility_map()["routes"])
-            if route["name"] in mutating_route_names
+            for item, route in enumerate(routes)
+            if route["mutation"] is True
         ]
         return {
             "requestIds": mutation_ids,
@@ -244,9 +325,11 @@ def _record_data(
             "provider_session_substitution",
             "hidden_control",
             "immutable_policy",
+            "cross_user",
+            "cross_workflow",
         ]
         return {
-            "requestIds": request_ids[:4],
+            "requestIds": request_ids[: len(kinds)],
             "denials": [
                 {
                     "requestId": request_ids[item],
@@ -258,33 +341,61 @@ def _record_data(
             ],
         }
     if record_type == "capabilitySnapshot":
+        sources = (
+            "upstream",
+            "agentProfile",
+            "providerPolicy",
+            "workflowState",
+            "callerPermission",
+        )
         inputs = {
-            "upstream": {"sendMessage": True, "changeModel": True},
-            "agentProfile": {"sendMessage": True, "changeModel": False},
-            "providerPolicy": {"sendMessage": True, "changeModel": True},
-            "workflowState": {"sendMessage": True, "changeModel": True},
-            "callerPermission": {"sendMessage": True, "changeModel": True},
+            name: {
+                capability: not (name == "agentProfile" and capability == "changeModel")
+                for capability in advertised
+            }
+            for name in sources
         }
-        effective = {"sendMessage": True, "changeModel": False}
+        effective = {
+            capability: capability != "changeModel" for capability in advertised
+        }
+        enforcement = {}
+        for item, capability in enumerate(advertised):
+            if capability == "changeModel":
+                enforcement[capability] = {
+                    "requestId": request_ids[2],
+                    "outcome": "denied",
+                }
+            else:
+                enforcement[capability] = {
+                    "requestId": request_ids[8 + item],
+                    "outcome": "allowed",
+                }
         return {
-            **common,
+            "requestIds": request_ids,
             "inputs": inputs,
             "effective": effective,
-            "snapshotDigest": _digest({"inputs": inputs, "effective": effective}),
+            "advertised": advertised,
+            "enforcement": enforcement,
+            "snapshotDigest": _digest(
+                {
+                    "inputs": inputs,
+                    "effective": effective,
+                    "advertised": advertised,
+                }
+            ),
         }
     if record_type == "scanAudit":
-        scan_ids = request_ids[4:]
         return {
-            "requestIds": scan_ids,
+            "requestIds": request_ids[6:8],
             "attempts": [
                 {
-                    "requestId": scan_ids[0],
+                    "requestId": request_ids[6],
                     "outcome": "blocked",
                     "forwarded": False,
                     "auditRef": "artifact://scan-blocked",
                 },
                 {
-                    "requestId": scan_ids[1],
+                    "requestId": request_ids[7],
                     "outcome": "enforcement_unavailable",
                     "forwarded": False,
                     "auditRef": "artifact://scan-unavailable",
@@ -307,14 +418,13 @@ def _record_data(
             "deniedMutationRequestIds": [request_ids[0]],
         }
     if record_type == "capturedEvidence":
-        artifacts = []
-        for ref in ("capture-manifest.json", "captured-final.json"):
-            artifacts.append(
-                {
-                    "ref": ref,
-                    "sha256": hashlib.sha256((root / ref).read_bytes()).hexdigest(),
-                }
-            )
+        artifacts = [
+            {
+                "ref": ref,
+                "sha256": hashlib.sha256((root / ref).read_bytes()).hexdigest(),
+            }
+            for ref in ("capture-manifest.json", "captured-final.json")
+        ]
         return {
             **common,
             "artifacts": artifacts,
@@ -323,10 +433,10 @@ def _record_data(
     if record_type == "continuationReceipt":
         relationship_identity = {
             "relationshipType": "linked_continuation",
-            "sourceWorkflowId": "workflow-1",
-            "sourceRunId": "run-1",
-            "destinationWorkflowId": "workflow-2",
-            "destinationRunId": "run-2",
+            "sourceWorkflowId": correlation["workflowId"],
+            "sourceRunId": f"run-{combination_id}",
+            "destinationWorkflowId": f"continuation-{combination_id}",
+            "destinationRunId": f"continuation-run-{combination_id}",
         }
         return {
             "requestIds": request_ids[1:3],
@@ -337,9 +447,9 @@ def _record_data(
                 "requestId": request_ids[1],
                 "created": True,
                 "relationshipType": "linked_continuation",
-                "sourceWorkflowId": "workflow-1",
-                "sourceRunId": "run-1",
-                "destinationWorkflowId": "workflow-2",
+                "sourceWorkflowId": correlation["workflowId"],
+                "sourceRunId": f"run-{combination_id}",
+                "destinationWorkflowId": f"continuation-{combination_id}",
             },
             "durableRelationship": {
                 **relationship_identity,
@@ -356,7 +466,41 @@ def _record_data(
             "replayedFromMoonMindArtifacts": True,
             "artifactRefs": ["captured-final.json"],
         }
+    if record_type == "cleanupReceipt":
+        return {
+            **common,
+            "steps": [
+                {
+                    "order": item + 1,
+                    "kind": kind,
+                    "outcome": "completed",
+                    "auditRef": f"artifact://cleanup-{item}",
+                }
+                for item, kind in enumerate(
+                    (
+                        "live_host_stopped",
+                        "provider_session_removed",
+                        "workspace_published",
+                        "provider_profile_release",
+                    )
+                )
+            ],
+            "liveResourcesRemoved": True,
+            "providerProfileReleasedLast": True,
+            "outcome": "released",
+            "hostMode": combination.host_mode,
+            "cleanupMode": combination.launch_policy.cleanup.get("mode"),
+            "cleanupState": "cleaned",
+        }
     raise AssertionError(f"missing test source record: {record_type}")
+
+
+def _source_ref(combination_id: str, row_index: int, record_type: str) -> str:
+    return f"source-{combination_id}-{row_index}-{record_type}.json"
+
+
+def _case_ref(combination_id: str, row_index: int) -> str:
+    return f"case-{combination_id}-{row_index}.json"
 
 
 def _matrix(root: Path) -> dict[str, object]:
@@ -365,83 +509,127 @@ def _matrix(root: Path) -> dict[str, object]:
         {"schemaVersion": "moonmind.capture-manifest/v1", "artifacts": ["final"]},
     )
     _write(root / "captured-final.json", {"status": "completed"})
-    rows: dict[str, object] = {}
-    for index, (row_name, assertions) in enumerate(
-        REQUIRED_WORKFLOW_CHAT_ROWS.items()
-    ):
-        source_records = []
-        for record_type in REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS[row_name]:
-            record_ref = f"source-{index}-{record_type}.json"
-            _write(
-                root / record_ref,
-                {
-                    "schemaVersion": WORKFLOW_CHAT_SOURCE_RECORD_VERSION,
-                    "recordType": record_type,
-                    "row": row_name,
-                    "sourceCommit": "abc123",
-                    "observedAt": NOW.isoformat(),
-                    "images": IMAGES,
-                    "observed": True,
-                    "correlation": {
-                        "workflowId": "workflow-1",
-                        "chatBindingId": "binding-1",
-                        "bridgeSessionId": "bridge-1",
-                        "providerSessionId": "provider-session-1",
-                        "browserTraceId": f"browser-trace-{index}",
+    combinations: dict[str, object] = {}
+    for combination_id, combination in workflow_chat_combinations().items():
+        declared: dict[str, object] = {
+            "schemaVersion": WORKFLOW_CHAT_COMBINATION_VERSION,
+            "combinationId": combination_id,
+            "harnessId": combination.harness_id,
+            "hostClassRef": combination.host_class_ref,
+            "launchPolicyRef": combination.launch_policy_ref,
+            "executionRealizerRef": combination.execution_realizer_ref,
+            "hostMode": combination.host_mode,
+            "advertisedCapabilities": sorted(combination.advertised_capabilities),
+        }
+        if not combination.native_chat_claimed:
+            combinations[combination_id] = {
+                **declared,
+                "status": "unsupported",
+                "unsupportedReason": combination.unsupported_reason,
+            }
+            continue
+        rows: dict[str, object] = {}
+        cases: list[dict[str, object]] = []
+        for row_index, row_name in enumerate(ROW_NAMES):
+            assertions = {
+                name: True for name in REQUIRED_WORKFLOW_CHAT_ROWS[row_name]
+            }
+            source_records = []
+            for record_type in REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS[row_name]:
+                record_ref = _source_ref(combination_id, row_index, record_type)
+                _write(
+                    root / record_ref,
+                    {
+                        "schemaVersion": WORKFLOW_CHAT_SOURCE_RECORD_VERSION,
+                        "recordType": record_type,
+                        "row": row_name,
+                        "combination": combination_id,
+                        "sourceCommit": "abc123",
+                        "observedAt": NOW.isoformat(),
+                        "images": IMAGES,
+                        "observed": True,
+                        "correlation": _correlation(combination_id, row_index),
+                        "data": _record_data(
+                            record_type, row_name, row_index, combination, root
+                        ),
                     },
-                    "data": _record_data(record_type, row_name, index, root),
+                )
+                source_records.append(
+                    {
+                        "type": record_type,
+                        "ref": record_ref,
+                        "sha256": hashlib.sha256(
+                            (root / record_ref).read_bytes()
+                        ).hexdigest(),
+                    }
+                )
+            case_ref = _case_ref(combination_id, row_index)
+            _write(
+                root / case_ref,
+                {
+                    "schemaVersion": WORKFLOW_CHAT_CASE_EVIDENCE_VERSION,
+                    "issue": WORKFLOW_CHAT_ACCEPTANCE_ISSUE,
+                    "parentIssue": WORKFLOW_CHAT_PARENT_ISSUE,
+                    "combination": combination_id,
+                    "row": row_name,
+                    "status": "passed",
+                    "sourceCommit": "abc123",
+                    "images": IMAGES,
+                    "stockHostUnmodified": True,
+                    "browserOriginated": True,
+                    "moonmindScopedOnly": True,
+                    "assertions": assertions,
+                    "sourceRecords": source_records,
+                    "observations": ["bounded protected observation"],
                 },
             )
-            source_records.append(
+            rows[row_name] = {
+                "status": "passed",
+                "assertions": assertions,
+                "evidenceRefs": [case_ref],
+            }
+            cases.append(
                 {
-                    "type": record_type,
-                    "ref": record_ref,
-                    "sha256": hashlib.sha256(
-                        (root / record_ref).read_bytes()
-                    ).hexdigest(),
+                    "caseId": f"workflow-chat-{combination_id}-{row_name}",
+                    "status": "passed",
+                    "durationMs": 1000 + row_index,
+                    "evidenceRefs": [case_ref],
                 }
             )
-        ref = f"case-{index}.json"
+        report_ref = f"report-{combination_id}.json"
         _write(
-            root / ref,
+            root / report_ref,
             {
-                "schemaVersion": WORKFLOW_CHAT_CASE_EVIDENCE_VERSION,
-                "issue": WORKFLOW_CHAT_ACCEPTANCE_ISSUE,
-                "parentIssue": WORKFLOW_CHAT_PARENT_ISSUE,
-                "row": row_name,
-                "status": "passed",
-                "sourceCommit": "abc123",
+                "schemaVersion": "moonmind.omnigent.conformance-report/v1",
+                "generatedAt": NOW.isoformat(),
                 "images": IMAGES,
-                "stockHostUnmodified": True,
-                "browserOriginated": True,
-                "moonmindScopedOnly": True,
-                "assertions": {name: True for name in assertions},
-                "sourceRecords": source_records,
-                "observations": ["bounded protected observation"],
+                "cases": cases,
+                "summary": {"passed": len(cases), "failed": 0, "skipped": 0},
             },
         )
-        rows[row_name] = {
+        timeline_ref = f"timeline-{combination_id}.json"
+        _write(
+            root / timeline_ref,
+            {
+                "sessionId": _correlation(combination_id, 0)["bridgeSessionId"],
+                "terminal": {"state": "completed"},
+                "cleanup": {"state": "cleaned"},
+            },
+        )
+        combinations[combination_id] = {
+            **declared,
             "status": "passed",
-            "assertions": {name: True for name in assertions},
-            "evidenceRefs": [ref],
+            "unsupportedReason": None,
+            "bindingIdentity": _binding_identity(combination),
+            "rows": rows,
+            "reports": [report_ref],
+            "timelineRef": timeline_ref,
+            "cleanupOutcome": {
+                "liveResourcesRemoved": True,
+                "providerProfileReleasedLast": True,
+                "cleanupState": "cleaned",
+            },
         }
-    _write(
-        root / "report.json",
-        {
-            "schemaVersion": "moonmind.omnigent.conformance-report/v1",
-            "generatedAt": NOW.isoformat(),
-            "images": IMAGES,
-            "cases": [
-                {
-                    "caseId": f"workflow-chat-{index}",
-                    "status": "passed",
-                    "evidenceRefs": [f"case-{index}.json"],
-                }
-                for index in range(len(REQUIRED_WORKFLOW_CHAT_ROWS))
-            ],
-            "summary": {"passed": 4, "failed": 0, "skipped": 0},
-        },
-    )
     scans: dict[str, object] = {}
     for channel in ("logs", "temporalHistory", "screenshots", "archives"):
         ref = f"scan-{channel}.json"
@@ -474,8 +662,9 @@ def _matrix(root: Path) -> dict[str, object]:
         "sourceCommit": "abc123",
         "compatibilityProfile": WORKFLOW_CHAT_COMPATIBILITY_PROFILE,
         "images": IMAGES,
-        "rows": rows,
-        "reports": ["report.json"],
+        "bundleDigests": dict(BUNDLE_DIGESTS),
+        "supersededReportRef": "previous/workflow-chat-acceptance.json",
+        "combinations": combinations,
         "evidenceScans": scans,
     }
 
@@ -486,14 +675,14 @@ def _rewrite_source(
     row_name: str,
     record_type: str,
     update,
+    combination_id: str = PRIMARY_COMBINATION,
 ) -> None:
-    row_names = list(REQUIRED_WORKFLOW_CHAT_ROWS)
-    index = row_names.index(row_name)
-    source_path = root / f"source-{index}-{record_type}.json"
+    row_index = ROW_NAMES.index(row_name)
+    source_path = root / _source_ref(combination_id, row_index, record_type)
     payload = json.loads(source_path.read_text(encoding="utf-8"))
     update(payload)
     _write(source_path, payload)
-    case_path = root / f"case-{index}.json"
+    case_path = root / _case_ref(combination_id, row_index)
     case = json.loads(case_path.read_text(encoding="utf-8"))
     record = next(
         item for item in case["sourceRecords"] if item["type"] == record_type
@@ -514,9 +703,412 @@ def test_complete_native_chat_matrix_builds_and_validates(tmp_path: Path) -> Non
         now=NOW,
     )
 
-    assert set(manifest["rows"]) == set(REQUIRED_WORKFLOW_CHAT_ROWS)
+    assert set(manifest["combinations"]) == set(workflow_chat_combinations())
     assert manifest["issue"] == WORKFLOW_CHAT_ACCEPTANCE_ISSUE
+    assert manifest["scenarioVersion"] == WORKFLOW_CHAT_SCENARIO_VERSION
+    assert manifest["routeInventoryVersion"] == compatibility_map()["version"]
+    assert set(manifest["bundleDigests"]) == set(REQUIRED_BUNDLE_DIGESTS)
     assert all(item["sha256"] for item in manifest["evidenceManifest"])
+    for entry in manifest["combinations"].values():
+        assert set(entry["rows"]) == set(REQUIRED_WORKFLOW_CHAT_ROWS)
+
+
+def test_every_claimed_combination_appears_in_the_protected_matrix() -> None:
+    inventory = workflow_chat_combinations()
+
+    assert {
+        "codex-on-demand-through-omnigent",
+        "codex-static-connected-through-omnigent",
+        "opencode-through-generic-omnigent-host",
+    } <= set(inventory)
+    assert inventory["opencode-through-generic-omnigent-host"].execution_realizer_ref == (
+        "generic-omnigent-host@1"
+    )
+    host_modes = {
+        combination.host_mode
+        for combination in inventory.values()
+        if combination.native_chat_claimed
+    }
+    assert {"on-demand", "static-connected"} <= host_modes
+    # A materially different cleanup mode must yield a different capability
+    # contract rather than reusing one constant row set.
+    on_demand = inventory["codex-on-demand-through-omnigent"].advertised_capabilities
+    static = inventory[
+        "codex-static-connected-through-omnigent"
+    ].advertised_capabilities
+    assert on_demand != static
+    assert "cleanupSession" in on_demand and "cleanupSession" not in static
+
+
+def test_missing_claimed_combination_fails_closed(tmp_path: Path) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    manifest["combinations"].pop("opencode-through-generic-omnigent-host")
+
+    with pytest.raises(ConformanceContractError, match="combination coverage"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_unclaimed_combination_needs_its_stable_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    inventory = workflow_chat_combinations()
+    declined = WorkflowChatCombination(
+        combination_id="declined-combination",
+        harness_id="opencode-native",
+        host_class_ref="omnigent-opencode@1",
+        launch_policy_ref="omnigent-on-demand@1",
+        execution_realizer_ref="generic-omnigent-host@1",
+        compose_profile="omnigent-host-codex",
+        compose_services=("omnigent",),
+        native_chat_claimed=False,
+        unsupported_reason="native_chat_not_advertised",
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.workflow_chat_acceptance.WORKFLOW_CHAT_COMBINATIONS",
+        (inventory[PRIMARY_COMBINATION], declined),
+    )
+    source = _matrix(tmp_path)
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+    validate_workflow_chat_acceptance_manifest(
+        manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+    )
+    assert manifest["combinations"]["declined-combination"]["status"] == "unsupported"
+
+    manifest["combinations"]["declined-combination"]["unsupportedReason"] = None
+    with pytest.raises(ConformanceContractError, match="unsupported"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["harnessImplementationRef", "executionRealizerRef", "modelConfigDigest"],
+)
+def test_binding_identity_must_recompute_the_support_combination_key(
+    field: str, tmp_path: Path
+) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    identity = manifest["combinations"][PRIMARY_COMBINATION]["bindingIdentity"]
+    if field == "modelConfigDigest":
+        identity[field] = "sha256:" + "9" * 64
+    elif field == "executionRealizerRef":
+        identity[field] = "generic-omnigent-host@1"
+    else:
+        identity[field] = "omnigent-harness-implementation:sha256:" + "9" * 64
+
+    with pytest.raises(ConformanceContractError, match="binding identity|support combination key"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_binding_identity_must_be_complete(tmp_path: Path) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    manifest["combinations"][PRIMARY_COMBINATION]["bindingIdentity"].pop(
+        "providerProfileClass"
+    )
+
+    with pytest.raises(ConformanceContractError, match="binding identity is incomplete"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_bundle_digests_are_required(tmp_path: Path) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    manifest["bundleDigests"].pop("omnigentUi")
+
+    with pytest.raises(ConformanceContractError, match="bundle digests"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_route_inventory_version_must_match_the_served_surface(
+    tmp_path: Path,
+) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    manifest["routeInventoryVersion"] = "omnigent.native-ui-compat/v0"
+
+    with pytest.raises(ConformanceContractError, match="route-inventory"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_report_cases_require_a_measured_duration(tmp_path: Path) -> None:
+    source = _matrix(tmp_path)
+    report_path = tmp_path / f"report-{PRIMARY_COMBINATION}.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["cases"][0].pop("durationMs")
+    _write(report_path, report)
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="report cases are malformed"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_operator_timeline_must_bind_the_terminal_cleaned_session(
+    tmp_path: Path,
+) -> None:
+    source = _matrix(tmp_path)
+    timeline_path = tmp_path / f"timeline-{PRIMARY_COMBINATION}.json"
+    _write(
+        timeline_path,
+        {
+            "sessionId": "unrelated-session",
+            "terminal": {"state": "completed"},
+            "cleanup": {"state": "cleaned"},
+        },
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="operator timeline"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_execution_creation_must_use_the_public_executions_api(
+    tmp_path: Path,
+) -> None:
+    source = _matrix(tmp_path)
+    _rewrite_source(
+        tmp_path,
+        row_name="native-live-conversation",
+        record_type="executionCreation",
+        update=lambda payload: payload["data"].update(
+            {"createdThroughPublicApi": False}
+        ),
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="/api/executions"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_execution_creation_must_resolve_the_live_session(tmp_path: Path) -> None:
+    source = _matrix(tmp_path)
+    _rewrite_source(
+        tmp_path,
+        row_name="native-live-conversation",
+        record_type="executionCreation",
+        update=lambda payload: payload["data"].update(
+            {"resolvedBridgeSessionId": "other-session"}
+        ),
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="/api/executions"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+@pytest.mark.parametrize("kind", ["cross_user", "cross_workflow"])
+def test_cross_user_and_cross_workflow_denials_are_required(
+    kind: str, tmp_path: Path
+) -> None:
+    source = _matrix(tmp_path)
+
+    def drop_denial(payload: dict[str, object]) -> None:
+        removed = next(
+            item for item in payload["data"]["denials"] if item["kind"] == kind
+        )
+        payload["data"]["denials"].remove(removed)
+        payload["data"]["requestIds"].remove(removed["requestId"])
+
+    _rewrite_source(
+        tmp_path,
+        row_name="authority-and-security-denials",
+        record_type="denialAudit",
+        update=drop_denial,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="denialAudit coverage"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_capability_coverage_is_derived_from_the_advertised_contract(
+    tmp_path: Path,
+) -> None:
+    source = _matrix(tmp_path)
+
+    def drop_capability(payload: dict[str, object]) -> None:
+        payload["data"]["enforcement"].pop("readResources")
+
+    _rewrite_source(
+        tmp_path,
+        row_name="authority-and-security-denials",
+        record_type="capabilitySnapshot",
+        update=drop_capability,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(
+        ConformanceContractError, match="every advertised capability"
+    ):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_capability_enforcement_must_match_the_effective_decision(
+    tmp_path: Path,
+) -> None:
+    source = _matrix(tmp_path)
+
+    def allow_denied_capability(payload: dict[str, object]) -> None:
+        payload["data"]["enforcement"]["changeModel"]["outcome"] = "allowed"
+
+    _rewrite_source(
+        tmp_path,
+        row_name="authority-and-security-denials",
+        record_type="capabilitySnapshot",
+        update=allow_denied_capability,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(
+        ConformanceContractError, match="does not match the effective decision"
+    ):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_advertised_capability_namespace_must_match_the_combination(
+    tmp_path: Path,
+) -> None:
+    source = _matrix(tmp_path)
+
+    def widen_namespace(payload: dict[str, object]) -> None:
+        payload["data"]["advertised"] = payload["data"]["advertised"] + ["invented"]
+
+    _rewrite_source(
+        tmp_path,
+        row_name="authority-and-security-denials",
+        record_type="capabilitySnapshot",
+        update=widen_namespace,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(
+        ConformanceContractError, match="advertised capability contract"
+    ):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_cleanup_must_release_the_provider_profile_last(tmp_path: Path) -> None:
+    source = _matrix(tmp_path)
+
+    def release_profile_first(payload: dict[str, object]) -> None:
+        steps = payload["data"]["steps"]
+        release = next(
+            item for item in steps if item["kind"] == "provider_profile_release"
+        )
+        release["order"] = 1
+        for step in steps:
+            if step is not release:
+                step["order"] += 1
+
+    _rewrite_source(
+        tmp_path,
+        row_name="terminal-evidence-and-continuation",
+        record_type="cleanupReceipt",
+        update=release_profile_first,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="release-last cleanup"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_cleanup_receipt_must_cover_live_resource_removal(tmp_path: Path) -> None:
+    source = _matrix(tmp_path)
+
+    def drop_host_stop(payload: dict[str, object]) -> None:
+        steps = [
+            step
+            for step in payload["data"]["steps"]
+            if step["kind"] != "live_host_stopped"
+        ]
+        for order, step in enumerate(steps, start=1):
+            step["order"] = order
+        payload["data"]["steps"] = steps
+
+    _rewrite_source(
+        tmp_path,
+        row_name="terminal-evidence-and-continuation",
+        record_type="cleanupReceipt",
+        update=drop_host_stop,
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="release-last cleanup"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_combination_cleanup_outcome_is_required(tmp_path: Path) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    manifest["combinations"][PRIMARY_COMBINATION]["cleanupOutcome"][
+        "providerProfileReleasedLast"
+    ] = False
+
+    with pytest.raises(ConformanceContractError, match="cleanup"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
 
 
 @pytest.mark.parametrize(
@@ -548,7 +1140,27 @@ def test_vacuous_source_record_cannot_satisfy_any_typed_schema(
         source, evidence_root=tmp_path
     )
 
-    with pytest.raises(ConformanceContractError, match="source record"):
+    with pytest.raises(ConformanceContractError, match="source record|Chat"):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+
+
+def test_source_records_must_declare_the_combination_under_test(
+    tmp_path: Path,
+) -> None:
+    source = _matrix(tmp_path)
+    _rewrite_source(
+        tmp_path,
+        row_name="native-live-conversation",
+        record_type="bindingSnapshot",
+        update=lambda payload: payload.update({"combination": "other-combination"}),
+    )
+    manifest = build_workflow_chat_acceptance_manifest(
+        source, evidence_root=tmp_path
+    )
+
+    with pytest.raises(ConformanceContractError, match="not bound to the combination"):
         validate_workflow_chat_acceptance_manifest(
             manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
         )
@@ -580,9 +1192,9 @@ def test_matrix_rows_must_bind_the_same_authoritative_workflow(tmp_path: Path) -
     source = _matrix(tmp_path)
 
     def substitute_workflow(payload: dict[str, object]) -> None:
-        payload["correlation"]["workflowId"] = "workflow-2"
+        payload["correlation"]["workflowId"] = "workflow-substituted"
         if payload["recordType"] == "browserTrace":
-            payload["data"]["route"] = "/workflows/workflow-2/chat"
+            payload["data"]["route"] = "/workflows/workflow-substituted/chat"
 
     for record_type in REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS[
         "scoped-transports-and-resources"
@@ -711,7 +1323,7 @@ def test_every_observed_mutation_requires_one_receipt(tmp_path: Path) -> None:
     [
         ("native-live-conversation", 1, 500),
         ("authority-and-security-denials", 0, 200),
-        ("authority-and-security-denials", 5, 403),
+        ("authority-and-security-denials", 7, 403),
     ],
 )
 def test_browser_trace_requires_success_or_the_exact_denial_status(
@@ -741,7 +1353,7 @@ def test_browser_trace_scope_requires_a_path_segment_boundary(tmp_path: Path) ->
 
     def replace_path(payload: dict[str, object]) -> None:
         payload["data"]["networkEvents"][0]["path"] = (
-            "/omnigent-ui/workflow-chat/binding-1-attacker"
+            f"/omnigent-ui/workflow-chat/binding-{PRIMARY_COMBINATION}-attacker"
         )
 
     _rewrite_source(
@@ -886,6 +1498,7 @@ def test_source_records_must_bind_commit_and_immutable_images(
         "failed_report",
         "missing_scan",
         "missing_source_record",
+        "absolute_superseded_ref",
     ],
 )
 def test_native_chat_rollout_gate_fails_closed(
@@ -895,11 +1508,14 @@ def test_native_chat_rollout_gate_fails_closed(
     manifest = build_workflow_chat_acceptance_manifest(
         source, evidence_root=tmp_path
     )
+    entry = manifest["combinations"][PRIMARY_COMBINATION]
+    primary_case = _case_ref(PRIMARY_COMBINATION, 0)
     if mutation == "missing_row":
-        manifest["rows"].pop("native-live-conversation")
+        entry["rows"].pop("native-live-conversation")
     elif mutation == "failed_assertion":
-        row = manifest["rows"]["native-live-conversation"]
-        row["assertions"]["native_ui_primary"] = False
+        entry["rows"]["native-live-conversation"]["assertions"][
+            "native_ui_primary"
+        ] = False
     elif mutation == "stale":
         manifest["generatedAt"] = (NOW - timedelta(days=8)).isoformat()
     elif mutation == "wrong_commit":
@@ -907,50 +1523,40 @@ def test_native_chat_rollout_gate_fails_closed(
     elif mutation == "mutable_image":
         manifest["images"]["host"] = "ghcr.io/omnigent/host:latest"
     elif mutation == "unresolved_ref":
-        manifest["rows"]["native-live-conversation"]["evidenceRefs"] = [
-            "missing.json"
-        ]
+        entry["rows"]["native-live-conversation"]["evidenceRefs"] = ["missing.json"]
     elif mutation == "tampered_ref":
-        (tmp_path / "case-0.json").write_text("{}", encoding="utf-8")
+        (tmp_path / primary_case).write_text("{}", encoding="utf-8")
     elif mutation == "failed_report":
-        (tmp_path / "report.json").write_text(
-            json.dumps(
-                {
-                    "schemaVersion": "moonmind.omnigent.conformance-report/v1",
-                    "generatedAt": NOW.isoformat(),
-                    "images": IMAGES,
-                    "cases": [
-                        {
-                            "caseId": f"workflow-chat-{index}",
-                            "status": "failed" if index == 0 else "passed",
-                            "evidenceRefs": [f"case-{index}.json"],
-                        }
-                        for index in range(4)
-                    ],
-                    "summary": {"passed": 3, "failed": 1},
-                }
-            ),
-            encoding="utf-8",
-        )
+        report_ref = f"report-{PRIMARY_COMBINATION}.json"
+        report = json.loads((tmp_path / report_ref).read_text(encoding="utf-8"))
+        report["cases"][0]["status"] = "failed"
+        report["summary"] = {
+            "passed": len(report["cases"]) - 1,
+            "failed": 1,
+            "skipped": 0,
+        }
+        _write(tmp_path / report_ref, report)
         for item in manifest["evidenceManifest"]:
-            if item["ref"] == "report.json":
+            if item["ref"] == report_ref:
                 item["sha256"] = hashlib.sha256(
-                    (tmp_path / "report.json").read_bytes()
+                    (tmp_path / report_ref).read_bytes()
                 ).hexdigest()
     elif mutation == "missing_scan":
         manifest["evidenceScans"].pop("archives")
+    elif mutation == "absolute_superseded_ref":
+        manifest["supersededReportRef"] = "/etc/passwd"
     else:
-        case = json.loads((tmp_path / "case-0.json").read_text(encoding="utf-8"))
+        case = json.loads((tmp_path / primary_case).read_text(encoding="utf-8"))
         case["sourceRecords"] = [
             record
             for record in case["sourceRecords"]
             if record["type"] != "browserTrace"
         ]
-        _write(tmp_path / "case-0.json", case)
+        _write(tmp_path / primary_case, case)
         for item in manifest["evidenceManifest"]:
-            if item["ref"] == "case-0.json":
+            if item["ref"] == primary_case:
                 item["sha256"] = hashlib.sha256(
-                    (tmp_path / "case-0.json").read_bytes()
+                    (tmp_path / primary_case).read_bytes()
                 ).hexdigest()
 
     with pytest.raises(ConformanceContractError):
@@ -964,9 +1570,10 @@ def test_native_chat_rollout_gate_fails_closed(
 
 def test_native_chat_evidence_is_secret_scanned(tmp_path: Path) -> None:
     source = _matrix(tmp_path)
-    case = json.loads((tmp_path / "case-0.json").read_text(encoding="utf-8"))
+    case_ref = _case_ref(PRIMARY_COMBINATION, 0)
+    case = json.loads((tmp_path / case_ref).read_text(encoding="utf-8"))
     case["observations"] = ["Authorization: Bearer exposed-value"]
-    _write(tmp_path / "case-0.json", case)
+    _write(tmp_path / case_ref, case)
     manifest = build_workflow_chat_acceptance_manifest(
         source, evidence_root=tmp_path
     )
@@ -974,4 +1581,89 @@ def test_native_chat_evidence_is_secret_scanned(tmp_path: Path) -> None:
     with pytest.raises(ConformanceContractError, match="secret-like"):
         validate_workflow_chat_acceptance_manifest(
             manifest, evidence_root=tmp_path, now=NOW
+        )
+
+
+def test_retirement_guard_consumes_the_manifest_without_interpretation(
+    tmp_path: Path,
+) -> None:
+    from moonmind.omnigent.legacy_retirement import (
+        RETIREMENT_INVENTORY,
+        RetirementCriterion,
+        criteria_from_native_chat_acceptance,
+        evaluate_retirement,
+    )
+
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+
+    passed = criteria_from_native_chat_acceptance(
+        manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+    )
+
+    assert passed == frozenset({RetirementCriterion.NATIVE_CHAT_ACCEPTANCE_PASSED})
+    native_chat_path = next(
+        path
+        for path in RETIREMENT_INVENTORY
+        if path.path_id == "omnigent.legacy.native_ui_compat"
+    )
+    decision = evaluate_retirement(native_chat_path, passed)
+    assert RetirementCriterion.NATIVE_CHAT_ACCEPTANCE_PASSED not in (
+        decision.unmet_criteria
+    )
+
+
+@pytest.mark.parametrize("failure", ["missing", "expired", "incomplete"])
+def test_retirement_guard_gets_no_criterion_from_unusable_evidence(
+    failure: str, tmp_path: Path
+) -> None:
+    from moonmind.omnigent.legacy_retirement import (
+        criteria_from_native_chat_acceptance,
+    )
+
+    if failure == "missing":
+        manifest = None
+    else:
+        manifest = build_workflow_chat_acceptance_manifest(
+            _matrix(tmp_path), evidence_root=tmp_path
+        )
+        if failure == "expired":
+            manifest["expiresAt"] = (NOW - timedelta(days=1)).isoformat()
+        else:
+            manifest["combinations"].pop(PRIMARY_COMBINATION)
+
+    assert (
+        criteria_from_native_chat_acceptance(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
+        )
+        == frozenset()
+    )
+
+
+def test_cleanup_outcome_must_match_the_typed_cleanup_receipt(tmp_path: Path) -> None:
+    manifest = build_workflow_chat_acceptance_manifest(
+        _matrix(tmp_path), evidence_root=tmp_path
+    )
+    entry = manifest["combinations"][PRIMARY_COMBINATION]
+    entry["cleanupOutcome"]["cleanupState"] = "claimed-clean"
+    _write(
+        tmp_path / f"timeline-{PRIMARY_COMBINATION}.json",
+        {
+            "sessionId": _correlation(PRIMARY_COMBINATION, 0)["bridgeSessionId"],
+            "terminal": {"state": "completed"},
+            "cleanup": {"state": "claimed-clean"},
+        },
+    )
+    for item in manifest["evidenceManifest"]:
+        if item["ref"] == f"timeline-{PRIMARY_COMBINATION}.json":
+            item["sha256"] = hashlib.sha256(
+                (tmp_path / item["ref"]).read_bytes()
+            ).hexdigest()
+
+    with pytest.raises(
+        ConformanceContractError, match="does not match the typed cleanup receipt"
+    ):
+        validate_workflow_chat_acceptance_manifest(
+            manifest, evidence_root=tmp_path, expected_commit="abc123", now=NOW
         )

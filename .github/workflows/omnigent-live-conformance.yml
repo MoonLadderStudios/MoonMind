@@ -96,6 +96,7 @@ jobs:
           MOONMIND_OMNIGENT_TEST_BRANCH: ${{ vars.MOONMIND_OMNIGENT_TEST_BRANCH }}
           MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE: ${{ runner.temp }}/moonmind-browser-state.json
           MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN: ${{ secrets.MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN }}
+          MOONMIND_OMNIGENT_WORKFLOW_CHAT_SUPERSEDED_REPORT: ${{ vars.MOONMIND_OMNIGENT_WORKFLOW_CHAT_SUPERSEDED_REPORT }}
         run: |
           python tools/run_omnigent_live_conformance.py \
             --mode "${{ matrix.mode }}" \
@@ -250,6 +251,22 @@ jobs:
               evidence_root=workflow_chat_path.parent,
               expected_commit=os.environ["GITHUB_SHA"],
           )
+          # #3712 retirement guards consume the acceptance report directly:
+          # the criterion is derived from the manifest, never asserted by hand.
+          from moonmind.omnigent.legacy_retirement import (
+              RetirementCriterion,
+              criteria_from_native_chat_acceptance,
+          )
+          native_chat_criteria = criteria_from_native_chat_acceptance(
+              workflow_chat,
+              evidence_root=workflow_chat_path.parent,
+              expected_commit=os.environ["GITHUB_SHA"],
+          )
+          if RetirementCriterion.NATIVE_CHAT_ACCEPTANCE_PASSED not in native_chat_criteria:
+              raise SystemExit(
+                  "native Workflow Chat acceptance evidence does not satisfy its "
+                  "retirement criterion"
+              )
           authority_fields = {
               "authoredWorkflowRef", "taskInputSnapshotRef", "compiledRuntimeRequestRef",
               "executionProfileRef", "launchPolicyRef", "effectiveLaunchSnapshotRef",
@@ -411,6 +428,10 @@ jobs:
               "browserRows": rows,
               "cumulativeRemediationEvidence": str(cumulative_paths[0].relative_to(root)),
               "nativeWorkflowChatEvidence": str(workflow_chat_path.relative_to(root)),
+              "nativeWorkflowChatCombinations": sorted(workflow_chat["combinations"]),
+              "nativeWorkflowChatRetirementCriteria": sorted(
+                  criterion.value for criterion in native_chat_criteria
+              ),
               "productSchemaVersions": product["schemaVersions"],
               "selection": selection,
               "executionProfileRef": acceptance["executionProfileRef"],

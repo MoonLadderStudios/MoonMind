@@ -597,6 +597,66 @@ def test_every_mode_has_dedicated_scenario_evidence_channel():
     assert len(set(module.SCENARIO_EVIDENCE_ENV.values())) == len(module.LIVE_CASES)
 
 
+WORKFLOW_CHAT_BUNDLE_DIGESTS = {
+    "dashboard": "sha256:" + "7" * 64,
+    "omnigentUi": "sha256:" + "8" * 64,
+}
+
+
+def _workflow_chat_binding_identity(module, combination):
+    fields = {
+        "omnigentServerBuildRef": "sha256:" + "b" * 64,
+        "omnigentHostBuildRef": "sha256:" + "b" * 64,
+        "harnessImplementationRef": (
+            "omnigent-harness-implementation:sha256:" + "a" * 64
+        ),
+        "vendorRuntimeRefs": ["opencode@1.18.11#sha256:" + "d" * 64],
+        "agentSourceRef": "agent-source:sha256:" + "c" * 64,
+        "materializerRefs": ["codex-oauth-home@1"],
+        "providerCompatibilityClass": "omnigent-provider-binding-set@1",
+        "hostClassRef": combination.host_class_ref,
+        "architecture": "linux/amd64",
+        "launchPolicyRef": combination.launch_policy_ref,
+        "modelConfigDigest": "sha256:" + "e" * 64,
+        "executionRealizerRef": combination.execution_realizer_ref,
+        "requiredCapabilitiesDigest": "sha256:" + "f" * 64,
+    }
+    return {
+        **fields,
+        "supportCombinationKey": "omnigent-support:sha256:" + "1" * 64,
+        "providerProfileClass": "omnigent-codex-oauth-profile-class@1",
+    }
+
+
+def _workflow_chat_cleanup_record(module, combination):
+    return {
+        "data": {
+            "liveResourcesRemoved": True,
+            "providerProfileReleasedLast": True,
+            "cleanupState": "cleaned",
+        }
+    }
+
+
+def _workflow_chat_action_result(module, tmp_path, row_name, combination_id, records):
+    combination = module.workflow_chat_combinations()[combination_id]
+    result = {
+        "row": row_name,
+        "combination": combination_id,
+        "_sourceRecords": records,
+    }
+    if row_name == "native-live-conversation":
+        result["bindingIdentity"] = _workflow_chat_binding_identity(
+            module, combination
+        )
+        result["bundleDigests"] = dict(WORKFLOW_CHAT_BUNDLE_DIGESTS)
+    if row_name == "terminal-evidence-and-continuation":
+        timeline = tmp_path / f"timeline-{combination_id}.json"
+        timeline.write_text("{}", encoding="utf-8")
+        result["timelineRef"] = timeline.as_uri()
+    return result
+
+
 def test_workflow_chat_controller_owns_action_order_manifest_and_provider_gate(
     tmp_path, monkeypatch
 ):
@@ -609,20 +669,30 @@ def test_workflow_chat_controller_owns_action_order_manifest_and_provider_gate(
     }
 
     def action(scenario, row_name, **state):
+        combination_id = state["combination"]
         events.append(("action", row_name, dict(state)))
         records = []
         for record_type in module.REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS[row_name]:
-            path = tmp_path / f"{row_name}-{record_type}.json"
+            path = tmp_path / f"{combination_id}-{row_name}-{record_type}.json"
             path.write_text("{}", encoding="utf-8")
+            resolved = (
+                _workflow_chat_cleanup_record(
+                    module, module.workflow_chat_combinations()[combination_id]
+                )
+                if record_type == "cleanupReceipt"
+                else {}
+            )
             records.append(
                 {
                     "type": record_type,
                     "ref": path.as_uri(),
                     "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                    "_resolved": {},
+                    "_resolved": resolved,
                 }
             )
-        return {"row": row_name, "_sourceRecords": records}
+        return _workflow_chat_action_result(
+            module, tmp_path, row_name, combination_id, records
+        )
 
     def validate_sources(sources, *, row_name, expected_correlation, **kwargs):
         assert set(sources) == set(
@@ -652,12 +722,17 @@ def test_workflow_chat_controller_owns_action_order_manifest_and_provider_gate(
     monkeypatch.setattr(
         module,
         "build_workflow_chat_acceptance_manifest",
-        lambda matrix, evidence_root: {"schemaVersion": "acceptance", "rows": matrix["rows"]},
+        lambda matrix, evidence_root: {
+            "schemaVersion": "acceptance",
+            "combinations": matrix["combinations"],
+        },
     )
     monkeypatch.setattr(
         module,
         "validate_workflow_chat_acceptance_manifest",
-        lambda manifest, **kwargs: events.append(("validate", tuple(manifest["rows"]))),
+        lambda manifest, **kwargs: events.append(
+            ("validate", tuple(manifest["combinations"]))
+        ),
     )
     monkeypatch.setattr(
         runner,
@@ -667,11 +742,29 @@ def test_workflow_chat_controller_owns_action_order_manifest_and_provider_gate(
 
     runner.workflow_chat(images, "commit-1")
 
-    assert [event[1] for event in events if event[0] == "action"] == list(
-        module.WORKFLOW_CHAT_ACTIONS
-    )
-    assert events[-2][0] == "validate"
+    claimed = [
+        combination_id
+        for combination_id, combination in module.workflow_chat_combinations().items()
+        if combination.native_chat_claimed
+    ]
+    assert [event[1] for event in events if event[0] == "action"] == [
+        row_name for _ in claimed for row_name in module.WORKFLOW_CHAT_ACTIONS
+    ]
+    assert [
+        event[2]["combination"] for event in events if event[0] == "action"
+    ] == [combination_id for combination_id in claimed for _ in module.WORKFLOW_CHAT_ACTIONS]
+    assert events[-2] == ("validate", tuple(module.workflow_chat_combinations()))
     assert events[-1] == ("provider", "workflow_chat")
+    matrix = json.loads(
+        (tmp_path / "workflow-chat-matrix.json").read_text(encoding="utf-8")
+    )
+    assert matrix["bundleDigests"] == WORKFLOW_CHAT_BUNDLE_DIGESTS
+    for combination_id in claimed:
+        entry = matrix["combinations"][combination_id]
+        assert entry["status"] == "passed"
+        assert entry["cleanupOutcome"]["providerProfileReleasedLast"] is True
+        assert entry["timelineRef"] == f"timeline-{combination_id}.json"
+        assert (tmp_path / entry["reports"][0]).is_file()
     assert (tmp_path / "workflow-chat-matrix.json").is_file()
     assert (tmp_path / "workflow-chat-report.json").is_file()
     assert (tmp_path / "workflow-chat-acceptance.json").is_file()
@@ -767,13 +860,28 @@ def test_workflow_chat_controller_fails_before_provider_gate_when_scan_missing(
     monkeypatch.setattr(
         runner,
         "action",
-        lambda scenario, row_name, **state: {
-            "row": row_name,
-            "_sourceRecords": [
-                {"type": name, "ref": "https://evidence.invalid/record", "sha256": "0" * 64, "_resolved": {}}
+        lambda scenario, row_name, **state: _workflow_chat_action_result(
+            module,
+            tmp_path,
+            row_name,
+            state["combination"],
+            [
+                {
+                    "type": name,
+                    "ref": "https://evidence.invalid/record",
+                    "sha256": "0" * 64,
+                    "_resolved": (
+                        _workflow_chat_cleanup_record(
+                            module,
+                            module.workflow_chat_combinations()[state["combination"]],
+                        )
+                        if name == "cleanupReceipt"
+                        else {}
+                    ),
+                }
                 for name in module.REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS[row_name]
             ],
-        },
+        ),
     )
     monkeypatch.setattr(
         module,

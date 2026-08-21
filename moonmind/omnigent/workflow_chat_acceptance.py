@@ -16,6 +16,7 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -27,10 +28,22 @@ from moonmind.omnigent.conformance import (
     assert_secret_free,
     require_pinned_images,
 )
+from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+from moonmind.omnigent.harness_platform.host_classes import (
+    HostClass,
+    LaunchPolicy,
+    get_host_class,
+    get_launch_policy,
+)
+from moonmind.omnigent.harness_platform.support import (
+    SupportKeyPayload,
+    compute_support_combination_key,
+    validate_realizer,
+)
 from moonmind.omnigent.native_ui_compat import compatibility_map
 
 WORKFLOW_CHAT_ACCEPTANCE_VERSION = (
-    "moonmind.omnigent.workflow-chat-acceptance/v1"
+    "moonmind.omnigent.workflow-chat-acceptance/v2"
 )
 WORKFLOW_CHAT_CASE_EVIDENCE_VERSION = (
     "moonmind.omnigent.workflow-chat-case-evidence/v1"
@@ -38,14 +51,170 @@ WORKFLOW_CHAT_CASE_EVIDENCE_VERSION = (
 WORKFLOW_CHAT_SOURCE_RECORD_VERSION = (
     "moonmind.omnigent.workflow-chat-source-record/v1"
 )
+WORKFLOW_CHAT_COMBINATION_VERSION = (
+    "moonmind.omnigent.workflow-chat-combination/v1"
+)
+WORKFLOW_CHAT_SCENARIO_VERSION = "moonmind.omnigent.workflow-chat-scenario/v1"
 WORKFLOW_CHAT_ACCEPTANCE_ISSUE = "MoonLadderStudios/MoonMind#3642"
 WORKFLOW_CHAT_PARENT_ISSUE = "MoonLadderStudios/MoonMind#3632"
 WORKFLOW_CHAT_COMPATIBILITY_PROFILE = "omnigent.server.v1"
 MAX_ACCEPTANCE_AGE = timedelta(days=7)
 
+# The deployed bundles a browser actually loads. Image digests alone do not
+# identify the compiled dashboard or the stock Omnigent UI bundle served through
+# the binding-scoped route, so both are bound separately (issue #3642 AC8).
+REQUIRED_BUNDLE_DIGESTS = ("dashboard", "omnigentUi")
+
+# Capability groups whose advertisement is decided by declared Host Class
+# features or Launch Policy authority rather than by this module.
+_TERMINAL_CAPABILITIES = frozenset(
+    {
+        "createTerminal",
+        "attachTerminal",
+        "viewTerminal",
+        "writeTerminal",
+        "closeTerminal",
+    }
+)
+_WORKSPACE_CAPABILITIES = frozenset({"uploadFiles", "mutateWorkspace"})
+_CONTROL_CAPABILITY_REQUIREMENTS: Mapping[str, str] = {
+    "interruptTurn": "interrupt",
+    "stopSession": "terminate",
+    "replaceSession": "clear_context",
+}
+
+
+def advertised_native_chat_capabilities(
+    *, host_class: HostClass, launch_policy: LaunchPolicy
+) -> frozenset[str]:
+    """Derive the native-chat capability contract a combination advertises.
+
+    The set is computed from already-declared authority (Host Class features,
+    Launch Policy control capabilities, capture, and cleanup mode) so a
+    combination that advertises a different capability surface produces a
+    different required coverage set instead of silently reusing a constant.
+    """
+
+    advertised: set[str] = set()
+    features = host_class.features
+    controls = set(launch_policy.controlCapabilities)
+    for name in CAPABILITY_NAMES:
+        if name in _TERMINAL_CAPABILITIES and not features.get("tmux"):
+            continue
+        if name in _WORKSPACE_CAPABILITIES and not features.get("workspaceBind"):
+            continue
+        required_control = _CONTROL_CAPABILITY_REQUIREMENTS.get(name)
+        if required_control is not None and required_control not in controls:
+            continue
+        if name == "harvestEvidence" and launch_policy.capture.get("required") is not True:
+            continue
+        if name == "cleanupSession" and launch_policy.cleanup.get("mode") != "remove":
+            continue
+        advertised.add(name)
+    return frozenset(advertised)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowChatCombination:
+    """One combination MoonMind either claims or declines for native chat.
+
+    ``native_chat_claimed`` is code-owned release authority: a claimed
+    combination must appear in the protected matrix with its own live evidence,
+    and a declined combination must appear with a stable machine reason. Neither
+    may be silently omitted.
+    """
+
+    combination_id: str
+    harness_id: str
+    host_class_ref: str
+    launch_policy_ref: str
+    execution_realizer_ref: str
+    compose_profile: str
+    compose_services: tuple[str, ...]
+    native_chat_claimed: bool
+    unsupported_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.native_chat_claimed == bool(self.unsupported_reason):
+            raise ConformanceContractError(
+                "workflow Chat combination must either be claimed or carry one "
+                f"stable unsupported reason: {self.combination_id}"
+            )
+        validate_realizer(self.execution_realizer_ref)
+
+    @property
+    def host_class(self) -> HostClass:
+        return get_host_class(self.host_class_ref)
+
+    @property
+    def launch_policy(self) -> LaunchPolicy:
+        return get_launch_policy(self.launch_policy_ref)
+
+    @property
+    def host_mode(self) -> str:
+        return self.launch_policy.hostMode
+
+    @property
+    def advertised_capabilities(self) -> frozenset[str]:
+        return advertised_native_chat_capabilities(
+            host_class=self.host_class, launch_policy=self.launch_policy
+        )
+
+
+# Every combination MoonMind claims for native Workflow Chat, including the
+# host modes whose transport and cleanup behavior differ materially (on-demand
+# hosts are removed; static-connected hosts are drained and keep serving).
+WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
+    WorkflowChatCombination(
+        combination_id="codex-on-demand-through-omnigent",
+        harness_id="codex-native",
+        host_class_ref="omnigent-codex-current@1",
+        launch_policy_ref="codex-on-demand@1",
+        execution_realizer_ref="codex-profile-bound@1",
+        compose_profile="omnigent-host-codex",
+        compose_services=("omnigent",),
+        native_chat_claimed=True,
+    ),
+    WorkflowChatCombination(
+        combination_id="codex-static-connected-through-omnigent",
+        harness_id="codex-native",
+        host_class_ref="omnigent-codex-current@1",
+        launch_policy_ref="codex-static@1",
+        execution_realizer_ref="codex-profile-bound@1",
+        compose_profile="omnigent-host-codex",
+        compose_services=("omnigent", "omnigent-host-codex"),
+        native_chat_claimed=True,
+    ),
+    WorkflowChatCombination(
+        combination_id="opencode-through-generic-omnigent-host",
+        harness_id="opencode-native",
+        host_class_ref="omnigent-opencode@1",
+        launch_policy_ref="omnigent-on-demand@1",
+        execution_realizer_ref="generic-omnigent-host@1",
+        compose_profile="omnigent-host-codex",
+        compose_services=("omnigent",),
+        native_chat_claimed=True,
+    ),
+)
+
+
+def workflow_chat_combinations() -> dict[str, WorkflowChatCombination]:
+    """Return the claimed-combination inventory keyed by combination id."""
+
+    inventory: dict[str, WorkflowChatCombination] = {}
+    for combination in WORKFLOW_CHAT_COMBINATIONS:
+        if combination.combination_id in inventory:
+            raise ConformanceContractError(
+                "workflow Chat combination inventory has a duplicate id: "
+                f"{combination.combination_id}"
+            )
+        inventory[combination.combination_id] = combination
+    return inventory
+
 REQUIRED_WORKFLOW_CHAT_ROWS: Mapping[str, frozenset[str]] = {
     "native-live-conversation": frozenset(
         {
+            "created_through_public_executions_api",
             "workflow_chat_route_opened",
             "authoritative_binding_only",
             "native_transcript_composer_queue",
@@ -68,6 +237,9 @@ REQUIRED_WORKFLOW_CHAT_ROWS: Mapping[str, frozenset[str]] = {
             "provider_session_substitution_denied",
             "hidden_control_direct_invocation_denied",
             "immutable_policy_enforced",
+            "cross_user_denied",
+            "cross_workflow_denied",
+            "advertised_capabilities_enforced",
             "high_security_send_blocked",
             "scan_unavailable_failed_closed",
             "credentials_separated",
@@ -80,6 +252,7 @@ REQUIRED_WORKFLOW_CHAT_ROWS: Mapping[str, frozenset[str]] = {
             "linked_continuation_created",
             "source_workflow_unchanged",
             "replay_after_stock_host_unavailable",
+            "cleanup_completed_provider_profile_released_last",
         }
     ),
 }
@@ -87,6 +260,7 @@ REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS: Mapping[str, frozenset[str]] = {
     "native-live-conversation": frozenset(
         {
             "browserTrace",
+            "executionCreation",
             "bindingSnapshot",
             "nativeConversation",
             "nativeControls",
@@ -116,6 +290,7 @@ REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS: Mapping[str, frozenset[str]] = {
             "capturedEvidence",
             "continuationReceipt",
             "replaySnapshot",
+            "cleanupReceipt",
         }
     ),
 }
@@ -142,8 +317,20 @@ _DENIAL_KINDS = frozenset(
         "provider_session_substitution",
         "hidden_control",
         "immutable_policy",
+        "cross_user",
+        "cross_workflow",
     }
 )
+# Cleanup must finish with provider-profile release, after the live host and
+# provider session are gone and the workspace result is durable.
+_PROVIDER_PROFILE_RELEASE_STEP = "provider_profile_release"
+_REQUIRED_CLEANUP_STEPS = (
+    "live_host_stopped",
+    "provider_session_removed",
+    "workspace_published",
+    _PROVIDER_PROFILE_RELEASE_STEP,
+)
+_EXECUTIONS_CREATE_PATH = "/api/executions"
 _TERMINAL_STATES = frozenset(
     {"completed", "failed", "canceled", "cancelled", "timed_out", "stopped"}
 )
@@ -192,8 +379,15 @@ def _canonical_digest(value: Any) -> str:
     return "sha256:" + hashlib.sha256(raw).hexdigest()
 
 
-def _is_scoped_path(path: str, allowed_bases: tuple[str, ...]) -> bool:
+def _is_scoped_path(
+    path: str,
+    allowed_bases: tuple[str, ...],
+    *,
+    allowed_exact: tuple[str, ...] = (),
+) -> bool:
     parsed_path = urllib.parse.urlsplit(path).path
+    if parsed_path in allowed_exact:
+        return True
     return any(
         parsed_path == base or parsed_path.startswith(base + "/")
         for base in allowed_bases
@@ -234,6 +428,7 @@ def _validate_record_data(
     data: Mapping[str, Any],
     *,
     correlation: Mapping[str, str],
+    combination: WorkflowChatCombination,
 ) -> None:
     request_ids = _require_string_list(
         data.get("requestIds"), field=f"{record_type}.data.requestIds"
@@ -273,7 +468,11 @@ def _validate_record_data(
             if (
                 request_id in event_ids
                 or transport not in _TRANSPORTS
-                or not _is_scoped_path(path, allowed_prefixes)
+                or not _is_scoped_path(
+                    path,
+                    allowed_prefixes,
+                    allowed_exact=(_EXECUTIONS_CREATE_PATH,),
+                )
                 or not isinstance(status, int)
                 or not 100 <= status <= 599
                 or item.get("moonmindScoped") is not True
@@ -299,6 +498,39 @@ def _validate_record_data(
         _require_sha256_ref(
             data.get("screenshotSha256"), field="browserTrace.data.screenshotSha256"
         )
+        return
+
+    if record_type == "executionCreation":
+        create_request_id = data.get("createRequestId")
+        if (
+            create_request_id not in request_id_set
+            or data.get("method") != "POST"
+            or urllib.parse.urlsplit(str(data.get("path") or "")).path
+            != _EXECUTIONS_CREATE_PATH
+            or data.get("createdThroughPublicApi") is not True
+            or data.get("workflowId") != workflow_id
+            or data.get("resolvedBridgeSessionId")
+            != correlation["bridgeSessionId"]
+            or data.get("harnessId") != combination.harness_id
+            or data.get("executionRealizerRef")
+            != combination.execution_realizer_ref
+            or data.get("launchPolicyRef") != combination.launch_policy_ref
+        ):
+            raise ConformanceContractError(
+                "workflow Chat executionCreation does not prove the normal "
+                "/api/executions create path"
+            )
+        for field in (
+            "temporalWorkflowId",
+            "temporalRunId",
+            "temporalTaskQueue",
+            "agentProfileSnapshotRef",
+            "executionPlanRef",
+            "providerProfileRef",
+        ):
+            _require_string(
+                data.get(field), field=f"executionCreation.data.{field}"
+            )
         return
 
     if record_type == "bindingSnapshot":
@@ -567,14 +799,47 @@ def _validate_record_data(
             name: all(values.get(name) is True for values in typed_inputs)
             for name in capability_names
         }
-        digest_payload = {"inputs": inputs, "effective": computed}
+        advertised = combination.advertised_capabilities
+        declared = _require_string_list(
+            data.get("advertised"), field="capabilitySnapshot.data.advertised"
+        )
+        digest_payload = {
+            "inputs": inputs,
+            "effective": computed,
+            "advertised": sorted(advertised),
+        }
         if (
             dict(effective) != computed
+            or set(declared) != set(advertised)
+            or set(computed) != set(advertised)
             or data.get("snapshotDigest") != _canonical_digest(digest_payload)
         ):
             raise ConformanceContractError(
-                "workflow Chat capabilitySnapshot is not the effective intersection"
+                "workflow Chat capabilitySnapshot is not the effective "
+                "intersection of the advertised capability contract"
             )
+        enforcement = _require_mapping(
+            data.get("enforcement"), field="capabilitySnapshot.data.enforcement"
+        )
+        if set(enforcement) != set(advertised):
+            raise ConformanceContractError(
+                "workflow Chat capabilitySnapshot does not cover every "
+                "advertised capability"
+            )
+        for name in sorted(advertised):
+            observation = _require_mapping(
+                enforcement[name],
+                field=f"capabilitySnapshot.data.enforcement.{name}",
+            )
+            expected_outcome = "allowed" if computed[name] else "denied"
+            if (
+                observation.get("requestId") not in request_id_set
+                or observation.get("outcome") != expected_outcome
+            ):
+                raise ConformanceContractError(
+                    "workflow Chat capability enforcement does not match the "
+                    f"effective decision: {name}"
+                )
         return
 
     if record_type == "scanAudit":
@@ -723,6 +988,53 @@ def _validate_record_data(
         )
         return
 
+    if record_type == "cleanupReceipt":
+        steps = data.get("steps")
+        if not isinstance(steps, list) or not steps:
+            raise ConformanceContractError(
+                "workflow Chat cleanupReceipt requires ordered cleanup steps"
+            )
+        observed: dict[int, str] = {}
+        for raw_step in steps:
+            step = _require_mapping(raw_step, field="cleanupReceipt.data.steps[]")
+            kind = _require_string(
+                step.get("kind"), field="cleanupReceipt.data.steps[].kind"
+            )
+            order = step.get("order")
+            if (
+                kind not in _REQUIRED_CLEANUP_STEPS
+                or not isinstance(order, int)
+                or isinstance(order, bool)
+                or order in observed
+                or step.get("outcome") != "completed"
+            ):
+                raise ConformanceContractError(
+                    "workflow Chat cleanupReceipt step is malformed or incomplete"
+                )
+            _require_string(
+                step.get("auditRef"), field="cleanupReceipt.data.steps[].auditRef"
+            )
+            observed[order] = kind
+        ordered = [observed[key] for key in sorted(observed)]
+        if (
+            sorted(observed) != list(range(1, len(ordered) + 1))
+            or set(ordered) != set(_REQUIRED_CLEANUP_STEPS)
+            or ordered[-1] != _PROVIDER_PROFILE_RELEASE_STEP
+            or data.get("liveResourcesRemoved") is not True
+            or data.get("providerProfileReleasedLast") is not True
+            or data.get("outcome") != "released"
+            or data.get("hostMode") != combination.host_mode
+            or data.get("cleanupMode")
+            != combination.launch_policy.cleanup.get("mode")
+        ):
+            raise ConformanceContractError(
+                "workflow Chat cleanupReceipt does not prove release-last cleanup"
+            )
+        _require_string(
+            data.get("cleanupState"), field="cleanupReceipt.data.cleanupState"
+        )
+        return
+
     if record_type == "replaySnapshot":
         replay_refs = _require_string_list(
             data.get("artifactRefs"), field="replaySnapshot.data.artifactRefs"
@@ -752,6 +1064,7 @@ def validate_workflow_chat_source_records(
     source_commit: str,
     images: Mapping[str, Any],
     generated_at: datetime,
+    combination: WorkflowChatCombination,
     expected_correlation: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, bool], dict[str, str]]:
     """Validate and correlate one row's production-owned source records.
@@ -805,8 +1118,15 @@ def validate_workflow_chat_source_records(
             raise ConformanceContractError(
                 f"workflow Chat source records are not correlated: {row_name}"
             )
+        if source.get("combination") != combination.combination_id:
+            raise ConformanceContractError(
+                "workflow Chat source record is not bound to the combination "
+                f"under test: {row_name}/{record_type}"
+            )
         data = _require_mapping(source.get("data"), field=f"{record_type}.data")
-        _validate_record_data(record_type, data, correlation=correlation)
+        _validate_record_data(
+            record_type, data, correlation=correlation, combination=combination
+        )
         request_ids_by_type[record_type] = set(data["requestIds"])
 
     assert row_correlation is not None
@@ -995,36 +1315,117 @@ def _resolve_json(ref: str, evidence_root: Path) -> dict[str, Any]:
     return value
 
 
+_BINDING_IDENTITY_FIELDS = (
+    "omnigentServerBuildRef",
+    "omnigentHostBuildRef",
+    "harnessImplementationRef",
+    "vendorRuntimeRefs",
+    "agentSourceRef",
+    "materializerRefs",
+    "providerCompatibilityClass",
+    "hostClassRef",
+    "architecture",
+    "launchPolicyRef",
+    "modelConfigDigest",
+    "executionRealizerRef",
+    "requiredCapabilitiesDigest",
+)
+
+
+def _validate_binding_identity(
+    identity: Any, *, combination: WorkflowChatCombination
+) -> None:
+    """Bind a combination's evidence to the exact support-combination identity.
+
+    The report is only usable as release evidence when it names the harness
+    implementation, vendor runtime, realizer, launch policy, normalized model
+    configuration, and Provider Profile class that actually ran, and when the
+    recomputed support-combination key agrees with the recorded one.
+    """
+
+    payload = _require_mapping(
+        identity, field=f"combinations.{combination.combination_id}.bindingIdentity"
+    )
+    expected_keys = set(_BINDING_IDENTITY_FIELDS) | {
+        "supportCombinationKey",
+        "providerProfileClass",
+    }
+    if set(payload) != expected_keys:
+        raise ConformanceContractError(
+            "workflow Chat acceptance binding identity is incomplete: "
+            f"{combination.combination_id}"
+        )
+    _require_string(
+        payload.get("providerProfileClass"),
+        field="bindingIdentity.providerProfileClass",
+    )
+    if (
+        payload.get("hostClassRef") != combination.host_class_ref
+        or payload.get("launchPolicyRef") != combination.launch_policy_ref
+        or payload.get("executionRealizerRef")
+        != combination.execution_realizer_ref
+    ):
+        raise ConformanceContractError(
+            "workflow Chat acceptance binding identity does not match the "
+            f"combination under test: {combination.combination_id}"
+        )
+    try:
+        support_payload = SupportKeyPayload.model_validate(
+            {field: payload[field] for field in _BINDING_IDENTITY_FIELDS}
+        )
+    except ValueError as exc:
+        raise ConformanceContractError(
+            "workflow Chat acceptance binding identity is not a valid support "
+            f"combination: {combination.combination_id}"
+        ) from exc
+    if payload.get("supportCombinationKey") != compute_support_combination_key(
+        support_payload
+    ):
+        raise ConformanceContractError(
+            "workflow Chat acceptance support combination key does not recompute: "
+            f"{combination.combination_id}"
+        )
+
+
 def build_workflow_chat_acceptance_manifest(
     source: Mapping[str, Any],
     *,
     evidence_root: Path,
 ) -> dict[str, Any]:
-    """Bind a protected-run matrix to immutable evidence digests.
+    """Bind a protected-run combination matrix to immutable evidence digests.
 
     ``source`` is the run-local matrix produced by the protected controller. It
-    carries rows and refs, never raw credentials.  This function resolves every
-    referenced file before emitting a candidate manifest; validation remains a
-    separate mandatory step.
+    carries combinations, rows, and refs, never raw credentials.  This function
+    resolves every referenced file before emitting a candidate manifest;
+    validation remains a separate mandatory step.
     """
 
-    rows = source.get("rows")
-    reports = source.get("reports")
+    combinations = source.get("combinations")
     scans = source.get("evidenceScans")
-    if not isinstance(rows, Mapping) or not isinstance(reports, list) or not isinstance(
-        scans, Mapping
-    ):
+    if not isinstance(combinations, Mapping) or not isinstance(scans, Mapping):
         raise ConformanceContractError(
-            "workflow Chat acceptance source lacks rows, reports, or evidence scans"
+            "workflow Chat acceptance source lacks combinations or evidence scans"
         )
     refs: list[str] = []
     case_refs: list[str] = []
-    for row in rows.values():
-        if isinstance(row, Mapping) and isinstance(row.get("evidenceRefs"), list):
-            row_refs = [str(ref) for ref in row["evidenceRefs"]]
-            refs.extend(row_refs)
-            case_refs.extend(row_refs)
-    refs.extend(str(ref) for ref in reports)
+    for combination in combinations.values():
+        if not isinstance(combination, Mapping):
+            raise ConformanceContractError(
+                "workflow Chat acceptance combination must be an object"
+            )
+        rows = combination.get("rows")
+        if isinstance(rows, Mapping):
+            for row in rows.values():
+                if isinstance(row, Mapping) and isinstance(
+                    row.get("evidenceRefs"), list
+                ):
+                    row_refs = [str(ref) for ref in row["evidenceRefs"]]
+                    refs.extend(row_refs)
+                    case_refs.extend(row_refs)
+        if isinstance(combination.get("reports"), list):
+            refs.extend(str(ref) for ref in combination["reports"])
+        if combination.get("timelineRef"):
+            refs.append(str(combination["timelineRef"]))
     scan_refs: list[str] = []
     for channel in REQUIRED_EVIDENCE_CHANNELS:
         scan = scans.get(channel)
@@ -1070,6 +1471,8 @@ def build_workflow_chat_acceptance_manifest(
         )
     manifest = {
         "schemaVersion": WORKFLOW_CHAT_ACCEPTANCE_VERSION,
+        "scenarioVersion": WORKFLOW_CHAT_SCENARIO_VERSION,
+        "routeInventoryVersion": compatibility_map()["version"],
         "issue": WORKFLOW_CHAT_ACCEPTANCE_ISSUE,
         "parentIssue": WORKFLOW_CHAT_PARENT_ISSUE,
         "status": "passed",
@@ -1078,8 +1481,13 @@ def build_workflow_chat_acceptance_manifest(
         "sourceCommit": source.get("sourceCommit"),
         "compatibilityProfile": source.get("compatibilityProfile"),
         "images": dict(source.get("images") or {}),
-        "rows": {str(key): dict(value) for key, value in rows.items()},
-        "reports": list(reports),
+        "bundleDigests": dict(source.get("bundleDigests") or {}),
+        "supersededReportRef": source.get("supersededReportRef"),
+        "combinations": {
+            str(key): dict(value)
+            for key, value in combinations.items()
+            if isinstance(value, Mapping)
+        },
         "evidenceScans": {
             str(key): dict(value)
             for key, value in scans.items()
@@ -1102,6 +1510,9 @@ def validate_workflow_chat_acceptance_manifest(
 
     if (
         manifest.get("schemaVersion") != WORKFLOW_CHAT_ACCEPTANCE_VERSION
+        or manifest.get("scenarioVersion") != WORKFLOW_CHAT_SCENARIO_VERSION
+        or manifest.get("routeInventoryVersion")
+        != compatibility_map()["version"]
         or manifest.get("issue") != WORKFLOW_CHAT_ACCEPTANCE_ISSUE
         or manifest.get("parentIssue") != WORKFLOW_CHAT_PARENT_ISSUE
         or manifest.get("status") != "passed"
@@ -1109,7 +1520,21 @@ def validate_workflow_chat_acceptance_manifest(
         != WORKFLOW_CHAT_COMPATIBILITY_PROFILE
     ):
         raise ConformanceContractError(
-            "workflow Chat acceptance identity or status is invalid"
+            "workflow Chat acceptance identity, scenario, or route-inventory "
+            "version is invalid"
+        )
+    superseded = manifest.get("supersededReportRef")
+    if superseded is not None and (
+        not isinstance(superseded, str)
+        or not superseded.strip()
+        or urllib.parse.urlparse(superseded).scheme not in {"", "https"}
+        or (
+            not urllib.parse.urlparse(superseded).scheme
+            and Path(superseded).is_absolute()
+        )
+    ):
+        raise ConformanceContractError(
+            "workflow Chat acceptance superseded report ref is not a bounded ref"
         )
     observed_at = now or datetime.now(timezone.utc)
     generated_at = _timestamp(manifest.get("generatedAt"), field="generatedAt")
@@ -1133,6 +1558,15 @@ def validate_workflow_chat_acceptance_manifest(
     if not isinstance(images, Mapping):
         raise ConformanceContractError("workflow Chat acceptance images are missing")
     require_pinned_images({str(key): str(value) for key, value in images.items()})
+    bundle_digests = manifest.get("bundleDigests")
+    if not isinstance(bundle_digests, Mapping) or set(bundle_digests) != set(
+        REQUIRED_BUNDLE_DIGESTS
+    ):
+        raise ConformanceContractError(
+            "workflow Chat acceptance bundle digests are incomplete"
+        )
+    for name in REQUIRED_BUNDLE_DIGESTS:
+        _require_sha256_ref(bundle_digests[name], field=f"bundleDigests.{name}")
 
     evidence_manifest = manifest.get("evidenceManifest")
     if not isinstance(evidence_manifest, list) or not evidence_manifest:
@@ -1169,225 +1603,347 @@ def validate_workflow_chat_acceptance_manifest(
         if isinstance(value, dict):
             resolved[ref] = value
 
-    rows = manifest.get("rows")
-    if not isinstance(rows, Mapping) or set(rows) != set(REQUIRED_WORKFLOW_CHAT_ROWS):
+    inventory = workflow_chat_combinations()
+    combinations = manifest.get("combinations")
+    if not isinstance(combinations, Mapping) or set(combinations) != set(inventory):
         raise ConformanceContractError(
-            "workflow Chat acceptance matrix coverage is incomplete"
+            "workflow Chat acceptance combination coverage is incomplete"
         )
     used_refs: set[str] = set()
     trace_screenshot_digests: set[str] = set()
-    global_correlation: dict[str, str] | None = None
-    for row_name, required_assertions in REQUIRED_WORKFLOW_CHAT_ROWS.items():
-        row = rows[row_name]
-        if not isinstance(row, Mapping) or row.get("status") != "passed":
+    for combination_id, combination in inventory.items():
+        entry = combinations[combination_id]
+        if not isinstance(entry, Mapping):
             raise ConformanceContractError(
-                f"workflow Chat acceptance row did not pass: {row_name}"
+                f"workflow Chat acceptance combination is malformed: {combination_id}"
             )
-        assertions = row.get("assertions")
-        refs = row.get("evidenceRefs")
         if (
-            not isinstance(assertions, Mapping)
-            or any(assertions.get(name) is not True for name in required_assertions)
-            or not isinstance(refs, list)
-            or not refs
+            entry.get("schemaVersion") != WORKFLOW_CHAT_COMBINATION_VERSION
+            or entry.get("combinationId") != combination_id
+            or entry.get("harnessId") != combination.harness_id
+            or entry.get("hostClassRef") != combination.host_class_ref
+            or entry.get("launchPolicyRef") != combination.launch_policy_ref
+            or entry.get("executionRealizerRef")
+            != combination.execution_realizer_ref
+            or entry.get("hostMode") != combination.host_mode
+            or set(
+                _require_string_list(
+                    entry.get("advertisedCapabilities"),
+                    field=f"combinations.{combination_id}.advertisedCapabilities",
+                )
+            )
+            != set(combination.advertised_capabilities)
         ):
             raise ConformanceContractError(
-                f"workflow Chat acceptance row lacks controlling evidence: {row_name}"
+                "workflow Chat acceptance combination identity does not match the "
+                f"claimed inventory: {combination_id}"
             )
-        for ref_value in refs:
-            ref = str(ref_value)
-            evidence = resolved.get(ref)
-            evidence_assertions = (
-                evidence.get("assertions")
-                if isinstance(evidence, Mapping)
-                else None
-            )
-            source_records = (
-                evidence.get("sourceRecords")
-                if isinstance(evidence, Mapping)
-                else None
-            )
+        if not combination.native_chat_claimed:
             if (
-                not isinstance(evidence, Mapping)
-                or evidence.get("schemaVersion")
-                != WORKFLOW_CHAT_CASE_EVIDENCE_VERSION
-                or evidence.get("issue") != WORKFLOW_CHAT_ACCEPTANCE_ISSUE
-                or evidence.get("parentIssue") != WORKFLOW_CHAT_PARENT_ISSUE
-                or evidence.get("row") != row_name
-                or evidence.get("status") != "passed"
-                or evidence.get("sourceCommit") != source_commit
-                or evidence.get("images") != images
-                or evidence.get("stockHostUnmodified") is not True
-                or evidence.get("browserOriginated") is not True
-                or evidence.get("moonmindScopedOnly") is not True
-                or not isinstance(evidence_assertions, Mapping)
-                or any(
-                    evidence_assertions.get(name) is not True
-                    for name in required_assertions
-                )
-                or not isinstance(source_records, list)
+                entry.get("status") != "unsupported"
+                or entry.get("unsupportedReason") != combination.unsupported_reason
+                or entry.get("rows")
+                or entry.get("reports")
+                or entry.get("bindingIdentity")
             ):
                 raise ConformanceContractError(
-                    f"workflow Chat acceptance case evidence is invalid: {row_name}"
+                    "workflow Chat acceptance must report an unclaimed combination "
+                    f"as unsupported with its stable reason: {combination_id}"
                 )
-            used_refs.add(ref)
-            sources_by_type: dict[str, Mapping[str, Any]] = {}
-            for record in source_records:
-                if not isinstance(record, Mapping):
-                    raise ConformanceContractError(
-                        f"workflow Chat source record is malformed: {row_name}"
-                    )
-                record_type = str(record.get("type") or "")
-                record_ref = str(record.get("ref") or "")
-                record_digest = str(record.get("sha256") or "")
-                if (
-                    not record_type
-                    or not record_ref
-                    or _SHA256.fullmatch(record_digest) is None
-                    or record_type in sources_by_type
-                ):
-                    raise ConformanceContractError(
-                        f"workflow Chat source record is malformed: {row_name}"
-                    )
-                source = resolved.get(record_ref)
-                manifest_digest = manifest_digests.get(record_ref, "")
-                if (
-                    not isinstance(source, Mapping)
-                    or manifest_digest != record_digest
-                ):
-                    raise ConformanceContractError(
-                        "workflow Chat source record is invalid: "
-                        f"{row_name}/{record_type}"
-                    )
-                sources_by_type[record_type] = source
-                used_refs.add(record_ref)
-            derived_assertions, correlation = validate_workflow_chat_source_records(
-                sources_by_type,
-                row_name=row_name,
-                source_commit=source_commit,
-                images=images,
-                generated_at=generated_at,
-                expected_correlation=global_correlation,
+            continue
+        if (
+            entry.get("status") != "passed"
+            or entry.get("unsupportedReason") is not None
+        ):
+            raise ConformanceContractError(
+                f"workflow Chat acceptance combination did not pass: {combination_id}"
             )
-            browser_data = sources_by_type["browserTrace"].get("data")
-            if isinstance(browser_data, Mapping):
-                trace_screenshot_digests.add(
-                    _require_sha256_ref(
-                        browser_data.get("screenshotSha256"),
-                        field="browserTrace.data.screenshotSha256",
-                    ).removeprefix("sha256:")
+        _validate_binding_identity(
+            entry.get("bindingIdentity"), combination=combination
+        )
+        cleanup_outcome = entry.get("cleanupOutcome")
+        if not isinstance(cleanup_outcome, Mapping) or any(
+            cleanup_outcome.get(field) is not True
+            for field in ("liveResourcesRemoved", "providerProfileReleasedLast")
+        ):
+            raise ConformanceContractError(
+                "workflow Chat acceptance combination lacks a complete cleanup "
+                f"outcome: {combination_id}"
+            )
+        _require_string(
+            cleanup_outcome.get("cleanupState"),
+            field=f"combinations.{combination_id}.cleanupOutcome.cleanupState",
+        )
+        rows = entry.get("rows")
+        if not isinstance(rows, Mapping) or set(rows) != set(
+            REQUIRED_WORKFLOW_CHAT_ROWS
+        ):
+            raise ConformanceContractError(
+                "workflow Chat acceptance journey coverage is incomplete: "
+                f"{combination_id}"
+            )
+        global_correlation: dict[str, str] | None = None
+        observed_cleanup_state: str | None = None
+        for row_name, required_assertions in REQUIRED_WORKFLOW_CHAT_ROWS.items():
+            row = rows[row_name]
+            if not isinstance(row, Mapping) or row.get("status") != "passed":
+                raise ConformanceContractError(
+                    f"workflow Chat acceptance row did not pass: {row_name}"
                 )
-            captured_source = sources_by_type.get("capturedEvidence")
-            if captured_source is not None:
-                captured_data = _require_mapping(
-                    captured_source.get("data"), field="capturedEvidence.data"
-                )
-                for artifact in _require_evidence_items(
-                    captured_data.get("artifacts"),
-                    field="capturedEvidence.data.artifacts",
-                ):
-                    if manifest_digests.get(artifact["ref"]) != artifact["sha256"]:
-                        raise ConformanceContractError(
-                            "workflow Chat capturedEvidence artifact is unresolved"
-                        )
-                    used_refs.add(artifact["ref"])
-            if any(
-                evidence_assertions.get(name) is not value
-                or assertions.get(name) is not value
-                for name, value in derived_assertions.items()
+            assertions = row.get("assertions")
+            refs = row.get("evidenceRefs")
+            if (
+                not isinstance(assertions, Mapping)
+                or any(assertions.get(name) is not True for name in required_assertions)
+                or not isinstance(refs, list)
+                or not refs
             ):
                 raise ConformanceContractError(
-                    "workflow Chat row assertions do not match typed source evidence: "
-                    f"{row_name}"
+                    f"workflow Chat acceptance row lacks controlling evidence: {row_name}"
                 )
-            if global_correlation is None:
-                global_correlation = correlation
-
-    reports = manifest.get("reports")
-    if not isinstance(reports, list) or not reports:
-        raise ConformanceContractError("workflow Chat acceptance report is missing")
-    for report_ref in reports:
-        ref = str(report_ref)
-        report = resolved.get(ref)
-        summary = report.get("summary") if isinstance(report, Mapping) else None
-        cases = report.get("cases") if isinstance(report, Mapping) else None
-        try:
-            failed = (
-                int(summary.get("failed", 1))
-                if isinstance(summary, Mapping)
-                else 1
-            )
-            passed = (
-                int(summary.get("passed", 0))
-                if isinstance(summary, Mapping)
-                else 0
-            )
-            skipped = (
-                int(summary.get("skipped", 0))
-                if isinstance(summary, Mapping)
-                else 0
-            )
-        except (TypeError, ValueError) as exc:
-            raise ConformanceContractError(
-                "workflow Chat acceptance report summary is malformed"
-            ) from exc
-        try:
-            report_generated_at = _timestamp(
-                report.get("generatedAt") if isinstance(report, Mapping) else None,
-                field="report.generatedAt",
-            )
-        except ConformanceContractError as exc:
-            raise ConformanceContractError(
-                "workflow Chat acceptance references a stale or malformed report"
-            ) from exc
-        case_statuses: list[str] = []
-        case_ids: set[str] = set()
-        if isinstance(cases, list):
-            for case in cases:
-                case_id = case.get("caseId") if isinstance(case, Mapping) else None
-                case_status = (
-                    case.get("status") if isinstance(case, Mapping) else None
+            for ref_value in refs:
+                ref = str(ref_value)
+                evidence = resolved.get(ref)
+                evidence_assertions = (
+                    evidence.get("assertions")
+                    if isinstance(evidence, Mapping)
+                    else None
                 )
-                case_refs = (
-                    case.get("evidenceRefs")
-                    if isinstance(case, Mapping)
+                source_records = (
+                    evidence.get("sourceRecords")
+                    if isinstance(evidence, Mapping)
                     else None
                 )
                 if (
-                    not isinstance(case_id, str)
-                    or not case_id
-                    or case_id in case_ids
-                    or case_status not in {"passed", "failed", "skipped"}
-                    or not isinstance(case_refs, list)
-                    or not case_refs
-                    or any(str(item) not in resolved_raw for item in case_refs)
+                    not isinstance(evidence, Mapping)
+                    or evidence.get("schemaVersion")
+                    != WORKFLOW_CHAT_CASE_EVIDENCE_VERSION
+                    or evidence.get("issue") != WORKFLOW_CHAT_ACCEPTANCE_ISSUE
+                    or evidence.get("parentIssue") != WORKFLOW_CHAT_PARENT_ISSUE
+                    or evidence.get("row") != row_name
+                    or evidence.get("combination") != combination_id
+                    or evidence.get("status") != "passed"
+                    or evidence.get("sourceCommit") != source_commit
+                    or evidence.get("images") != images
+                    or evidence.get("stockHostUnmodified") is not True
+                    or evidence.get("browserOriginated") is not True
+                    or evidence.get("moonmindScopedOnly") is not True
+                    or not isinstance(evidence_assertions, Mapping)
+                    or any(
+                        evidence_assertions.get(name) is not True
+                        for name in required_assertions
+                    )
+                    or not isinstance(source_records, list)
                 ):
                     raise ConformanceContractError(
-                        "workflow Chat acceptance report cases are malformed"
+                        f"workflow Chat acceptance case evidence is invalid: {row_name}"
                     )
-                case_ids.add(case_id)
-                case_statuses.append(str(case_status))
-        computed_summary = {
-            status_name: sum(value == status_name for value in case_statuses)
-            for status_name in ("passed", "failed", "skipped")
-        }
+                used_refs.add(ref)
+                sources_by_type: dict[str, Mapping[str, Any]] = {}
+                for record in source_records:
+                    if not isinstance(record, Mapping):
+                        raise ConformanceContractError(
+                            f"workflow Chat source record is malformed: {row_name}"
+                        )
+                    record_type = str(record.get("type") or "")
+                    record_ref = str(record.get("ref") or "")
+                    record_digest = str(record.get("sha256") or "")
+                    if (
+                        not record_type
+                        or not record_ref
+                        or _SHA256.fullmatch(record_digest) is None
+                        or record_type in sources_by_type
+                    ):
+                        raise ConformanceContractError(
+                            f"workflow Chat source record is malformed: {row_name}"
+                        )
+                    source = resolved.get(record_ref)
+                    manifest_digest = manifest_digests.get(record_ref, "")
+                    if (
+                        not isinstance(source, Mapping)
+                        or manifest_digest != record_digest
+                    ):
+                        raise ConformanceContractError(
+                            "workflow Chat source record is invalid: "
+                            f"{row_name}/{record_type}"
+                        )
+                    sources_by_type[record_type] = source
+                    used_refs.add(record_ref)
+                derived_assertions, correlation = validate_workflow_chat_source_records(
+                    sources_by_type,
+                    row_name=row_name,
+                    source_commit=source_commit,
+                    images=images,
+                    generated_at=generated_at,
+                    combination=combination,
+                    expected_correlation=global_correlation,
+                )
+                browser_data = sources_by_type["browserTrace"].get("data")
+                if isinstance(browser_data, Mapping):
+                    trace_screenshot_digests.add(
+                        _require_sha256_ref(
+                            browser_data.get("screenshotSha256"),
+                            field="browserTrace.data.screenshotSha256",
+                        ).removeprefix("sha256:")
+                    )
+                captured_source = sources_by_type.get("capturedEvidence")
+                if captured_source is not None:
+                    captured_data = _require_mapping(
+                        captured_source.get("data"), field="capturedEvidence.data"
+                    )
+                    for artifact in _require_evidence_items(
+                        captured_data.get("artifacts"),
+                        field="capturedEvidence.data.artifacts",
+                    ):
+                        if manifest_digests.get(artifact["ref"]) != artifact["sha256"]:
+                            raise ConformanceContractError(
+                                "workflow Chat capturedEvidence artifact is unresolved"
+                            )
+                        used_refs.add(artifact["ref"])
+                if any(
+                    evidence_assertions.get(name) is not value
+                    or assertions.get(name) is not value
+                    for name, value in derived_assertions.items()
+                ):
+                    raise ConformanceContractError(
+                        "workflow Chat row assertions do not match typed source evidence: "
+                        f"{row_name}"
+                    )
+                cleanup_source = sources_by_type.get("cleanupReceipt")
+                if cleanup_source is not None:
+                    cleanup_data = _require_mapping(
+                        cleanup_source.get("data"), field="cleanupReceipt.data"
+                    )
+                    observed_cleanup_state = str(cleanup_data["cleanupState"])
+                if global_correlation is None:
+                    global_correlation = correlation
+
+        if observed_cleanup_state != cleanup_outcome["cleanupState"]:
+            raise ConformanceContractError(
+                "workflow Chat acceptance cleanup outcome does not match the "
+                f"typed cleanup receipt: {combination_id}"
+            )
+        if global_correlation is None:
+            raise ConformanceContractError(
+                "workflow Chat acceptance combination resolved no session "
+                f"correlation: {combination_id}"
+            )
+        timeline_ref = _require_string(
+            entry.get("timelineRef"),
+            field=f"combinations.{combination_id}.timelineRef",
+        )
+        timeline = resolved.get(timeline_ref)
+        terminal = timeline.get("terminal") if isinstance(timeline, Mapping) else None
+        timeline_cleanup = (
+            timeline.get("cleanup") if isinstance(timeline, Mapping) else None
+        )
         if (
-            not isinstance(report, Mapping)
-            or report.get("schemaVersion") != REPORT_VERSION
-            or report.get("images") != images
-            or not isinstance(summary, Mapping)
-            or not case_statuses
-            or computed_summary
-            != {"passed": passed, "failed": failed, "skipped": skipped}
-            or report_generated_at > generated_at
-            or generated_at - report_generated_at > timedelta(days=1)
-            or failed != 0
-            or passed < 1
+            not isinstance(timeline, Mapping)
+            or timeline.get("sessionId") != global_correlation["bridgeSessionId"]
+            or not isinstance(terminal, Mapping)
+            or terminal.get("state") not in _TERMINAL_STATES
+            or not isinstance(timeline_cleanup, Mapping)
+            or timeline_cleanup.get("state") != cleanup_outcome["cleanupState"]
         ):
             raise ConformanceContractError(
-                "workflow Chat acceptance references a non-passing report"
+                "workflow Chat acceptance operator timeline does not bind the "
+                f"terminal, cleaned-up session: {combination_id}"
             )
-        used_refs.add(ref)
+        used_refs.add(timeline_ref)
+        reports = entry.get("reports")
+        if not isinstance(reports, list) or not reports:
+            raise ConformanceContractError(
+                "workflow Chat acceptance report is missing: "
+                f"{combination_id}"
+            )
+        for report_ref in reports:
+            ref = str(report_ref)
+            report = resolved.get(ref)
+            summary = report.get("summary") if isinstance(report, Mapping) else None
+            cases = report.get("cases") if isinstance(report, Mapping) else None
+            try:
+                failed = (
+                    int(summary.get("failed", 1))
+                    if isinstance(summary, Mapping)
+                    else 1
+                )
+                passed = (
+                    int(summary.get("passed", 0))
+                    if isinstance(summary, Mapping)
+                    else 0
+                )
+                skipped = (
+                    int(summary.get("skipped", 0))
+                    if isinstance(summary, Mapping)
+                    else 0
+                )
+            except (TypeError, ValueError) as exc:
+                raise ConformanceContractError(
+                    "workflow Chat acceptance report summary is malformed"
+                ) from exc
+            try:
+                report_generated_at = _timestamp(
+                    report.get("generatedAt") if isinstance(report, Mapping) else None,
+                    field="report.generatedAt",
+                )
+            except ConformanceContractError as exc:
+                raise ConformanceContractError(
+                    "workflow Chat acceptance references a stale or malformed report"
+                ) from exc
+            case_statuses: list[str] = []
+            case_ids: set[str] = set()
+            if isinstance(cases, list):
+                for case in cases:
+                    case_id = case.get("caseId") if isinstance(case, Mapping) else None
+                    case_status = (
+                        case.get("status") if isinstance(case, Mapping) else None
+                    )
+                    case_refs = (
+                        case.get("evidenceRefs")
+                        if isinstance(case, Mapping)
+                        else None
+                    )
+                    duration_ms = (
+                        case.get("durationMs") if isinstance(case, Mapping) else None
+                    )
+                    if (
+                        not isinstance(case_id, str)
+                        or not case_id
+                        or case_id in case_ids
+                        or case_status not in {"passed", "failed", "skipped"}
+                        or not isinstance(duration_ms, int)
+                        or isinstance(duration_ms, bool)
+                        or duration_ms <= 0
+                        or not isinstance(case_refs, list)
+                        or not case_refs
+                        or any(str(item) not in resolved_raw for item in case_refs)
+                    ):
+                        raise ConformanceContractError(
+                            "workflow Chat acceptance report cases are malformed"
+                        )
+                    case_ids.add(case_id)
+                    case_statuses.append(str(case_status))
+            computed_summary = {
+                status_name: sum(value == status_name for value in case_statuses)
+                for status_name in ("passed", "failed", "skipped")
+            }
+            if (
+                not isinstance(report, Mapping)
+                or report.get("schemaVersion") != REPORT_VERSION
+                or report.get("images") != images
+                or not isinstance(summary, Mapping)
+                or not case_statuses
+                or computed_summary
+                != {"passed": passed, "failed": failed, "skipped": skipped}
+                or report_generated_at > generated_at
+                or generated_at - report_generated_at > timedelta(days=1)
+                or failed != 0
+                or passed < 1
+            ):
+                raise ConformanceContractError(
+                    "workflow Chat acceptance references a non-passing report"
+                )
+            used_refs.add(ref)
 
     scans = manifest.get("evidenceScans")
     if not isinstance(scans, Mapping) or set(scans) != set(
@@ -1448,15 +2004,22 @@ def validate_workflow_chat_acceptance_manifest(
 
 __all__ = [
     "MAX_ACCEPTANCE_AGE",
+    "REQUIRED_BUNDLE_DIGESTS",
     "REQUIRED_WORKFLOW_CHAT_ROWS",
     "REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS",
     "WORKFLOW_CHAT_ACCEPTANCE_ISSUE",
     "WORKFLOW_CHAT_ACCEPTANCE_VERSION",
     "WORKFLOW_CHAT_CASE_EVIDENCE_VERSION",
+    "WORKFLOW_CHAT_COMBINATIONS",
+    "WORKFLOW_CHAT_COMBINATION_VERSION",
     "WORKFLOW_CHAT_COMPATIBILITY_PROFILE",
     "WORKFLOW_CHAT_PARENT_ISSUE",
+    "WORKFLOW_CHAT_SCENARIO_VERSION",
     "WORKFLOW_CHAT_SOURCE_RECORD_VERSION",
+    "WorkflowChatCombination",
+    "advertised_native_chat_capabilities",
     "build_workflow_chat_acceptance_manifest",
     "validate_workflow_chat_source_records",
     "validate_workflow_chat_acceptance_manifest",
+    "workflow_chat_combinations",
 ]

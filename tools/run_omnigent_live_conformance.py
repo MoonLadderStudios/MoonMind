@@ -17,6 +17,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 import urllib.parse
 import urllib.request
@@ -55,15 +56,19 @@ from moonmind.omnigent.remediation_matrix import (  # noqa: E402
     validate_remediation_evidence_artifact,
 )
 from moonmind.omnigent.workflow_chat_acceptance import (  # noqa: E402
+    REQUIRED_BUNDLE_DIGESTS,
     REQUIRED_WORKFLOW_CHAT_ROWS,
     REQUIRED_WORKFLOW_CHAT_SOURCE_RECORDS,
     WORKFLOW_CHAT_ACCEPTANCE_ISSUE,
     WORKFLOW_CHAT_CASE_EVIDENCE_VERSION,
+    WORKFLOW_CHAT_COMBINATION_VERSION,
     WORKFLOW_CHAT_COMPATIBILITY_PROFILE,
     WORKFLOW_CHAT_PARENT_ISSUE,
+    WorkflowChatCombination,
     build_workflow_chat_acceptance_manifest,
     validate_workflow_chat_acceptance_manifest,
     validate_workflow_chat_source_records,
+    workflow_chat_combinations,
 )
 
 PROFILE = REPO_ROOT / "tests/fixtures/omnigent/conformance-v4.json"
@@ -735,8 +740,9 @@ class LiveRunner:
     def _write_workflow_chat_report(
         self,
         *,
+        name: str,
         images: dict[str, str],
-        case_refs: list[str],
+        cases: list[dict[str, object]],
         scans: dict[str, dict[str, str]],
     ) -> Path:
         report = {
@@ -748,25 +754,15 @@ class LiveRunner:
             "protocolVersion": "omnigent/v1",
             "capabilities": ["workflow_chat"],
             "evidenceScans": scans,
-            "cases": [
-                {
-                    "caseId": f"workflow-chat-{row_name}",
-                    "status": "passed",
-                    "evidenceRefs": [case_ref],
-                    "diagnostics": [],
-                }
-                for row_name, case_ref in zip(
-                    WORKFLOW_CHAT_ACTIONS, case_refs, strict=True
-                )
-            ],
+            "cases": cases,
             "summary": {
-                "passed": len(case_refs),
-                "failed": 0,
-                "skipped": 0,
+                "passed": sum(case["status"] == "passed" for case in cases),
+                "failed": sum(case["status"] == "failed" for case in cases),
+                "skipped": sum(case["status"] == "skipped" for case in cases),
             },
         }
         assert_secret_free(report)
-        path = self.output_dir / "workflow-chat-report.json"
+        path = self.output_dir / name
         path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
         return path
 
@@ -796,35 +792,41 @@ class LiveRunner:
         path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
         return path
 
-    def workflow_chat(self, images: dict[str, str], source_commit: str) -> None:
-        """Own the protected #3642 browser-to-stock-host acceptance matrix."""
+    def _workflow_chat_combination(
+        self,
+        combination: WorkflowChatCombination,
+        *,
+        index: int,
+        images: dict[str, str],
+        source_commit: str,
+    ) -> dict[str, object]:
+        """Run one claimed combination's full protected journey."""
 
-        if not source_commit.strip():
-            raise ConformanceContractError(
-                "workflow Chat mode requires the tested source commit"
-            )
-        self.env["MOONMIND_OMNIGENT_SOURCE_COMMIT"] = source_commit
-        self.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE_DIR"] = str(
-            self.output_dir
-        )
-        self.run(
-            "workflow-chat-up",
-            self.compose("up", "-d", "--wait", "omnigent", "omnigent-host-codex"),
-        )
         rows: dict[str, dict[str, object]] = {}
+        cases: list[dict[str, object]] = []
         case_refs: list[str] = []
         correlation: dict[str, str] | None = None
-        state: dict[str, object] = {}
-        for index, row_name in enumerate(WORKFLOW_CHAT_ACTIONS):
+        state: dict[str, object] = {"combination": combination.combination_id}
+        binding_identity: object | None = None
+        bundle_digests: object | None = None
+        timeline_ref: str | None = None
+        cleanup_outcome: dict[str, object] | None = None
+        for row_index, row_name in enumerate(WORKFLOW_CHAT_ACTIONS):
+            started = time.monotonic()
             result = self.action("workflow_chat", row_name, **state)
-            if result.get("row") != row_name:
+            duration_ms = max(1, int((time.monotonic() - started) * 1000))
+            if result.get("row") != row_name or result.get("combination") != (
+                combination.combination_id
+            ):
                 raise ConformanceContractError(
-                    f"workflow Chat action returned the wrong row: {row_name}"
+                    "workflow Chat action returned the wrong row or combination: "
+                    f"{combination.combination_id}/{row_name}"
                 )
             records = result.get("_sourceRecords")
             if not isinstance(records, list):
                 raise ConformanceContractError(
-                    f"workflow Chat action lacks resolved source records: {row_name}"
+                    "workflow Chat action lacks resolved source records: "
+                    f"{combination.combination_id}/{row_name}"
                 )
             sources = {
                 str(record["type"]): record["_resolved"]
@@ -838,24 +840,42 @@ class LiveRunner:
                 source_commit=source_commit,
                 images=images,
                 generated_at=datetime.now(timezone.utc),
+                combination=combination,
                 expected_correlation=correlation,
             )
             if correlation is None:
                 correlation = observed_correlation
             state = {
-                field: observed_correlation[field]
-                for field in (
-                    "workflowId",
-                    "chatBindingId",
-                    "bridgeSessionId",
-                    "providerSessionId",
-                )
+                "combination": combination.combination_id,
+                **{
+                    field: observed_correlation[field]
+                    for field in (
+                        "workflowId",
+                        "chatBindingId",
+                        "bridgeSessionId",
+                        "providerSessionId",
+                    )
+                },
             }
-            case_ref = f"workflow-chat-case-{index}.json"
+            if row_name == "native-live-conversation":
+                binding_identity = result.get("bindingIdentity")
+                bundle_digests = result.get("bundleDigests")
+            if row_name == "terminal-evidence-and-continuation":
+                timeline_ref = self._portable_ref(str(result.get("timelineRef") or ""))
+                cleanup_data = sources["cleanupReceipt"]["data"]
+                cleanup_outcome = {
+                    "liveResourcesRemoved": cleanup_data["liveResourcesRemoved"],
+                    "providerProfileReleasedLast": cleanup_data[
+                        "providerProfileReleasedLast"
+                    ],
+                    "cleanupState": cleanup_data["cleanupState"],
+                }
+            case_ref = f"workflow-chat-case-{index}-{row_index}.json"
             case_payload = {
                 "schemaVersion": WORKFLOW_CHAT_CASE_EVIDENCE_VERSION,
                 "issue": WORKFLOW_CHAT_ACCEPTANCE_ISSUE,
                 "parentIssue": WORKFLOW_CHAT_PARENT_ISSUE,
+                "combination": combination.combination_id,
                 "row": row_name,
                 "status": "passed",
                 "sourceCommit": source_commit,
@@ -885,10 +905,143 @@ class LiveRunner:
                 "evidenceRefs": [case_ref],
             }
             case_refs.append(case_ref)
+            cases.append(
+                {
+                    "caseId": f"workflow-chat-{combination.combination_id}-{row_name}",
+                    "status": "passed",
+                    "durationMs": duration_ms,
+                    "evidenceRefs": [case_ref],
+                    "diagnostics": [],
+                }
+            )
+        if (
+            binding_identity is None
+            or timeline_ref is None
+            or cleanup_outcome is None
+            or not isinstance(bundle_digests, dict)
+            or set(bundle_digests) != set(REQUIRED_BUNDLE_DIGESTS)
+        ):
+            raise ConformanceContractError(
+                "workflow Chat combination did not report binding identity, "
+                "bundle digests, operator timeline, and cleanup outcome: "
+                f"{combination.combination_id}"
+            )
+        return {
+            "rows": rows,
+            "cases": cases,
+            "caseRefs": case_refs,
+            "bindingIdentity": binding_identity,
+            "bundleDigests": {
+                str(key): str(value) for key, value in bundle_digests.items()
+            },
+            "timelineRef": timeline_ref,
+            "cleanupOutcome": cleanup_outcome,
+        }
 
+    def workflow_chat(self, images: dict[str, str], source_commit: str) -> None:
+        """Own the protected #3642 native Workflow Chat combination matrix."""
+
+        if not source_commit.strip():
+            raise ConformanceContractError(
+                "workflow Chat mode requires the tested source commit"
+            )
+        self.env["MOONMIND_OMNIGENT_SOURCE_COMMIT"] = source_commit
+        self.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_EVIDENCE_DIR"] = str(
+            self.output_dir
+        )
+        inventory = workflow_chat_combinations()
+        combinations: dict[str, dict[str, object]] = {}
+        aggregate_cases: list[dict[str, object]] = []
+        bundle_digests: dict[str, str] | None = None
+        for index, (combination_id, combination) in enumerate(inventory.items()):
+            declared: dict[str, object] = {
+                "schemaVersion": WORKFLOW_CHAT_COMBINATION_VERSION,
+                "combinationId": combination_id,
+                "harnessId": combination.harness_id,
+                "hostClassRef": combination.host_class_ref,
+                "launchPolicyRef": combination.launch_policy_ref,
+                "executionRealizerRef": combination.execution_realizer_ref,
+                "hostMode": combination.host_mode,
+                "advertisedCapabilities": sorted(
+                    combination.advertised_capabilities
+                ),
+            }
+            if not combination.native_chat_claimed:
+                # An unclaimed combination is reported with its stable reason
+                # instead of being silently dropped from the matrix.
+                combinations[combination_id] = {
+                    **declared,
+                    "status": "unsupported",
+                    "unsupportedReason": combination.unsupported_reason,
+                }
+                continue
+            self.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_COMBINATION"] = combination_id
+            self.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_HARNESS_ID"] = (
+                combination.harness_id
+            )
+            self.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_HOST_CLASS_REF"] = (
+                combination.host_class_ref
+            )
+            self.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_LAUNCH_POLICY_REF"] = (
+                combination.launch_policy_ref
+            )
+            self.env["MOONMIND_OMNIGENT_WORKFLOW_CHAT_REALIZER_REF"] = (
+                combination.execution_realizer_ref
+            )
+            self.run(
+                f"workflow-chat-up-{combination_id}",
+                self.compose_profile(
+                    combination.compose_profile,
+                    "up",
+                    "-d",
+                    "--wait",
+                    *combination.compose_services,
+                ),
+            )
+            observed = self._workflow_chat_combination(
+                combination,
+                index=index,
+                images=images,
+                source_commit=source_commit,
+            )
+            aggregate_cases.extend(observed["cases"])
+            if bundle_digests is None:
+                bundle_digests = observed["bundleDigests"]
+            elif bundle_digests != observed["bundleDigests"]:
+                raise ConformanceContractError(
+                    "workflow Chat combinations loaded different deployed bundles"
+                )
+            combinations[combination_id] = {
+                **declared,
+                "status": "passed",
+                "unsupportedReason": None,
+                "bindingIdentity": observed["bindingIdentity"],
+                "rows": observed["rows"],
+                "reports": [f"workflow-chat-report-{index}.json"],
+                "timelineRef": observed["timelineRef"],
+                "cleanupOutcome": observed["cleanupOutcome"],
+                "_cases": observed["cases"],
+            }
+        if bundle_digests is None:
+            raise ConformanceContractError(
+                "workflow Chat matrix claims no supported combination"
+            )
         scans = self.scan()
-        report_path = self._write_workflow_chat_report(
-            images=images, case_refs=case_refs, scans=scans
+        for entry in combinations.values():
+            cases = entry.pop("_cases", None)
+            if cases is None:
+                continue
+            self._write_workflow_chat_report(
+                name=str(entry["reports"][0]),
+                images=images,
+                cases=cases,
+                scans=scans,
+            )
+        self._write_workflow_chat_report(
+            name="workflow-chat-report.json",
+            images=images,
+            cases=aggregate_cases,
+            scans=scans,
         )
         generated_at = datetime.now(timezone.utc)
         matrix = {
@@ -897,8 +1050,14 @@ class LiveRunner:
             "sourceCommit": source_commit,
             "compatibilityProfile": WORKFLOW_CHAT_COMPATIBILITY_PROFILE,
             "images": images,
-            "rows": rows,
-            "reports": [report_path.name],
+            "bundleDigests": bundle_digests,
+            "supersededReportRef": (
+                self.env.get(
+                    "MOONMIND_OMNIGENT_WORKFLOW_CHAT_SUPERSEDED_REPORT", ""
+                ).strip()
+                or None
+            ),
+            "combinations": combinations,
             "evidenceScans": scans,
         }
         matrix_path = self.output_dir / "workflow-chat-matrix.json"
@@ -1547,9 +1706,13 @@ class LiveRunner:
 
     @staticmethod
     def compose(*args: str) -> list[str]:
+        return LiveRunner.compose_profile("omnigent-host-codex", *args)
+
+    @staticmethod
+    def compose_profile(profile: str, *args: str) -> list[str]:
         return [
             "docker", "compose", "--project-name", PROJECT,
-            "--profile", "omnigent-host-codex", *args,
+            "--profile", profile, *args,
         ]
 
     def scenario(self, mode: str, *, phase: str | None = None) -> None:
