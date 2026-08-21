@@ -1,4 +1,5 @@
 """Resolve immutable Omnigent agent-profile selections at authoring boundaries."""
+
 from __future__ import annotations
 
 import copy
@@ -20,7 +21,9 @@ from api_service.services.omnigent_agent_profile_service import (
     projection_identity,
     projection_readiness,
 )
-from api_service.services.provider_profile_readiness import provider_profile_launch_ready
+from api_service.services.provider_profile_readiness import (
+    provider_profile_launch_ready,
+)
 
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
 
@@ -101,8 +104,7 @@ def compile_agent_profile_snapshot_parameters(
     ]
     if missing:
         raise ValueError(
-            "agent profile snapshot is missing required fields: "
-            + ", ".join(missing)
+            "agent profile snapshot is missing required fields: " + ", ".join(missing)
         )
 
     compiled = copy.deepcopy(dict(parameters))
@@ -116,8 +118,11 @@ def compile_agent_profile_snapshot_parameters(
 
     effective_model = document.get("model")
     if isinstance(effective_model, Mapping):
-        if effective_model.get("model") is not None:
-            compiled["model"] = effective_model["model"]
+        selected_model = effective_model.get("qualifiedId") or effective_model.get(
+            "model"
+        )
+        if selected_model is not None:
+            compiled["model"] = selected_model
         if effective_model.get("effort") is not None:
             compiled["effort"] = effective_model["effort"]
 
@@ -134,7 +139,14 @@ def compile_agent_profile_snapshot_parameters(
     # block. A newly resolved snapshot must remove those stale copies before it
     # writes the canonical target/policy fields, otherwise immutable profile
     # version advancement creates two contradictory authorities in one request.
-    omnigent.pop("agentProfileRef", None)
+    if document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2":
+        omnigent["agentProfileRef"] = {
+            "profileId": snapshot["profileId"],
+            "version": snapshot["version"],
+            "digest": snapshot["digest"],
+        }
+    else:
+        omnigent.pop("agentProfileRef", None)
     omnigent.pop("executionProfileRef", None)
     raw_agent = omnigent.get("agent")
     if isinstance(raw_agent, Mapping):
@@ -170,7 +182,9 @@ async def resolve_agent_profile_snapshot(
     """
     profile_id = str(selection.get("profileId") or "").strip()
     if not profile_id:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "agentProfile.profileId is required")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "agentProfile.profileId is required"
+        )
     profile = await session.get(OmnigentAgentProfile, profile_id)
     if profile is None or (
         profile.visibility == "private"
@@ -182,7 +196,11 @@ async def resolve_agent_profile_snapshot(
 
     requested_version = selection.get("version")
     try:
-        version_number = int(requested_version) if requested_version is not None else profile.active_version
+        version_number = (
+            int(requested_version)
+            if requested_version is not None
+            else profile.active_version
+        )
     except (TypeError, ValueError) as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -199,22 +217,49 @@ async def resolve_agent_profile_snapshot(
             OmnigentAgentProfileVersion.version == version_number,
         )
     )
-    if version is None or not version.validation_result or version.validation_result.get("ready") is not True:
-        raise HTTPException(status.HTTP_409_CONFLICT, "selected profile version is not launch ready")
+    if (
+        version is None
+        or not version.validation_result
+        or version.validation_result.get("ready") is not True
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "selected profile version is not launch ready"
+        )
+    requested_digest = str(selection.get("digest") or "").strip()
+    if requested_digest and requested_digest != version.digest:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "agentProfile.digest does not match the selected immutable version",
+        )
 
     document = copy.deepcopy(version.document)
+    is_v2 = document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2"
     source = document.get("source") or {}
     upstream_snapshot = version.upstream_snapshot
     if source.get("upstreamId"):
         projection = await session.get(
             OmnigentUpstreamAgentProjection,
-            projection_identity(document["endpointRef"], source["upstreamId"], source.get("upstreamVersion")),
+            projection_identity(
+                document["endpointRef"],
+                source["upstreamId"],
+                source.get("upstreamVersion"),
+            ),
         )
         readiness = projection_readiness(
             projection,
-            bridge_mode=document["bridgeMode"],
-            harness=document["harness"],
-            required_capabilities=document.get("requiredCapabilities", []),
+            bridge_mode=(None if is_v2 else document["bridgeMode"]),
+            harness=(
+                str((document.get("harness") or {}).get("id") or "")
+                if is_v2
+                else document["harness"]
+            ),
+            required_capabilities=(
+                (document.get("requirements") or {})
+                .get("moonmind", {})
+                .get("required", [])
+                if is_v2
+                else document.get("requiredCapabilities", [])
+            ),
         )
         if not readiness["ready"]:
             raise HTTPException(status.HTTP_409_CONFLICT, readiness["reason"])
@@ -222,7 +267,10 @@ async def resolve_agent_profile_snapshot(
 
     overrides = selection.get("overrides") or {}
     if not isinstance(overrides, Mapping):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "agentProfile.overrides must be an object")
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            "agentProfile.overrides must be an object",
+        )
     rejected = set(overrides) - _OVERRIDABLE_SECTIONS
     if rejected:
         raise HTTPException(
@@ -232,34 +280,38 @@ async def resolve_agent_profile_snapshot(
     _enforce_override_ceilings(defaults=document, overrides=overrides)
     for key, value in overrides.items():
         if not isinstance(value, Mapping):
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, f"{key} override must be an object")
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                f"{key} override must be an object",
+            )
         document[key] = {**document.get(key, {}), **dict(value)}
 
     # Overrides cross the same authority boundary as authored versions. Re-run
     # the canonical document schema so unknown fields and authority-bearing
     # values cannot enter an effective launch snapshot.
-    from api_service.api.routers.omnigent_agent_profiles import AgentProfileDocument
     try:
-        document = AgentProfileDocument.model_validate(document).model_dump(
-            mode="json", by_alias=True, exclude_none=True
-        )
+        if is_v2:
+            from moonmind.omnigent.harness_platform.agent_profile import (
+                OmnigentAgentProfileV2,
+            )
+
+            document = OmnigentAgentProfileV2.model_validate(document).model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        else:
+            from api_service.api.routers.omnigent_agent_profiles import (
+                AgentProfileDocument,
+            )
+
+            document = AgentProfileDocument.model_validate(document).model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
     except Exception as exc:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "agentProfile overrides do not form a valid profile document",
         ) from exc
 
-    requirements = document["providerRequirements"]
-    provider_query = select(ManagedAgentProviderProfile).where(
-            ManagedAgentProviderProfile.enabled.is_(True),
-            ManagedAgentProviderProfile.runtime_id == requirements["runtimeId"],
-            ManagedAgentProviderProfile.credential_source == requirements["credentialSource"],
-            ManagedAgentProviderProfile.runtime_materialization_mode == requirements["materializationMode"],
-        )
-    if requirements.get("providerIds"):
-        provider_query = provider_query.where(
-            ManagedAgentProviderProfile.provider_id.in_(requirements["providerIds"])
-        )
     requested_provider_profile = str(
         selection.get("providerProfileRef") or selection.get("providerProfileId") or ""
     ).strip()
@@ -268,10 +320,37 @@ async def resolve_agent_profile_snapshot(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "agentProfile.providerProfileRef is required",
         )
-    provider_query = provider_query.where(
-        ManagedAgentProviderProfile.profile_id == requested_provider_profile
-    )
-    compatible_provider = await session.scalar(provider_query.limit(1))
+    if is_v2:
+        compatible_provider = await session.get(
+            ManagedAgentProviderProfile, requested_provider_profile
+        )
+        accepted_provider_ids = {
+            str(provider_id)
+            for slot in document.get("credentialSlots", [])
+            for provider_id in slot.get("acceptedProviderIds", [])
+        }
+        if (
+            compatible_provider is not None
+            and accepted_provider_ids
+            and compatible_provider.provider_id not in accepted_provider_ids
+        ):
+            compatible_provider = None
+    else:
+        requirements = document["providerRequirements"]
+        provider_query = select(ManagedAgentProviderProfile).where(
+            ManagedAgentProviderProfile.enabled.is_(True),
+            ManagedAgentProviderProfile.runtime_id == requirements["runtimeId"],
+            ManagedAgentProviderProfile.credential_source
+            == requirements["credentialSource"],
+            ManagedAgentProviderProfile.runtime_materialization_mode
+            == requirements["materializationMode"],
+            ManagedAgentProviderProfile.profile_id == requested_provider_profile,
+        )
+        if requirements.get("providerIds"):
+            provider_query = provider_query.where(
+                ManagedAgentProviderProfile.provider_id.in_(requirements["providerIds"])
+            )
+        compatible_provider = await session.scalar(provider_query.limit(1))
     if compatible_provider is None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -292,9 +371,16 @@ async def resolve_agent_profile_snapshot(
             status.HTTP_409_CONFLICT,
             "selected profile has no stable launch agent identity",
         )
-    allowed_launch_policies = document["execution"]["allowedLaunchPolicyRefs"]
+    allowed_launch_policies = (
+        document["allowedLaunchPolicyRefs"]
+        if is_v2
+        else document["execution"]["allowedLaunchPolicyRefs"]
+    )
     requested_launch_policy = str(selection.get("launchPolicyRef") or "").strip()
-    if requested_launch_policy and requested_launch_policy not in allowed_launch_policies:
+    if (
+        requested_launch_policy
+        and requested_launch_policy not in allowed_launch_policies
+    ):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             "agentProfile.launchPolicyRef is not allowed by the selected profile",
@@ -308,11 +394,15 @@ async def resolve_agent_profile_snapshot(
         "digest": version.digest,
         "document": document,
         "providerProfileRef": compatible_provider.profile_id,
-        "executionProfileRef": document["execution"]["defaultExecutionProfileRef"],
-        "allowedLaunchPolicyRefs": document["execution"]["allowedLaunchPolicyRefs"],
+        "executionProfileRef": (
+            "generic-omnigent-host@1"
+            if is_v2
+            else document["execution"]["defaultExecutionProfileRef"]
+        ),
+        "allowedLaunchPolicyRefs": allowed_launch_policies,
         "launchPolicyRef": launch_policy_ref,
         "agentId": agent_id,
-        "policyRef": document["policyRef"],
+        "policyRef": (launch_policy_ref if is_v2 else document["policyRef"]),
         "upstreamSnapshot": upstream_snapshot,
         "validationResult": version.validation_result,
     }
@@ -333,14 +423,16 @@ async def resolve_agent_profile_snapshot(
         usage.digest = version.digest
         usage.effective_snapshot = snapshot
     else:
-        session.add(OmnigentAgentProfileUsage(
-            consumer_type=consumer_type,
-            consumer_id=consumer_id,
-            profile_id=profile_id,
-            version=version.version,
-            digest=version.digest,
-            effective_snapshot=snapshot,
-        ))
+        session.add(
+            OmnigentAgentProfileUsage(
+                consumer_type=consumer_type,
+                consumer_id=consumer_id,
+                profile_id=profile_id,
+                version=version.version,
+                digest=version.digest,
+                effective_snapshot=snapshot,
+            )
+        )
     await session.flush()
     return snapshot
 

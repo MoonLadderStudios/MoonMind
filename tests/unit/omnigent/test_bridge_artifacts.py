@@ -12,6 +12,7 @@ from moonmind.omnigent.bridge_artifacts import (
     LocalOmnigentArtifactGateway,
     OmnigentArtifactError,
     OmnigentCaptureBundle,
+    TemporalOmnigentArtifactGateway,
     _associate_resource_events,
     _capture_resource_projection,
     _reconcile_changed_file_evidence,
@@ -31,7 +32,9 @@ def _request() -> AgentExecutionRequest:
     )
 
 
-def test_provider_endpoint_provenance_is_accepted_but_credentials_are_redacted() -> None:
+def test_provider_endpoint_provenance_is_accepted_but_credentials_are_redacted() -> (
+    None
+):
     assert (
         _redacted_endpoint_url(
             "https://provider-user:provider-password@omnigent.example:8443/v1/?token=secret#session"
@@ -39,6 +42,16 @@ def test_provider_endpoint_provenance_is_accepted_but_credentials_are_redacted()
         == "https://omnigent.example:8443/v1"
     )
     assert _redacted_endpoint_url("provider-native-session-id") == "redacted"
+
+
+def test_durable_artifact_gateway_accepts_only_temporal_artifact_ids() -> None:
+    assert TemporalOmnigentArtifactGateway._artifact_id("artifact:art_123") == "art_123"
+    assert TemporalOmnigentArtifactGateway._artifact_id("art_456") == "art_456"
+
+    with pytest.raises(OmnigentArtifactError, match="Unsupported durable artifact ref"):
+        TemporalOmnigentArtifactGateway._artifact_id(
+            "artifact://omnigent/local-only/evidence.json"
+        )
 
 
 class FakeHarvestClient:
@@ -177,8 +190,7 @@ async def test_resource_harvester_does_not_persist_content_over_byte_limit(
 
     for group in ("changedFiles", "workspaceFiles", "workspaceDiffs", "sessionFiles"):
         assert any(
-            "harvest limit" in item.get("unavailable", "")
-            for item in manifest[group]
+            "harvest limit" in item.get("unavailable", "") for item in manifest[group]
         )
     assert not list(tmp_path.rglob("app.py"))
     assert not list(tmp_path.rglob("session.log"))
@@ -208,26 +220,22 @@ async def test_bridge_resource_harvester_writes_section_12_artifacts(tmp_path) -
     assert manifest["workspaceDiffs"][0]["path"] == "src/app.py"
     assert manifest["sessionFiles"][0]["filename"] == "session.log"
     assert manifest["patchUnavailable"] is False
-    assert manifest["changedFiles"][0]["diffArtifactRef"] == manifest["workspaceDiffs"][0]["artifactRef"]
+    assert (
+        manifest["changedFiles"][0]["diffArtifactRef"]
+        == manifest["workspaceDiffs"][0]["artifactRef"]
+    )
     assert refs["changedFilesIndexRef"].endswith(
         "/output.omnigent.changed_files.index.json"
     )
     assert refs["childSessionsRef"].endswith("/runtime.omnigent.child_sessions.jsonl")
 
     diff = (
-        tmp_path
-        / "corr-1"
-        / "output.omnigent.workspace_diffs"
-        / "src"
-        / "app.py.diff"
+        tmp_path / "corr-1" / "output.omnigent.workspace_diffs" / "src" / "app.py.diff"
     )
     assert diff.read_text(encoding="utf-8") == "diff --git a/src/app.py b/src/app.py\n"
     child_snapshot = json.loads(
         (
-            tmp_path
-            / "corr-1"
-            / "runtime.omnigent.child_sessions"
-            / "child-1.json"
+            tmp_path / "corr-1" / "runtime.omnigent.child_sessions" / "child-1.json"
         ).read_text(encoding="utf-8")
     )
     assert child_snapshot["id"] == "child-1"

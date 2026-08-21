@@ -66,28 +66,37 @@ type AgentProfileEditor = {
   sourceKind?: 'upstream' | 'bundle'; sourceRef?: string; bundleDigest?: string;
   endpointRef?: string; executionProfileRef?: string; launchPolicyRef?: string;
   policyRef?: string; providerRuntime?: string;
+  preset?: 'codex' | 'opencode' | 'pi-experimental'; defaultModel?: string;
+  workspaceMutation?: 'read_only' | 'allowed' | 'checkpoint_branch';
+  skillsText?: string; toolsText?: string; captureStream?: boolean;
+  captureEvidence?: boolean; continuationCheckpoint?: boolean;
+  continuationBranch?: boolean; publicationMode?: 'none' | 'draft' | 'required';
 };
 
-function structuredProfileDocument(draft: AgentProfileEditor): Record<string, unknown> {
-  const source = draft.sourceKind === 'bundle'
-    ? { bundleArtifactRef: draft.sourceRef, bundleDigest: draft.bundleDigest }
-    : { upstreamId: draft.sourceRef };
+function codexProfileDocument(draft: AgentProfileEditor): Record<string, unknown> {
   return {
     schemaVersion: 'moonmind.omnigent-agent-profile.v1',
-    endpointRef: draft.endpointRef || 'default', bridgeMode: 'proxy', source,
-    harness: 'codex-native', requiredCapabilities: ['session.start'],
+    endpointRef: 'default',
+    bridgeMode: 'proxy',
+    source: { upstreamId: draft.sourceRef || 'codex-native-ui' },
+    harness: 'codex-native',
+    requiredCapabilities: ['session.start'],
     execution: {
-      defaultExecutionProfileRef: draft.executionProfileRef || 'omnigent-codex@1',
-      allowedLaunchPolicyRefs: [draft.launchPolicyRef || 'on-demand@1'],
+      defaultExecutionProfileRef: 'omnigent-codex@1',
+      allowedLaunchPolicyRefs: ['on-demand@1'],
     },
     providerRequirements: {
-      runtimeId: draft.providerRuntime || 'codex_cli', providerIds: [],
+      runtimeId: 'codex_cli', providerIds: ['openai'],
       credentialSource: 'oauth_volume', materializationMode: 'oauth_home',
     },
-    workspace: { mutation: 'allowed', requiredCapabilities: [] },
-    continuations: { checkpoint: true, branch: true, remediation: true },
-    capture: { stream: true, evidence: true }, rag: {}, publish: { mode: 'none' },
-    policyRef: draft.policyRef || 'default@1',
+    model: { model: draft.defaultModel || null },
+    workspace: { mutation: draft.workspaceMutation || 'allowed', requiredCapabilities: [] },
+    skills: (draft.skillsText || '').split(',').map((item) => item.trim()).filter(Boolean),
+    tools: (draft.toolsText || '').split(',').map((item) => item.trim()).filter(Boolean),
+    capture: { stream: draft.captureStream !== false, evidence: draft.captureEvidence !== false },
+    continuations: { checkpoint: draft.continuationCheckpoint !== false, branch: draft.continuationBranch !== false, remediation: true },
+    rag: {}, publish: { mode: draft.publicationMode === 'required' ? 'auto' : draft.publicationMode || 'none' },
+    policyRef: 'default@1',
   };
 }
 
@@ -277,11 +286,36 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
   });
   const saveAgentProfile = useMutation({
     mutationFn: async (draft: NonNullable<typeof agentEditor>) => {
-      const document = draft.mode === 'create'
-        ? structuredProfileDocument(draft)
-        : JSON.parse(draft.document) as Record<string, unknown>;
-      let url = '/api/omnigent/agent-profiles';
-      let body: Record<string, unknown> = { profileId: draft.id, displayName: draft.name, description: draft.description || null, visibility: 'private', document };
+      const document = draft.mode === 'create' ? null : JSON.parse(draft.document) as Record<string, unknown>;
+      let url = draft.preset === 'codex'
+        ? '/api/omnigent/agent-profiles'
+        : '/api/omnigent/agent-profiles/guided';
+      let body: Record<string, unknown> = {
+        profileId: draft.id,
+        displayName: draft.name,
+        description: draft.description || null,
+        preset: draft.preset || 'opencode',
+        sourceUpstreamId: draft.sourceRef || undefined,
+        defaultModel: draft.defaultModel,
+        launchPolicyRef: draft.launchPolicyRef || 'omnigent-on-demand@1',
+        workspaceMutation: draft.workspaceMutation || 'allowed',
+        skills: (draft.skillsText || '').split(',').map((item) => item.trim()).filter(Boolean),
+        tools: (draft.toolsText || '').split(',').map((item) => item.trim()).filter(Boolean),
+        captureStream: draft.captureStream !== false,
+        captureEvidence: draft.captureEvidence !== false,
+        continuationCheckpoint: draft.continuationCheckpoint !== false,
+        continuationBranch: draft.continuationBranch !== false,
+        publicationMode: draft.publicationMode || 'none',
+      };
+      if (draft.mode === 'create' && draft.preset === 'codex') {
+        body = {
+          profileId: draft.id,
+          displayName: draft.name,
+          description: draft.description || null,
+          visibility: 'private',
+          document: codexProfileDocument(draft),
+        };
+      }
       if (draft.mode === 'version') {
         url = `/api/omnigent/agent-profiles/${encodeURIComponent(draft.source!.profileId)}/versions`;
         body = { document };
@@ -500,7 +534,7 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
     {kind === 'agents' ? <section aria-labelledby="omnigent-profiles-heading">
       <div className="omnigent-inventory__toolbar">
         <div><p className="eyebrow">Reusable configuration</p><h2 id="omnigent-profiles-heading">Agent profiles</h2></div>
-        <div className="actions"><button type="button" onClick={() => setAgentEditor({ mode: 'create', id: '', name: '', description: '', document: '{}', sourceKind: 'upstream', sourceRef: '', endpointRef: 'default', executionProfileRef: 'omnigent-codex@1', launchPolicyRef: 'on-demand@1', policyRef: 'default@1', providerRuntime: 'codex_cli' })}>Create from upstream or bundle</button><button type="button" onClick={() => void profiles.refetch()} disabled={profiles.isFetching}>Refresh profiles</button></div>
+        <div className="actions"><button type="button" onClick={() => setAgentEditor({ mode: 'create', id: 'omnigent-opencode-default', name: 'OpenCode via Omnigent', description: '', document: '{}', preset: 'opencode', sourceRef: '', defaultModel: '', launchPolicyRef: 'omnigent-on-demand@1', workspaceMutation: 'allowed', skillsText: '', toolsText: '', captureStream: true, captureEvidence: true, continuationCheckpoint: true, continuationBranch: true, publicationMode: 'none' })}>Create Omnigent agent</button><button type="button" onClick={() => void profiles.refetch()} disabled={profiles.isFetching}>Refresh profiles</button></div>
       </div>
       <p>Immutable, validated selections used by workflows and continuations.</p>
       {profiles.isPending ? <p role="status">Loading agent profiles…</p> : null}
@@ -512,14 +546,21 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         <label><span>Display name</span><input value={agentEditor.name} disabled={agentEditor.mode === 'version'} onChange={(event) => setAgentEditor({ ...agentEditor, name: event.target.value })} required /></label>
         <label><span>Description</span><input value={agentEditor.description} disabled={agentEditor.mode !== 'create'} onChange={(event) => setAgentEditor({ ...agentEditor, description: event.target.value })} /></label>
         {agentEditor.mode === 'create' ? <>
-          <label><span>Source type</span><select value={agentEditor.sourceKind} onChange={(event) => setAgentEditor({ ...agentEditor, sourceKind: event.target.value as 'upstream' | 'bundle', sourceRef: '', bundleDigest: '' })}><option value="upstream">Existing upstream agent</option><option value="bundle">Artifact-backed bundle</option></select></label>
-          <label><span>{agentEditor.sourceKind === 'bundle' ? 'Bundle artifact reference' : 'Stable upstream agent id'}</span><input value={agentEditor.sourceRef || ''} onChange={(event) => setAgentEditor({ ...agentEditor, sourceRef: event.target.value })} required /></label>
-          {agentEditor.sourceKind === 'bundle' ? <label><span>Bundle SHA-256 digest</span><input pattern="sha256:[0-9a-f]{64}" value={agentEditor.bundleDigest || ''} onChange={(event) => setAgentEditor({ ...agentEditor, bundleDigest: event.target.value })} required /></label> : null}
-          <label><span>Endpoint reference</span><input value={agentEditor.endpointRef || ''} onChange={(event) => setAgentEditor({ ...agentEditor, endpointRef: event.target.value })} required /></label>
-          <label><span>Execution profile reference</span><input value={agentEditor.executionProfileRef || ''} onChange={(event) => setAgentEditor({ ...agentEditor, executionProfileRef: event.target.value })} required /></label>
-          <label><span>Launch policy reference</span><input value={agentEditor.launchPolicyRef || ''} onChange={(event) => setAgentEditor({ ...agentEditor, launchPolicyRef: event.target.value })} required /></label>
-          <label><span>Policy reference</span><input value={agentEditor.policyRef || ''} onChange={(event) => setAgentEditor({ ...agentEditor, policyRef: event.target.value })} required /></label>
-          <label><span>Provider runtime</span><input value={agentEditor.providerRuntime || ''} onChange={(event) => setAgentEditor({ ...agentEditor, providerRuntime: event.target.value })} required /></label>
+          <label><span>Omnigent agent</span><select value={agentEditor.preset} onChange={(event) => { const preset = event.target.value as 'codex' | 'opencode' | 'pi-experimental'; setAgentEditor({ ...agentEditor, preset, id: preset === 'codex' ? 'omnigent-codex-default' : preset === 'opencode' ? 'omnigent-opencode-default' : 'omnigent-pi-default', name: preset === 'codex' ? 'Codex via Omnigent' : preset === 'opencode' ? 'OpenCode via Omnigent' : 'Pi via Omnigent (experimental)', sourceRef: '', defaultModel: '', launchPolicyRef: preset === 'codex' ? 'on-demand@1' : 'omnigent-on-demand@1' }); }}><option value="codex">Codex via Omnigent</option><option value="opencode">OpenCode via Omnigent</option><option value="pi-experimental">Pi via Omnigent (experimental)</option></select></label>
+          <label><span>Harness</span><input value={agentEditor.preset === 'codex' ? 'codex-native' : agentEditor.preset === 'pi-experimental' ? 'pi-native' : 'opencode-native'} readOnly /></label>
+          <label><span>Provider credential slot</span><input value="primary-model" readOnly /></label>
+          <label><span>Default model</span><input placeholder={agentEditor.preset === 'pi-experimental' ? 'provider/model-id' : 'opencode-go/model-id'} value={agentEditor.defaultModel || ''} onChange={(event) => setAgentEditor({ ...agentEditor, defaultModel: event.target.value })} required /></label>
+          <label><span>Host policy</span><select value={agentEditor.launchPolicyRef} onChange={(event) => setAgentEditor({ ...agentEditor, launchPolicyRef: event.target.value })}>{agentEditor.preset === 'codex' ? <option value="on-demand@1">Mature Codex on-demand host</option> : <option value="omnigent-on-demand@1">On-demand isolated host</option>}</select></label>
+          <label><span>Workspace mutation</span><select value={agentEditor.workspaceMutation} onChange={(event) => setAgentEditor({ ...agentEditor, workspaceMutation: event.target.value as NonNullable<AgentProfileEditor['workspaceMutation']> })}><option value="allowed">Allow repository changes</option><option value="read_only">Read only</option><option value="checkpoint_branch">Checkpoint branch only</option></select></label>
+          <details><summary>Skills, tools, capture, continuation, and publication</summary>
+            <label><span>Skills (comma-separated canonical names)</span><input value={agentEditor.skillsText || ''} onChange={(event) => setAgentEditor({ ...agentEditor, skillsText: event.target.value })} /></label>
+            <label><span>Mounted tools (comma-separated names)</span><input value={agentEditor.toolsText || ''} onChange={(event) => setAgentEditor({ ...agentEditor, toolsText: event.target.value })} /></label>
+            <label><input type="checkbox" checked={agentEditor.captureStream !== false} onChange={(event) => setAgentEditor({ ...agentEditor, captureStream: event.target.checked })} /> Capture event stream</label>
+            <label><input type="checkbox" checked={agentEditor.captureEvidence !== false} onChange={(event) => setAgentEditor({ ...agentEditor, captureEvidence: event.target.checked })} /> Capture evidence</label>
+            <label><input type="checkbox" checked={agentEditor.continuationCheckpoint !== false} onChange={(event) => setAgentEditor({ ...agentEditor, continuationCheckpoint: event.target.checked })} /> Allow checkpoint continuation</label>
+            <label><input type="checkbox" checked={agentEditor.continuationBranch !== false} onChange={(event) => setAgentEditor({ ...agentEditor, continuationBranch: event.target.checked })} /> Allow branch continuation</label>
+            <label><span>Publication</span><select value={agentEditor.publicationMode} onChange={(event) => setAgentEditor({ ...agentEditor, publicationMode: event.target.value as NonNullable<AgentProfileEditor['publicationMode']> })}><option value="none">No publication</option><option value="draft">Draft handoff</option><option value="required">Publication required</option></select></label>
+          </details>
         </> : agentEditor.mode === 'version' ? <label><span>Normalized profile document (JSON)</span><textarea rows={18} value={agentEditor.document} onChange={(event) => setAgentEditor({ ...agentEditor, document: event.target.value })} required /></label> : null}
         {saveAgentProfile.isError ? <p role="alert">{saveAgentProfile.error.message}</p> : null}
         <button type="submit" disabled={saveAgentProfile.isPending}>Save immutable profile version</button><button type="button" onClick={() => setAgentEditor(null)}>Cancel</button>

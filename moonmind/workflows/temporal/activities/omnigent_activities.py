@@ -9,26 +9,8 @@ from typing import Any
 
 from temporalio import activity
 
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
-
-# Generic realizer dispatch helpers (Phase 1)
-_GENERIC_HARNESS_IDS = {"opencode-native", "pi-native", "qwen-native", "claude-native"}
-
-# Singleton plan store for retry-stable planRef (P1 3828196601) – fixed observedAt
-# ensures retries do not replan with a different digest.
-_GENERIC_PLAN_STORE: Any | None = None
-_GENERIC_CATALOG_OBSERVED_AT = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
-
-
-def _get_generic_plan_store() -> Any:
-    global _GENERIC_PLAN_STORE
-    if _GENERIC_PLAN_STORE is None:
-        from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
-
-        _GENERIC_PLAN_STORE = InMemoryExecutionPlanStore()
-    return _GENERIC_PLAN_STORE
-
+from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 _IMMUTABLE_RECOVERY_DIMENSIONS = (
     "instructionDigest",
@@ -73,9 +55,7 @@ class _OnDemandTemporalArtifactService:
         return await self._invoke("read_chunks", artifact_id=artifact_id, **kwargs)
 
     async def write_complete(self, *, artifact_id: str, **kwargs: Any) -> Any:
-        return await self._invoke(
-            "write_complete", artifact_id=artifact_id, **kwargs
-        )
+        return await self._invoke("write_complete", artifact_id=artifact_id, **kwargs)
 
 
 def _checkpoint_recovery_decision(
@@ -343,212 +323,92 @@ async def _try_generic_realizer_dispatch(
     artifact_gateway: Any,
     run_store: Any,
 ) -> AgentRunResult | None:
-    """Attempt harness-neutral dispatch via execution plan + realizer registry.
+    """Plan and dispatch a generic selection without harness-specific branches."""
 
-    Returns None for legacy Codex-only requests (caller continues to legacy
-    coordinator). For generic requests, compiles or loads the plan and
-    dispatches to the persisted executionRealizerRef without harness branches.
-
-    Generic detection is deliberately narrow: a request is generic if it
-    carries an Agent Profile v2 payload (`omnigent.agentProfileV2` or
-    `omnigentAgentProfileV2`) or an explicit `harnessId` in
-    `omnigent.agent` / `omnigent.session` that is not codex-native.
-    Workflow input cannot author `executionRealizerRef` – the planner's
-    trusted selection is used, and any request-supplied value is ignored.
-    """
     params = request.parameters if isinstance(request.parameters, dict) else {}
-    omnigent = params.get("omnigent") if isinstance(params.get("omnigent"), dict) else {}
-    agent = omnigent.get("agent") if isinstance(omnigent.get("agent"), dict) else {}
-    session_cfg = omnigent.get("session") if isinstance(omnigent.get("session"), dict) else {}
-
-    # Detect generic v2 payload
-    has_v2_profile = (
-        isinstance(omnigent.get("agentProfileV2"), dict)
-        or isinstance(params.get("omnigentAgentProfileV2"), dict)
-        or isinstance(params.get("agentProfileV2"), dict)
+    omnigent = (
+        params.get("omnigent") if isinstance(params.get("omnigent"), dict) else {}
     )
-    # Canonical harness override is `harnessOverride` (profile_bound_execution._bind_exact_host)
-    harness_id = str(
-        agent.get("harnessOverride")
-        or agent.get("harnessId")
-        or agent.get("harness")
-        or session_cfg.get("harnessOverride")
-        or session_cfg.get("harness")
-        or session_cfg.get("harnessId")
-        or ""
-    ).strip()
-    # If v2 profile present, its harness takes precedence over session/agent override
-    if has_v2_profile:
-        v2_payload = omnigent.get("agentProfileV2") if isinstance(omnigent.get("agentProfileV2"), dict) else (params.get("omnigentAgentProfileV2") if isinstance(params.get("omnigentAgentProfileV2"), dict) else params.get("agentProfileV2"))
-        if isinstance(v2_payload, dict):
-            v2_harness = v2_payload.get("harness", {}) if isinstance(v2_payload.get("harness"), dict) else {}
-            v2_id = str(v2_harness.get("id") or "").strip()
-            if v2_id:
-                harness_id = v2_id
-    is_generic_harness = harness_id in _GENERIC_HARNESS_IDS and harness_id != "codex-native"
-
-    # Also detect via explicit generic marker for hermetic tests
-    generic_marker = bool(params.get("_genericHarnessTest") or omnigent.get("_genericHarnessTest"))
-
-    if not (has_v2_profile or is_generic_harness or generic_marker):
+    has_profile_ref = isinstance(omnigent.get("agentProfileRef"), dict)
+    inline_profile = any(
+        isinstance(value, dict)
+        for value in (
+            omnigent.get("agentProfile"),
+            omnigent.get("agentProfileV2"),
+            params.get("omnigentAgentProfileV2"),
+            params.get("agentProfileV2"),
+        )
+    )
+    # The immutable Agent Profile selection is the dispatch discriminator.
+    # Harness names are catalog data and must never steer Temporal dispatch.
+    selects_generic = has_profile_ref or inline_profile
+    if not selects_generic:
         return None
 
-    # For now, generic dispatch is validated via planner + registry
-    # The actual plan compilation requires catalog, skills, binding set, etc.
-    # which are not yet available in this activity's request shape for
-    # hermetic tests. We validate that the dispatch path is reachable and
-    # that harness-specific branches are absent.
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+        remediation_for,
+    )
+    from moonmind.omnigent.settings import generic_host_enabled
 
-    # If the request explicitly tries to author a realizer, ignore it (trusted)
-    # and use planner's selection. We surface this as a metric, not a failure.
-    # The planner will reject workflow-authored realizers that are incompatible.
-
-    # Check if caller attempted to author realizer via params
-    attempted_realizer = params.get("executionRealizerRef") or omnigent.get("executionRealizerRef")
-    if attempted_realizer:
-        # Do not honor workflow-authored realizer; planner will select trusted
-        pass
-
-    # Unified generic dispatch – both harness-only and v2 payloads compile and
-    # delegate via the same harness-neutral planner path (P1 3828196581).
-    # This ensures the canonical v2 input also goes through plan persistence
-    # and realizer dispatch, not the legacy driver.
-    try:
-        from datetime import UTC, datetime
-
-        from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
-        from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot, classify_harness_trust, HarnessImplementationIdentity, TrustState
-        from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
-        from moonmind.omnigent.harness_platform.planner import compile_execution_plan
-        from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
-        from moonmind.omnigent.harness_platform.stores import InMemoryExecutionPlanStore
-        from moonmind.omnigent.realizers.registry import get_default_registry
-
-        # Minimal synthetic catalog for the requested harness
-        impl_digest = "sha256:" + "a" * 64
-        if harness_id == "pi-native":
-            impl_digest = "sha256:" + "c" * 64
-        impl = HarnessImplementationIdentity.model_validate(
-            {"sourceKind": "core", "package": "omnigent", "version": "1.0.0", "digest": impl_digest, "pluginEntryPoint": None}
-        )
-        catalog = create_catalog_snapshot(
-            endpointRef="default",
-            omnigentVersion="1.0.0",
-            omnigentBuildDigest="sha256:" + "b" * 64,
-            sourceDigest="sha256:" + "c" * 64,
-            harnesses=[
-                {
-                    "id": harness_id,
-                    "aliases": [],
-                    "label": harness_id,
-                    "implementation": {"sourceKind": "core", "package": "omnigent", "version": "1.0.0", "digest": impl_digest, "pluginEntryPoint": None},
-                    "runtimeRequirements": {},
-                    "capabilities": {"integrationMode": "native-server", "authModel": "own-auth", "interrupt": True, "streaming": True},
-                    "setupSteps": [],
-                }
-            ],
-            observedAt=_GENERIC_CATALOG_OBSERVED_AT,
-        )
-        trust = classify_harness_trust(harnessId=harness_id, implementation=impl, trustState=TrustState.core_trusted)
-        # Use a minimal v2 profile for the harness
-        profile = OmnigentAgentProfileV2.model_validate(
-            {
-                "schemaVersion": "moonmind.omnigent-agent-profile.v2",
-                "endpointRef": "default",
-                "source": {"kind": "upstream", "upstreamId": f"{harness_id}-ui", "upstreamVersion": "1.0.0", "upstreamSnapshotDigest": "sha256:" + "d" * 64},
-                "harness": {"id": harness_id, "catalogRef": catalog.catalogRef, "implementationRef": impl.implementation_ref()},
-                "requirements": {"harness": {"required": [], "preferred": []}, "moonmind": {"required": []}, "host": {"required": []}},
-                "credentialSlots": [{"id": "primary-model", "optional": False, "acceptedAuthModels": ["own-auth"], "acceptedProviderIds": ["opencode"]}],
-                "model": {},
-                "workspace": {},
-                "skills": [],
-                "tools": [],
-                "capture": {},
-                "continuations": {},
-                "publish": {},
-                "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
-            }
-        )
-        skills = ResolvedSkillSet.model_validate({"resolvedSkillSetRef": "artifact:test", "resolvedSkillSetDigest": "sha256:" + "a" * 64, "skillDeliveryRef": "skill-delivery:sha256:" + "b" * 64})
-        bs = create_binding_set(bindingSetId="test-generic", version=1, bindings={"primary-model": {"providerProfileRef": "test-provider", "materializerRef": "opencode-auth-json@1" if harness_id != "pi-native" else "omnigent-provider-config@1"}})
-        # Host class selection: dedicated images per harness (fail closed without real digest)
-        if harness_id == "opencode-native":
-            host_class_ref = "omnigent-opencode@1"
-        elif harness_id == "pi-native":
-            host_class_ref = "omnigent-pi@1"
-        else:
-            host_class_ref = "omnigent-native-standard@3"
-        # Fail closed when dedicated image not configured – do not inject fabricated digest
-        if harness_id == "opencode-native":
-            import os
-
-            from moonmind.omnigent.harness_platform.failures import HarnessPlatformError as _HPE, HarnessPlatformFailure as _HPF
-
-            if not os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip():
-                raise _HPE(
-                    "OMNIGENT_OPENCODE_HOST_IMAGE_REF must be set to a digest-pinned image for opencode",
-                    code=_HPF.OMNIGENT_HARNESS_BUILD_MISMATCH,
-                )
-        if harness_id == "pi-native":
-            import os
-
-            from moonmind.omnigent.harness_platform.failures import HarnessPlatformError as _HPE2, HarnessPlatformFailure as _HPF2
-
-            if not os.getenv("OMNIGENT_PI_HOST_IMAGE_REF", "").strip():
-                raise _HPE2(
-                    "OMNIGENT_PI_HOST_IMAGE_REF must be set to a digest-pinned image for pi",
-                    code=_HPF2.OMNIGENT_HARNESS_BUILD_MISMATCH,
-                )
-        # Bind plan to request's actual model selection (P1 3828196631)
-        model_qualified_id = (
-            str(params.get("model") or "").strip()
-            or str(omnigent.get("model") or "").strip()
-            or str(agent.get("model") or "").strip()
-            or str(params.get("modelId") or "").strip()
-            or "test/model"
-        )
-        model_route_ref = str(
-            params.get("modelRoute") or params.get("model_route") or omnigent.get("modelRoute") or omnigent.get("routeRef") or ("pi" if harness_id == "pi-native" else "opencode-go")
-        ).strip() or ("pi" if harness_id == "pi-native" else "opencode-go")
-        _effort_raw = params.get("effort") or params.get("modelEffort") or omnigent.get("effort") or agent.get("effort")
-        model_effort = str(_effort_raw).strip() if isinstance(_effort_raw, str) and str(_effort_raw).strip() else None
-        model_options = params.get("modelOptions") if isinstance(params.get("modelOptions"), dict) else (omnigent.get("modelOptions") if isinstance(omnigent.get("modelOptions"), dict) else {})
-
-        # Use singleton store so retries load same planRef (P1 3828196601)
-        store = _get_generic_plan_store()
-        # Compile via store's load_or_compile to ensure retry stability (fixed observedAt)
-        persisted = await store.load_or_compile(
-            compile_fn=compile_execution_plan,
-            compile_kwargs=dict(
-                agent_profile=profile,
-                harness_catalog=catalog,
-                trust_record=trust,
-                resolved_skills=skills,
-                credential_binding_set=bs,
-                host_class_ref=host_class_ref,
-                launch_policy_ref="omnigent-on-demand@1",
-                model_qualified_id=model_qualified_id,
-                model_effort=model_effort,
-                model_route_ref=model_route_ref,
-                model_normalized_options=model_options,
-            ),
-        )
-        # Dispatch via registry – must be generic-omnigent-host@1, no fallback
-        registry = get_default_registry()
-        realizer = registry.require(persisted.payload.executionRealizerRef)
-        # Verify harness-neutral: realizer ref must be generic for non-codex
-        if harness_id != "codex-native" and persisted.payload.executionRealizerRef != "generic-omnigent-host@1":
-            raise ValueError(f"non-codex harness must use generic realizer, got {persisted.payload.executionRealizerRef}")
-        return await realizer.execute(request, persisted)
-    except Exception as exc:
-        # Surface as integration_error but do not fallback to codex
-        from moonmind.schemas.agent_runtime_models import AgentRunResult
-
+    if not generic_host_enabled():
         return AgentRunResult(
-            summary=f"generic dispatch failed: {exc}",
+            summary="Generic Omnigent host execution is not enabled for this deployment.",
+            failureClass="configuration_error",
+            providerErrorCode=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY.value,
+            retryRecommendation="enable_generic_omnigent_after_setup",
+        )
+
+    try:
+        from api_service.db.base import async_session_maker
+        from moonmind.omnigent.production import (
+            build_generic_omnigent_execution_services,
+        )
+
+        services = build_generic_omnigent_execution_services(
+            session_factory=async_session_maker,
+            artifact_gateway=artifact_gateway,
+            run_store=run_store,
+        )
+        plan = await services.planning_service.plan(request)
+        realizer = services.realizer_registry.require(plan.payload.executionRealizerRef)
+        return await realizer.execute(request, plan)
+    except HarnessPlatformError as exc:
+        code = str(exc.code)
+        configuration_codes = {
+            HarnessPlatformFailure.OMNIGENT_AGENT_PROFILE_INVALID.value,
+            HarnessPlatformFailure.OMNIGENT_AGENT_SOURCE_UNAVAILABLE.value,
+            HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE.value,
+            HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_STALE.value,
+            HarnessPlatformFailure.OMNIGENT_HARNESS_UNTRUSTED.value,
+            HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE.value,
+            HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE.value,
+            HarnessPlatformFailure.OMNIGENT_MODEL_UNAVAILABLE.value,
+            HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY.value,
+        }
+        return AgentRunResult(
+            summary=str(exc),
+            failureClass=(
+                "configuration_error"
+                if code in configuration_codes
+                else "integration_error"
+            ),
+            providerErrorCode=code,
+            retryRecommendation=remediation_for(code),
+        )
+    except Exception:
+        # Unknown implementation defects retain one generic boundary code; do
+        # not copy exception text into workflow history because it may include
+        # provider or infrastructure details. Known boundaries above preserve
+        # their actionable typed failure codes.
+        return AgentRunResult(
+            summary="Generic Omnigent dispatch failed before a terminal provider result.",
             failureClass="integration_error",
-            providerErrorCode="OMNIGENT_GENERIC_DISPATCH_FAILED",
-            retryRecommendation="retry_transient_upstream",
+            providerErrorCode=HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value,
+            retryRecommendation=remediation_for(
+                HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value
+            ),
         )
 
 
@@ -567,10 +427,13 @@ async def _omnigent_execute_activity(
 ) -> AgentRunResult:
     """Run one Omnigent streaming execution."""
 
-    from api_service.db.base import async_session_maker
     import httpx
 
-    from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bridge_artifacts import (
+        LocalOmnigentArtifactGateway,
+        TemporalOmnigentArtifactGateway,
+    )
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
     from moonmind.omnigent.execute import run_omnigent_execution
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
@@ -583,10 +446,10 @@ async def _omnigent_execute_activity(
         resolved_proxy_forward_headers,
         resolved_server_url,
     )
+    from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
     from moonmind.repositories.lore_runtime import (
         build_lore_repository_adapter_from_environment,
     )
-    from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
     from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
     from moonmind.workflows.temporal.client import TemporalClientAdapter
 
@@ -599,7 +462,7 @@ async def _omnigent_execute_activity(
     # registry. This path is harness-neutral: no `if harness == "opencode"` branches.
     generic_dispatch = await _try_generic_realizer_dispatch(
         request,
-        artifact_gateway=artifact_gateway,
+        artifact_gateway=TemporalOmnigentArtifactGateway(async_session_maker),
         run_store=run_store,
     )
     if generic_dispatch is not None:
@@ -698,8 +561,7 @@ async def _omnigent_execute_activity(
                     and checkpoint.validation.workspace_cold_restore_available
                     and authority["current_credential_generation"]
                     == checkpoint.credential_generation
-                    and request.execution_profile_ref
-                    == checkpoint.provider_profile_id
+                    and request.execution_profile_ref == checkpoint.provider_profile_id
                 ),
             )
             recovery_payload["recoveryDecision"] = decision
@@ -709,8 +571,7 @@ async def _omnigent_execute_activity(
                     "checkpoint_authority_unavailable"
                 ]
                 raise ValueError(
-                    "checkpoint resume unavailable: "
-                    + ",".join(map(str, reasons[:20]))
+                    "checkpoint resume unavailable: " + ",".join(map(str, reasons[:20]))
                 )
             if decision["recoveryAction"] == "cold_restore":
                 raise ValueError(
@@ -746,8 +607,8 @@ async def omnigent_oauth_host_janitor_activity(
     import httpx
 
     from api_service.db.base import async_session_maker
-    from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+    from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
     from moonmind.omnigent.settings import (
@@ -782,13 +643,13 @@ async def omnigent_oauth_host_janitor_activity(
         if action_kind:
             try:
                 result = await janitor.run_action(
-                action_kind=action_kind,
-                profile_id=str(payload.get("profile_id") or "").strip(),
-                host_lease_ref=str(payload.get("hostLeaseRef") or "").strip(),
-                expected_host_state=(
-                    str(payload.get("expectedHostState") or "").strip() or None
-                ),
-                request_id=str(payload.get("requestId") or "").strip(),
+                    action_kind=action_kind,
+                    profile_id=str(payload.get("profile_id") or "").strip(),
+                    host_lease_ref=str(payload.get("hostLeaseRef") or "").strip(),
+                    expected_host_state=(
+                        str(payload.get("expectedHostState") or "").strip() or None
+                    ),
+                    request_id=str(payload.get("requestId") or "").strip(),
                 )
             except Exception:
                 control_plane_metrics.increment(
@@ -829,6 +690,25 @@ async def omnigent_oauth_host_janitor_activity(
                 control_plane_metrics.JANITOR_OPERATIONS,
                 janitor_outcome="conflict",
             )
+        from moonmind.omnigent.settings import generic_host_enabled
+
+        if generic_host_enabled():
+            from moonmind.omnigent.generic_host_janitor import (
+                GenericOmnigentHostJanitor,
+            )
+            from moonmind.omnigent.production import (
+                build_generic_omnigent_execution_services,
+            )
+
+            services = build_generic_omnigent_execution_services(
+                session_factory=async_session_maker
+            )
+            generic_result = await GenericOmnigentHostJanitor(
+                host_leases=services.host_lease_repository,
+                runtime_bindings=services.runtime_binding_store,
+                realizer=services.generic_realizer,
+            ).run()
+            result = {**result, "genericHost": generic_result}
         return result
 
 

@@ -114,6 +114,123 @@ class OmnigentArtifactGateway:
         return (await self.read_text(artifact_ref)).encode("utf-8")
 
 
+class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
+    """Persist generic-host evidence through MoonMind's durable artifact store."""
+
+    def __init__(
+        self,
+        session_factory: Any,
+        *,
+        principal: str = "service:omnigent-generic-host",
+    ) -> None:
+        self._session_factory = session_factory
+        self._principal = principal
+
+    @staticmethod
+    def _artifact_id(artifact_ref: str) -> str:
+        value = str(artifact_ref or "").strip()
+        if value.startswith("artifact:"):
+            value = value.removeprefix("artifact:")
+        if value.startswith("//"):
+            value = value.removeprefix("//")
+        if not value.startswith("art_"):
+            raise OmnigentArtifactError(
+                f"Unsupported durable artifact ref: {artifact_ref}"
+            )
+        return value
+
+    async def write_json(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: Any,
+        link_type: str,
+    ) -> str:
+        body = (
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n"
+        ).encode("utf-8")
+        return await self.write_bytes(
+            request=request,
+            name=name,
+            payload=body,
+            link_type=link_type,
+            content_type="application/json",
+        )
+
+    async def write_text(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: str,
+        link_type: str,
+        content_type: str = "text/plain",
+    ) -> str:
+        return await self.write_bytes(
+            request=request,
+            name=name,
+            payload=payload.encode("utf-8"),
+            link_type=link_type,
+            content_type=content_type,
+        )
+
+    async def write_bytes(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: bytes,
+        link_type: str,
+        content_type: str = "application/octet-stream",
+    ) -> str:
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        digest = hashlib.sha256(payload).hexdigest()
+        async with self._session_factory() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            artifact, _upload = await service.create(
+                principal=self._principal,
+                content_type=content_type,
+                size_bytes=len(payload),
+                sha256=digest,
+                metadata_json={
+                    "artifact_type": "omnigent.generic_host_evidence",
+                    "name": _safe_artifact_name(name),
+                    "link_type": str(link_type)[:255],
+                    "correlation_id": str(request.correlation_id)[:255],
+                },
+            )
+            completed = await service.write_complete(
+                artifact_id=artifact.artifact_id,
+                principal=self._principal,
+                payload=payload,
+                content_type=content_type,
+            )
+        return f"artifact:{completed.artifact_id}"
+
+    async def read_text(self, artifact_ref: str) -> str:
+        return (await self.read_bytes(artifact_ref)).decode("utf-8")
+
+    async def read_bytes(self, artifact_ref: str) -> bytes:
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        async with self._session_factory() as session:
+            service = TemporalArtifactService(TemporalArtifactRepository(session))
+            _artifact, payload = await service.read(
+                artifact_id=self._artifact_id(artifact_ref),
+                principal=self._principal,
+                allow_restricted_raw=True,
+            )
+        return payload
+
+
 class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
     """Local MoonMind artifact gateway for Omnigent evidence capture."""
 
@@ -224,7 +341,9 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
             if os.path.isfile(fullpath):
                 with open(fullpath, encoding="utf-8") as handle:
                     return handle.read()
-        raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
+        raise OmnigentArtifactError(
+            f"Unable to dereference artifact ref: {artifact_ref}"
+        )
 
     async def read_bytes(self, artifact_ref: str) -> bytes:
         if artifact_ref in self._readable_refs:
@@ -247,7 +366,9 @@ class LocalOmnigentArtifactGateway(OmnigentArtifactGateway):
             if os.path.isfile(fullpath):
                 with open(fullpath, "rb") as handle:
                     return handle.read()
-        raise OmnigentArtifactError(f"Unable to dereference artifact ref: {artifact_ref}")
+        raise OmnigentArtifactError(
+            f"Unable to dereference artifact ref: {artifact_ref}"
+        )
 
 
 def _safe_artifact_segment(value: object) -> str:
@@ -370,9 +491,13 @@ def build_omnigent_result(
     output_refs = list(capture_bundle.output_refs)
     diagnostics_ref = capture_bundle.diagnostics_ref
     if not output_refs:
-        raise OmnigentContractError("Omnigent result requires MoonMind output artifact refs")
+        raise OmnigentContractError(
+            "Omnigent result requires MoonMind output artifact refs"
+        )
     if not diagnostics_ref:
-        raise OmnigentContractError("Omnigent result requires a MoonMind diagnostics artifact ref")
+        raise OmnigentContractError(
+            "Omnigent result requires a MoonMind diagnostics artifact ref"
+        )
     _assert_no_provider_native_refs(
         [*output_refs, diagnostics_ref, *capture_bundle.metadata_refs.values()]
     )
@@ -419,9 +544,7 @@ def build_omnigent_result(
     parameters = request.parameters if isinstance(request.parameters, dict) else {}
     request_metadata = parameters.get("metadata")
     moonmind_metadata = (
-        request_metadata.get("moonmind")
-        if isinstance(request_metadata, dict)
-        else None
+        request_metadata.get("moonmind") if isinstance(request_metadata, dict) else None
     )
     initial_context_pack_ref = (
         str(moonmind_metadata.get("latestContextPackRef") or "").strip()
@@ -724,9 +847,7 @@ class BridgeResourceHarvester:
         changed_items: list[dict[str, Any]],
     ) -> None:
         paths = [
-            path
-            for path in (_resource_path(item) for item in changed_items)
-            if path
+            path for path in (_resource_path(item) for item in changed_items) if path
         ][:_MAX_OMNIGENT_HARVEST_ITEMS]
         if not paths:
             self._manifest["workspaceDiffs"] = []
@@ -984,11 +1105,9 @@ async def _harvest_workspace_diffs(
     manifest: dict[str, Any],
     refs: dict[str, str],
 ) -> None:
-    paths = [
-        path
-        for path in (_resource_path(item) for item in changed_items)
-        if path
-    ][:_MAX_OMNIGENT_HARVEST_ITEMS]
+    paths = [path for path in (_resource_path(item) for item in changed_items) if path][
+        :_MAX_OMNIGENT_HARVEST_ITEMS
+    ]
     if not paths:
         manifest["workspaceDiffs"] = []
         manifest["patchUnavailable"] = True
@@ -1014,7 +1133,9 @@ async def _harvest_workspace_diffs(
             link_type="output.omnigent.workspace_diff",
             content_type="text/x-diff",
         )
-        harvested.append(_harvested_resource(path, ref, diff, content_type="text/x-diff"))
+        harvested.append(
+            _harvested_resource(path, ref, diff, content_type="text/x-diff")
+        )
     manifest["workspaceDiffs"] = harvested
     manifest["patchUnavailable"] = not bool(harvested)
 
@@ -1048,7 +1169,9 @@ async def _harvest_session_files(
     manifest["sessionFilesIndexRef"] = index_ref
     harvested: list[dict[str, Any]] = []
     for item in _resource_items(files)[:_MAX_OMNIGENT_HARVEST_ITEMS]:
-        file_id = str(item.get("id") or item.get("file_id") or item.get("fileId") or "").strip()
+        file_id = str(
+            item.get("id") or item.get("file_id") or item.get("fileId") or ""
+        ).strip()
         filename = str(item.get("filename") or item.get("name") or file_id).strip()
         if not file_id:
             continue
@@ -1135,14 +1258,18 @@ def _resource_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _resource_path(item: dict[str, Any]) -> str:
-    return str(
-        item.get("path")
-        or item.get("file_path")
-        or item.get("filePath")
-        or item.get("relativePath")
-        or item.get("name")
-        or ""
-    ).strip().strip("/")
+    return (
+        str(
+            item.get("path")
+            or item.get("file_path")
+            or item.get("filePath")
+            or item.get("relativePath")
+            or item.get("name")
+            or ""
+        )
+        .strip()
+        .strip("/")
+    )
 
 
 def _child_session_ids(
@@ -1276,7 +1403,7 @@ def _reconcile_changed_file_evidence(manifest: dict[str, Any]) -> None:
         manifest.get("workspaceDiffsUnavailable")
         or "No diff artifact was published for this changed file."
     )
-    for changed_file in (manifest.get("changedFiles") or []):
+    for changed_file in manifest.get("changedFiles") or []:
         if not isinstance(changed_file, dict) or not changed_file.get("path"):
             continue
         diff_ref = diffs_by_path.get(str(changed_file["path"]))
@@ -1302,7 +1429,7 @@ def _associate_resource_events(
         sequence = event.get("sequence")
         if path and isinstance(sequence, int):
             sequence_by_path.setdefault((event_type, path), sequence)
-    for changed_file in (manifest.get("changedFiles") or []):
+    for changed_file in manifest.get("changedFiles") or []:
         if not isinstance(changed_file, dict):
             continue
         sequence = sequence_by_path.get(
@@ -1310,7 +1437,7 @@ def _associate_resource_events(
         )
         if sequence is not None:
             changed_file["sourceEventSequence"] = sequence
-    for session_file in (manifest.get("sessionFiles") or []):
+    for session_file in manifest.get("sessionFiles") or []:
         if not isinstance(session_file, dict):
             continue
         sequence = sequence_by_path.get(
@@ -1334,7 +1461,11 @@ def _capture_resource_groups(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         ("manifests", "Capture and checkpoint manifests", "manifestEvidence"),
     )
     index_items = [
-        {"label": label, "artifactRef": manifest[ref_key], "contentType": "application/json"}
+        {
+            "label": label,
+            "artifactRef": manifest[ref_key],
+            "contentType": "application/json",
+        }
         for label, ref_key in (
             ("Changed-file index", "changedFilesIndexRef"),
             ("Workspace-file index", "workspaceFilesIndexRef"),
@@ -1391,9 +1522,7 @@ def _capture_resource_projection(manifest: dict[str, Any]) -> dict[str, Any]:
                 "status": (
                     "available"
                     if artifact_ref
-                    else "unavailable"
-                    if unavailable_reason
-                    else "pending"
+                    else "unavailable" if unavailable_reason else "pending"
                 ),
                 "previewAvailable": bool(artifact_ref)
                 and not artifact_ref.startswith("artifact://"),
@@ -1529,7 +1658,11 @@ async def _build_capture_bundle_impl(
                 "maxContentBytes": _MAX_OMNIGENT_CONTENT_BYTES,
                 "maxPreviewBytes": _MAX_OMNIGENT_PREVIEW_BYTES,
             },
-            "supportedContentTypes": ["text/*", "application/json", "application/octet-stream"],
+            "supportedContentTypes": [
+                "text/*",
+                "application/json",
+                "application/octet-stream",
+            ],
             "binaryHandling": "metadata_and_authorized_download; preview_when_supported",
             "timeoutSeconds": _OMNIGENT_HARVEST_TIMEOUT_SECONDS,
             "retry": {"maxAttempts": _OMNIGENT_HARVEST_MAX_ATTEMPTS},
@@ -1654,9 +1787,7 @@ async def _build_capture_bundle_impl(
         "status": (
             "required_missing"
             if resource_harvest_failure_class
-            else "degraded"
-            if optional_harvest_failed
-            else "complete"
+            else "degraded" if optional_harvest_failed else "complete"
         ),
         "unavailableReasons": unavailable_reasons,
     }
@@ -1739,9 +1870,7 @@ async def _build_capture_bundle_impl(
             ),
             "firstMessage": first_message_state,
             "retry": external_state.get("retry", {}),
-            "terminalReconciliation": external_state.get(
-                "terminalReconciliation"
-            ),
+            "terminalReconciliation": external_state.get("terminalReconciliation"),
             "reattachState": {
                 "idempotencyKey": request.idempotency_key,
                 "initialSnapshotRef": refs.get("initialSnapshotRef"),

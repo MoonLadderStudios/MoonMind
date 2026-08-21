@@ -88,28 +88,32 @@ describe('OmnigentInventoryPage', () => {
     expect(await screen.findByRole('button', { name: 'Activate Team Codex' })).toBeTruthy();
   });
 
-  it('creates an upstream profile through structured controls without raw JSON', async () => {
+  it('creates a generic v2 profile through guided controls without client-authored authority', async () => {
     renderPage({
       page: 'omnigent-inventory', apiBase: '/api', features: { omnigentAgents: true },
       initialData: { uiEndpoints: { omnigentAgents: '/api/omnigent/api/agents' } },
     });
     await screen.findByText('Team Codex');
-    fireEvent.click(screen.getByRole('button', { name: 'Create from upstream or bundle' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Omnigent agent' }));
     expect(screen.queryByLabelText('Normalized profile document (JSON)')).toBeNull();
-    fireEvent.change(screen.getByLabelText('Profile id'), { target: { value: 'new-codex' } });
-    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'New Codex' } });
-    fireEvent.change(screen.getByLabelText('Stable upstream agent id'), { target: { value: 'agent-42' } });
+    fireEvent.change(screen.getByLabelText('Profile id'), { target: { value: 'new-opencode' } });
+    fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'New OpenCode' } });
+    fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'opencode-go/test-model' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save immutable profile version' }));
 
     await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) =>
-      String(url) === '/api/omnigent/agent-profiles' && (init as RequestInit | undefined)?.method === 'POST')).toBe(true));
+      String(url) === '/api/omnigent/agent-profiles/guided' && (init as RequestInit | undefined)?.method === 'POST')).toBe(true));
     const call = vi.mocked(fetch).mock.calls.find(([url, init]) =>
-      String(url) === '/api/omnigent/agent-profiles' && (init as RequestInit | undefined)?.method === 'POST');
+      String(url) === '/api/omnigent/agent-profiles/guided' && (init as RequestInit | undefined)?.method === 'POST');
     const body = JSON.parse(String((call?.[1] as RequestInit).body));
-    expect(body.document).toMatchObject({
-      endpointRef: 'default', source: { upstreamId: 'agent-42' }, harness: 'codex-native',
-      continuations: { checkpoint: true, branch: true, remediation: true },
+    expect(body).toMatchObject({
+      profileId: 'new-opencode', preset: 'opencode',
+      defaultModel: 'opencode-go/test-model', launchPolicyRef: 'omnigent-on-demand@1',
+      continuationCheckpoint: true, continuationBranch: true,
     });
+    expect(body).not.toHaveProperty('implementationRef');
+    expect(body).not.toHaveProperty('catalogRef');
+    expect(body).not.toHaveProperty('materializerRef');
   });
 
   it('does not fetch policy actions without a capability contract', async () => {

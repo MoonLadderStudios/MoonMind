@@ -15,9 +15,11 @@ It must NOT contain `if harness == "opencode-native": ...`.
 
 from __future__ import annotations
 
-from moonmind.omnigent.harness_platform.failures import HarnessPlatformError, HarnessPlatformFailure
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
+)
 from moonmind.omnigent.harness_platform.support import validate_realizer
-
 from moonmind.omnigent.realizers.base import OmnigentExecutionRealizer
 
 
@@ -57,55 +59,44 @@ class OmnigentExecutionRealizerRegistry:
         return sorted(self._realizers.keys())
 
 
-# Global default populated lazily to avoid circular imports at import time
+# Global default populated lazily to avoid circular imports at import time.
+# It is assigned only after the complete selected deployment surface builds.
 _default_registry: OmnigentExecutionRealizerRegistry | None = None
-_default_registry_init_error: Exception | None = None
 
 
 def get_default_registry() -> OmnigentExecutionRealizerRegistry:
-    global _default_registry, _default_registry_init_error
+    global _default_registry
     if _default_registry is not None:
-        # If previous init had errors and registry is incomplete, allow retry
-        if _default_registry_init_error is not None and len(_default_registry.list_refs()) < 2:
-            _default_registry = None
-            _default_registry_init_error = None
-        else:
-            return _default_registry
+        return _default_registry
+    from moonmind.omnigent.settings import generic_host_enabled
+
+    if generic_host_enabled():
+        # Production construction is all-or-nothing. No partially initialized
+        # registry is cached when the generic feature is enabled.
+        from api_service.db.base import async_session_maker
+        from moonmind.omnigent.production import (
+            build_generic_omnigent_execution_services,
+        )
+
+        services = build_generic_omnigent_execution_services(
+            session_factory=async_session_maker
+        )
+        _default_registry = services.realizer_registry
+        return _default_registry
+
+    from moonmind.omnigent.realizers.codex_profile_bound import (
+        CodexProfileBoundRealizer,
+    )
+
     registry = OmnigentExecutionRealizerRegistry()
-    init_error: Exception | None = None
-
-    # Lazy imports to avoid cycles
-    try:
-        from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRealizer
-
-        registry.register(CodexProfileBoundRealizer())
-    except Exception as exc:  # pragma: no cover - import/dependency failure is not tested
-        init_error = exc
-
-    try:
-        from moonmind.omnigent.realizers.generic_host import GenericOmnigentHostRealizer
-
-        registry.register(GenericOmnigentHostRealizer())
-    except Exception as exc:  # pragma: no cover
-        init_error = exc
-
-    if init_error is not None and len(registry.list_refs()) == 0:
-        # No realizers at all – surface immediately rather than caching empty
-        raise HarnessPlatformError(
-            f"realizer registry initialization failed: {init_error}",
-            code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
-        ) from init_error
-
-    # Cache only when at least one realizer succeeded; retain init error for diagnostics
-    _default_registry_init_error = init_error
+    registry.register(CodexProfileBoundRealizer())
     _default_registry = registry
     return registry
 
 
 def reset_default_registry() -> None:
-    global _default_registry, _default_registry_init_error
+    global _default_registry
     _default_registry = None
-    _default_registry_init_error = None
 
 
 # Ensure the global registry is considered used (CodeQL)
@@ -114,5 +105,4 @@ __all__ = [
     "get_default_registry",
     "reset_default_registry",
     "_default_registry",
-    "_default_registry_init_error",
 ]

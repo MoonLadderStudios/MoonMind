@@ -1,34 +1,41 @@
-"""Generic Omnigent host realizer: `generic-omnigent-host@1`.
+"""Production lifecycle for ``generic-omnigent-host@1``.
 
-Owns only the work necessary to produce an attested Omnigent host:
-
-Resolve Host Class, launch policy, workspace, Skills, credential runtime
-state, build secret-free HostLaunchSpec, start/attach host, verify exact
-host and harness, verify model availability, persist runtime binding,
-delegate session execution to existing generic Omnigent driver.
-
-It does NOT understand how OpenCode sends messages or how Qwen streams.
-Omnigent owns those details.
-
-After realization, it uses the existing generic session driver:
-  run_omnigent_execution() + OmnigentHttpClient (sessions, events, streams,
-  files, diffs, interruption, termination)
-
-This realizer is harness-neutral: no `if harness == "opencode"` branches.
-Harness-specific behavior is data: catalog records, Host Classes,
-materializers, Agent Profiles, conformance evidence.
+Harness-specific compatibility is selected by persisted catalog, Host Class,
+and materializer data. This coordinator owns only the common fenced lifecycle;
+the existing Omnigent session driver owns provider interaction after creation.
 """
 
 from __future__ import annotations
 
-import os
-from typing import Any
+from typing import Any, Awaitable, Callable
 
-from moonmind.omnigent.harness_platform.execution_plan import OmnigentExecutionPlanEnvelope
-from moonmind.omnigent.harness_platform.failures import HarnessPlatformError, HarnessPlatformFailure
-from moonmind.omnigent.harness_platform.host_classes import get_host_class, get_launch_policy
-from moonmind.omnigent.harness_platform.materializers import materialize_credential
+from moonmind.omnigent.credential_materializers import (
+    CredentialRuntimeHandle,
+    credential_runtime_identity,
+)
+from moonmind.omnigent.harness_platform.execution_plan import (
+    OmnigentExecutionPlanEnvelope,
+)
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
+)
+from moonmind.omnigent.runtime_bindings import (
+    RuntimeBindingSessionAuthoritySink,
+    RuntimeBindingState,
+    StableRuntimeBinding,
+    stable_binding_id,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+
+
+def _execution_identity(request: AgentExecutionRequest) -> tuple[str, str]:
+    if request.step_execution is not None:
+        return (
+            request.step_execution.workflow_id,
+            request.step_execution.step_execution_id,
+        )
+    return request.correlation_id, request.correlation_id
 
 
 class GenericOmnigentHostRealizer:
@@ -37,15 +44,42 @@ class GenericOmnigentHostRealizer:
     def __init__(
         self,
         *,
-        session_factory: Any | None = None,
-        plan_store: Any | None = None,
-        runtime_binding_store: Any | None = None,
-        host_runtime: Any | None = None,
+        runtime_binding_store: Any,
+        provider_lease_coordinator: Any,
+        credential_provisioning_service: Any,
+        host_lease_repository: Any,
+        host_runtime: Any,
+        planned_host_resolver: Callable[
+            [OmnigentExecutionPlanEnvelope], Awaitable[tuple[Any, Any]]
+        ],
+        session_driver: Callable[..., Awaitable[AgentRunResult]],
+        session_cleanup_service: Any,
+        artifact_gateway: Any | None = None,
     ) -> None:
-        self._session_factory = session_factory
-        self._plan_store = plan_store
-        self._runtime_binding_store = runtime_binding_store
+        dependencies = (
+            runtime_binding_store,
+            provider_lease_coordinator,
+            credential_provisioning_service,
+            host_lease_repository,
+            host_runtime,
+            planned_host_resolver,
+            session_driver,
+            session_cleanup_service,
+        )
+        if any(item is None for item in dependencies):
+            raise HarnessPlatformError(
+                "generic Omnigent realizer dependencies are incomplete",
+                code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
+            )
+        self._runtime_bindings = runtime_binding_store
+        self._provider_leases = provider_lease_coordinator
+        self._credentials = credential_provisioning_service
+        self._host_leases = host_lease_repository
         self._host_runtime = host_runtime
+        self._resolve_host = planned_host_resolver
+        self._session_driver = session_driver
+        self._session_cleanup = session_cleanup_service
+        self._artifacts = artifact_gateway
 
     async def execute(
         self,
@@ -57,174 +91,569 @@ class GenericOmnigentHostRealizer:
                 f"plan realizer {plan.payload.executionRealizerRef} != {self.ref}",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
             )
+        prior = await self._runtime_bindings.get(
+            stable_binding_id(
+                execution_plan_ref=plan.planRef,
+                idempotency_key=request.idempotency_key,
+            )
+        )
+        if prior is not None and prior.state is RuntimeBindingState.cleaned:
+            if prior.terminalResult is None:
+                raise HarnessPlatformError(
+                    "cleaned generic execution has no durable terminal result",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
+            return AgentRunResult.model_validate(prior.terminalResult)
+        workflow_id, step_execution_id = _execution_identity(request)
+        acquired: tuple[Any, ...] = ()
+        credential_handles: tuple[CredentialRuntimeHandle, ...] = ()
+        binding: StableRuntimeBinding | None = None
+        host_lease: Any | None = None
+        host_context: dict[str, Any] | None = None
+        prepared: Any | None = None
+        result: AgentRunResult | None = None
+        primary_error: BaseException | None = None
+        cleanup_error: BaseException | None = None
 
-        # Validate plan is generically realizable (no harness branches)
-        return await self._execute_generic(request, plan)
+        host_class, launch_policy = await self._resolve_host(plan)
+        try:
+            acquired = await self._provider_leases.acquire_all(
+                plan=plan,
+                workflow_id=workflow_id,
+                step_execution_id=step_execution_id,
+                idempotency_key=request.idempotency_key,
+            )
+            materializers = {
+                slot: str(value["materializerRef"])
+                for slot, value in plan.payload.credentialBindings.items()
+            }
+            provider_authority = {
+                item.slot: {
+                    **item.runtime_binding_value(
+                        credential_runtime_ref=credential_runtime_identity(
+                            item, materializers[item.slot]
+                        )[0]
+                    ),
+                    "materializerRef": materializers[item.slot],
+                }
+                for item in acquired
+            }
+            # Acquired generations become immutable before SecretRef resolution.
+            binding = await self._runtime_bindings.create_initial(
+                execution_plan_ref=plan.planRef,
+                idempotency_key=request.idempotency_key,
+                provider_leases=provider_authority,
+            )
+            if binding.state is RuntimeBindingState.cleaned:
+                # A completed binding is immutable. A duplicate execution must
+                # use the already-published workflow result, never recreate its
+                # released host or credential state.
+                await self._provider_leases.release_all(acquired)
+                acquired = ()
+                if binding.terminalResult is not None:
+                    return AgentRunResult.model_validate(binding.terminalResult)
+                raise HarnessPlatformError(
+                    "cleaned generic execution has no durable terminal result",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
+            if binding.state in {
+                RuntimeBindingState.host_allocating,
+                RuntimeBindingState.host_ready,
+                RuntimeBindingState.session_creating,
+                RuntimeBindingState.session_active,
+                RuntimeBindingState.draining,
+                RuntimeBindingState.cleanup_pending,
+                RuntimeBindingState.failed,
+            }:
+                credential_handles = await self._credentials.load_cleanup_handles(
+                    binding.providerLeases, binding.credentialRuntimeHandles
+                )
+                host_lease = (
+                    await self._host_leases.get(binding.hostLeaseRef)
+                    if binding.hostLeaseRef
+                    else None
+                )
+                host_context = self._persisted_host_context(binding, host_lease)
+                if binding.state in {
+                    RuntimeBindingState.host_ready,
+                    RuntimeBindingState.session_creating,
+                    RuntimeBindingState.session_active,
+                }:
+                    return await self._resume_attested_host(
+                        request=request,
+                        plan=plan,
+                        binding=binding,
+                        host_lease=host_lease,
+                        host_context=host_context,
+                        credential_handles=credential_handles,
+                        acquired=acquired,
+                    )
+                raise HarnessPlatformError(
+                    "an interrupted generic host allocation requires fenced cleanup",
+                    code=HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED,
+                )
 
-    async def _execute_generic(
+            credential_handles = await self._credentials.materialize_all(
+                request=request,
+                plan=plan,
+                acquired_leases=acquired,
+                writer_image_ref=host_class.imageRef,
+            )
+            by_runtime_ref = {
+                (handle.providerLeaseRef, handle.materializerRef): handle
+                for handle in credential_handles
+            }
+            credential_map = {
+                item.slot: by_runtime_ref[
+                    (item.provider_lease_ref, materializers[item.slot])
+                ].model_dump(by_alias=True, mode="json")
+                for item in acquired
+            }
+            cleanup_authorities: list[str | dict[str, Any]] = [
+                {
+                    "kind": "credential",
+                    "credentialRuntimeRef": handle.credentialRuntimeRef,
+                    "cleanupRef": handle.cleanupRef,
+                }
+                for handle in credential_handles
+            ]
+            binding = await self._update_binding(
+                binding,
+                state=RuntimeBindingState.credentials_materialized,
+                updates={
+                    "credentialRuntimeHandles": credential_map,
+                    "cleanupAuthorityRefs": cleanup_authorities,
+                },
+            )
+
+            async def record_prepared(authority: dict[str, Any]) -> None:
+                nonlocal binding
+                assert binding is not None
+                cleanup = list(binding.cleanupAuthorityRefs)
+                if authority not in cleanup:
+                    cleanup.append(authority)
+                binding = await self._update_binding(
+                    binding, updates={"cleanupAuthorityRefs": cleanup}
+                )
+
+            prepared = await self._host_runtime.prepare(
+                request=request,
+                plan=plan,
+                launch_policy=launch_policy,
+                authority_sink=record_prepared,
+            )
+            binding = await self._update_binding(
+                binding, state=RuntimeBindingState.host_allocating
+            )
+            host_lease = await self._host_leases.acquire(
+                execution_plan_ref=plan.planRef,
+                runtime_binding_id=binding.bindingId,
+                host_class_ref=host_class.ref,
+                launch_policy_ref=launch_policy.ref,
+                harness_id=plan.payload.harnessId,
+                harness_implementation_ref=plan.payload.harnessImplementationRef,
+                provider_profile_refs=tuple(
+                    sorted({item.provider_profile_ref for item in acquired})
+                ),
+                ttl_seconds=int(launch_policy.limits["timeoutSeconds"]) + 900,
+            )
+            binding = await self._update_binding(
+                binding,
+                updates={
+                    "hostBindingRef": host_lease.bindingRef,
+                    "hostLeaseRef": host_lease.leaseRef,
+                    "hostLeaseGeneration": host_lease.generation,
+                },
+            )
+
+            async def record_host_launch(authority: dict[str, Any]) -> None:
+                nonlocal binding, host_lease
+                assert binding is not None and host_lease is not None
+                host_lease = await self._host_leases.record_launch(
+                    host_lease.leaseRef,
+                    expected_generation=host_lease.generation,
+                    cleanup_handle=authority,
+                )
+                cleanup = list(binding.cleanupAuthorityRefs)
+                if authority not in cleanup:
+                    cleanup.append(authority)
+                binding = await self._update_binding(
+                    binding, updates={"cleanupAuthorityRefs": cleanup}
+                )
+
+            host_context = await self._host_runtime.realize(
+                request=request,
+                plan=plan,
+                runtime_binding_id=binding.bindingId,
+                host_lease_ref=host_lease.leaseRef,
+                host_lease_generation=host_lease.launchGeneration,
+                host_class=host_class,
+                launch_policy=launch_policy,
+                prepared=prepared,
+                credential_handles=[
+                    handle.model_dump(by_alias=True, mode="json")
+                    for handle in credential_handles
+                ],
+                authority_sink=record_host_launch,
+            )
+            host_lease = await self._host_leases.mark_ready(
+                host_lease.leaseRef,
+                expected_generation=host_lease.generation,
+                omnigent_host_id=str(host_context["omnigentHostId"]),
+                cleanup_handle={
+                    "kind": "host",
+                    "containerName": host_context["containerName"],
+                    "stateVolumeRef": host_context["stateVolumeRef"],
+                    "controlVolumeRef": host_context.get("controlVolumeRef"),
+                    "launchGeneration": host_lease.launchGeneration,
+                },
+            )
+            attestations = {
+                key: str(value)
+                for key, value in host_context.items()
+                if key.endswith("AttestationRef") and value
+            }
+            binding = await self._update_binding(
+                binding,
+                state=RuntimeBindingState.host_ready,
+                updates={
+                    "omnigentHostId": host_context["omnigentHostId"],
+                    "hostLeaseGeneration": host_lease.generation,
+                    "attestationRefs": attestations,
+                },
+            )
+            binding = await self._update_binding(
+                binding, state=RuntimeBindingState.session_creating
+            )
+            sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, binding)
+            result = await self._session_driver(
+                self._bind_exact_host(request, plan, host_context, binding),
+                session_authority_sink=sink,
+            )
+            binding = sink.binding
+            binding = await self._update_binding(
+                binding,
+                updates={
+                    "terminalResult": result.model_dump(
+                        by_alias=True, mode="json", exclude_none=True
+                    )
+                },
+            )
+        except BaseException as exc:
+            primary_error = exc
+
+        if binding is not None:
+            try:
+                binding, host_lease = await self._cleanup(
+                    request=request,
+                    binding=binding,
+                    host_lease=host_lease,
+                    host_context=host_context,
+                    prepared=prepared,
+                    credential_handles=credential_handles,
+                    acquired=acquired,
+                )
+            except BaseException as exc:
+                cleanup_error = exc
+        elif acquired:
+            try:
+                await self._provider_leases.release_all(acquired)
+            except BaseException as exc:
+                cleanup_error = exc
+
+        if primary_error is not None:
+            raise primary_error
+        if result is None:
+            raise HarnessPlatformError(
+                "generic Omnigent execution ended without a terminal result",
+                code=HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED,
+            )
+        # Cleanup remains durably cleanup_pending for janitor recovery and does
+        # not overwrite an objectively completed provider turn.
+        _ = cleanup_error
+        return result
+
+    @staticmethod
+    def _persisted_host_context(
+        binding: StableRuntimeBinding,
+        host_lease: Any | None,
+    ) -> dict[str, Any] | None:
+        cleanup = host_lease.cleanupHandle if host_lease is not None else None
+        if not isinstance(cleanup, dict) or not binding.omnigentHostId:
+            return None
+        return {
+            **cleanup,
+            "omnigentHostId": binding.omnigentHostId,
+            "hostId": binding.omnigentHostId,
+            "workspacePath": "/workspaces/run",
+            **dict(binding.attestationRefs),
+        }
+
+    async def _resume_attested_host(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        binding: StableRuntimeBinding,
+        host_lease: Any | None,
+        host_context: dict[str, Any] | None,
+        credential_handles: tuple[CredentialRuntimeHandle, ...],
+        acquired: tuple[Any, ...],
+    ) -> AgentRunResult:
+        if host_lease is None or host_context is None:
+            raise HarnessPlatformError(
+                "attested host retry authority is incomplete",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        primary_error: BaseException | None = None
+        result: AgentRunResult | None = None
+        current = binding
+        try:
+            if current.terminalResult is not None:
+                result = AgentRunResult.model_validate(current.terminalResult)
+            elif current.state is RuntimeBindingState.host_ready:
+                current = await self._update_binding(
+                    current, state=RuntimeBindingState.session_creating
+                )
+            if result is None:
+                sink = RuntimeBindingSessionAuthoritySink(
+                    self._runtime_bindings, current
+                )
+                result = await self._session_driver(
+                    self._bind_exact_host(request, plan, host_context, current),
+                    session_authority_sink=sink,
+                )
+                current = await self._update_binding(
+                    sink.binding,
+                    updates={
+                        "terminalResult": result.model_dump(
+                            by_alias=True, mode="json", exclude_none=True
+                        )
+                    },
+                )
+        except BaseException as exc:
+            primary_error = exc
+        try:
+            await self._cleanup(
+                request=request,
+                binding=current,
+                host_lease=host_lease,
+                host_context=host_context,
+                prepared=None,
+                credential_handles=credential_handles,
+                acquired=acquired,
+            )
+        except BaseException:
+            # Cleanup authority remains durable for janitor retry. Preserve the
+            # primary provider boundary result when one exists.
+            pass
+        if primary_error is not None:
+            raise primary_error
+        if result is None:
+            raise HarnessPlatformError(
+                "generic Omnigent retry ended without a terminal result",
+                code=HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED,
+            )
+        return result
+
+    async def _cleanup(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        binding: StableRuntimeBinding,
+        host_lease: Any | None,
+        host_context: dict[str, Any] | None,
+        prepared: Any | None,
+        credential_handles: tuple[CredentialRuntimeHandle, ...],
+        acquired: tuple[Any, ...],
+    ) -> tuple[StableRuntimeBinding, Any | None]:
+        if binding.state is RuntimeBindingState.session_active:
+            binding = await self._update_binding(
+                binding, state=RuntimeBindingState.draining
+            )
+        if binding.state not in {
+            RuntimeBindingState.cleanup_pending,
+            RuntimeBindingState.cleaned,
+        }:
+            binding = await self._update_binding(
+                binding, state=RuntimeBindingState.cleanup_pending
+            )
+        if binding.state is RuntimeBindingState.cleaned:
+            return binding, host_lease
+
+        cleanup_evidence: dict[str, Any] = {}
+        if binding.omnigentSessionId:
+            cleanup_evidence["session"] = await self._session_cleanup.drain(
+                binding.omnigentSessionId
+            )
+        if host_lease is not None and host_lease.status != "cleaned":
+            host_lease = await self._host_leases.claim_cleanup(
+                host_lease.leaseRef, expected_generation=host_lease.generation
+            )
+            context = host_context or host_lease.cleanupHandle
+            if context is not None:
+                cleanup_evidence["host"] = await self._host_runtime.cleanup(
+                    host_context=context,
+                    host_lease_ref=host_lease.leaseRef,
+                    host_lease_generation=host_lease.launchGeneration,
+                )
+            host_lease = await self._host_leases.mark_cleaned(
+                host_lease.leaseRef, expected_generation=host_lease.generation
+            )
+        if prepared is not None:
+            await self._host_runtime.cleanup_prepared(prepared)
+        else:
+            await self._host_runtime.cleanup_authorities(binding.cleanupAuthorityRefs)
+        cleanup_evidence["credentials"] = [
+            item.model_dump(by_alias=True, mode="json")
+            for item in await self._credentials.cleanup_all(credential_handles)
+        ]
+        evidence_ref: str | None = None
+        if self._artifacts is not None:
+            evidence_ref = await self._artifacts.write_json(
+                request=request,
+                name="generic-host-cleanup.json",
+                payload={
+                    "bindingId": binding.bindingId,
+                    "executionPlanRef": binding.executionPlanRef,
+                    "results": cleanup_evidence,
+                    "providerCapacityReleaseOrder": "last",
+                },
+                link_type="evidence.cleanup",
+            )
+        # Provider capacity releases after all credential-consuming state.
+        await self._provider_leases.release_all(acquired)
+        attestation_refs = dict(binding.attestationRefs)
+        if evidence_ref:
+            attestation_refs["cleanupAttestationRef"] = evidence_ref
+        binding = await self._update_binding(
+            binding,
+            state=RuntimeBindingState.cleaned,
+            updates={"attestationRefs": attestation_refs},
+        )
+        return binding, host_lease
+
+    async def _update_binding(
+        self,
+        binding: StableRuntimeBinding,
+        *,
+        state: RuntimeBindingState | None = None,
+        updates: dict[str, Any] | None = None,
+    ) -> StableRuntimeBinding:
+        return await self._runtime_bindings.update(
+            binding.bindingId,
+            expected_revision=binding.revision,
+            expected_fencing_generation=binding.fencingGeneration,
+            state=state,
+            updates=updates,
+        )
+
+    def _bind_exact_host(
         self,
         request: AgentExecutionRequest,
         plan: OmnigentExecutionPlanEnvelope,
-    ) -> AgentRunResult:
-        # 1. Resolve immutable decisions from plan (no secret, no lease yet)
-        host_class = get_host_class(plan.payload.hostClassRef)
-        launch_policy = get_launch_policy(plan.payload.launchPolicyRef)
-
-        # 2. Verify class-level admission already computed in plan; do not recompute
-        # 3. Acquire Provider Profile leases deterministically (stub for now)
-        # In production, this goes via ProviderProfileLeaseClient keyed by
-        # capacityScopeRef, not harness runtime_id.
-
-        # 4. For now, delegate to existing generic session driver with prepared
-        # authorization block. Full host realization (workspace, skills,
-        # credential materialization, host launch, attestation) is owned by
-        # GenericOmnigentHostRuntime which uses shared services.
-
-        # Import lazily to avoid cycles
-        from moonmind.omnigent.generic_opencode_runtime import (
-            compile_opencode_execution_plan,  # noqa: F401 - demonstrates wiring
-        )
-        from moonmind.omnigent.execute import run_omnigent_execution
-        from api_service.db.base import async_session_maker
-        from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
-        from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-
-        # If host_runtime supplied (tests), use it for host realization;
-        # otherwise, fall back to direct session driver (host is externally
-        # managed or test harness).
-
-        # Acquire provider leases and materialize credential handles (secret-free)
-        credential_handles: list[dict[str, Any]] = []
-        for slot, binding in plan.payload.credentialBindings.items():
-            handle = materialize_credential(
-                materializer_ref=binding.materializerRef,
-                provider_profile_ref=binding.providerProfileRef,
-                provider_lease_ref=f"provider-lease:{binding.providerProfileRef}:{slot}",
-                credential_generation=1,
-            )
-            credential_handles.append(handle)
-
-        if self._host_runtime is not None:
-            # Let host runtime materialize host and verify attestation
-            host_ctx = await self._host_runtime.realize(
-                request=request,
-                plan=plan,
-                host_class=host_class,
-                launch_policy=launch_policy,
-                credential_handles=credential_handles,
-            )
-            # host_ctx contains attested hostId, workspace, handles
-            # Build generic session payload
-            # Delegate to generic driver
-            session_factory = self._session_factory or async_session_maker
-            artifact_gateway = LocalOmnigentArtifactGateway()
-            run_store = OmnigentBridgeSessionStore(session_factory)
-            # Enrich request with host binding (request is copied)
-            enriched = self._bind_host_to_request(request, host_ctx)
-            return await run_omnigent_execution(
-                enriched,
-                artifact_gateway=artifact_gateway,
-                run_store=run_store,
-            )
-
-        # Fallback: direct driver (no host materialization in this stub)
-        # This path still validates that the realizer contains no per-harness
-        # execution branches – the harnessId is data, not a branch.
-        from moonmind.omnigent.host_runtime import GenericOmnigentHostRuntime
-
-        # Use shared services for workspace/skills/egress/cleanup extraction
-        # (Phase 2). For now, GenericOmnigentHostRuntime is a thin wrapper
-        # that validates attestation via harness_platform.
-
-        # If no host_runtime injected, create one with default services
-        host_runtime = GenericOmnigentHostRuntime()
-        # In hermetic tests, host_runtime.realize may be mocked to attest
-        # without docker; we attempt but fall back to direct execution if no
-        # docker backend.
-        try:
-            host_ctx = await host_runtime.realize(
-                request=request,
-                plan=plan,
-                host_class=host_class,
-                launch_policy=launch_policy,
-                credential_handles=credential_handles,
-            )
-            enriched = self._bind_host_to_request(request, host_ctx)
-            session_factory = self._session_factory or async_session_maker
-            artifact_gateway = LocalOmnigentArtifactGateway()
-            run_store = OmnigentBridgeSessionStore(session_factory)
-            return await run_omnigent_execution(enriched, artifact_gateway=artifact_gateway, run_store=run_store)
-        except HarnessPlatformError:
-            raise
-        except Exception as exc:
-            # In test environments without docker, fall back to direct driver
-            # with a synthetic host ctx that still validates attestation logic
-            # but does not require container launch.
-            if os.getenv("PYTEST_CURRENT_TEST"):
-                # Hermetic: synthesize attestation and proceed to driver
-                from api_service.db.base import async_session_maker
-                from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
-                from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-
-                session_factory = self._session_factory or async_session_maker
-                artifact_gateway = LocalOmnigentArtifactGateway()
-                run_store = OmnigentBridgeSessionStore(session_factory)
-                # Synthesize minimal host ctx for harness-neutral execution
-                synthetic_ctx = {
-                    "hostId": f"host_synthetic_{plan.payload.harnessId}",
-                    "workspacePath": "/workspaces/run",
-                    "hostClassRef": plan.payload.hostClassRef,
-                    "launchPolicyRef": plan.payload.launchPolicyRef,
-                }
-                enriched = self._bind_host_to_request(request, synthetic_ctx)
-                return await run_omnigent_execution(enriched, artifact_gateway=artifact_gateway, run_store=run_store)
-            raise HarnessPlatformError(
-                f"generic host realization failed: {exc}",
-                code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
-            ) from exc
-
-    def _bind_host_to_request(
-        self,
-        request: AgentExecutionRequest,
-        host_ctx: dict[str, Any],
+        host_context: dict[str, Any],
+        binding: StableRuntimeBinding,
     ) -> AgentExecutionRequest:
-        """Build secret-free authorization block for generic session driver."""
+        host_id = str(host_context.get("omnigentHostId") or "").strip()
+        if not host_id:
+            raise HarnessPlatformError(
+                "exact Omnigent host authority is missing",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
+            )
         parameters = dict(request.parameters or {})
         omnigent = dict(parameters.get("omnigent") or {})
+        source = plan.payload.agentSource
+        agent_id = str(
+            source.get("upstreamId") or source.get("importedAgentId") or ""
+        ).strip()
+        if not agent_id:
+            raise HarnessPlatformError(
+                "planned Agent source has no runnable upstream identity",
+                code=HarnessPlatformFailure.OMNIGENT_AGENT_SOURCE_UNAVAILABLE,
+            )
+        omnigent["endpointRef"] = plan.payload.endpointRef
+        omnigent["agent"] = {
+            "agentId": agent_id,
+            "harnessOverride": plan.payload.harnessId,
+        }
         session = dict(omnigent.get("session") or {})
-        session["hostType"] = "external"
-        session["hostId"] = host_ctx.get("hostId") or host_ctx.get("omnigentHostId") or "host_synthetic"
-        session["workspace"] = host_ctx.get("workspacePath") or "/workspaces/run"
+        session.update(
+            {
+                "hostType": "external",
+                "hostId": host_id,
+                "workspace": str(
+                    host_context.get("workspacePath") or "/workspaces/run"
+                ),
+                "modelOverride": plan.payload.modelConfig.qualifiedId,
+                "reasoningEffort": plan.payload.modelConfig.effort,
+                "labels": {
+                    **dict(session.get("labels") or {}),
+                    "moonmind.runtime_binding_id": binding.bindingId,
+                    "moonmind.execution_plan_ref": plan.planRef,
+                },
+            }
+        )
         omnigent["session"] = session
         omnigent["_moonmindProfileAuthorization"] = {
-            "hostClassRef": host_ctx.get("hostClassRef"),
-            "launchPolicyRef": host_ctx.get("launchPolicyRef"),
+            "hostClassRef": plan.payload.hostClassRef,
+            "launchPolicyRef": plan.payload.launchPolicyRef,
             "executionRealizerRef": self.ref,
+            "runtimeBindingId": binding.bindingId,
         }
         parameters["omnigent"] = omnigent
         return request.model_copy(update={"parameters": parameters})
 
-    async def reconcile(
-        self,
-        plan_ref: str,
-        runtime_binding_ref: str | None,
-    ) -> None:
-        # Reverse authority order: host, credential, leases (leases last)
-        # 1. Remove on-demand host or release connected host
-        if self._host_runtime is not None and hasattr(self._host_runtime, "cleanup"):
-            try:
-                await self._host_runtime.cleanup(plan_ref, runtime_binding_ref)  # type: ignore[attr-defined]
-            except Exception:  # best-effort cleanup, ignore
-                pass
-        # 2. Clean up materialized credential state
-        try:
-            from moonmind.omnigent.harness_platform.materializers import cleanup_opencode_auth
+    async def reconcile(self, plan_ref: str, runtime_binding_ref: str | None) -> None:
+        if not runtime_binding_ref:
+            return
+        binding = await self._runtime_bindings.get(runtime_binding_ref)
+        if binding is None or binding.executionPlanRef != plan_ref:
+            raise HarnessPlatformError(
+                "runtime binding is unavailable for reconciliation",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        if binding.state is RuntimeBindingState.cleaned:
+            return
+        binding = await self._runtime_bindings.update(
+            binding.bindingId,
+            expected_revision=binding.revision,
+            expected_fencing_generation=binding.fencingGeneration,
+            state=RuntimeBindingState.cleanup_pending,
+            increment_fence=True,
+        )
+        host_lease = (
+            await self._host_leases.get(binding.hostLeaseRef)
+            if binding.hostLeaseRef
+            else None
+        )
+        cleanup_handles = await self._credentials.load_cleanup_handles(
+            binding.providerLeases, binding.credentialRuntimeHandles
+        )
+        if host_lease is not None and host_lease.status != "cleaned":
+            if binding.omnigentSessionId:
+                await self._session_cleanup.drain(binding.omnigentSessionId)
+            claimed = await self._host_leases.claim_cleanup(
+                host_lease.leaseRef, expected_generation=host_lease.generation
+            )
+            if claimed.cleanupHandle:
+                await self._host_runtime.cleanup(
+                    host_context=claimed.cleanupHandle,
+                    host_lease_ref=claimed.leaseRef,
+                    host_lease_generation=claimed.launchGeneration,
+                )
+            await self._host_leases.mark_cleaned(
+                claimed.leaseRef, expected_generation=claimed.generation
+            )
+        await self._host_runtime.cleanup_authorities(binding.cleanupAuthorityRefs)
+        await self._credentials.cleanup_all(cleanup_handles)
+        await self._provider_leases.release_from_binding(binding.providerLeases)
+        await self._runtime_bindings.update(
+            binding.bindingId,
+            expected_revision=binding.revision,
+            expected_fencing_generation=binding.fencingGeneration,
+            state=RuntimeBindingState.cleaned,
+        )
 
-            # Best-effort cleanup for opencode; other materializers have their own cleanup
-            cleanup_opencode_auth(host_root="/")
-        except Exception:  # best-effort cleanup, ignore
-            pass
-        # 3. Release Provider Profile leases last (capacityScopeRef, not harness runtime)
-        # In production, this goes via ProviderProfileLeaseClient.release()
-        # Here we ensure the call is not silently omitted.
-        return None
+
+__all__ = ["GenericOmnigentHostRealizer"]

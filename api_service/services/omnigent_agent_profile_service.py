@@ -1,8 +1,11 @@
 """Server-owned synchronization and validation for Omnigent agent profiles."""
+
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -12,17 +15,79 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api_service.db.models import OmnigentUpstreamAgentProjection
 
-# Generic harness support (Phase 5): synchronized catalog + trust records own launchability.
-# Only harnesses with a declared Host Class and approved materializer are launchable.
-# Keep explicit allowlist minimal; qwen/claude remain quarantined until Host Class exists.
-_SUPPORTED_HARNESSES = {"codex-native", "opencode-native", "pi-native"}
 _MAX_INVENTORY = 500
 _INVENTORY_FRESHNESS_TTL = timedelta(minutes=5)
 _METADATA_TEXT_LIMIT = 512
 _METADATA_LIST_LIMIT = 64
+_IMMUTABLE_IMAGE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 
 
-def projection_identity(endpoint_ref: str, upstream_id: str, version: str | None) -> str:
+async def computed_launchable_harnesses(session: AsyncSession) -> set[str]:
+    """Return harness IDs backed by actual legacy or generic production wiring."""
+
+    from api_service.db.models import (
+        OmnigentHarnessCatalogSnapshotRecord,
+        OmnigentHarnessTrustRecord,
+    )
+    from moonmind.omnigent.execution_profiles import PROFILES
+    from moonmind.omnigent.harness_platform.catalog import HarnessCatalogSnapshot
+    from moonmind.omnigent.harness_platform.host_classes import (
+        DEFAULT_HOST_CLASS_TEMPLATES,
+    )
+    from moonmind.omnigent.settings import (
+        generic_host_enabled,
+        opencode_support_enabled,
+    )
+
+    launchable = {
+        profile.harness
+        for profile in PROFILES.values()
+        if profile.provider_runtime in {"codex_cli", "claude_code"}
+    }
+    if not generic_host_enabled():
+        return launchable
+    rows = list(
+        (
+            await session.execute(
+                select(OmnigentHarnessCatalogSnapshotRecord).order_by(
+                    OmnigentHarnessCatalogSnapshotRecord.observed_at.desc()
+                )
+            )
+        ).scalars()
+    )
+    latest_by_endpoint: dict[str, Any] = {}
+    for row in rows:
+        latest_by_endpoint.setdefault(row.endpoint_ref, row)
+    trust_rows = list(
+        (await session.execute(select(OmnigentHarnessTrustRecord))).scalars()
+    )
+    trusted = {
+        row.implementation_ref
+        for row in trust_rows
+        if row.trust_state in {"core_trusted", "plugin_approved"}
+    }
+    for row in latest_by_endpoint.values():
+        snapshot = HarnessCatalogSnapshot.model_validate(row.snapshot_json)
+        for harness in snapshot.harnesses:
+            if harness.implementation.implementation_ref() not in trusted:
+                continue
+            for template in DEFAULT_HOST_CLASS_TEMPLATES:
+                if harness.id not in template.harness_ids:
+                    continue
+                if (
+                    template.host_class_id == "omnigent-opencode"
+                    and not opencode_support_enabled()
+                ):
+                    continue
+                image = str(os.getenv(template.image_env) or "").strip()
+                if _IMMUTABLE_IMAGE.fullmatch(image) and not image.endswith("0" * 64):
+                    launchable.add(harness.id)
+    return launchable
+
+
+def projection_identity(
+    endpoint_ref: str, upstream_id: str, version: str | None
+) -> str:
     """Build a bounded stable key without trusting a display name."""
     raw = json.dumps(
         [endpoint_ref, upstream_id, version or ""],
@@ -119,11 +184,13 @@ def _bounded_metadata(item: Mapping[str, Any]) -> dict[str, Any]:
             result[target] = value[:_METADATA_TEXT_LIMIT]
     capabilities = item.get("capabilities")
     if isinstance(capabilities, list):
-        result["capabilities"] = sorted({
-            str(value)[:_METADATA_TEXT_LIMIT]
-            for value in capabilities[:_METADATA_LIST_LIMIT]
-            if isinstance(value, str) and value
-        })
+        result["capabilities"] = sorted(
+            {
+                str(value)[:_METADATA_TEXT_LIMIT]
+                for value in capabilities[:_METADATA_LIST_LIMIT]
+                if isinstance(value, str) and value
+            }
+        )
     return result
 
 
@@ -137,6 +204,7 @@ async def synchronize_upstream_inventory(
 ) -> int:
     """Upsert one bounded last-known projection and mark disappearances unavailable."""
     observed_at = now or datetime.now(timezone.utc)
+    launchable_harnesses = await computed_launchable_harnesses(session)
     rows = list(inventory[:_MAX_INVENTORY])
     seen: set[str] = set()
     for item in rows:
@@ -153,8 +221,10 @@ async def synchronize_upstream_inventory(
             if isinstance(capabilities, list)
             else set()
         )
-        compatible = harness in _SUPPORTED_HARNESSES or (
-            not harness and "codex-native" in capability_values
+        compatible = harness in launchable_harnesses or (
+            not harness
+            and "codex-native" in capability_values
+            and "codex-native" in launchable_harnesses
         )
         projection = await session.get(OmnigentUpstreamAgentProjection, projection_id)
         if projection is None:
@@ -179,12 +249,16 @@ async def synchronize_upstream_inventory(
             projection.last_attempt_at = observed_at
             projection.error = None
 
-    existing = list((await session.execute(
-        select(OmnigentUpstreamAgentProjection).where(
-            OmnigentUpstreamAgentProjection.endpoint_ref == endpoint_ref,
-            OmnigentUpstreamAgentProjection.bridge_mode == bridge_mode,
-        )
-    )).scalars())
+    existing = list(
+        (
+            await session.execute(
+                select(OmnigentUpstreamAgentProjection).where(
+                    OmnigentUpstreamAgentProjection.endpoint_ref == endpoint_ref,
+                    OmnigentUpstreamAgentProjection.bridge_mode == bridge_mode,
+                )
+            )
+        ).scalars()
+    )
     for projection in existing:
         if len(inventory) <= _MAX_INVENTORY and projection.projection_id not in seen:
             projection.available = False
@@ -205,12 +279,16 @@ async def record_upstream_sync_failure(
     """Retain last-known metadata while explicitly recording stale error state."""
     attempted_at = now or datetime.now(timezone.utc)
     safe_error = error.replace("\n", " ")[:512]
-    rows = list((await session.execute(
-        select(OmnigentUpstreamAgentProjection).where(
-            OmnigentUpstreamAgentProjection.endpoint_ref == endpoint_ref,
-            OmnigentUpstreamAgentProjection.bridge_mode == bridge_mode,
-        )
-    )).scalars())
+    rows = list(
+        (
+            await session.execute(
+                select(OmnigentUpstreamAgentProjection).where(
+                    OmnigentUpstreamAgentProjection.endpoint_ref == endpoint_ref,
+                    OmnigentUpstreamAgentProjection.bridge_mode == bridge_mode,
+                )
+            )
+        ).scalars()
+    )
     for projection in rows:
         projection.last_attempt_at = attempted_at
         projection.error = safe_error
