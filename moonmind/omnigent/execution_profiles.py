@@ -35,10 +35,10 @@ class OmnigentExecutionProfile(BaseModel):
     enabled: bool = True
     endpoint_ref: str = Field(alias="endpointRef")
     agent_name: str = Field(alias="agentName")
-    harness: Literal["codex-native", "claude-native"]
+    harness: Literal["codex-native", "claude-native", "opencode-native"]
     default_policy_ref: str = Field(alias="defaultPolicyRef")
-    provider_runtime: Literal["codex_cli", "claude_code"] = Field(alias="providerRuntime")
-    provider_auth: Literal["oauth_volume"] = Field("oauth_volume", alias="providerAuth")
+    provider_runtime: Literal["codex_cli", "claude_code", "opencode"] = Field(alias="providerRuntime")
+    provider_auth: Literal["oauth_volume", "secret_ref"] = Field("oauth_volume", alias="providerAuth")
     capture_defaults: dict[str, Any] = Field(alias="captureDefaults")
     model: str | None = None
     reasoning: str | None = None
@@ -185,6 +185,20 @@ POLICIES = {
             cleanup={"mode": "remove", "janitor": True},
             **_COMMON,
         ),
+        OmnigentLaunchPolicy(
+            policyId="opencode-on-demand",
+            version=1,
+            hostMode="on_demand_docker",
+            cleanup={"mode": "remove", "janitor": True},
+            **_COMMON,
+        ),
+        OmnigentLaunchPolicy(
+            policyId="opencode-static",
+            version=1,
+            hostMode="static_compose",
+            cleanup={"mode": "drain", "janitor": True},
+            **_COMMON,
+        ),
     )
 }
 PROFILES = {
@@ -211,6 +225,19 @@ PROFILES = {
             harness="claude-native",
             defaultPolicyRef="claude-static@1",
             providerRuntime="claude_code",
+            captureDefaults={"required": True, "retentionDays": 30},
+            readiness={"requiresProviderLaunchReady": True, "validationVersion": 1},
+        ),
+        OmnigentExecutionProfile(
+            profileId="omnigent-opencode",
+            version=1,
+            displayName="Omnigent OpenCode",
+            endpointRef="default",
+            agentName="opencode",
+            harness="opencode-native",
+            defaultPolicyRef="opencode-on-demand@1",
+            providerRuntime="opencode",
+            providerAuth="secret_ref",
             captureDefaults={"required": True, "retentionDays": 30},
             readiness={"requiresProviderLaunchReady": True, "validationVersion": 1},
         ),
@@ -251,10 +278,15 @@ def compile_effective_launch(
             "Omnigent launch policy is missing or disabled",
             code="OMNIGENT_LAUNCH_POLICY_UNAVAILABLE",
         )
-    expected_prefix = (
-        "codex-" if profile.provider_runtime == "codex_cli" else "claude-"
-    )
-    if not policy.policy_id.startswith(expected_prefix):
+    if profile.provider_runtime == "codex_cli":
+        expected_prefix = "codex-"
+    elif profile.provider_runtime == "claude_code":
+        expected_prefix = "claude-"
+    elif profile.provider_runtime == "opencode":
+        expected_prefix = "opencode-"
+    else:
+        expected_prefix = ""
+    if expected_prefix and not policy.policy_id.startswith(expected_prefix):
         raise OmnigentOAuthHostError(
             "Omnigent launch policy is incompatible with the execution profile",
             code="OMNIGENT_LAUNCH_POLICY_PROVIDER_MISMATCH",

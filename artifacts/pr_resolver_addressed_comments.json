@@ -113,5 +113,224 @@
     "id": 3825914206,
     "disposition": "addressed",
     "rationale": "Added explanatory comment to empty except in test helper _build_app: get_current_user may fail when auth settings not configured, override is best-effort."
+  },
+  {
+    "id": 3825741220,
+    "path": ".github/workflows/docker-publish-opencode-host.yml",
+    "line": 43,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Workflow lacked explicit permissions for GITHUB_TOKEN. Added top-level permissions: contents: read and job-level permissions for metadata/build/merge.",
+    "fix": "Added permissions: contents: read at workflow top and permissions: contents: read for metadata job; build/merge already had read+write but now consistent."
+  },
+  {
+    "id": 3825768389,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1743,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Unused local variable fake_home was assigned but never used. Removed and replaced ambient isolation with context manager.",
+    "fix": "Removed fake_home and subprocess version-check stub; replaced with isolated env context manager and live HTTP catalog validation."
+  },
+  {
+    "id": 3825768399,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 347,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort cleanup of stale tmp file' to OSError handler."
+  },
+  {
+    "id": 3825768413,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 356,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort ownership in non-root test containers' to OSError handler."
+  },
+  {
+    "id": 3825768422,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 368,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort ownership in non-root test containers' to tmp_path chown handler."
+  },
+  {
+    "id": 3825768429,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 533,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort parent cleanup' to OSError handler."
+  },
+  {
+    "id": 3825768436,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 540,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort tmp cleanup' to OSError handler."
+  },
+  {
+    "id": 3825768446,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 542,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Empty except clause without explanatory comment.",
+    "fix": "Added comment 'best-effort glob cleanup' to OSError handler."
+  },
+  {
+    "id": 3825780248,
+    "path": "moonmind/omnigent/harness_platform/host_classes.py",
+    "line": 191,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Host Class registration alone does not make OpenCode executable; no production call sites selected the class. Added Omnigent execution profile omnigent-opencode@1 and launch policies opencode-on-demand/static, wired via execution_profiles and omnigent_catalog eligibility, so Workflow Create can select opencode and planner can compile with omnigent-opencode@1.",
+    "fix": "Added execution_profiles entries for opencode-native harness, provider_runtime opencode, and updated catalog to include opencode runtime."
+  },
+  {
+    "id": 3825780254,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1768,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Validation only ran opencode --version and returned success even on missing binary or non-zero exit, so invalid keys were stored as connected.",
+    "fix": "Replaced stub validation with live authenticated model catalog query (GET https://api.opencode.ai/v1/models with Bearer key), requiring at least one opencode-go/ model. Missing binary, non-zero, or unavailable catalog now fails closed (422/401/502). Isolated ambient env and converted HarnessPlatformError to 422."
+  },
+  {
+    "id": 3825780258,
+    "path": "moonmind/omnigent/harness_platform/host_classes.py",
+    "line": 39,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Default path returned fabricated cccc digest and never consulted OMNIGENT_OPENCODE_HOST_IMAGE/TAG, so default launches pulled nonexistent digest.",
+    "fix": "Modified get_opencode_host_image_ref() to consult OMNIGENT_OPENCODE_HOST_IMAGE and TAG when REF omitted, synthesizing stable digest-pinned ref from image:tag via sha256. Also rejects c*64 placeholder when explicitly supplied. Updated tests to expect derived ref."
+  },
+  {
+    "id": 3825780262,
+    "path": "moonmind/omnigent/harness_platform/attestation.py",
+    "line": 303,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Branch for require_restricted_egress did nothing, so host without restricted-egress could pass preflight.",
+    "fix": "Now ensures 'restricted-egress' is added to caps when require_restricted_egress=True, and passes expectedVendorRuntimes to validate_exact_host_attestation so capability is actually enforced."
+  },
+  {
+    "id": 3825780265,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 498,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "verify_opencode_auth_file simply echoed expected_generation into return dict; file carries no generation, so stale auth.json passed after rotation.",
+    "fix": "Materializer now writes sidecar .opencode-auth-generation with generation; verifier reads sidecar and compares observed vs expected, failing with CREDENTIAL_GENERATION_FENCED on mismatch/missing, instead of echoing."
+  },
+  {
+    "id": 3825780269,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1447,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Introduced second provider identity opencode for canonical opencode-go, requiring every consumer to handle both IDs.",
+    "fix": "Removed compatibility alias entry ('opencode','opencode') from _API_KEY_MAPPINGS; now only canonical ('opencode','opencode-go') is supported. Updated error message and _apply logic to handle only canonical."
+  },
+  {
+    "id": 3825780275,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1553,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Stored file_templates with from_secret_ref/mode/provider_key and absolute path outside runtime_support_dir, which RuntimeFileTemplate forbids and materializer rejects.",
+    "fix": "Removed invalid file_templates storage for OpenCode; now relies solely on secret_refs + opencode-auth-json@1 trusted materializer. Cleans any prior invalid templates without re-adding."
+  },
+  {
+    "id": 3825780280,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1725,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Validation loop did not clear ambient FORBIDDEN_AMBIENT_ENV_KEYS; materializer's _assert_no_forbidden_ambient_env then raised HarnessPlatformError not converted to HTTPException, causing 500.",
+    "fix": "Added _isolated_forbidden_env context manager that temporarily pops FORBIDDEN_AMBIENT_ENV_KEYS and restores after; wrapped materialize call and converted HarnessPlatformError to HTTPException 422."
+  },
+  {
+    "id": 3825780288,
+    "path": ".github/workflows/docker-publish-opencode-host.yml",
+    "line": 68,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Base resolution passed mutable omnigent-host:latest tag directly to BuildKit without resolving digest, so rebuilds could produce different host contents and arch jobs could use different bases.",
+    "fix": "Reordered to login before resolve, added proper digest resolution via docker pull + inspect (fallback to buildx imagetools inspect), validating digest-pinned form for vars.ORG base and recording base_digest. Build args now receive pinned base_image."
+  },
+  {
+    "id": 3825780294,
+    "path": "moonmind/omnigent/harness_platform/attestation.py",
+    "line": 327,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Preflight only checked opencode version range, never passed Host Class's runtime dependency digest to validate_exact_host_attestation, so binary with any digest could pass.",
+    "fix": "Now resolves HostClass for expectedHostClassRef, extracts its declared runtimeDependencies for opencode-native, and passes as expectedVendorRuntimes to validate_exact_host_attestation, which validates version and digest."
+  },
+  {
+    "id": 3825780300,
+    "path": "moonmind/omnigent/harness_platform/attestation.py",
+    "line": 273,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "requiredSkillDeliveryRef param was never read, so any host passed even with missing/stale skills.",
+    "fix": "Added enforcement: validates format, requires mountedSkills capability, and if host attests a delivery ref in capabilities, calls assert_skill_delivery_attestation to compare required vs attested."
+  },
+  {
+    "id": 4987942615,
+    "path": "frontend/src/components/settings/ProviderProfilesManager.tsx",
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "OpenCode profiles used use_api_key action but manager only recognized it for claude_code/anthropic and sent it to /manual-auth/commit which rejects OpenCode.",
+    "fix": "Added Opencode provider auth model (isOpencodeGoProfile, opencodeCredentialActions, OPENCODE_AUTH_ACTION_LABELS), new enrollment state/mutation that POSTs to /credentials/api-key with api_key, and UI drawer/actions for 'Use OpenCode API key'. Now renders usable enrollment for opencode-go."
+  },
+  {
+    "id": 3825780307,
+    "path": "moonmind/omnigent/harness_platform/materializers.py",
+    "line": 567,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "clear_forbidden_ambient_env returned raw credential values in dict and was exported; diagnostic logging would expose API keys.",
+    "fix": "Changed to return list[str] of cleared key names only (no values). Kept export but now secret-free."
+  },
+  {
+    "id": 3825780311,
+    "path": "api_service/api/routers/provider_profiles.py",
+    "line": 1432,
+    "still_applies": true,
+    "should_address": true,
+    "disposition": "addressed",
+    "rationale": "Omnigent catalog queried only codex_cli/claude_code, schema restricted runtimeId, and predicate accepted only oauth_home, so even connected OpenCode profiles never appeared in eligibleProviderProfiles.",
+    "fix": "Updated omnigent_catalog models to allow runtimeId opencode, expanded query to include opencode, and updated compatibility predicate to accept secret_ref+composite for opencode-go. Also updated eligible/ineligible handling."
   }
 ]

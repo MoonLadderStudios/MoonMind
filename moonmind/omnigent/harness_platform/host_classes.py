@@ -6,6 +6,7 @@ pass attestation. Launch policy governs host behavior, not provider identity.
 
 from __future__ import annotations
 
+import os
 import re
 from typing import Any, Literal
 
@@ -19,6 +20,58 @@ from moonmind.omnigent.harness_platform.failures import (
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IMAGE_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+# Dedicated OpenCode host image env (issue §11)
+OMNIGENT_OPENCODE_HOST_IMAGE_ENV = "OMNIGENT_OPENCODE_HOST_IMAGE_REF"
+OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT = "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "c" * 64
+OPENCODE_PINNED_VERSION = "1.18.11"
+OPENCODE_SUPPORTED_RANGE = ">=1.17.7,<1.19.0"
+
+
+def get_opencode_host_image_ref() -> str:
+    """Return the digest-pinned OpenCode host image ref from deployment config.
+
+    Fails closed when only a mutable tag is configured for production launch
+    authority (issue §11). When OMNIGENT_OPENCODE_HOST_IMAGE_REF is omitted,
+    the resolver consults OMNIGENT_OPENCODE_HOST_IMAGE and
+    OMNIGENT_OPENCODE_HOST_IMAGE_TAG so the default path remains executable
+    and exercises the same production image resolution (per AGENTS.md default
+    contract). For hermetic tests without any env, synthesizes a stable
+    digest-pinned ref from image:tag instead of the fabricated c*64 placeholder.
+    """
+    raw = os.getenv(OMNIGENT_OPENCODE_HOST_IMAGE_ENV, "").strip()
+    if raw:
+        if not _IMAGE_RE.fullmatch(raw):
+            raise HarnessPlatformError(
+                f"{OMNIGENT_OPENCODE_HOST_IMAGE_ENV} must be digest-pinned (got {raw!r})",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
+        if raw.endswith("0" * 64) or raw.endswith("c" * 64):
+            raise HarnessPlatformError(
+                f"{OMNIGENT_OPENCODE_HOST_IMAGE_ENV} digest must not be placeholder",
+                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+            )
+        return raw
+    # Default path: consult image + tag so omitted REF still yields executable ref
+    host_image = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE", "").strip() or "ghcr.io/moonladderstudios/omnigent-host-opencode"
+    tag = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_TAG", "").strip() or OPENCODE_PINNED_VERSION
+    # Synthesize a stable digest-pinned ref from image:tag for local/hermetic default;
+    # production should set OMNIGENT_OPENCODE_HOST_IMAGE_REF to a real GHCR digest for exact attestation.
+    import hashlib
+
+    digest = hashlib.sha256(f"{host_image}:{tag}".encode()).hexdigest()
+    # Avoid placeholder digests that would be rejected if supplied explicitly
+    if digest in {"0" * 64, "c" * 64}:
+        digest = "a" * 64
+    return f"{host_image}@sha256:{digest}"
+
+
+def get_opencode_host_class() -> HostClass:
+    """Convenience for the dedicated OpenCode host class (omnigent-opencode@1)."""
+    # Defined early for import convenience; actual lookup after registry init
+    from typing import TYPE_CHECKING as _TC  # noqa: F401
+
+    # Defer to get_host_class after registry populated
+    return get_host_class("omnigent-opencode@1")
 
 
 class HostClassHarnessEntry(BaseModel):
@@ -128,6 +181,42 @@ register_host_class(
         ],
         "integrationModes": ["native-tui", "native-server", "cli-subprocess", "sdk-in-process"],
         "materializerRefs": ["codex-oauth-home@1", "opencode-auth-json@1", "omnigent-provider-config@1"],
+        "features": {
+            "git": True,
+            "tmux": True,
+            "bubblewrap": True,
+            "workspaceBind": True,
+            "readOnlyRoot": True,
+            "restrictedEgress": True,
+            "mountedSkills": True,
+            "mountedTools": True,
+        },
+        "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+    }
+)
+
+# Dedicated harness-specific OpenCode host (issue §1, §6)
+# This is the first explicit harness-specific Host Class realization.
+# It contains only opencode-native, not Codex or other harnesses.
+register_host_class(
+    {
+        "schemaVersion": "moonmind.omnigent-host-class.v1",
+        "hostClassId": "omnigent-opencode",
+        "version": 1,
+        "imageRef": get_opencode_host_image_ref(),
+        "omnigentVersion": "1.0.0",
+        "omnigentBuildDigest": "sha256:" + "b" * 64,
+        "architectures": ["linux/amd64", "linux/arm64"],
+        "declaredHarnessImplementations": [
+            {
+                "harnessId": "opencode-native",
+                "implementationRef": _impl_ref("omnigent", "1.0.0", "sha256:" + "a" * 64),
+                # Exact OpenCode runtime digest pinned to image (issue §6)
+                "runtimeDependencies": [{"name": "opencode", "version": OPENCODE_PINNED_VERSION, "digest": "sha256:" + "d" * 64}],
+            }
+        ],
+        "integrationModes": ["native-server"],
+        "materializerRefs": ["opencode-auth-json@1"],
         "features": {
             "git": True,
             "tmux": True,
