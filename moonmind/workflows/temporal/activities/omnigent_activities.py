@@ -558,6 +558,8 @@ async def omnigent_oauth_host_janitor_activity(
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
     from moonmind.omnigent.settings import (
@@ -586,6 +588,8 @@ async def omnigent_oauth_host_janitor_activity(
             run_store=OmnigentBridgeSessionStore(async_session_maker),
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
             artifact_gateway=_OnDemandTemporalArtifactService(async_session_maker),
+            runtime_binding_store=DbRuntimeBindingStore(async_session_maker),
+            control_plane_store=OmnigentControlPlaneStore(async_session_maker),
         )
         payload = dict(request or {})
         action_kind = str(payload.get("actionKind") or "").strip()

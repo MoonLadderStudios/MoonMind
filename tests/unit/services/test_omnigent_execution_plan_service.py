@@ -8,6 +8,16 @@ import pytest
 from api_service.services import omnigent_execution_plan_service as service
 from api_service.services.omnigent_policies import bootstrap_document
 from moonmind.omnigent.policies import compile_policy_snapshot
+from moonmind.omnigent.harness_platform.execution_plan import (
+    execution_plan_support_evidence,
+)
+from moonmind.omnigent.session_supervisor_rollback import (
+    SUPERVISOR_ROLLBACK_POLICY_VERSION,
+)
+from moonmind.schemas.omnigent_session_models import (
+    OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+    OMNIGENT_SESSION_FEATURE_GENERATION,
+)
 
 
 class _ArtifactService:
@@ -88,17 +98,18 @@ def _snapshot(*, harness: str, policy: str, provider_id: str) -> dict:
     }
 
 
-def _policy_snapshot(*, harness: str, policy: str) -> dict:
+def _policy_snapshot(
+    *, harness: str, policy: str, host_image_ref: str | None = None
+) -> dict:
     profile_ref = f"omnigent-{harness.removesuffix('-native')}@1"
     host_image_digest = "7" if harness == "opencode-native" else "f"
     document = bootstrap_document(
         host_mode="on_demand_docker",
         execution_profile_ref=profile_ref,
         server_image_ref="ghcr.io/example/omnigent-server@sha256:" + "a" * 64,
-        host_image_ref=(
-            "ghcr.io/example/omnigent-host@sha256:"
-            + host_image_digest * 64
-        ),
+        host_image_ref=host_image_ref
+        or "ghcr.io/example/omnigent-host@sha256:"
+        + host_image_digest * 64,
     ).model_dump(mode="json", by_alias=True)
     document["execution"]["harness"] = harness
     document["execution"]["agentIdentities"] = [
@@ -178,6 +189,22 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
     assert result.envelope.payload.hostArchitecture == "linux/amd64"
     assert result.envelope.payload.authority is not None
     assert result.envelope.payload.authority.taskInputSnapshotRef == "art_request_1"
+    admission = result.envelope.payload.admissionAuthority
+    assert admission is not None
+    assert admission.featureGeneration == OMNIGENT_SESSION_FEATURE_GENERATION
+    assert (
+        admission.replayCompatibilityVersion
+        == OMNIGENT_SESSION_COMPATIBILITY_VERSION
+    )
+    assert admission.rollbackPolicyVersion == SUPERVISOR_ROLLBACK_POLICY_VERSION
+    support_artifact_id = admission.supportEvidenceRef.removeprefix("artifact:")
+    support_payload = json.loads(artifacts.payloads[support_artifact_id])
+    assert support_payload == execution_plan_support_evidence(
+        result.envelope.payload,
+        feature_generation=OMNIGENT_SESSION_FEATURE_GENERATION,
+        replay_compatibility_version=OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        rollback_policy_version=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    )
     assert result.binding.plan_ref == result.envelope.planRef
     serialized = json.dumps(
         result.envelope.model_dump(mode="json", by_alias=True), sort_keys=True

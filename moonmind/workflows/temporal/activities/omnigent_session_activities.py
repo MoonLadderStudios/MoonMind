@@ -21,6 +21,7 @@ from moonmind.schemas.agent_runtime_models import (
     OmnigentExecutionPlanBinding,
 )
 from moonmind.schemas.omnigent_session_models import (
+    OMNIGENT_SESSION_COMPATIBILITY_VERSION,
     OMNIGENT_SESSION_FEATURE_GENERATION,
     OmnigentFailureAuthorityRequest,
     OmnigentPersistDecisionRequest,
@@ -221,11 +222,30 @@ async def omnigent_evaluate_session_admission_activity(
             materializer_refs=materializers,
         )
         get_default_registry().require(plan.payload.executionRealizerRef)
+        _validate_plan_support_authority(plan, host_class)
+        from moonmind.omnigent.session_supervisor_rollback import (
+            SessionRollbackContext,
+            resolve_rollback_effect,
+            rollback_mode_from_settings,
+        )
+
+        rollback = resolve_rollback_effect(
+            mode=rollback_mode_from_settings(settings.feature_flags),
+            context=SessionRollbackContext(
+                admittedViaSupervisor=True,
+                recordedExecutionOwner=plan.payload.executionRealizerRef,
+            ),
+        )
+        if not rollback.new_supervisor_admission_allowed:
+            raise ValueError(
+                "recorded rollback generation blocks new supervisor admission"
+            )
         return OmnigentSessionAdmissionDecision(
             admitted=True,
             reasonCode="enabled",
             admissionMode="enabled",
             admittedFeatureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+            executionRealizerRef=plan.payload.executionRealizerRef,
         ).model_dump(mode="json", by_alias=True)
     flags = settings.feature_flags
     mode = flags.omnigent_session_supervisor_admission_mode
@@ -268,6 +288,85 @@ async def omnigent_evaluate_session_admission_activity(
         admissionMode=mode,
         admittedFeatureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
     ).model_dump(mode="json", by_alias=True)
+
+
+def _validate_plan_support_authority(plan: Any, host_class: Any) -> None:
+    """Recompute the exact support identity used by the trusted planner."""
+
+    from moonmind.omnigent.harness_platform.capabilities import (
+        ClassAdmissionDecision,
+    )
+    from moonmind.omnigent.harness_platform.support import (
+        SupportKeyPayload,
+        compute_required_capabilities_digest,
+        compute_support_combination_key,
+    )
+
+    class_decision = ClassAdmissionDecision.model_validate(
+        plan.payload.classAdmissionDecision
+    )
+    if class_decision.unknown:
+        raise ValueError("support combination contains unknown admission evidence")
+    entry = next(
+        (
+            candidate
+            for candidate in host_class.declaredHarnessImplementations
+            if candidate.harnessId == plan.payload.harnessId
+            and candidate.implementationRef
+            == plan.payload.harnessImplementationRef
+        ),
+        None,
+    )
+    if entry is None:
+        raise ValueError("support combination lacks exact harness evidence")
+    vendor_refs = sorted(
+        f"{item.get('name')}@{item.get('version')}#{item.get('digest')}"
+        for item in entry.runtimeDependencies
+    )
+    source_body = json.dumps(
+        plan.payload.agentSource,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    agent_source_ref = (
+        "agent-source:sha256:" + hashlib.sha256(source_body).hexdigest()
+    )
+    binding_identity = plan.payload.credentialBindingSetRef.removeprefix(
+        "omnigent-credential-bindings:"
+    ).split("@", 1)[0]
+    support_payload = SupportKeyPayload(
+        omnigentServerBuildRef=plan.payload.omnigentHostBuildDigest,
+        omnigentHostBuildRef=plan.payload.omnigentHostBuildDigest,
+        harnessImplementationRef=plan.payload.harnessImplementationRef,
+        vendorRuntimeRefs=vendor_refs,
+        agentSourceRef=agent_source_ref,
+        materializerRefs=sorted(
+            value.materializerRef
+            for value in plan.payload.credentialBindings.values()
+        ),
+        providerCompatibilityClass=binding_identity,
+        hostClassRef=plan.payload.hostClassRef,
+        architecture=plan.payload.hostArchitecture,
+        launchPolicyRef=plan.payload.launchPolicyRef,
+        modelConfigDigest=plan.payload.modelConfig.modelConfigDigest,
+        executionRealizerRef=plan.payload.executionRealizerRef,
+        requiredCapabilitiesDigest=compute_required_capabilities_digest(
+            list(class_decision.requiredSatisfied)
+        ),
+    )
+    if (
+        compute_support_combination_key(support_payload)
+        != plan.payload.supportCombinationKey
+    ):
+        raise ValueError("persisted support-combination evidence is mismatched")
+    if (
+        not plan.payload.hostImageRef
+        or "@sha256:" not in plan.payload.hostImageRef
+        or plan.payload.hostImageRef != host_class.imageRef
+        or not plan.payload.effectiveLaunchSnapshotRef
+        or not plan.payload.effectiveLaunchSnapshotDigest
+    ):
+        raise ValueError("persisted exact-artifact evidence is incomplete")
 
 
 async def _load_intent_request(
@@ -331,6 +430,62 @@ def _bind_request_to_execution_plan(
     )
 
 
+async def _validate_plan_admission_authority(persisted: Any) -> None:
+    """Load and validate support, replay, and rollback evidence from the plan."""
+
+    authority = persisted.payload.authority
+    admission_authority = persisted.payload.admissionAuthority
+    if authority is not None and admission_authority is None:
+        if persisted.payload.executionRealizerRef == "codex-profile-bound@1":
+            # Product plans persisted before admission-evidence authority was
+            # introduced keep their recorded Codex coordinator. They cannot be
+            # switched to the generic realizer, and new compilation always
+            # emits the evidence below.
+            return
+        raise ValueError("execution plan lacks persisted admission evidence")
+    if admission_authority is None:
+        return
+
+    from moonmind.omnigent.harness_platform.execution_plan import (
+        execution_plan_support_evidence,
+    )
+    from moonmind.omnigent.session_supervisor_rollback import (
+        SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    )
+
+    if (
+        admission_authority.featureGeneration
+        != OMNIGENT_SESSION_FEATURE_GENERATION
+    ):
+        raise ValueError("execution plan feature generation is unsupported")
+    if (
+        admission_authority.replayCompatibilityVersion
+        != OMNIGENT_SESSION_COMPATIBILITY_VERSION
+    ):
+        raise ValueError("execution plan replay compatibility is unsupported")
+    if (
+        admission_authority.rollbackPolicyVersion
+        != SUPERVISOR_ROLLBACK_POLICY_VERSION
+    ):
+        raise ValueError("execution plan rollback policy is unsupported")
+    support_ref = admission_authority.supportEvidenceRef.removeprefix(
+        "artifact:"
+    )
+    support_evidence = await _read_json_artifact(support_ref)
+    if _digest_bytes(_json_bytes(support_evidence)) != (
+        admission_authority.supportEvidenceDigest
+    ):
+        raise ValueError("execution support evidence digest conflicts with the plan")
+    expected_support_evidence = execution_plan_support_evidence(
+        persisted.payload,
+        feature_generation=OMNIGENT_SESSION_FEATURE_GENERATION,
+        replay_compatibility_version=OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        rollback_policy_version=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    )
+    if support_evidence != expected_support_evidence:
+        raise ValueError("execution support evidence conflicts with the plan")
+
+
 async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
     """Load the DB and artifact copies and verify one exact plan envelope."""
 
@@ -359,6 +514,7 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
         raise ValueError(
             "execution plan binding conflicts with task-input snapshot authority"
         )
+    await _validate_plan_admission_authority(persisted)
     profile_ref = str(persisted.payload.agentProfileSnapshotRef or "").strip()
     if not profile_ref.startswith("artifact:"):
         raise ValueError("execution plan lacks Agent Profile artifact authority")
@@ -512,6 +668,7 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
 async def _load_current_runtime_binding(
     *,
     execution_plan_ref: str,
+    execution_scope_ref: str,
     recorded_runtime_binding_ref: str | None,
 ):
     """Resolve the current binding after a crash between CAS and projection."""
@@ -526,11 +683,23 @@ async def _load_current_runtime_binding(
         else None
     )
     if state is None:
-        state = await store.get_current_state(execution_plan_ref)
+        state = await store.get_current_state(
+            execution_plan_ref, execution_scope_ref
+        )
     if state is None:
         raise ValueError("runtime binding authority is unavailable")
     if state.binding.executionPlanRef != execution_plan_ref:
         raise ValueError("runtime binding belongs to a different execution plan")
+    if (
+        state.binding.executionScopeRef is not None
+        and state.binding.executionScopeRef != execution_scope_ref
+    ):
+        raise ValueError("runtime binding payload belongs to a different execution scope")
+    if (
+        state.execution_scope_ref
+        and state.execution_scope_ref != execution_scope_ref
+    ):
+        raise ValueError("runtime binding belongs to a different execution scope")
     return store, state
 
 
@@ -1154,6 +1323,18 @@ async def omnigent_load_reconciliation_inputs_activity(
     terminal_outcome = _durable_terminal_outcome(
         session.terminal_state, TerminalOutcome, classify_provider_status
     )
+    runtime_binding_state = None
+    if request.omnigent_execution_plan is not None:
+        from moonmind.omnigent.harness_platform.stores import (
+            DbRuntimeBindingStore,
+        )
+
+        runtime_binding_state = await DbRuntimeBindingStore(
+            async_session_maker
+        ).get_current_state(
+            request.omnigent_execution_plan.plan_ref,
+            str(session.moonmind_workflow_id or ""),
+        )
     profile_held = bool(
         session.provider_profile_id
         and session.metadata.get("providerLeaseRef")
@@ -1167,6 +1348,21 @@ async def omnigent_load_reconciliation_inputs_activity(
         revision=session.revision,
         ownerToken=f"omnigent-session:{session.session_id}",
         fencingGeneration=session.fencing_generation,
+        runtimeBindingRef=(
+            runtime_binding_state.binding.runtimeBindingRef
+            if runtime_binding_state is not None
+            else None
+        ),
+        runtimeBindingRevision=(
+            runtime_binding_state.revision
+            if runtime_binding_state is not None
+            else None
+        ),
+        runtimeBindingFencingGeneration=(
+            runtime_binding_state.fencing_generation
+            if runtime_binding_state is not None
+            else None
+        ),
         desired=(
             DesiredLifecycle.CANCEL
             if session.desired_state in {"cancel", "cleanup", "timeout"}
@@ -1443,10 +1639,15 @@ async def _claim_command(request: OmnigentSessionActivityRequest) -> tuple[Any, 
             owner_class="omnigent_session_activity",
             claim_token=claim_token,
         )
-    if execution_plan is not None and runtime_binding_ref:
+    if execution_plan is not None and (
+        runtime_binding_ref or request.runtime_binding_ref
+    ):
         _runtime_store, runtime_state = await _load_current_runtime_binding(
             execution_plan_ref=execution_plan.planRef,
-            recorded_runtime_binding_ref=runtime_binding_ref,
+            execution_scope_ref=str(session.moonmind_workflow_id or ""),
+            recorded_runtime_binding_ref=(
+                runtime_binding_ref or request.runtime_binding_ref
+            ),
         )
         if (
             projected_runtime_revision is not None
@@ -1458,6 +1659,16 @@ async def _claim_command(request: OmnigentSessionActivityRequest) -> tuple[Any, 
             and int(projected_runtime_fence) != runtime_state.fencing_generation
         ):
             raise ValueError("runtime-binding projection fence conflicts with authority")
+        if request.runtime_binding_ref is not None and (
+            request.runtime_binding_ref
+            != runtime_state.binding.runtimeBindingRef
+            or request.runtime_binding_revision != runtime_state.revision
+            or request.runtime_binding_fencing_generation
+            != runtime_state.fencing_generation
+        ):
+            raise ValueError(
+                "activity runtime-binding authority is obsolete"
+            )
     return claim.record, claim.outcome is ControlPlaneOutcome.APPLIED
 
 
@@ -1764,9 +1975,13 @@ async def omnigent_ensure_provider_profile_lease_activity(
     profile = acquired_profile
     runtime_binding = None
     runtime_binding_state = None
+    replacing_runtime_authority = False
     if execution_plan is not None:
         from moonmind.omnigent.harness_platform.stores import (
             DbRuntimeBindingStore,
+        )
+        from moonmind.omnigent.harness_platform.runtime_binding import (
+            create_runtime_binding,
         )
 
         provider_leases = {
@@ -1782,45 +1997,127 @@ async def omnigent_ensure_provider_profile_lease_activity(
             for slot, binding in execution_plan.payload.credentialBindings.items()
         }
         runtime_store = DbRuntimeBindingStore(async_session_maker)
-        runtime_binding = await runtime_store.create_initial(
-            execution_plan_ref=execution_plan.planRef,
-            provider_leases=provider_leases,
+        execution_scope_ref = str(session_authority.moonmind_workflow_id or "")
+        current_runtime_state = await runtime_store.get_current_state(
+            execution_plan.planRef, execution_scope_ref
         )
+        replacing_runtime_authority = bool(
+            current_runtime_state is not None
+            and current_runtime_state.binding.providerLeases
+            != create_runtime_binding(
+                executionPlanRef=execution_plan.planRef,
+                providerLeases=provider_leases,
+            ).providerLeases
+        )
+        if replacing_runtime_authority and any(
+            value is not None
+            for value in (
+                session_authority.host_binding_ref,
+                session_authority.host_lease_ref,
+                session_authority.provider_session_ref,
+            )
+        ):
+            await lease_client.release_lease(lease)
+            raise ValueError(
+                "Provider Profile rotation requires the bound host and session "
+                "to be drained before reconciliation"
+            )
+        if current_runtime_state is None:
+            runtime_binding = await runtime_store.create_initial(
+                execution_plan_ref=execution_plan.planRef,
+                execution_scope_ref=execution_scope_ref,
+                provider_leases=provider_leases,
+            )
+        elif not replacing_runtime_authority:
+            runtime_binding = current_runtime_state.binding
+        else:
+            runtime_binding = await runtime_store.reconcile_provider_leases(
+                current_runtime_state.binding.runtimeBindingRef,
+                provider_leases=provider_leases,
+                expected_revision=current_runtime_state.revision,
+                expected_fencing_generation=(
+                    current_runtime_state.fencing_generation
+                ),
+            )
         runtime_binding_state = await runtime_store.get_state(
             runtime_binding.runtimeBindingRef
         )
         if runtime_binding_state is None:
             raise RuntimeError("persisted runtime binding could not be reloaded")
+        if (
+            session_authority.credential_generation is not None
+            and session_authority.credential_generation
+            != int(profile.credential_generation)
+        ):
+            replacing_runtime_authority = True
+        if replacing_runtime_authority:
+            provider_generation = int(
+                session_authority.provider_profile_generation or 0
+            )
+            if provider_generation > runtime_binding_state.fencing_generation:
+                raise ValueError(
+                    "session Provider Profile fence is ahead of runtime binding"
+                )
+            if provider_generation < runtime_binding_state.fencing_generation:
+                if (
+                    provider_generation + 1
+                    != runtime_binding_state.fencing_generation
+                ):
+                    raise ValueError(
+                        "runtime binding skipped a Provider Profile fencing generation"
+                    )
+                async with store.transaction() as repos:
+                    session_authority = (
+                        await repos.sessions.acquire_fencing_generation(
+                            request.session_id,
+                            FencingScope.PROVIDER_PROFILE_LEASE,
+                            expected_revision=session_authority.revision,
+                        )
+                    )
     async with store.transaction() as repos:
-        updated = await repos.sessions.bind_runtime_authority(
-            request.session_id,
-            expected_revision=session_authority.revision,
-            expected_fencing_generation=request.fencing_generation,
-            provider_profile_id=profile_id,
-            provider_profile_generation=(
-                session_authority.provider_profile_generation
+        runtime_metadata = {
+            "providerLeaseRef": lease.lease_id,
+            "providerLeaseOwnerId": lease.owner_id,
+            "providerRuntimeId": runtime_id,
+            **(
+                {
+                    "runtimeBindingRef": runtime_binding.runtimeBindingRef,
+                    "runtimeBindingRevision": runtime_binding_state.revision,
+                    "runtimeBindingFencingGeneration": (
+                        runtime_binding_state.fencing_generation
+                    ),
+                    "executionPlanRef": execution_plan.planRef,
+                }
+                if runtime_binding is not None
+                and runtime_binding_state is not None
+                and execution_plan is not None
+                else {}
             ),
-            credential_generation=int(profile.credential_generation),
-            metadata_patch={
-                "providerLeaseRef": lease.lease_id,
-                "providerLeaseOwnerId": lease.owner_id,
-                "providerRuntimeId": runtime_id,
-                **(
-                    {
-                        "runtimeBindingRef": runtime_binding.runtimeBindingRef,
-                        "runtimeBindingRevision": runtime_binding_state.revision,
-                        "runtimeBindingFencingGeneration": (
-                            runtime_binding_state.fencing_generation
-                        ),
-                        "executionPlanRef": execution_plan.planRef,
-                    }
-                    if runtime_binding is not None
-                    and runtime_binding_state is not None
-                    and execution_plan is not None
-                    else {}
+        }
+        if replacing_runtime_authority:
+            updated = await repos.sessions.replace_provider_runtime_authority(
+                request.session_id,
+                expected_revision=session_authority.revision,
+                expected_fencing_generation=request.fencing_generation,
+                expected_provider_profile_generation=int(
+                    session_authority.provider_profile_generation or 0
                 ),
-            },
-        )
+                provider_profile_id=profile_id,
+                credential_generation=int(profile.credential_generation),
+                metadata_patch=runtime_metadata,
+            )
+        else:
+            updated = await repos.sessions.bind_runtime_authority(
+                request.session_id,
+                expected_revision=session_authority.revision,
+                expected_fencing_generation=request.fencing_generation,
+                provider_profile_id=profile_id,
+                provider_profile_generation=(
+                    session_authority.provider_profile_generation
+                ),
+                credential_generation=int(profile.credential_generation),
+                metadata_patch=runtime_metadata,
+            )
     if runtime_binding_state is not None:
         await _project_runtime_binding_to_execution(
             workflow_id=str(updated.moonmind_workflow_id or ""),
@@ -2179,6 +2476,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         host_lease_ref=lease.lease_id,
         omnigent_host_id=host_id,
         effective_launch_snapshot=effective_launch,
+        workspace=str(preflight.get("workspacePath") or "").strip() or None,
     )
     if lease.status == "starting":
         lease = await hosts.transition_host_lease(
@@ -2207,6 +2505,7 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
         current_runtime_ref = str(session.metadata.get("runtimeBindingRef") or "")
         runtime_store, current_runtime_state = await _load_current_runtime_binding(
             execution_plan_ref=execution_plan.planRef,
+            execution_scope_ref=str(session.moonmind_workflow_id or ""),
             recorded_runtime_binding_ref=current_runtime_ref,
         )
         runtime_binding = await runtime_store.update_with_host(
@@ -2346,6 +2645,7 @@ async def omnigent_ensure_provider_session_activity(
             runtime_store, runtime_binding_state = (
                 await _load_current_runtime_binding(
                     execution_plan_ref=plan_binding.plan_ref,
+                    execution_scope_ref=str(session.moonmind_workflow_id or ""),
                     recorded_runtime_binding_ref=current_runtime_ref,
                 )
             )
@@ -2454,6 +2754,11 @@ async def omnigent_ensure_provider_session_activity(
         omnigent = dict(parameters.get("omnigent") or {})
         session_parameters = dict(omnigent.get("session") or {})
         session_parameters.update({"hostType": "external", "hostId": host_id})
+        if not bridge.workspace:
+            raise ValueError(
+                "ready host authority is missing its resolved workspace"
+            )
+        session_parameters["workspace"] = bridge.workspace
         omnigent["session"] = session_parameters
         parameters["omnigent"] = omnigent
         provider_request = provider_request.model_copy(
@@ -2504,6 +2809,7 @@ async def omnigent_ensure_provider_session_activity(
         plan_binding = agent_request.omnigent_execution_plan
         runtime_store, current_runtime_state = await _load_current_runtime_binding(
             execution_plan_ref=plan_binding.plan_ref,
+            execution_scope_ref=str(session.moonmind_workflow_id or ""),
             recorded_runtime_binding_ref=current_runtime_ref,
         )
         runtime_binding = await runtime_store.update_with_session(
@@ -3857,6 +4163,17 @@ async def omnigent_release_leases_activity(
         raise KeyError(request.session_id)
     if session.cleanup_state not in {"host_stopped", "leases_released", "complete"}:
         raise ValueError("host cleanup must complete before Provider Profile release")
+    runtime_store = None
+    runtime_state = None
+    if request.omnigent_execution_plan is not None:
+        runtime_ref = str(session.metadata.get("runtimeBindingRef") or "")
+        if not runtime_ref:
+            raise ValueError("plan-bound cleanup lacks runtime binding authority")
+        runtime_store, runtime_state = await _load_current_runtime_binding(
+            execution_plan_ref=request.omnigent_execution_plan.plan_ref,
+            execution_scope_ref=str(session.moonmind_workflow_id or ""),
+            recorded_runtime_binding_ref=runtime_ref,
+        )
     lease_ref = str(session.metadata.get("providerLeaseRef") or "")
     owner_id = str(session.metadata.get("providerLeaseOwnerId") or "")
     runtime_id = str(session.metadata.get("providerRuntimeId") or "")
@@ -3883,6 +4200,30 @@ async def omnigent_release_leases_activity(
         else:
             updated = current
     settled = await _settle_command(request)
+    if runtime_store is not None and runtime_state is not None:
+        completed_binding = await runtime_store.mark_cleanup_complete(
+            runtime_state.binding.runtimeBindingRef,
+            expected_revision=runtime_state.revision,
+            expected_fencing_generation=runtime_state.fencing_generation,
+        )
+        completed_state = await runtime_store.get_state(
+            completed_binding.runtimeBindingRef
+        )
+        if completed_state is None:
+            raise RuntimeError("cleanup-complete runtime binding is unavailable")
+        await _project_runtime_binding_to_execution(
+            workflow_id=str(session.moonmind_workflow_id or ""),
+            state=completed_state,
+        )
+        settled.update(
+            {
+                "runtimeBindingRef": completed_binding.runtimeBindingRef,
+                "runtimeBindingRevision": completed_state.revision,
+                "runtimeBindingFencingGeneration": (
+                    completed_state.fencing_generation
+                ),
+            }
+        )
     if updated is not None:
         settled["revision"] = updated.revision
     return settled

@@ -5072,6 +5072,7 @@ class MoonMindAgentRun:
                         session_admitted = (
                             use_omnigent_session_supervisor or plan_bound_session
                         )
+                        recorded_plan_realizer: str | None = None
                         admitted_feature_generation = (
                             OMNIGENT_SESSION_FEATURE_GENERATION
                         )
@@ -5118,6 +5119,30 @@ class MoonMindAgentRun:
                             admitted_feature_generation = (
                                 admission.admitted_feature_generation
                             )
+                            recorded_plan_realizer = (
+                                admission.execution_realizer_ref
+                            )
+                            if (
+                                plan_bound_session
+                                and not recorded_plan_realizer
+                            ):
+                                raise ValueError(
+                                    "plan-bound admission omitted execution realizer authority"
+                                )
+                            if recorded_plan_realizer == "codex-profile-bound@1":
+                                # Codex remains on its recorded coordinator;
+                                # the generic session supervisor must never
+                                # become an implicit replacement realizer.
+                                session_admitted = False
+                            elif (
+                                plan_bound_session
+                                and recorded_plan_realizer
+                                != "generic-omnigent-host@1"
+                            ):
+                                raise ValueError(
+                                    "plan realizer does not own the Omnigent "
+                                    "session-supervisor path"
+                                )
                         if (
                             validated_id == "omnigent"
                             and request.execution_profile_ref
@@ -5218,15 +5243,20 @@ class MoonMindAgentRun:
                                 else RunStatus.failed
                             )
                         else:
-                            # Histories that predate the supervisor patch remain
-                            # on the legacy one-activity path for replay safety.
+                            # Historical sessions retain their recorded lane.
+                            # New plan-bound Codex work also uses the one-
+                            # activity dispatcher because that boundary invokes
+                            # the exact recorded realizer from the persisted
+                            # plan instead of the generic supervisor.
                             stc_seconds = min(
                                 max(int(timeout_seconds), 60),
                                 86400,
                             )
                             act_name = f"integration.{validated_id}.execute"
                             if (
-                                validated_id == "omnigent"
+                                recorded_plan_realizer
+                                != "codex-profile-bound@1"
+                                and validated_id == "omnigent"
                                 and request.execution_profile_ref
                                 and workflow.patched(
                                     OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID

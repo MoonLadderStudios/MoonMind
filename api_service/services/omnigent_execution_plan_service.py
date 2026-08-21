@@ -25,7 +25,10 @@ from moonmind.omnigent.harness_platform.catalog import (
 )
 from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
 from moonmind.omnigent.harness_platform.execution_plan import (
+    AdmissionAuthority,
     OmnigentExecutionPlanEnvelope,
+    create_execution_plan_envelope,
+    execution_plan_support_evidence,
 )
 from moonmind.omnigent.harness_platform.host_classes import get_host_class
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
@@ -735,6 +738,41 @@ async def compile_and_persist_execution_plan(
         execution_authority=authority,
         agent_profile_snapshot_ref=f"artifact:{profile_snapshot_ref}",
     )
+    from moonmind.omnigent.session_supervisor_rollback import (
+        SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    )
+    from moonmind.schemas.omnigent_session_models import (
+        OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        OMNIGENT_SESSION_FEATURE_GENERATION,
+    )
+
+    support_evidence = execution_plan_support_evidence(
+        plan.payload,
+        feature_generation=OMNIGENT_SESSION_FEATURE_GENERATION,
+        replay_compatibility_version=OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        rollback_policy_version=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    )
+    support_evidence_ref, support_evidence_digest = await persist_json_artifact(
+        artifact_service=artifact_service,
+        principal=principal,
+        artifact_class="omnigent.execution_support_evidence",
+        payload=support_evidence,
+    )
+    plan = create_execution_plan_envelope(
+        plan.payload.model_copy(
+            update={
+                "admissionAuthority": AdmissionAuthority(
+                    supportEvidenceRef=f"artifact:{support_evidence_ref}",
+                    supportEvidenceDigest=support_evidence_digest,
+                    featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+                    replayCompatibilityVersion=(
+                        OMNIGENT_SESSION_COMPATIBILITY_VERSION
+                    ),
+                    rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+                )
+            }
+        )
+    )
     plan_store = execution_plan_store or DbExecutionPlanStore(session_factory)
     persisted = await plan_store.persist(plan)
     plan_payload = persisted.model_dump(mode="json", by_alias=True)
@@ -759,6 +797,7 @@ async def compile_and_persist_execution_plan(
             policy_artifact_ref,
             effective_launch_ref,
             profile_snapshot_ref,
+            support_evidence_ref,
             *skill_content_refs,
             skill_ref,
             plan_artifact_ref,

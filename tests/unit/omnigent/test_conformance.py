@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from moonmind.omnigent.bridge_security import redact_raw_events
 from moonmind.omnigent.conformance import (
     BROWSER_AUTHORITY_FIELDS,
     PROFILE_VERSION,
@@ -19,6 +20,7 @@ from moonmind.omnigent.conformance import (
     validate_acceptance_manifest,
     validate_fixture,
 )
+from moonmind.utils.logging import redact_sensitive_payload
 
 PROFILE = Path("tests/fixtures/omnigent/conformance-v4.json")
 
@@ -403,3 +405,55 @@ def test_report_rejects_duplicate_results_and_non_string_scan_refs() -> None:
 def test_all_evidence_paths_reject_secret_material(value: object) -> None:
     with pytest.raises(ConformanceContractError, match="secret-like"):
         assert_secret_free(value)
+
+
+def test_execution_authority_cross_surface_secret_scan() -> None:
+    """Every persisted or projected authority surface is secret-free."""
+
+    raw_secret = "ghp_" + "s" * 36
+    surfaces = {
+        "persistedPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "providerProfileRef": "provider-opencode",
+            "hostClassRef": "omnigent-opencode@1",
+        },
+        "temporalHistory": {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "art_plan_3706",
+        },
+        "runtimeBinding": {
+            "executionScopeRef": "mm:workflow-3706",
+            "providerLeaseRef": "provider-lease-1",
+            "credentialGeneration": 4,
+            "hostLeaseRef": "host-lease-1",
+        },
+        "logs": redact_raw_events(
+            [{"type": "provider.output", "message": f"token={raw_secret}"}]
+        ),
+        "containerMetadata": redact_sensitive_payload(
+            {
+                "image": "example/host@sha256:" + "b" * 64,
+                "OPENAI_API_KEY": raw_secret,
+            }
+        ),
+        "diagnostics": redact_sensitive_payload(
+            {"message": f"Authorization: Bearer {raw_secret}"}
+        ),
+        "artifacts": redact_raw_events(
+            [{"kind": "capture", "api_token": raw_secret}]
+        ),
+    }
+
+    serialized = json.dumps(surfaces, sort_keys=True)
+    assert raw_secret not in serialized
+    assert_secret_free(
+        {
+            key: surfaces[key]
+            for key in (
+                "persistedPlan",
+                "temporalHistory",
+                "runtimeBinding",
+            )
+        }
+    )

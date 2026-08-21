@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
+import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -27,12 +29,17 @@ from moonmind.schemas.agent_runtime_models import (
     AgentRunResult,
     OmnigentExecutionPlanBinding,
 )
+from moonmind.omnigent.harness_platform.execution_plan import AdmissionAuthority
+from moonmind.omnigent.session_supervisor_rollback import (
+    SUPERVISOR_ROLLBACK_POLICY_VERSION,
+)
 from moonmind.schemas.omnigent_session_models import (
     OMNIGENT_SESSION_FEATURE_GENERATION,
     OmnigentPersistFailureRequest,
     OmnigentFailureAuthorityRequest,
     OmnigentSessionAdmissionDecision,
     OmnigentSessionAdmissionRequest,
+    OmnigentSessionActivityRequest,
     OmnigentSessionContinueAsNewState,
     OmnigentSessionSignal,
     OmnigentSessionTerminalResult,
@@ -99,6 +106,52 @@ def test_workflow_input_is_compact_closed_and_reference_only() -> None:
         _workflow_input(admittedFeatureGeneration="omnigent-session-v2")
 
 
+def test_activity_request_carries_one_atomic_runtime_binding_fence() -> None:
+    runtime_ref = "omnigent-runtime-binding:sha256:" + "c" * 64
+    request = OmnigentSessionActivityRequest(
+        sessionId="oms_123",
+        compiledExecutionIntentRef="art_intent_123",
+        compiledExecutionIntentDigest="sha256:" + "a" * 64,
+        expectedRevision=7,
+        fencingGeneration=1,
+        runtimeBindingRef=runtime_ref,
+        runtimeBindingRevision=4,
+        runtimeBindingFencingGeneration=2,
+    )
+
+    assert request.runtime_binding_ref == runtime_ref
+    with pytest.raises(ValidationError, match="must be recorded atomically"):
+        OmnigentSessionActivityRequest(
+            sessionId="oms_123",
+            compiledExecutionIntentRef="art_intent_123",
+            compiledExecutionIntentDigest="sha256:" + "a" * 64,
+            expectedRevision=7,
+            fencingGeneration=1,
+            runtimeBindingRef=runtime_ref,
+        )
+
+
+def test_workflow_projects_loaded_runtime_binding_fence_to_side_effects() -> None:
+    runtime_ref = "omnigent-runtime-binding:sha256:" + "d" * 64
+    supervisor = MoonMindOmnigentSessionWorkflow()
+    supervisor._input = _workflow_input()
+    durable = DurableSessionState(
+        sessionId="oms_123",
+        revision=7,
+        ownerToken="omnigent-session:oms_123",
+        fencingGeneration=1,
+        runtimeBindingRef=runtime_ref,
+        runtimeBindingRevision=4,
+        runtimeBindingFencingGeneration=2,
+    )
+
+    request = supervisor._base_activity_request(durable)
+
+    assert request.runtime_binding_ref == runtime_ref
+    assert request.runtime_binding_revision == 4
+    assert request.runtime_binding_fencing_generation == 2
+
+
 def test_admission_contract_is_frozen_compact_and_fail_closed() -> None:
     request = OmnigentSessionAdmissionRequest(
         workflowId="workflow-1",
@@ -155,7 +208,7 @@ async def test_plan_bound_admission_rejects_current_host_image_drift(
             harnessId="codex-native",
             harnessImplementationRef=(
                 "omnigent-harness-implementation:sha256:"
-                "6db2fe2ebe07e7c26d46f0e72f9538fc9f23d72e67ed482ef34b395e9490eb14"
+                "96f9ac4c77a5ae0137b5f65d48be4eb021d741081da51af0f0a0717e5db395d5"
             ),
             launchPolicyRef="codex-on-demand@1",
             executionRealizerRef="codex-profile-bound@1",
@@ -177,6 +230,278 @@ async def test_plan_bound_admission_rejects_current_host_image_drift(
                 omnigentExecutionPlan=binding,
             ).model_dump(mode="json", by_alias=True)
         )
+
+
+@pytest.mark.asyncio
+async def test_plan_admission_rejects_missing_support_evidence() -> None:
+    persisted = SimpleNamespace(
+        payload=SimpleNamespace(
+            authority=object(),
+            admissionAuthority=None,
+            executionRealizerRef="generic-omnigent-host@1",
+        )
+    )
+
+    with pytest.raises(ValueError, match="lacks persisted admission evidence"):
+        await omnigent_session_activities._validate_plan_admission_authority(
+            persisted
+        )
+
+
+@pytest.mark.asyncio
+async def test_pre_evidence_codex_plan_keeps_recorded_legacy_realizer() -> None:
+    persisted = SimpleNamespace(
+        payload=SimpleNamespace(
+            authority=object(),
+            admissionAuthority=None,
+            executionRealizerRef="codex-profile-bound@1",
+        )
+    )
+
+    await omnigent_session_activities._validate_plan_admission_authority(
+        persisted
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "bad_value", "message"),
+    [
+        ("featureGeneration", "omnigent-session-v2", "feature generation"),
+        ("replayCompatibilityVersion", "v2", "replay compatibility"),
+        (
+            "rollbackPolicyVersion",
+            "moonmind.omnigent-session-supervisor-rollback/v2",
+            "rollback policy",
+        ),
+    ],
+)
+async def test_plan_admission_rejects_mismatched_replay_authority(
+    field: str,
+    bad_value: str,
+    message: str,
+) -> None:
+    values = {
+        "supportEvidenceRef": "artifact:art-support",
+        "supportEvidenceDigest": "sha256:" + "a" * 64,
+        "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
+        "replayCompatibilityVersion": "v1",
+        "rollbackPolicyVersion": SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    }
+    values[field] = bad_value
+    persisted = SimpleNamespace(
+        payload=SimpleNamespace(
+            authority=object(),
+            admissionAuthority=AdmissionAuthority.model_validate(values),
+        )
+    )
+
+    with pytest.raises(ValueError, match=message):
+        await omnigent_session_activities._validate_plan_admission_authority(
+            persisted
+        )
+
+
+@pytest.mark.asyncio
+async def test_plan_admission_rejects_mismatched_support_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorded = {"supportCombinationKey": "support:recorded"}
+    digest = "sha256:" + hashlib.sha256(
+        json.dumps(recorded, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    authority = AdmissionAuthority(
+        supportEvidenceRef="artifact:art-support",
+        supportEvidenceDigest=digest,
+        featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
+        replayCompatibilityVersion="v1",
+        rollbackPolicyVersion=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    )
+    persisted = SimpleNamespace(
+        payload=SimpleNamespace(authority=object(), admissionAuthority=authority)
+    )
+
+    async def read_support(ref: str) -> dict[str, str]:
+        assert ref == "art-support"
+        return recorded
+
+    monkeypatch.setattr(
+        omnigent_session_activities, "_read_json_artifact", read_support
+    )
+    from moonmind.omnigent.harness_platform import execution_plan
+
+    monkeypatch.setattr(
+        execution_plan,
+        "execution_plan_support_evidence",
+        lambda *_args, **_kwargs: {
+            "supportCombinationKey": "support:expected"
+        },
+    )
+
+    with pytest.raises(ValueError, match="support evidence conflicts"):
+        await omnigent_session_activities._validate_plan_admission_authority(
+            persisted
+        )
+
+
+@pytest.mark.asyncio
+async def test_plan_admission_rejects_active_rollback_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            credentialBindings={
+                "primary-model": SimpleNamespace(
+                    providerProfileRef="provider-profile-1",
+                    materializerRef="codex-oauth-home@1",
+                )
+            },
+            hostClassRef="omnigent-codex-current@1",
+            hostImageRef=None,
+            omnigentHostBuildDigest=None,
+            hostArchitecture=None,
+            harnessId="codex-native",
+            harnessImplementationRef=(
+                "omnigent-harness-implementation:sha256:"
+                "96f9ac4c77a5ae0137b5f65d48be4eb021d741081da51af0f0a0717e5db395d5"
+            ),
+            launchPolicyRef="codex-on-demand@1",
+            executionRealizerRef="codex-profile-bound@1",
+        )
+    )
+    binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "a" * 64,
+        planDigest="sha256:" + "a" * 64,
+        planArtifactRef="art-plan",
+        taskInputSnapshotRef="art-task",
+        taskInputSnapshotDigest="sha256:" + "b" * 64,
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_load_verified_execution_plan",
+        AsyncMock(return_value=plan),
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_validate_plan_support_authority",
+        lambda *_args: None,
+    )
+    from moonmind.omnigent import session_supervisor_rollback
+
+    monkeypatch.setattr(
+        session_supervisor_rollback,
+        "rollback_mode_from_settings",
+        lambda _flags: "disable_new_admission",
+    )
+
+    with pytest.raises(ValueError, match="rollback generation blocks"):
+        await omnigent_session_activities.omnigent_evaluate_session_admission_activity(
+            OmnigentSessionAdmissionRequest(
+                workflowId="workflow-1",
+                stepExecutionId="step-1",
+                agentRunId="agent-run-1",
+                executionProfileRef="provider-profile-1",
+                omnigentExecutionPlan=binding,
+            ).model_dump(mode="json", by_alias=True)
+        )
+
+
+@pytest.mark.asyncio
+async def test_side_effect_rejects_obsolete_runtime_binding_fence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A delayed cleanup/host owner cannot claim current live authority."""
+
+    import moonmind.omnigent.control_plane as control_plane_module
+    from moonmind.omnigent.control_plane import ControlPlaneOutcome
+
+    plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
+    old_ref = "omnigent-runtime-binding:sha256:" + "b" * 64
+    current_ref = "omnigent-runtime-binding:sha256:" + "c" * 64
+    command = SimpleNamespace(
+        session_id="oms_123",
+        expected_session_revision=7,
+        fencing_generation=1,
+        status="pending",
+    )
+    session = SimpleNamespace(
+        fencing_generation=1,
+        revision=7,
+        moonmind_workflow_id="workflow-1",
+        metadata={
+            "executionPlanRef": plan_ref,
+            "runtimeBindingRef": current_ref,
+            "runtimeBindingRevision": 5,
+            "runtimeBindingFencingGeneration": 3,
+        },
+    )
+
+    class Commands:
+        async def get(self, command_id: str):
+            assert command_id == "cleanup-command"
+            return command
+
+        async def claim_command(self, *_args: object, **_kwargs: object):
+            return SimpleNamespace(
+                record=command,
+                outcome=ControlPlaneOutcome.APPLIED,
+            )
+
+    class Sessions:
+        async def load_for_update(self, session_id: str):
+            assert session_id == "oms_123"
+            return session
+
+    class Store:
+        @asynccontextmanager
+        async def transaction(self):
+            yield SimpleNamespace(commands=Commands(), sessions=Sessions())
+
+    monkeypatch.setattr(
+        control_plane_module,
+        "OmnigentControlPlaneStore",
+        lambda _session_maker: Store(),
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_load_verified_execution_plan",
+        AsyncMock(return_value=SimpleNamespace(planRef=plan_ref)),
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_load_current_runtime_binding",
+        AsyncMock(
+            return_value=(
+                object(),
+                SimpleNamespace(
+                    binding=SimpleNamespace(runtimeBindingRef=current_ref),
+                    revision=5,
+                    fencing_generation=3,
+                ),
+            )
+        ),
+    )
+    request = OmnigentSessionActivityRequest(
+        sessionId="oms_123",
+        compiledExecutionIntentRef="art_intent_123",
+        compiledExecutionIntentDigest="sha256:" + "d" * 64,
+        omnigentExecutionPlan=OmnigentExecutionPlanBinding(
+            planRef=plan_ref,
+            planDigest="sha256:" + "a" * 64,
+            planArtifactRef="art-plan",
+            taskInputSnapshotRef="art-task",
+            taskInputSnapshotDigest="sha256:" + "e" * 64,
+        ),
+        expectedRevision=7,
+        fencingGeneration=1,
+        commandId="cleanup-command",
+        runtimeBindingRef=old_ref,
+        runtimeBindingRevision=4,
+        runtimeBindingFencingGeneration=2,
+    )
+
+    with pytest.raises(ValueError, match="authority is obsolete"):
+        await omnigent_session_activities._claim_command(request)
 
 
 def _exact_host_evidence_fixture() -> tuple[SimpleNamespace, dict[str, object]]:

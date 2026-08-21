@@ -979,6 +979,7 @@ class OmnigentBridgeSessionStore:
         host_lease_ref: str,
         omnigent_host_id: str | None,
         effective_launch_snapshot: dict[str, Any] | None = None,
+        workspace: str | None = None,
     ) -> OmnigentBridgeSession:
         """Persist lease-authorized routing before provider session creation."""
 
@@ -1023,6 +1024,7 @@ class OmnigentBridgeSessionStore:
                 "hostBindingRef": host_binding_ref,
                 "hostLeaseRef": host_lease_ref,
                 "omnigentHostId": omnigent_host_id,
+                "workspace": workspace,
                 "effectiveLaunchRef": (
                     effective_launch_snapshot.get("snapshotRef")
                     if effective_launch_snapshot
@@ -2279,7 +2281,7 @@ class OmnigentBridgeSessionStore:
         plan = await DbExecutionPlanStore(self._session_factory).load(plan_ref)
         state = await DbRuntimeBindingStore(
             self._session_factory
-        ).get_current_state(plan_ref)
+        ).get_current_state(plan_ref, str(row.moonmind_workflow_id or ""))
         if plan is None or state is None:
             return {}
         expected_digest = "sha256:" + plan.planRef.rsplit(":", 1)[-1]

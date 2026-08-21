@@ -10,7 +10,11 @@ from temporalio.testing import ActivityEnvironment
 from moonmind.omnigent import execute as omnigent_execute_module
 from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    OmnigentExecutionPlanBinding,
+)
 from moonmind.workflows.temporal.activities import (
     omnigent_activities as omnigent_activities_module,
 )
@@ -207,6 +211,71 @@ async def test_omnigent_execute_activity_delegates(
         if payload.get("activityAlive") is True
         and payload.get("eventsCaptured") == 1
     )
+
+
+@pytest.mark.asyncio
+async def test_plan_bound_execute_dispatches_only_recorded_codex_realizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
+    plan = SimpleNamespace(
+        planRef=plan_ref,
+        payload=SimpleNamespace(executionRealizerRef="codex-profile-bound@1"),
+    )
+    calls: list[str] = []
+
+    class PlanStore:
+        def __init__(self, _session_factory):
+            pass
+
+        async def load(self, loaded_ref: str):
+            assert loaded_ref == plan_ref
+            return plan
+
+    class RecordedCodexRealizer:
+        async def execute(self, request, loaded_plan):
+            calls.append("codex-profile-bound@1")
+            assert loaded_plan is plan
+            return AgentRunResult(summary="recorded Codex realizer completed")
+
+    class Registry:
+        def require(self, realizer_ref: str):
+            calls.append(f"require:{realizer_ref}")
+            assert realizer_ref == "codex-profile-bound@1"
+            return RecordedCodexRealizer()
+
+    from moonmind.omnigent.harness_platform import stores
+    from moonmind.omnigent.realizers import registry
+
+    monkeypatch.setattr(stores, "DbExecutionPlanStore", PlanStore)
+    monkeypatch.setattr(registry, "get_default_registry", lambda: Registry())
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="provider-codex",
+        correlationId="workflow-codex",
+        idempotencyKey="step-codex",
+        omnigentExecutionPlan=OmnigentExecutionPlanBinding(
+            planRef=plan_ref,
+            planDigest="sha256:" + "a" * 64,
+            planArtifactRef="art-plan-codex",
+            taskInputSnapshotRef="art-task-codex",
+            taskInputSnapshotDigest="sha256:" + "b" * 64,
+        ),
+    )
+
+    result = await omnigent_activities_module._try_generic_realizer_dispatch(
+        request,
+        artifact_gateway=object(),
+        run_store=object(),
+    )
+
+    assert result is not None
+    assert result.summary == "recorded Codex realizer completed"
+    assert calls == [
+        "require:codex-profile-bound@1",
+        "codex-profile-bound@1",
+    ]
 
 
 def test_omnigent_execution_path_does_not_use_managed_github_broker() -> None:

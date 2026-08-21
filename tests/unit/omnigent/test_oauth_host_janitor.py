@@ -5,6 +5,7 @@ import pytest
 
 from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
 from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.omnigent.harness_platform.stores import InMemoryRuntimeBindingStore
 
 
 class _Repository:
@@ -183,6 +184,100 @@ async def test_action_rejects_stale_expected_state_before_mutation() -> None:
             request_id="request-1",
         )
 
+    assert runtime.stopped == 0
+
+
+@pytest.mark.asyncio
+async def test_janitor_rejects_host_fenced_by_replacement_binding() -> None:
+    lease = _lease()
+    lease.holder_workflow_id = "oms-host-replacement"
+    lease.credential_generation = 1
+    lease.omnigent_host_id = "host-old"
+    repository = _Repository(lease)
+    runtime = _Runtime()
+    binding_store = InMemoryRuntimeBindingStore()
+    initial = await binding_store.create_initial(
+        execution_plan_ref="omnigent-execution-plan:sha256:" + "6" * 64,
+        execution_scope_ref="workflow-host-replacement",
+        provider_leases={
+            "primary-model": {
+                "providerProfileRef": "profile-1",
+                "providerLeaseRef": "provider-lease-1",
+                "credentialGeneration": 1,
+                "credentialRuntimeRef": "credential-runtime:profile-1:1",
+            }
+        },
+    )
+    initial_state = await binding_store.get_state(initial.runtimeBindingRef)
+    assert initial_state is not None
+    old_host = await binding_store.update_with_host(
+        initial.runtimeBindingRef,
+        host_binding_ref="binding-1",
+        host_lease_ref="lease-1",
+        host_lease_generation=1,
+        omnigent_host_id="host-old",
+        host_harness_attestation_ref="art-host-old",
+        exact_host_capability_decision_ref="art-caps-old",
+        workspace_resolution_ref="art-workspace-old",
+        model_option_attestation_ref="art-model-old",
+        skill_delivery_attestation_ref="art-skill-old",
+        cleanup_authority_refs=["art-cleanup-old"],
+        expected_revision=initial_state.revision,
+        expected_fencing_generation=initial_state.fencing_generation,
+    )
+    old_state = await binding_store.get_state(old_host.runtimeBindingRef)
+    assert old_state is not None
+    await binding_store.update_with_host(
+        old_host.runtimeBindingRef,
+        host_binding_ref="binding-2",
+        host_lease_ref="lease-2",
+        host_lease_generation=2,
+        omnigent_host_id="host-current",
+        host_harness_attestation_ref="art-host-current",
+        exact_host_capability_decision_ref="art-caps-current",
+        workspace_resolution_ref="art-workspace-current",
+        model_option_attestation_ref="art-model-current",
+        skill_delivery_attestation_ref="art-skill-current",
+        cleanup_authority_refs=["art-cleanup-current"],
+        expected_revision=old_state.revision,
+        expected_fencing_generation=old_state.fencing_generation,
+    )
+
+    class _Sessions:
+        async def get(self, session_id):
+            assert session_id == "oms-host-replacement"
+            return SimpleNamespace(
+                moonmind_workflow_id="workflow-host-replacement"
+            )
+
+    class _ControlPlaneStore:
+        class _Transaction:
+            async def __aenter__(self):
+                return SimpleNamespace(sessions=_Sessions())
+
+            async def __aexit__(self, *_exc):
+                return None
+
+        def transaction(self):
+            return self._Transaction()
+
+    with pytest.raises(ValueError, match="fenced by replacement"):
+        await OmnigentOAuthHostJanitor(
+            repository=repository,
+            runtime=runtime,
+            client=_Client(),
+            runtime_binding_store=binding_store,
+            control_plane_store=_ControlPlaneStore(),
+        ).run_action(
+            action_kind="host.stop",
+            profile_id="profile-1",
+            host_lease_ref="lease-1",
+            expected_host_state="ready",
+            request_id="request-stale-janitor",
+        )
+
+    assert repository.cleanup_claims == []
+    assert lease.status == "ready"
     assert runtime.stopped == 0
 
 

@@ -3983,7 +3983,8 @@ class OmnigentRuntimeBindingRecord(Base):
     __table_args__ = (
         UniqueConstraint(
             "execution_plan_ref",
-            name="uq_omnigent_runtime_binding_execution_plan",
+            "execution_scope_ref",
+            name="uq_omnigent_runtime_binding_plan_scope",
         ),
         Index("ix_omnigent_runtime_bindings_plan", "execution_plan_ref"),
         Index("ix_omnigent_runtime_bindings_host", "omnigent_host_id"),
@@ -3992,6 +3993,7 @@ class OmnigentRuntimeBindingRecord(Base):
 
     runtime_binding_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
     execution_plan_ref: Mapped[str] = mapped_column(String(255), ForeignKey("omnigent_execution_plans.plan_ref", ondelete="CASCADE"), nullable=False)
+    execution_scope_ref: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
     fencing_generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default=text("1"))
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="credentials_acquired", server_default=text("'credentials_acquired'"))

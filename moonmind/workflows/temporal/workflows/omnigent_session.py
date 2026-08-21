@@ -289,6 +289,11 @@ class MoonMindOmnigentSessionWorkflow:
             omnigentExecutionPlan=session_input.omnigent_execution_plan,
             expectedRevision=durable.revision,
             fencingGeneration=durable.fencing_generation,
+            runtimeBindingRef=durable.runtime_binding_ref,
+            runtimeBindingRevision=durable.runtime_binding_revision,
+            runtimeBindingFencingGeneration=(
+                durable.runtime_binding_fencing_generation
+            ),
             decisionId=(
                 f"{session_input.session_id}:decision:{self._decision_count + 1}"
                 if decision is not None

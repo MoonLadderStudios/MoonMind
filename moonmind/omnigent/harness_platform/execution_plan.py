@@ -12,6 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.omnigent.harness_platform.credential_bindings import CredentialBinding
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
@@ -132,11 +133,41 @@ class ExecutionAuthority(BaseModel):
     failurePolicyRef: str = Field(alias="failurePolicyRef")
 
 
+class AdmissionAuthority(BaseModel):
+    """Immutable evidence required before a new session may be admitted."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    supportEvidenceRef: str = Field(alias="supportEvidenceRef")
+    supportEvidenceDigest: str = Field(alias="supportEvidenceDigest")
+    featureGeneration: str = Field(alias="featureGeneration")
+    replayCompatibilityVersion: str = Field(alias="replayCompatibilityVersion")
+    rollbackPolicyVersion: str = Field(alias="rollbackPolicyVersion")
+
+    @model_validator(mode="after")
+    def validate_authority(self) -> "AdmissionAuthority":
+        if not self.supportEvidenceRef.startswith("artifact:"):
+            raise ValueError("supportEvidenceRef must be artifact-backed")
+        if not self.supportEvidenceDigest.startswith("sha256:"):
+            raise ValueError("supportEvidenceDigest must be a sha256 digest")
+        for field_name in (
+            "featureGeneration",
+            "replayCompatibilityVersion",
+            "rollbackPolicyVersion",
+        ):
+            if not str(getattr(self, field_name) or "").strip():
+                raise ValueError(f"{field_name} is required")
+        return self
+
+
 class OmnigentExecutionPlanPayload(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schemaVersion: str = Field("moonmind.omnigent-execution-plan-payload.v1", alias="schemaVersion")
     authority: ExecutionAuthority | None = None
+    admissionAuthority: AdmissionAuthority | None = Field(
+        default=None, alias="admissionAuthority"
+    )
     endpointRef: str = Field(alias="endpointRef")
     agentProfileSnapshotRef: str = Field(alias="agentProfileSnapshotRef")
     harnessCatalogRef: str = Field(alias="harnessCatalogRef")
@@ -144,7 +175,7 @@ class OmnigentExecutionPlanPayload(BaseModel):
     harnessImplementationRef: str = Field(alias="harnessImplementationRef")
     agentSource: dict[str, Any] = Field(alias="agentSource")
     credentialBindingSetRef: str = Field(alias="credentialBindingSetRef")
-    credentialBindings: dict[str, dict[str, Any]] = Field(alias="credentialBindings")
+    credentialBindings: dict[str, CredentialBinding] = Field(alias="credentialBindings")
     hostClassRef: str = Field(alias="hostClassRef")
     hostImageRef: str | None = Field(default=None, alias="hostImageRef")
     omnigentHostBuildDigest: str | None = Field(
@@ -212,11 +243,37 @@ def canonical_payload_bytes(payload: OmnigentExecutionPlanPayload | dict[str, An
         "policySnapshotDigest",
         "effectiveLaunchSnapshotRef",
         "effectiveLaunchSnapshotDigest",
+        "admissionAuthority",
     ):
         if data.get(optional_v1_field) is None:
             data.pop(optional_v1_field, None)
     # Normalize: sorted keys, no whitespace, utf-8, normalized enums/null
     return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+
+
+def execution_plan_support_evidence(
+    payload: OmnigentExecutionPlanPayload,
+    *,
+    feature_generation: str,
+    replay_compatibility_version: str,
+    rollback_policy_version: str,
+) -> dict[str, Any]:
+    """Build the canonical, secret-free admission evidence for one plan."""
+
+    return {
+        "schemaVersion": "moonmind.omnigent-execution-support-evidence.v1",
+        "supportCombinationKey": payload.supportCombinationKey,
+        "hostImageRef": payload.hostImageRef,
+        "omnigentHostBuildDigest": payload.omnigentHostBuildDigest,
+        "hostArchitecture": payload.hostArchitecture,
+        "harnessImplementationRef": payload.harnessImplementationRef,
+        "effectiveLaunchSnapshotRef": payload.effectiveLaunchSnapshotRef,
+        "effectiveLaunchSnapshotDigest": payload.effectiveLaunchSnapshotDigest,
+        "executionRealizerRef": payload.executionRealizerRef,
+        "featureGeneration": feature_generation,
+        "replayCompatibilityVersion": replay_compatibility_version,
+        "rollbackPolicyVersion": rollback_policy_version,
+    }
 
 
 def compute_plan_ref(payload: OmnigentExecutionPlanPayload | dict[str, Any]) -> str:

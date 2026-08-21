@@ -14,7 +14,7 @@ import re
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
 from moonmind.schemas.agent_runtime_models import (
@@ -234,6 +234,9 @@ class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
             alias="admittedFeatureGeneration",
         )
     )
+    execution_realizer_ref: str | None = Field(
+        None, alias="executionRealizerRef", max_length=255
+    )
 
 
 class OmnigentFailureAuthorityRequest(_OmnigentSessionModel):
@@ -283,6 +286,15 @@ class OmnigentSessionActivityRequest(_OmnigentSessionModel):
     )
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     fencing_generation: int = Field(alias="fencingGeneration", ge=0)
+    runtime_binding_ref: str | None = Field(
+        None, alias="runtimeBindingRef", max_length=255
+    )
+    runtime_binding_revision: int | None = Field(
+        None, alias="runtimeBindingRevision", ge=1
+    )
+    runtime_binding_fencing_generation: int | None = Field(
+        None, alias="runtimeBindingFencingGeneration", ge=1
+    )
     decision_id: str | None = Field(None, alias="decisionId", max_length=255)
     command_id: str | None = Field(None, alias="commandId", max_length=255)
     turn_attempt_id: str | None = Field(None, alias="turnAttemptId", max_length=255)
@@ -300,6 +312,30 @@ class OmnigentSessionActivityRequest(_OmnigentSessionModel):
         if not _DIGEST_PATTERN.match(normalized):
             raise ValueError("compiledExecutionIntentDigest must be a sha256 digest")
         return normalized
+
+    @model_validator(mode="after")
+    def _validate_runtime_binding_authority(
+        self,
+    ) -> "OmnigentSessionActivityRequest":
+        authority = (
+            self.runtime_binding_ref,
+            self.runtime_binding_revision,
+            self.runtime_binding_fencing_generation,
+        )
+        if any(value is not None for value in authority) and not all(
+            value is not None for value in authority
+        ):
+            raise ValueError(
+                "runtime binding ref, revision, and fencing generation "
+                "must be recorded atomically"
+            )
+        if self.runtime_binding_ref is not None and not (
+            self.runtime_binding_ref.startswith(
+                "omnigent-runtime-binding:sha256:"
+            )
+        ):
+            raise ValueError("runtimeBindingRef is invalid")
+        return self
 
 
 class OmnigentPersistDecisionRequest(OmnigentSessionActivityRequest):

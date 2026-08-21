@@ -45,14 +45,40 @@ class OmnigentRuntimeBindingStore(Protocol):
     async def get(self, runtime_binding_ref: str) -> OmnigentRuntimeBinding | None: pass  # noqa
 
     async def get_current_state(
-        self, execution_plan_ref: str
+        self, execution_plan_ref: str, execution_scope_ref: str
+    ) -> "RuntimeBindingStoreState | None": pass  # noqa
+
+    async def get_state_for_host_lease(
+        self, host_lease_ref: str
+    ) -> "RuntimeBindingStoreState | None": pass  # noqa
+
+    async def get_current_state_for_execution_scope(
+        self, execution_scope_ref: str
     ) -> "RuntimeBindingStoreState | None": pass  # noqa
 
     async def create_initial(
         self,
         *,
         execution_plan_ref: str,
+        execution_scope_ref: str,
         provider_leases: dict[str, dict[str, Any]],
+    ) -> OmnigentRuntimeBinding: pass  # noqa
+
+    async def reconcile_provider_leases(
+        self,
+        runtime_binding_ref: str,
+        *,
+        provider_leases: dict[str, dict[str, Any]],
+        expected_revision: int,
+        expected_fencing_generation: int,
+    ) -> OmnigentRuntimeBinding: pass  # noqa
+
+    async def mark_cleanup_complete(
+        self,
+        runtime_binding_ref: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
     ) -> OmnigentRuntimeBinding: pass  # noqa
 
     async def update_with_host(
@@ -129,6 +155,7 @@ class RuntimeBindingStoreState:
     revision: int
     fencing_generation: int
     state: str
+    execution_scope_ref: str
 
 
 class InMemoryRuntimeBindingStore:
@@ -139,7 +166,7 @@ class InMemoryRuntimeBindingStore:
         # Also index by planRef for lookup
         self._by_plan: dict[str, list[str]] = {}
         self._state: dict[str, RuntimeBindingStoreState] = {}
-        self._current_by_plan: dict[str, str] = {}
+        self._current_by_scope: dict[tuple[str, str], str] = {}
 
     async def get(self, runtime_binding_ref: str) -> OmnigentRuntimeBinding | None:
         return self._bindings.get(runtime_binding_ref)
@@ -148,21 +175,27 @@ class InMemoryRuntimeBindingStore:
         self,
         *,
         execution_plan_ref: str,
+        execution_scope_ref: str,
         provider_leases: dict[str, dict[str, Any]],
         host_binding_ref: str | None = None,
         host_lease_ref: str | None = None,
         host_lease_generation: int | None = None,
         omnigent_host_id: str | None = None,
     ) -> OmnigentRuntimeBinding:
+        if not str(execution_scope_ref or "").strip():
+            raise ValueError("execution_scope_ref is required")
         binding = create_runtime_binding(
             executionPlanRef=execution_plan_ref,
+            executionScopeRef=execution_scope_ref,
             providerLeases=provider_leases,
             hostBindingRef=host_binding_ref,
             hostLeaseRef=host_lease_ref,
             hostLeaseGeneration=host_lease_generation,
             omnigentHostId=omnigent_host_id,
         )
-        current = await self.get_current_state(execution_plan_ref)
+        current = await self.get_current_state(
+            execution_plan_ref, execution_scope_ref
+        )
         if current is not None:
             if current.binding.providerLeases != binding.providerLeases:
                 raise HarnessPlatformError(
@@ -178,8 +211,11 @@ class InMemoryRuntimeBindingStore:
             revision=1,
             fencing_generation=1,
             state="credentials_acquired",
+            execution_scope_ref=execution_scope_ref,
         )
-        self._current_by_plan[execution_plan_ref] = binding.runtimeBindingRef
+        self._current_by_scope[(execution_plan_ref, execution_scope_ref)] = (
+            binding.runtimeBindingRef
+        )
         return binding
 
     async def get_state(
@@ -188,10 +224,50 @@ class InMemoryRuntimeBindingStore:
         return self._state.get(runtime_binding_ref)
 
     async def get_current_state(
-        self, execution_plan_ref: str
+        self, execution_plan_ref: str, execution_scope_ref: str
     ) -> RuntimeBindingStoreState | None:
-        current_ref = self._current_by_plan.get(execution_plan_ref)
+        current_ref = self._current_by_scope.get(
+            (execution_plan_ref, execution_scope_ref)
+        )
         return self._state.get(current_ref) if current_ref is not None else None
+
+    async def get_state_for_host_lease(
+        self, host_lease_ref: str
+    ) -> RuntimeBindingStoreState | None:
+        matches = [
+            state
+            for state in self._state.values()
+            if state.binding.hostLeaseRef == host_lease_ref
+            and self._current_by_scope.get(
+                (
+                    state.binding.executionPlanRef,
+                    state.execution_scope_ref,
+                )
+            )
+            == state.binding.runtimeBindingRef
+        ]
+        if len(matches) > 1:
+            raise HarnessPlatformError(
+                "host lease has conflicting runtime binding authority",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        return matches[0] if matches else None
+
+    async def get_current_state_for_execution_scope(
+        self, execution_scope_ref: str
+    ) -> RuntimeBindingStoreState | None:
+        matches = [
+            state
+            for (_plan_ref, scope_ref), binding_ref in self._current_by_scope.items()
+            if scope_ref == execution_scope_ref
+            and (state := self._state.get(binding_ref)) is not None
+        ]
+        if len(matches) > 1:
+            raise HarnessPlatformError(
+                "execution scope has conflicting runtime binding authority",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        return matches[0] if matches else None
 
     def _require_current(
         self,
@@ -202,7 +278,12 @@ class InMemoryRuntimeBindingStore:
     ) -> RuntimeBindingStoreState:
         current = self._state.get(runtime_binding_ref)
         if current is None or (
-            self._current_by_plan.get(current.binding.executionPlanRef)
+            self._current_by_scope.get(
+                (
+                    current.binding.executionPlanRef,
+                    current.execution_scope_ref,
+                )
+            )
             != runtime_binding_ref
         ):
             raise HarnessPlatformError(
@@ -220,18 +301,73 @@ class InMemoryRuntimeBindingStore:
         return current
 
     def _advance(
-        self, current: RuntimeBindingStoreState, updated: OmnigentRuntimeBinding, state: str
+        self,
+        current: RuntimeBindingStoreState,
+        updated: OmnigentRuntimeBinding,
+        state: str,
+        *,
+        advance_fencing_generation: bool = False,
     ) -> OmnigentRuntimeBinding:
         next_state = RuntimeBindingStoreState(
             binding=updated,
             revision=current.revision + 1,
-            fencing_generation=current.fencing_generation,
+            fencing_generation=(
+                current.fencing_generation + 1
+                if advance_fencing_generation
+                else current.fencing_generation
+            ),
             state=state,
+            execution_scope_ref=current.execution_scope_ref,
         )
         self._bindings[updated.runtimeBindingRef] = updated
         self._state[updated.runtimeBindingRef] = next_state
-        self._current_by_plan[updated.executionPlanRef] = updated.runtimeBindingRef
+        self._current_by_scope[
+            (updated.executionPlanRef, current.execution_scope_ref)
+        ] = updated.runtimeBindingRef
         return updated
+
+    async def reconcile_provider_leases(
+        self,
+        runtime_binding_ref: str,
+        *,
+        provider_leases: dict[str, dict[str, Any]],
+        expected_revision: int,
+        expected_fencing_generation: int,
+    ) -> OmnigentRuntimeBinding:
+        """Replace acquired live authority and fence every former owner."""
+
+        current = self._require_current(
+            runtime_binding_ref,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+        )
+        replacement = create_runtime_binding(
+            executionPlanRef=current.binding.executionPlanRef,
+            executionScopeRef=current.binding.executionScopeRef,
+            providerLeases=provider_leases,
+        )
+        if replacement.providerLeases == current.binding.providerLeases:
+            return current.binding
+        return self._advance(
+            current,
+            replacement,
+            "credentials_acquired",
+            advance_fencing_generation=True,
+        )
+
+    async def mark_cleanup_complete(
+        self,
+        runtime_binding_ref: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+    ) -> OmnigentRuntimeBinding:
+        current = self._require_current(
+            runtime_binding_ref,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+        )
+        return self._advance(current, current.binding, "cleanup_complete")
 
     async def update_with_host(
         self,
@@ -256,10 +392,20 @@ class InMemoryRuntimeBindingStore:
             expected_fencing_generation=expected_fencing_generation,
         )
         existing = current.binding
+        replacing_host = bool(
+            existing.hostBindingRef is not None
+            and (
+                existing.hostBindingRef != host_binding_ref
+                or existing.hostLeaseRef != host_lease_ref
+                or existing.hostLeaseGeneration != host_lease_generation
+                or existing.omnigentHostId != omnigent_host_id
+            )
+        )
         # Cannot mutate plan decisions or acquired generations; only add host info
         # Re-create with new host fields but preserve providerLeases (immutable)
         updated = create_runtime_binding(
             executionPlanRef=existing.executionPlanRef,
+            executionScopeRef=existing.executionScopeRef,
             providerLeases={k: v.model_dump(by_alias=True, mode="json") for k, v in existing.providerLeases.items()},
             hostBindingRef=host_binding_ref,
             hostLeaseRef=host_lease_ref,
@@ -270,14 +416,23 @@ class InMemoryRuntimeBindingStore:
             workspaceResolutionRef=workspace_resolution_ref,
             modelOptionAttestationRef=model_option_attestation_ref,
             skillDeliveryAttestationRef=skill_delivery_attestation_ref,
-            omnigentRunnerRef=existing.omnigentRunnerRef,
-            omnigentSessionId=existing.omnigentSessionId,
-            chatBindingRef=existing.chatBindingRef,
+            omnigentRunnerRef=(
+                None if replacing_host else existing.omnigentRunnerRef
+            ),
+            omnigentSessionId=(
+                None if replacing_host else existing.omnigentSessionId
+            ),
+            chatBindingRef=(None if replacing_host else existing.chatBindingRef),
             cleanupAuthorityRefs=cleanup_authority_refs,
         )
         # New ref differs because host fields are part of digest; we store under new ref
         # but also keep old for history; return new
-        return self._advance(current, updated, "host_attested")
+        return self._advance(
+            current,
+            updated,
+            "host_attested",
+            advance_fencing_generation=replacing_host,
+        )
 
     async def update_with_session(
         self,
@@ -297,6 +452,7 @@ class InMemoryRuntimeBindingStore:
         existing = current.binding
         updated = create_runtime_binding(
             executionPlanRef=existing.executionPlanRef,
+            executionScopeRef=existing.executionScopeRef,
             providerLeases={k: v.model_dump(by_alias=True, mode="json") for k, v in existing.providerLeases.items()},
             hostBindingRef=existing.hostBindingRef,
             hostLeaseRef=existing.hostLeaseRef,
@@ -494,6 +650,7 @@ class DbRuntimeBindingStore:
         attestations = dict(record.attestation_refs_json or {})
         return create_runtime_binding(
             executionPlanRef=record.execution_plan_ref,
+            executionScopeRef=record.execution_scope_ref,
             providerLeases=dict(record.provider_leases_json or {}),
             hostBindingRef=record.host_binding_ref,
             hostLeaseRef=record.host_lease_ref,
@@ -544,10 +701,11 @@ class DbRuntimeBindingStore:
                 revision=int(record.revision),
                 fencing_generation=int(record.fencing_generation),
                 state=str(record.state),
+                execution_scope_ref=str(record.execution_scope_ref or ""),
             )
 
     async def get_current_state(
-        self, execution_plan_ref: str
+        self, execution_plan_ref: str, execution_scope_ref: str
     ) -> RuntimeBindingStoreState | None:
         from api_service.db.models import OmnigentRuntimeBindingRecord
         from sqlalchemy import select
@@ -557,7 +715,9 @@ class DbRuntimeBindingStore:
                 select(OmnigentRuntimeBindingRecord)
                 .where(
                     OmnigentRuntimeBindingRecord.execution_plan_ref
-                    == execution_plan_ref
+                    == execution_plan_ref,
+                    OmnigentRuntimeBindingRecord.execution_scope_ref
+                    == execution_scope_ref,
                 )
                 .order_by(
                     OmnigentRuntimeBindingRecord.revision.desc(),
@@ -578,12 +738,92 @@ class DbRuntimeBindingStore:
                 revision=int(record.revision),
                 fencing_generation=int(record.fencing_generation),
                 state=str(record.state),
+                execution_scope_ref=str(record.execution_scope_ref or ""),
             )
+
+    async def get_state_for_host_lease(
+        self, host_lease_ref: str
+    ) -> RuntimeBindingStoreState | None:
+        from api_service.db.models import OmnigentRuntimeBindingRecord
+        from sqlalchemy import select
+
+        async with self._session_factory() as session:
+            records = list(
+                (
+                    await session.scalars(
+                        select(OmnigentRuntimeBindingRecord).where(
+                            OmnigentRuntimeBindingRecord.host_lease_ref
+                            == host_lease_ref
+                        )
+                    )
+                ).all()
+            )
+        if len(records) > 1:
+            raise HarnessPlatformError(
+                "host lease has conflicting runtime binding authority",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        if not records:
+            return None
+        record = records[0]
+        binding = self._binding_from_record(record)
+        if binding.runtimeBindingRef != record.runtime_binding_ref:
+            raise HarnessPlatformError(
+                "persisted runtime binding digest mismatch",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        return RuntimeBindingStoreState(
+            binding=binding,
+            revision=int(record.revision),
+            fencing_generation=int(record.fencing_generation),
+            state=str(record.state),
+            execution_scope_ref=str(record.execution_scope_ref or ""),
+        )
+
+    async def get_current_state_for_execution_scope(
+        self, execution_scope_ref: str
+    ) -> RuntimeBindingStoreState | None:
+        from api_service.db.models import OmnigentRuntimeBindingRecord
+        from sqlalchemy import select
+
+        async with self._session_factory() as session:
+            records = list(
+                (
+                    await session.scalars(
+                        select(OmnigentRuntimeBindingRecord).where(
+                            OmnigentRuntimeBindingRecord.execution_scope_ref
+                            == execution_scope_ref
+                        )
+                    )
+                ).all()
+            )
+        if len(records) > 1:
+            raise HarnessPlatformError(
+                "execution scope has conflicting runtime binding authority",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        if not records:
+            return None
+        record = records[0]
+        binding = self._binding_from_record(record)
+        if binding.runtimeBindingRef != record.runtime_binding_ref:
+            raise HarnessPlatformError(
+                "persisted runtime binding digest mismatch",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        return RuntimeBindingStoreState(
+            binding=binding,
+            revision=int(record.revision),
+            fencing_generation=int(record.fencing_generation),
+            state=str(record.state),
+            execution_scope_ref=str(record.execution_scope_ref or ""),
+        )
 
     async def create_initial(
         self,
         *,
         execution_plan_ref: str,
+        execution_scope_ref: str,
         provider_leases: dict[str, dict[str, Any]],
     ) -> OmnigentRuntimeBinding:
         from api_service.db.models import (
@@ -592,15 +832,17 @@ class DbRuntimeBindingStore:
         )
         from sqlalchemy import select
 
-        binding = create_runtime_binding(
-            executionPlanRef=execution_plan_ref,
-            providerLeases=provider_leases,
-        )
         async with self._session_factory() as session:
-            # Serialize the one-runtime-binding-per-plan decision on the
-            # immutable plan authority.  Without this lock, concurrent retry
-            # activities can both observe no binding and create competing
-            # generations for the same plan.
+            if not str(execution_scope_ref or "").strip():
+                raise ValueError("execution_scope_ref is required")
+            binding = create_runtime_binding(
+                executionPlanRef=execution_plan_ref,
+                executionScopeRef=execution_scope_ref,
+                providerLeases=provider_leases,
+            )
+            # Serialize the one-current-binding-per-execution decision on the
+            # immutable plan authority. Different executions intentionally
+            # reuse the same plan while owning independent live bindings.
             plan = await session.scalar(
                 select(OmnigentExecutionPlanRecord)
                 .where(
@@ -618,7 +860,9 @@ class DbRuntimeBindingStore:
                 select(OmnigentRuntimeBindingRecord)
                 .where(
                     OmnigentRuntimeBindingRecord.execution_plan_ref
-                    == execution_plan_ref
+                    == execution_plan_ref,
+                    OmnigentRuntimeBindingRecord.execution_scope_ref
+                    == execution_scope_ref,
                 )
                 .order_by(OmnigentRuntimeBindingRecord.updated_at.desc())
                 .limit(1)
@@ -634,6 +878,7 @@ class DbRuntimeBindingStore:
             record = OmnigentRuntimeBindingRecord(
                 runtime_binding_ref=binding.runtimeBindingRef,
                 execution_plan_ref=execution_plan_ref,
+                execution_scope_ref=execution_scope_ref,
                 revision=1,
                 fencing_generation=1,
                 state="credentials_acquired",
@@ -660,6 +905,7 @@ class DbRuntimeBindingStore:
         expected_fencing_generation: int,
         update: Any,
         state: str,
+        advance_fencing_generation: bool = False,
     ) -> OmnigentRuntimeBinding:
         from api_service.db.models import OmnigentRuntimeBindingRecord
         from sqlalchemy import select
@@ -690,6 +936,8 @@ class DbRuntimeBindingStore:
             updated = update(current)
             record.runtime_binding_ref = updated.runtimeBindingRef
             record.revision = int(record.revision) + 1
+            if advance_fencing_generation:
+                record.fencing_generation = int(record.fencing_generation) + 1
             record.state = state
             record.host_binding_ref = updated.hostBindingRef
             record.host_lease_ref = updated.hostLeaseRef
@@ -700,6 +948,10 @@ class DbRuntimeBindingStore:
             record.chat_binding_ref = updated.chatBindingRef
             record.provider_leases_json = {
                 slot: lease.model_dump(mode="json", by_alias=True)
+                for slot, lease in updated.providerLeases.items()
+            }
+            record.credential_runtime_handles_json = {
+                slot: lease.credentialRuntimeRef
                 for slot, lease in updated.providerLeases.items()
             }
             record.attestation_refs_json = {
@@ -723,6 +975,64 @@ class DbRuntimeBindingStore:
             await session.commit()
             return updated
 
+    async def reconcile_provider_leases(
+        self,
+        runtime_binding_ref: str,
+        *,
+        provider_leases: dict[str, dict[str, Any]],
+        expected_revision: int,
+        expected_fencing_generation: int,
+    ) -> OmnigentRuntimeBinding:
+        """CAS a replacement lease set and fence all prior live owners."""
+
+        def update(current: OmnigentRuntimeBinding) -> OmnigentRuntimeBinding:
+            return create_runtime_binding(
+                executionPlanRef=current.executionPlanRef,
+                executionScopeRef=current.executionScopeRef,
+                providerLeases=provider_leases,
+            )
+
+        current = await self.get_state(runtime_binding_ref)
+        if current is None:
+            raise HarnessPlatformError(
+                f"runtime binding {runtime_binding_ref} is stale or unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        replacement = update(current.binding)
+        if replacement.providerLeases == current.binding.providerLeases:
+            if (
+                current.revision != expected_revision
+                or current.fencing_generation != expected_fencing_generation
+            ):
+                raise HarnessPlatformError(
+                    "runtime binding revision or fencing generation conflict",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
+            return current.binding
+        return await self._advance(
+            runtime_binding_ref,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            update=update,
+            state="credentials_acquired",
+            advance_fencing_generation=True,
+        )
+
+    async def mark_cleanup_complete(
+        self,
+        runtime_binding_ref: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+    ) -> OmnigentRuntimeBinding:
+        return await self._advance(
+            runtime_binding_ref,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            update=lambda current: current,
+            state="cleanup_complete",
+        )
+
     async def update_with_host(
         self,
         runtime_binding_ref: str,
@@ -740,9 +1050,27 @@ class DbRuntimeBindingStore:
         expected_revision: int,
         expected_fencing_generation: int,
     ) -> OmnigentRuntimeBinding:
+        current_state = await self.get_state(runtime_binding_ref)
+        if current_state is None:
+            raise HarnessPlatformError(
+                f"runtime binding {runtime_binding_ref} is stale or unavailable",
+                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+            )
+        current_binding = current_state.binding
+        replacing_host = bool(
+            current_binding.hostBindingRef is not None
+            and (
+                current_binding.hostBindingRef != host_binding_ref
+                or current_binding.hostLeaseRef != host_lease_ref
+                or current_binding.hostLeaseGeneration != host_lease_generation
+                or current_binding.omnigentHostId != omnigent_host_id
+            )
+        )
+
         def update(current: OmnigentRuntimeBinding) -> OmnigentRuntimeBinding:
             return create_runtime_binding(
                 executionPlanRef=current.executionPlanRef,
+                executionScopeRef=current.executionScopeRef,
                 providerLeases={
                     slot: lease.model_dump(mode="json", by_alias=True)
                     for slot, lease in current.providerLeases.items()
@@ -758,9 +1086,15 @@ class DbRuntimeBindingStore:
                 workspaceResolutionRef=workspace_resolution_ref,
                 modelOptionAttestationRef=model_option_attestation_ref,
                 skillDeliveryAttestationRef=skill_delivery_attestation_ref,
-                omnigentRunnerRef=current.omnigentRunnerRef,
-                omnigentSessionId=current.omnigentSessionId,
-                chatBindingRef=current.chatBindingRef,
+                omnigentRunnerRef=(
+                    None if replacing_host else current.omnigentRunnerRef
+                ),
+                omnigentSessionId=(
+                    None if replacing_host else current.omnigentSessionId
+                ),
+                chatBindingRef=(
+                    None if replacing_host else current.chatBindingRef
+                ),
                 cleanupAuthorityRefs=cleanup_authority_refs,
             )
 
@@ -770,6 +1104,7 @@ class DbRuntimeBindingStore:
             expected_fencing_generation=expected_fencing_generation,
             update=update,
             state="host_attested",
+            advance_fencing_generation=replacing_host,
         )
 
     async def update_with_session(
@@ -785,6 +1120,7 @@ class DbRuntimeBindingStore:
         def update(current: OmnigentRuntimeBinding) -> OmnigentRuntimeBinding:
             return create_runtime_binding(
                 executionPlanRef=current.executionPlanRef,
+                executionScopeRef=current.executionScopeRef,
                 providerLeases={
                     slot: lease.model_dump(mode="json", by_alias=True)
                     for slot, lease in current.providerLeases.items()

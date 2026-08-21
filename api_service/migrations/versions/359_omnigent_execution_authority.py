@@ -1,4 +1,4 @@
-"""Enforce one fenced runtime binding aggregate per execution plan.
+"""Scope fenced runtime binding authority to one execution of a plan.
 
 Source: MoonLadderStudios/MoonMind#3706
 Revision ID: 359_omnigent_execution_authority
@@ -21,10 +21,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_unique_constraint(
-        "uq_omnigent_runtime_binding_execution_plan",
+    op.add_column(
         "omnigent_runtime_bindings",
-        ["execution_plan_ref"],
+        sa.Column("execution_scope_ref", sa.String(length=255), nullable=True),
+    )
+    op.create_unique_constraint(
+        "uq_omnigent_runtime_binding_plan_scope",
+        "omnigent_runtime_bindings",
+        ["execution_plan_ref", "execution_scope_ref"],
     )
     op.add_column(
         "omnigent_runtime_bindings",
@@ -40,7 +44,8 @@ def downgrade() -> None:
     op.drop_column("omnigent_runtime_bindings", "chat_binding_ref")
     op.drop_column("omnigent_runtime_bindings", "runner_ref")
     op.drop_constraint(
-        "uq_omnigent_runtime_binding_execution_plan",
+        "uq_omnigent_runtime_binding_plan_scope",
         "omnigent_runtime_bindings",
         type_="unique",
     )
+    op.drop_column("omnigent_runtime_bindings", "execution_scope_ref")

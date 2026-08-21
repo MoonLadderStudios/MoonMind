@@ -36,6 +36,7 @@ class OmnigentRuntimeBinding(BaseModel):
     schemaVersion: str = Field("moonmind.omnigent-runtime-binding.v1", alias="schemaVersion")
     runtimeBindingRef: str = Field(alias="runtimeBindingRef")
     executionPlanRef: str = Field(alias="executionPlanRef")
+    executionScopeRef: str | None = Field(default=None, alias="executionScopeRef")
     providerLeases: dict[str, RuntimeBindingProviderLease] = Field(alias="providerLeases")
     hostBindingRef: str | None = Field(default=None, alias="hostBindingRef")
     hostLeaseRef: str | None = Field(default=None, alias="hostLeaseRef")
@@ -57,6 +58,8 @@ class OmnigentRuntimeBinding(BaseModel):
             raise ValueError("executionPlanRef invalid")
         if not self.runtimeBindingRef.startswith("omnigent-runtime-binding:sha256:"):
             raise ValueError("runtimeBindingRef invalid")
+        if self.executionScopeRef is not None and not self.executionScopeRef.strip():
+            raise ValueError("executionScopeRef must be non-empty when recorded")
         host_values = (
             self.hostBindingRef,
             self.hostLeaseRef,
@@ -105,6 +108,11 @@ def compute_runtime_binding_ref(binding: dict[str, Any] | OmnigentRuntimeBinding
     ):
         payload.pop("omnigentRunnerRef", None)
         payload.pop("chatBindingRef", None)
+    # Bindings persisted before execution-scoped authority was introduced did
+    # not include this field in their digest. New production bindings always
+    # record it so two executions can safely realize the same immutable plan.
+    if payload.get("executionScopeRef") is None:
+        payload.pop("executionScopeRef", None)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return "omnigent-runtime-binding:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -112,6 +120,7 @@ def compute_runtime_binding_ref(binding: dict[str, Any] | OmnigentRuntimeBinding
 def create_runtime_binding(
     *,
     executionPlanRef: str,
+    executionScopeRef: str | None = None,
     providerLeases: dict[str, dict[str, Any]],
     hostBindingRef: str | None = None,
     hostLeaseRef: str | None = None,
@@ -130,6 +139,7 @@ def create_runtime_binding(
     raw: dict[str, Any] = {
         "schemaVersion": "moonmind.omnigent-runtime-binding.v1",
         "executionPlanRef": executionPlanRef,
+        "executionScopeRef": executionScopeRef,
         "providerLeases": providerLeases,
         "hostBindingRef": hostBindingRef,
         "hostLeaseRef": hostLeaseRef,

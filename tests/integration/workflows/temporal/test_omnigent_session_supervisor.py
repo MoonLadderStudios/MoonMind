@@ -112,6 +112,7 @@ def _reset_state() -> None:
         cleanup=False,
         cancel=False,
         admission=True,
+        execution_realizer_ref="generic-omnigent-host@1",
         fail_activity=None,
         load_failures_remaining=0,
         reconciler_failed=False,
@@ -311,7 +312,7 @@ async def _resolve_intent(payload: dict[str, Any]) -> dict[str, Any]:
 async def _evaluate_session_admission(payload: dict[str, Any]) -> dict[str, Any]:
     CALLS.append("evaluate_session_admission")
     STATE["admission_plan"] = payload.get("omnigentExecutionPlan")
-    return {
+    decision = {
         "admitted": bool(STATE["admission"]),
         "reasonCode": (
             "enabled" if STATE["admission"] else "new_selection_disabled"
@@ -319,6 +320,20 @@ async def _evaluate_session_admission(payload: dict[str, Any]) -> dict[str, Any]
         "admissionMode": "enabled" if STATE["admission"] else "disabled",
         "admittedFeatureGeneration": "omnigent-session-v1",
     }
+    if payload.get("omnigentExecutionPlan") is not None:
+        decision["executionRealizerRef"] = STATE["execution_realizer_ref"]
+    return decision
+
+
+@activity.defn(name="integration.omnigent.execute")
+async def _execute_recorded_plan_realizer(
+    request: AgentExecutionRequest,
+) -> AgentRunResult:
+    CALLS.append("execute_recorded_plan_realizer")
+    STATE["codex_dispatch_plan"] = request.omnigent_execution_plan.model_dump(
+        mode="json", by_alias=True
+    )
+    return AgentRunResult(summary="Recorded Codex realizer completed")
 
 
 @activity.defn(name="omnigent.load_reconciliation_inputs")
@@ -1071,6 +1086,69 @@ async def test_product_compiled_agent_run_converges_after_lost_terminal_event() 
     assert CALLS.index("harvest_evidence") < CALLS.index("stop_provider_session")
     assert CALLS.index("stop_host") < CALLS.index("release_leases")
     assert CALLS[-1] == "publish_artifacts"
+
+
+async def test_plan_bound_codex_keeps_recorded_realizer_and_replays() -> None:
+    """A new Codex plan never crosses into the generic session supervisor."""
+
+    _reset_state()
+    STATE["execution_realizer_ref"] = "codex-profile-bound@1"
+    binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "d" * 64,
+        planDigest="sha256:" + "d" * 64,
+        planArtifactRef="art_codex_plan_3706",
+        taskInputSnapshotRef="art_codex_task_3706",
+        taskInputSnapshotDigest="sha256:" + "e" * 64,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="provider-codex-native",
+        omnigentExecutionPlan=binding,
+        correlationId="workflow-codex-product",
+        idempotencyKey="step-codex-product",
+        instructionRef="art_codex_task_3706",
+    )
+    workflow_queue = get_workflow_task_queue()
+
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with (
+            Worker(
+                env.client,
+                task_queue=workflow_queue,
+                workflows=[MoonMindAgentRun],
+                activities=[_resolve_adapter_metadata],
+                workflow_runner=UnsandboxedWorkflowRunner(),
+            ),
+            Worker(
+                env.client,
+                task_queue=AGENT_RUNTIME_TASK_QUEUE,
+                activities=[
+                    _evaluate_session_admission,
+                    _execute_recorded_plan_realizer,
+                    _publish_artifacts,
+                ],
+            ),
+        ):
+            handle = await env.client.start_workflow(
+                MoonMindAgentRun.run,
+                request,
+                id=f"agent-run-codex-plan-{uuid4()}",
+                task_queue=workflow_queue,
+            )
+            result = AgentRunResult.model_validate(await handle.result())
+            history = await handle.fetch_history()
+
+    assert result.summary == "Recorded Codex realizer completed"
+    assert STATE["codex_dispatch_plan"] == binding.model_dump(
+        mode="json", by_alias=True
+    )
+    assert "execute_recorded_plan_realizer" in CALLS
+    assert "resolve_intent" not in CALLS
+    await Replayer(
+        workflows=[MoonMindAgentRun],
+        workflow_runner=UnsandboxedWorkflowRunner(),
+    ).replay_workflow(history)
 
 
 async def test_continue_as_new_preserves_active_provider_session(
