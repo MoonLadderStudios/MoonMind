@@ -325,6 +325,7 @@ function visibleReadinessChecks(readiness?: ProviderProfileReadiness | null): Pr
 type ProviderAuthActionLabel =
   | 'OAuth'
   | 'Use Anthropic API key'
+  | 'Use OpenCode API key'
   | 'Validate OAuth'
   | 'Disconnect OAuth';
 
@@ -332,6 +333,8 @@ interface ClaudeAuthAction {
   id: string;
   label: ProviderAuthActionLabel;
 }
+
+type OpencodeAuthAction = ClaudeAuthAction;
 
 type ClaudeEnrollmentStep =
   | 'not_connected'
@@ -359,6 +362,12 @@ type ProviderAuthModel =
       actions: ClaudeAuthAction[];
       readiness: ClaudeReadinessMetadata | null;
     }
+  | {
+      kind: 'opencode_credentials';
+      statusLabel: string | null;
+      actions: OpencodeAuthAction[];
+      readiness: ClaudeReadinessMetadata | null;
+    }
   | { kind: 'none' };
 
 interface ClaudeEnrollmentState {
@@ -384,6 +393,10 @@ const CLAUDE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
   use_api_key: 'Use Anthropic API key',
   validate_oauth: 'Validate OAuth',
   disconnect_oauth: 'Disconnect OAuth',
+};
+
+const OPENCODE_AUTH_ACTION_LABELS: Record<string, ProviderAuthActionLabel> = {
+  use_api_key: 'Use OpenCode API key',
 };
 
 const CLAUDE_ENROLLMENT_STEPS: ClaudeEnrollmentStep[] = [
@@ -543,9 +556,44 @@ function claudeCredentialActions(profile: ProviderProfile): ClaudeAuthAction[] {
     .filter((action): action is ClaudeAuthAction => action !== null);
 }
 
+function isOpencodeGoProfile(profile: ProviderProfile): boolean {
+  return profile.runtime_id === 'opencode' && profile.provider_id === 'opencode-go';
+}
+
+function isOpencodeCredentialMethodProfile(profile: ProviderProfile): boolean {
+  return profile.runtime_id === 'opencode' && (profile.provider_id === 'opencode-go' || profile.provider_id === 'opencode');
+}
+
+function defaultOpencodeCredentialActions(profile: ProviderProfile): string[] {
+  if (!isOpencodeGoProfile(profile)) {
+    return [];
+  }
+  return ['use_api_key'];
+}
+
+function opencodeCredentialActions(profile: ProviderProfile): OpencodeAuthAction[] {
+  const actionIds = commandBehaviorStringArray(profile, 'auth_actions');
+  const resolvedActionIds = actionIds ?? defaultOpencodeCredentialActions(profile);
+  return resolvedActionIds
+    .map((actionId) => {
+      const label = OPENCODE_AUTH_ACTION_LABELS[actionId];
+      return label ? { id: actionId, label } : null;
+    })
+    .filter((action): action is OpencodeAuthAction => action !== null);
+}
+
 function providerAuthModel(profile: ProviderProfile): ProviderAuthModel {
   if (isFirstPartyOAuthProfile(profile)) {
     return { kind: 'codex_oauth' };
+  }
+
+  if (isOpencodeCredentialMethodProfile(profile)) {
+    return {
+      kind: 'opencode_credentials',
+      statusLabel: formatStatusLabel(commandBehaviorString(profile, 'auth_status_label'), ''),
+      actions: opencodeCredentialActions(profile),
+      readiness: normalizeReadinessMetadata(commandBehaviorValue(profile, 'auth_readiness')),
+    };
   }
 
   if (!isClaudeCredentialMethodProfile(profile)) {
@@ -855,6 +903,165 @@ export function ProviderProfilesManager({
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [claudeEnrollment]);
+
+  // ── OpenCode API-key enrollment (mirrors Claude flow but uses /credentials/api-key) ──
+  const [opencodeEnrollment, setOpencodeEnrollment] = useState<ClaudeEnrollmentState | null>(null);
+  const opencodeEnrollmentDrawerRef = useRef<HTMLDivElement | null>(null);
+  const opencodeEnrollmentProfileIdRef = useRef<string | null>(null);
+
+  const updateOpencodeEnrollmentForProfile = (
+    profileId: string,
+    updater: (current: ClaudeEnrollmentState) => ClaudeEnrollmentState,
+  ) => {
+    setOpencodeEnrollment((current) => {
+      if (!current || current.profile.profile_id !== profileId) {
+        return current;
+      }
+      return updater(current);
+    });
+  };
+
+  const closeOpencodeEnrollment = () => {
+    opencodeEnrollmentProfileIdRef.current = null;
+    setOpencodeEnrollment(null);
+  };
+
+  const openOpencodeEnrollment = (profile: ProviderProfile) => {
+    const authModel = providerAuthModel(profile);
+    opencodeEnrollmentProfileIdRef.current = profile.profile_id;
+    setOpencodeEnrollment({
+      profile,
+      step: 'not_connected',
+      token: '',
+      failureReason: null,
+      statusLabel: authModel.kind === 'opencode_credentials' ? authModel.statusLabel : null,
+      readiness: authModel.kind === 'opencode_credentials' ? authModel.readiness : null,
+    });
+    onNotice(null);
+  };
+
+  const updateOpencodeEnrollmentToken = (token: string) => {
+    setOpencodeEnrollment((current) => (current ? { ...current, token } : current));
+  };
+
+  const continueOpencodeEnrollment = () => {
+    setOpencodeEnrollment((current) =>
+      current ? { ...current, step: 'awaiting_token_paste', failureReason: null } : current,
+    );
+  };
+
+  const opencodeEnrollmentMutation = useMutation({
+    mutationFn: async ({
+      profileId,
+      submittedToken,
+    }: {
+      profileId: string;
+      submittedToken: string;
+    }) => {
+      const response = await fetch(
+        `/api/v1/provider-profiles/${encodeURIComponent(profileId)}/credentials/api-key`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: submittedToken }),
+        },
+      );
+      const payload: unknown = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(redactClaudeSecretText(extractErrorMessage(payload), submittedToken) ?? 'OpenCode API key validation failed.');
+      }
+
+      return payload as ClaudeManualAuthResult;
+    },
+    onMutate: ({ profileId }) => {
+      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'validating_token',
+        token: '',
+        failureReason: null,
+      }));
+    },
+    onSuccess: async (result, { profileId }) => {
+      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'saving_secret',
+        token: '',
+      }));
+      await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
+      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'updating_profile',
+        token: '',
+      }));
+      await delay(CLAUDE_ENROLLMENT_PROGRESS_DELAY_MS);
+      if (opencodeEnrollmentProfileIdRef.current !== profileId) {
+        return;
+      }
+      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'ready',
+        token: '',
+        failureReason: null,
+        statusLabel: formatStatusLabel(result.status_label ?? result.statusLabel ?? current.statusLabel, ''),
+        readiness: normalizeReadinessMetadata(result.readiness) ?? current.readiness,
+      }));
+      queryClient.invalidateQueries({ queryKey: PROVIDER_PROFILE_QUERY_KEY });
+      onNotice({
+        level: 'ok',
+        text: `OpenCode API key enrollment completed for "${profileId}".`,
+      });
+    },
+    onError: (error, { profileId, submittedToken }) => {
+      if (opencodeEnrollmentProfileIdRef.current !== profileId) {
+        return;
+      }
+      const failureReason =
+        error instanceof Error
+          ? redactClaudeSecretText(error.message, submittedToken)
+          : 'OpenCode API key validation failed.';
+      updateOpencodeEnrollmentForProfile(profileId, (current) => ({
+        ...current,
+        step: 'failed',
+        token: '',
+        failureReason: failureReason ?? 'OpenCode API key validation failed.',
+      }));
+    },
+  });
+
+  const submitOpencodeEnrollment = () => {
+    if (!opencodeEnrollment) return;
+    const profileId = opencodeEnrollment.profile.profile_id;
+    const submittedToken = opencodeEnrollment.token.trim();
+    if (!submittedToken) {
+      onNotice({ level: 'error', text: 'OpenCode API key is required.' });
+      return;
+    }
+
+    opencodeEnrollmentMutation.mutate({ profileId, submittedToken });
+  };
+
+  useEffect(() => {
+    if (!opencodeEnrollment) return;
+    opencodeEnrollmentDrawerRef.current?.focus();
+  }, [opencodeEnrollment?.profile.profile_id]);
+
+  useEffect(() => {
+    opencodeEnrollmentProfileIdRef.current = opencodeEnrollment?.profile.profile_id ?? null;
+  }, [opencodeEnrollment?.profile.profile_id]);
+
+  useEffect(() => {
+    if (!opencodeEnrollment) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeOpencodeEnrollment();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [opencodeEnrollment]);
 
   const saveMutation = useMutation({
     mutationFn: async (formState: ProviderProfileFormState) => {
@@ -1325,6 +1532,8 @@ export function ProviderProfilesManager({
                 const enableAllowed = mayEnableFromSettings(profile);
                 const claudeReadiness =
                   authModel.kind === 'claude_credentials' ? authModel.readiness : undefined;
+                const opencodeReadiness =
+                  authModel.kind === 'opencode_credentials' ? authModel.readiness : undefined;
                 const hasStatusDetails = Boolean(
                   (activationLabel && activationLabel !== 'Connected') ||
                     profile.disabled_reason ||
@@ -1334,7 +1543,12 @@ export function ProviderProfilesManager({
                     claudeReadiness?.lastValidatedAt ||
                     claudeReadiness?.backingSecretExists !== undefined ||
                     claudeReadiness?.launchReady !== undefined ||
-                    claudeReadiness?.failureReason,
+                    claudeReadiness?.failureReason ||
+                    opencodeReadiness?.connected !== undefined ||
+                    opencodeReadiness?.lastValidatedAt ||
+                    opencodeReadiness?.backingSecretExists !== undefined ||
+                    opencodeReadiness?.launchReady !== undefined ||
+                    opencodeReadiness?.failureReason,
                 );
                 return (
                 <tr key={profile.profile_id} role="row">
@@ -1502,6 +1716,11 @@ export function ProviderProfilesManager({
                           {authModel.statusLabel}
                         </div>
                       ) : null}
+                      {authModel.kind === 'opencode_credentials' && authModel.statusLabel ? (
+                        <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                          {authModel.statusLabel}
+                        </div>
+                      ) : null}
                       {oauthSession ? (
                         <div className="text-xs font-medium text-slate-600 dark:text-slate-400">
                           OAuth: {oauthStatusLabel(oauthSession.status)}
@@ -1577,6 +1796,31 @@ export function ProviderProfilesManager({
                                 Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
                               </div>
                             ) : null}
+                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.connected !== undefined ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                OpenCode connection: {authModel.readiness.connected ? 'Connected' : 'Not connected'}
+                              </div>
+                            ) : null}
+                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.lastValidatedAt ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Last validated: {authModel.readiness.lastValidatedAt}
+                              </div>
+                            ) : null}
+                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.backingSecretExists !== undefined ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Backing secret: {authModel.readiness.backingSecretExists ? 'Present' : 'Missing'}
+                              </div>
+                            ) : null}
+                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.launchReady !== undefined ? (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Launch readiness: {authModel.readiness.launchReady ? 'Ready' : 'Not ready'}
+                              </div>
+                            ) : null}
+                            {authModel.kind === 'opencode_credentials' && authModel.readiness?.failureReason ? (
+                              <div className="text-xs text-rose-600 dark:text-rose-400">
+                                Failure: {redactClaudeSecretText(authModel.readiness.failureReason)}
+                              </div>
+                            ) : null}
                           </div>
                         </details>
                       ) : null}
@@ -1623,6 +1867,25 @@ export function ProviderProfilesManager({
                                 }
                               }}
                               disabled={claudeOAuthLifecycleMutation.isPending}
+                              aria-label={`${action.label} ${profile.profile_id}`}
+                            >
+                              {action.label}
+                            </button>
+                          ))
+                        : null}
+                      {canWriteProviderProfiles && authModel.kind === 'opencode_credentials'
+                        ? authModel.actions.map((action) => (
+                            <button
+                              key={action.id}
+                              type="button"
+                              className="rounded-full border border-emerald-300 dark:border-emerald-700 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 transition hover:border-emerald-500 dark:hover:border-emerald-500"
+                              onClick={() => {
+                                if (action.id === 'use_api_key') {
+                                  openOpencodeEnrollment(profile);
+                                  return;
+                                }
+                              }}
+                              disabled={opencodeEnrollmentMutation.isPending}
                               aria-label={`${action.label} ${profile.profile_id}`}
                             >
                               {action.label}
@@ -1936,6 +2199,126 @@ export function ProviderProfilesManager({
                 type="button"
                 className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
                 onClick={continueClaudeEnrollment}
+              >
+                Return to API key paste
+              </button>
+            </div>
+          ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {opencodeEnrollment ? (
+        <div
+          className="fixed inset-0 z-50 flex justify-end bg-slate-950/40"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              closeOpencodeEnrollment();
+            }
+          }}
+        >
+          <div
+            ref={opencodeEnrollmentDrawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="opencode-enrollment-title"
+            tabIndex={-1}
+            className="h-full w-full max-w-2xl overflow-y-auto border-l border-emerald-200 dark:border-emerald-900/60 bg-white dark:bg-slate-900 p-5 shadow-2xl outline-none"
+          >
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="space-y-2">
+              <h4
+                id="opencode-enrollment-title"
+                className="text-base font-semibold text-slate-900 dark:text-white"
+              >
+                OpenCode API key enrollment for {opencodeEnrollment.profile.profile_id}
+              </h4>
+              <p className="max-w-3xl text-sm text-slate-600 dark:text-slate-400">
+                Use an OpenCode Go API key for OpenCode launches. Paste the key here, then validate and save it as a managed provider credential.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
+              onClick={closeOpencodeEnrollment}
+            >
+              Cancel API key enrollment
+            </button>
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2" aria-label="OpenCode enrollment lifecycle states">
+            {CLAUDE_ENROLLMENT_STEPS.map((step) => (
+              <span
+                key={step}
+                className={`rounded-full px-2.5 py-1 font-mono text-xs ${
+                  step === opencodeEnrollment.step
+                    ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
+                    : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+                }`}
+              >
+                {formatStatusLabel(step)}
+              </span>
+            ))}
+          </div>
+
+          {opencodeEnrollment.step === 'not_connected' ? (
+            <div className="mt-5 space-y-4">
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 text-sm text-slate-700 dark:text-slate-300">
+                Continue when you are ready to paste the OpenCode API key. This path stores the key in Managed Secrets and does not create an OAuth terminal session.
+              </div>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+                onClick={continueOpencodeEnrollment}
+              >
+                Continue to API key paste
+              </button>
+            </div>
+          ) : null}
+
+          {opencodeEnrollment.step === 'awaiting_token_paste' ? (
+            <div className="mt-5 space-y-4">
+              <label className="flex flex-col gap-1.5 text-sm font-medium text-slate-700 dark:text-slate-300">
+                <span>OpenCode API key</span>
+                <input
+                  type="password"
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 px-3 py-2 text-sm text-slate-900 dark:text-white shadow-sm"
+                  value={opencodeEnrollment.token}
+                  onChange={(event) => updateOpencodeEnrollmentToken(event.target.value)}
+                  autoComplete="off"
+                />
+              </label>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-lg bg-slate-900 dark:bg-slate-100 px-4 py-2 text-sm font-semibold text-white dark:text-slate-900 transition hover:bg-slate-800 dark:hover:bg-slate-200"
+                onClick={() => void submitOpencodeEnrollment()}
+              >
+                Validate and save OpenCode API key
+              </button>
+            </div>
+          ) : null}
+
+          {['validating_token', 'saving_secret', 'updating_profile'].includes(opencodeEnrollment.step) ? (
+            <div className="mt-5 rounded-xl border border-sky-200 dark:border-sky-900/60 bg-sky-50 dark:bg-sky-950/30 p-4 text-sm font-medium text-sky-800 dark:text-sky-300">
+              Processing OpenCode API key enrollment: {formatStatusLabel(opencodeEnrollment.step)}
+            </div>
+          ) : null}
+
+          {opencodeEnrollment.step === 'ready' ? (
+            <div className="mt-5 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 p-4 text-sm font-medium text-emerald-800 dark:text-emerald-300">
+              {formatStatusLabel(opencodeEnrollment.statusLabel ?? 'OpenCode API key ready')}
+            </div>
+          ) : null}
+
+          {opencodeEnrollment.step === 'failed' ? (
+            <div className="mt-5 space-y-4">
+              <div className="rounded-xl border border-rose-200 dark:border-rose-900/60 bg-rose-50 dark:bg-rose-950/30 p-4 text-sm font-medium text-rose-700 dark:text-rose-300">
+                {opencodeEnrollment.failureReason ?? 'OpenCode API key validation failed.'}
+              </div>
+              <button
+                type="button"
+                className="inline-flex items-center justify-center rounded-lg border border-slate-300 dark:border-slate-700 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-300 transition hover:border-slate-400 dark:hover:border-slate-500"
+                onClick={continueOpencodeEnrollment}
               >
                 Return to API key paste
               </button>

@@ -144,12 +144,15 @@ def test_public_catalog_exposes_only_safe_stable_product_refs() -> None:
     assert {profile["ref"] for profile in catalog["profiles"]} == {
         "omnigent-codex@1",
         "omnigent-claude@1",
+        "omnigent-opencode@1",
     }
     assert {policy["ref"] for policy in catalog["policies"]} == {
         "codex-static@1",
         "codex-on-demand@1",
         "claude-static@1",
         "claude-on-demand@1",
+        "opencode-static@1",
+        "opencode-on-demand@1",
     }
     codex_profile = next(
         profile for profile in catalog["profiles"] if profile["ref"] == "omnigent-codex@1"
