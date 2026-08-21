@@ -18,7 +18,10 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from moonmind.omnigent.control_plane.turn_service import CanonicalTurnResult
+from moonmind.omnigent.control_plane.turn_service import (
+    CanonicalTurnResult,
+    CanonicalTurnService,
+)
 from moonmind.schemas.omnigent_session_models import OmnigentSessionSignal
 
 SUBMIT_TURN_SIGNAL = "submit_authorized_continuation"
@@ -59,8 +62,31 @@ class SupervisorTurnDispatcher:
         )
 
 
+def production_turn_service(store: Any) -> CanonicalTurnService:
+    """Build the one production canonical turn service over ``store``.
+
+    Every production producer -- Workflow Chat, the repository-publication
+    continuation loop, remediation, checkpoint resume, and the Checkpoint Branch
+    turn launcher -- constructs the boundary through this factory, so all of them
+    share one submission authority *and* one delivery path. The service invokes
+    the dispatcher only for a submission that declares
+    ``supervisor_delivered=True`` on a session that records a supervisor
+    generation
+    (:func:`~moonmind.omnigent.control_plane.turn_service.session_supervises_turns`).
+    A producer-delivered turn and a pre-canonical session are both delivered by
+    their own transport owner, never signalled, so no turn is submitted twice.
+    """
+
+    from moonmind.workflows.temporal.client import TemporalClientAdapter
+
+    return CanonicalTurnService(
+        store, dispatcher=SupervisorTurnDispatcher(TemporalClientAdapter())
+    )
+
+
 __all__ = [
     "SUBMIT_TURN_SIGNAL",
     "SupervisorTurnDispatcher",
     "WorkflowSignalClient",
+    "production_turn_service",
 ]

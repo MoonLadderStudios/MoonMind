@@ -23,6 +23,7 @@ from moonmind.omnigent.reconciler import (
     TerminalOutcome,
     classify_provider_status,
 )
+from moonmind.omnigent.turn_contracts import PRE_CUTOVER_SIGNAL_TURN_SOURCE
 from moonmind.schemas.agent_runtime_models import AgentRunResult
 from moonmind.schemas.omnigent_session_models import (
     OMNIGENT_SESSION_FEATURE_GENERATION,
@@ -179,17 +180,30 @@ def test_signal_contract_carries_only_safe_ids_and_refs() -> None:
             turnSource="continuation",
         )
 
-    # A continuation must name the source that authorized it.
+    # A continuation must still name its turn identity and instruction.
     supervisor = MoonMindOmnigentSessionWorkflow()
     supervisor._initialize(_workflow_input())
     with pytest.raises(ValueError):
         supervisor.submit_authorized_turn(
-            OmnigentSessionSignal(
-                requestId="request-4",
-                turnAttemptId="turn-4",
-                instructionRef="art_instruction_4",
-            )
+            OmnigentSessionSignal(requestId="request-4")
         )
+
+    # An *omitted* source is a pre-#3707 in-flight history, not a live producer
+    # skipping the field: raising on replay would wedge an already-admitted run,
+    # so it resolves to the one deterministic pre-cutover source instead. The
+    # replay/cutover contract is covered in test_omnigent_supervisor_replay.py.
+    supervisor.submit_authorized_turn(
+        OmnigentSessionSignal(
+            requestId="request-4",
+            turnAttemptId="turn-4",
+            instructionRef="art_instruction_4",
+        )
+    )
+    queued = supervisor._pending_signal_intents[-1]
+    assert queued["kind"] == "submit_authorized_continuation"
+    assert queued["payload"]["turnSource"] == (
+        PRE_CUTOVER_SIGNAL_TURN_SOURCE.value
+    )
 
     with pytest.raises(ValidationError):
         OmnigentSessionSignal(

@@ -164,26 +164,38 @@ TURN_SOURCE_POLICIES: Mapping[OmnigentTurnSource, TurnSourcePolicy] = MappingPro
 #: inventory cannot reach :class:`~moonmind.omnigent.control_plane.turn_service.CanonicalTurnService`,
 #: so an alternate submission path is a contract violation rather than a
 #: silently-accepted second authority.
+#:
+#: Every key here names a *live production call site*, not an aspiration: an
+#: inventory that claims coverage it does not have is itself an alternate
+#: submission path hiding behind a registration. ``initial`` has no producer
+#: because a session's first turn is *established* with the session
+#: (``OmnigentControlPlaneStore.establish_session``) rather than submitted onto
+#: an existing one, and :func:`evaluate_turn_admission` refuses that source by
+#: policy.
 TURN_PRODUCER_SOURCES: Mapping[str, OmnigentTurnSource] = MappingProxyType(
     {
-        "omnigent.session_supervisor.initial": OmnigentTurnSource.INITIAL,
+        # moonmind/omnigent/profile_bound_execution.py - the bounded
+        # same-session repository-publication continuation loop.
         "omnigent.repository_output_continuation": (
             OmnigentTurnSource.REPOSITORY_CONTINUATION
         ),
+        # api_service/services/checkpoint_branch_turn_execution.py - the
+        # remediation controller's branch turn, admitted against the source
+        # session it remediates.
         "omnigent.remediation_controller": OmnigentTurnSource.REMEDIATION,
+        # api_service/api/routers/omnigent_bridge.py - native Workflow Chat.
         "omnigent.workflow_chat.http": OmnigentTurnSource.WORKFLOW_CHAT,
-        "omnigent.workflow_chat.websocket": OmnigentTurnSource.WORKFLOW_CHAT,
         "omnigent.workflow_chat.steering": OmnigentTurnSource.STEERING,
         "omnigent.workflow_chat.approval_response": (
             OmnigentTurnSource.APPROVAL_RESPONSE
         ),
+        # moonmind/omnigent/profile_bound_execution.py - checkpoint resume.
         "omnigent.checkpoint_resume": OmnigentTurnSource.CHECKPOINT_RESUME,
+        # api_service/services/checkpoint_branch_turn_execution.py - the
+        # server-owned Checkpoint Branch turn launcher.
         "omnigent.checkpoint_branch_turn": OmnigentTurnSource.LINKED_BRANCH,
+        # moonmind/omnigent/profile_bound_execution.py - branch-from-checkpoint.
         "omnigent.linked_branch_workflow": OmnigentTurnSource.LINKED_BRANCH,
-        "omnigent.edit_and_rerun_reconstruction": (
-            OmnigentTurnSource.REPOSITORY_CONTINUATION
-        ),
-        "omnigent.execution_realizer": OmnigentTurnSource.REPOSITORY_CONTINUATION,
     }
 )
 
@@ -220,6 +232,34 @@ def resolve_turn_source(value: object) -> OmnigentTurnSource:
         return OmnigentTurnSource(str(value or "").strip())
     except ValueError as exc:
         raise UnknownTurnSourceError(value) from exc
+
+
+#: Deterministic source for a ``submit_authorized_continuation`` signal that was
+#: already delivered into a ``MoonMind.OmnigentSession`` history *before* #3707
+#: made ``turnSource`` mandatory. Those payloads carry no source at all, and a
+#: replayed signal handler that raised on them would wedge the workflow task for
+#: an in-flight run rather than fail one submission. The value is exactly the one
+#: migration ``358_omnigent_turn_source`` assigns to the historical
+#: ``lineage_kind='continuation'`` rows those signals produced, so a pre-cutover
+#: turn is classified identically whether it is replayed from history or read
+#: from a migrated row. New submissions never reach this path: the one production
+#: sender (``SupervisorTurnDispatcher``) always names the admitted source, and
+#: any other *non-empty* value still fails closed.
+PRE_CUTOVER_SIGNAL_TURN_SOURCE = OmnigentTurnSource.REPOSITORY_CONTINUATION
+
+
+def resolve_signal_turn_source(value: object) -> OmnigentTurnSource:
+    """Resolve the source of a supervisor turn signal, replay-safe.
+
+    An omitted source is a pre-#3707 in-flight history and resolves to
+    :data:`PRE_CUTOVER_SIGNAL_TURN_SOURCE`. Anything else goes through
+    :func:`resolve_turn_source` and fails closed, so a live producer cannot use
+    the compatibility path to submit an unknown source.
+    """
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return PRE_CUTOVER_SIGNAL_TURN_SOURCE
+    return resolve_turn_source(value)
 
 
 def turn_source_policy(source: object) -> TurnSourcePolicy:
@@ -339,6 +379,87 @@ class ImmutableExecutionAuthority(BaseModel):
         )
 
 
+def immutable_authority_from_compiled_intent(
+    intent: Mapping[str, object],
+    *,
+    execution_plan_ref: str,
+    runtime_binding_ref: str | None = None,
+) -> ImmutableExecutionAuthority:
+    """Project the immutable execution authority a compiled intent fixes.
+
+    The compiled execution intent is the canonical session's recorded plan: it is
+    written once, digest-verified, and never re-derived from live provider state.
+    This projection is what turn admission compares a later submission against,
+    so it records *only* the dimensions the intent actually fixes. A dimension
+    the intent does not fix stays ``None``, which is not a wildcard: a submitter
+    that names a value for an unrecorded dimension is reporting authority the
+    plan never granted, and :meth:`ImmutableExecutionAuthority.changed_dimensions`
+    reports it as changed so the turn branches instead of silently reusing the
+    session.
+
+    No credential, host path, endpoint, or secret is projected -- every value is
+    a ref, digest, or ordinal, exactly as :class:`ImmutableExecutionAuthority`
+    requires.
+    """
+
+    raw_request = intent.get("request")
+    request: Mapping[str, object] = (
+        raw_request if isinstance(raw_request, Mapping) else {}
+    )
+    raw_parameters = request.get("parameters")
+    parameters: Mapping[str, object] = (
+        raw_parameters if isinstance(raw_parameters, Mapping) else {}
+    )
+    raw_omnigent = parameters.get("omnigent")
+    omnigent: Mapping[str, object] = (
+        raw_omnigent if isinstance(raw_omnigent, Mapping) else {}
+    )
+    raw_target = omnigent.get("target")
+    target: Mapping[str, object] = raw_target if isinstance(raw_target, Mapping) else {}
+    raw_workspace = request.get("workspaceSpec")
+    workspace: Mapping[str, object] = (
+        raw_workspace if isinstance(raw_workspace, Mapping) else {}
+    )
+    raw_locator = workspace.get("workspaceLocator")
+    locator: Mapping[str, object] = (
+        raw_locator if isinstance(raw_locator, Mapping) else {}
+    )
+
+    def _text(value: object) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    model_config = {
+        "model": _text(parameters.get("model")),
+        "effort": _text(parameters.get("effort")),
+    }
+    model_digest = (
+        None
+        if not any(model_config.values())
+        else "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                model_config, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    return ImmutableExecutionAuthority(
+        executionPlanRef=_text(execution_plan_ref),
+        runtimeBindingRef=_text(runtime_binding_ref),
+        providerProfileId=_text(request.get("executionProfileRef")),
+        modelConfigDigest=model_digest,
+        repositoryRef=_text(
+            parameters.get("repository") or workspace.get("repository")
+        ),
+        branchRef=_text(
+            parameters.get("targetBranch") or workspace.get("targetBranch")
+        ),
+        workspaceIntentRef=_text(locator.get("workspaceId")),
+        launchPolicyRef=_text(target.get("launchPolicyRef")),
+        publicationAuthorityRef=_text(parameters.get("publishMode")),
+    )
+
+
 # --- Runtime authority evidence ----------------------------------------------
 
 #: Cleanup-authority states, mirrored from the durable control plane so this
@@ -414,6 +535,16 @@ class TurnDisposition(str, Enum):
 #: Dispositions that admit the turn onto the *existing* canonical session.
 SAME_SESSION_DISPOSITIONS: frozenset[TurnDisposition] = frozenset(
     {TurnDisposition.LIVE_REATTACH, TurnDisposition.COLD_RESTORE}
+)
+
+#: Dispositions that instruct the producer to allocate *new* canonical authority
+#: -- a branch or a fresh session -- instead of mutating the prior one. These are
+#: refusals of same-session reuse, never permission to proceed in place, and they
+#: are the only refusals a branch-allocating producer may act on. Every other
+#: refusal (``resume_unavailable``) means no safe path exists and the producer
+#: must fail closed before any mutation.
+NEW_AUTHORITY_DISPOSITIONS: frozenset[TurnDisposition] = frozenset(
+    {TurnDisposition.BRANCH_REQUIRED, TurnDisposition.NEW_SESSION_REQUIRED}
 )
 
 # Reason codes. Ordered gates mean the first failing gate wins, so the reason for
@@ -756,8 +887,10 @@ __all__ = [
     "IMMUTABLE_AUTHORITY_CHANGED",
     "IMMUTABLE_AUTHORITY_DIMENSIONS",
     "ImmutableExecutionAuthority",
+    "NEW_AUTHORITY_DISPOSITIONS",
     "OmnigentTurnSource",
     "PARENT_TURN_REQUIRED",
+    "PRE_CUTOVER_SIGNAL_TURN_SOURCE",
     "PRODUCER_SOURCE_MISMATCH",
     "REMEDIATION_EVIDENCE_REQUIRED",
     "REMEDIATION_LOCKED_DIMENSIONS",
@@ -780,7 +913,9 @@ __all__ = [
     "UnknownTurnProducerError",
     "UnknownTurnSourceError",
     "evaluate_turn_admission",
+    "immutable_authority_from_compiled_intent",
     "resolve_producer_source",
+    "resolve_signal_turn_source",
     "resolve_turn_source",
     "turn_source_policy",
 ]

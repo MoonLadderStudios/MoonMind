@@ -29,11 +29,12 @@ this service admits the turn.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Awaitable, Callable, Mapping, Optional
 
 from moonmind.omnigent.turn_contracts import (
     CANONICAL_SUBMIT_COMMAND_TYPE,
+    NEW_AUTHORITY_DISPOSITIONS,
     SESSION_NOT_FOUND,
     ImmutableExecutionAuthority,
     OmnigentTurnSource,
@@ -76,6 +77,14 @@ SUBMIT_OWNER_CLASS = "canonical_turn_service"
 DECISION_TURN_ADMITTED = "submit_turn"
 DECISION_TURN_REFUSED = "await_observation"
 
+#: Session metadata key recording the supervisor feature generation the session
+#: was admitted under. It is written only by the supervisor admission path
+#: (``omnigent.resolve_intent``), so its presence is durable evidence that a
+#: ``MoonMind.OmnigentSession`` supervisor owns this session's delivery. Sessions
+#: derived from legacy bridge rows by ``control_plane.backfill`` have no
+#: supervisor and are delivered by the bridge transport instead.
+SUPERVISOR_GENERATION_METADATA_KEY = "featureGeneration"
+
 
 class CanonicalTurnServiceError(RuntimeError):
     """Base error for the canonical turn boundary."""
@@ -83,6 +92,37 @@ class CanonicalTurnServiceError(RuntimeError):
 
 class TurnProducerNotRegisteredError(CanonicalTurnServiceError):
     """Raised when an unregistered production path tries to submit a turn."""
+
+
+class TurnSubmissionRefusedError(CanonicalTurnServiceError):
+    """Raised when a producer cannot act on the decision it was given.
+
+    Carries the typed decision so the caller reports the canonical disposition
+    and reason code rather than inventing its own failure vocabulary.
+    """
+
+    def __init__(self, decision: TurnAdmissionDecision, *, expected: str) -> None:
+        self.decision = decision
+        super().__init__(
+            f"canonical turn submission by {decision.producer!r} was refused: "
+            f"disposition={decision.disposition.value!r} "
+            f"reason={decision.reason_code!r} (expected {expected})"
+        )
+
+
+def session_supervises_turns(session: SessionRecord) -> bool:
+    """Whether the durable supervisor owns delivery for this session.
+
+    Authority and transport are separate (#3707): this service is always the
+    submission *authority*, but the admitted turn is delivered either by the
+    ``MoonMind.OmnigentSession`` supervisor (sessions it admitted) or by the
+    bridge transport (pre-canonical sessions derived from legacy bridge rows).
+    The distinction is read from durable session metadata, never guessed from a
+    failed signal attempt.
+    """
+
+    value = session.metadata.get(SUPERVISOR_GENERATION_METADATA_KEY)
+    return bool(str(value or "").strip())
 
 
 @dataclass(frozen=True)
@@ -113,6 +153,18 @@ class CanonicalTurnRequest:
     expected_fencing_generation: Optional[int] = None
     requested_authority: ImmutableExecutionAuthority = ImmutableExecutionAuthority()
     evidence: RuntimeAuthorityEvidence = RuntimeAuthorityEvidence()
+    #: Who delivers the admitted turn to the provider. ``False`` (the default)
+    #: means the submitting producer forwards it through its own transport --
+    #: the bridge forward for native Workflow Chat, the profile-bound runtime
+    #: for continuations and checkpoint resume, the branch workflow for a linked
+    #: branch. ``True`` hands delivery to the durable session supervisor, which
+    #: is the only case where ``submit_authorized_continuation`` is sent.
+    #:
+    #: Delivery ownership is declared, never inferred: a turn that is both
+    #: forwarded by its producer *and* signalled to the supervisor would be
+    #: submitted to the provider twice, so this must be an explicit, reviewable
+    #: property of each producer rather than a side effect of session state.
+    supervisor_delivered: bool = False
 
 
 @dataclass(frozen=True)
@@ -126,6 +178,10 @@ class CanonicalTurnResult:
     decision_ref: Optional[str] = None
     #: Artifact-backed instruction reference for an admitted turn.
     instruction_ref: str = ""
+    #: Whether the durable supervisor owns delivery for this session.
+    supervised: bool = False
+    #: Whether the supervisor signal was actually sent for this turn.
+    dispatched: bool = False
 
     @property
     def admitted(self) -> bool:
@@ -134,6 +190,42 @@ class CanonicalTurnResult:
     @property
     def disposition(self) -> TurnDisposition:
         return self.decision.disposition
+
+    @property
+    def allocates_new_authority(self) -> bool:
+        """True when the decision tells the producer to branch or start fresh."""
+
+        return self.decision.disposition in NEW_AUTHORITY_DISPOSITIONS
+
+    def require_same_session(self) -> "CanonicalTurnResult":
+        """Return self only if the turn was admitted onto the existing session.
+
+        A same-session producer has no other safe path: ``branch_required``,
+        ``new_session_required``, and ``resume_unavailable`` all mean it must
+        stop before mutating the provider, not continue under a weaker
+        assumption.
+        """
+
+        if not self.admitted:
+            raise TurnSubmissionRefusedError(
+                self.decision, expected="same-session admission"
+            )
+        return self
+
+    def require_new_canonical_authority(self) -> "CanonicalTurnResult":
+        """Return self only if the decision authorizes new canonical authority.
+
+        A branch-allocating producer is *supposed* to be told the prior session
+        may not be reused. What it may never do is proceed on
+        ``resume_unavailable`` (no safe path) or silently mutate the prior
+        session after a same-session admission it cannot honor.
+        """
+
+        if not self.allocates_new_authority:
+            raise TurnSubmissionRefusedError(
+                self.decision, expected="branch_required or new_session_required"
+            )
+        return self
 
     def dispatch_payload(self) -> dict[str, Any]:
         """Compact supervisor signal payload for an admitted turn.
@@ -335,9 +427,20 @@ class CanonicalTurnService:
             command=command,
             decision_ref=decision_ref,
             instruction_ref=request.instruction_ref,
+            supervised=session_supervises_turns(session),
         )
-        if self._dispatcher is not None:
+        if (
+            self._dispatcher is not None
+            and request.supervisor_delivered
+            and result.supervised
+        ):
+            # Both conditions are required. A producer that forwards its own
+            # turn must not also signal the supervisor (that would submit the
+            # turn to the provider twice), and a pre-canonical session has no
+            # supervisor workflow to signal at all. ``dispatched`` records which
+            # delivery path this turn actually took.
             await self._dispatcher(result)
+            result = replace(result, dispatched=True)
         return result
 
     async def _resolve_evidence(
@@ -486,7 +589,10 @@ __all__ = [
     "DECISION_TURN_REFUSED",
     "IMMUTABLE_AUTHORITY_METADATA_KEY",
     "SUBMIT_OWNER_CLASS",
+    "SUPERVISOR_GENERATION_METADATA_KEY",
     "TURN_INSTRUCTION_METADATA_PREFIX",
     "TurnProducerNotRegisteredError",
+    "TurnSubmissionRefusedError",
     "recorded_authority_from_session",
+    "session_supervises_turns",
 ]

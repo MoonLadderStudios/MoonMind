@@ -13,6 +13,9 @@ behaviour of :class:`CanonicalTurnService`.
 
 from __future__ import annotations
 
+import json
+import pathlib
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -198,24 +201,30 @@ def test_turn_source_vocabulary_is_closed_and_versioned() -> None:
 
 
 def test_every_registered_producer_binds_to_one_vocabulary_member() -> None:
-    """AC1: the production-producer inventory is exhaustive and typed."""
+    """AC1: the production-producer inventory is exhaustive, typed, and real.
+
+    The inventory lists the producers that actually submit follow-up work today,
+    one per source kind, and nothing else: a key with no production call site
+    would assert coverage the boundary does not have.
+    ``tests/unit/omnigent/test_canonical_turn_producers.py`` holds the guard that
+    every key here has a live production caller.
+    """
 
     assert set(TURN_PRODUCER_SOURCES.values()) <= set(OmnigentTurnSource)
-    # Each historical follow-up producer named by the issue is present.
-    for producer in (
+    assert set(TURN_PRODUCER_SOURCES) == {
         "omnigent.repository_output_continuation",
         "omnigent.remediation_controller",
         "omnigent.workflow_chat.http",
-        "omnigent.workflow_chat.websocket",
         "omnigent.workflow_chat.steering",
         "omnigent.workflow_chat.approval_response",
         "omnigent.checkpoint_resume",
         "omnigent.checkpoint_branch_turn",
         "omnigent.linked_branch_workflow",
-        "omnigent.edit_and_rerun_reconstruction",
-        "omnigent.execution_realizer",
-    ):
-        assert producer in TURN_PRODUCER_SOURCES
+    }
+    # ``initial`` is deliberately unregistered: a session's first turn is
+    # established with the session, never submitted onto an existing one, and
+    # the admission gates refuse that source by policy.
+    assert OmnigentTurnSource.INITIAL not in set(TURN_PRODUCER_SOURCES.values())
 
 
 def test_source_kind_never_changes_the_command_or_fencing_model() -> None:
@@ -404,7 +413,7 @@ def test_cold_restore_requires_artifact_backed_evidence() -> None:
 def test_branch_sources_always_get_a_new_canonical_session() -> None:
     for source, producer in (
         (OmnigentTurnSource.LINKED_BRANCH, "omnigent.linked_branch_workflow"),
-        (OmnigentTurnSource.INITIAL, "omnigent.session_supervisor.initial"),
+        (OmnigentTurnSource.LINKED_BRANCH, "omnigent.checkpoint_branch_turn"),
     ):
         decision = evaluate_turn_admission(
             _admission(
@@ -819,22 +828,56 @@ async def test_refused_submission_is_journalled_but_never_dispatched(store) -> N
 
 @pytest.mark.asyncio
 async def test_admitted_submission_dispatches_the_canonical_source(store) -> None:
-    await _establish(store)
+    """A supervisor-delivered turn is signalled with the source that admitted it.
+
+    Dispatch requires both halves: the producer declares that the supervisor --
+    not itself -- delivers the turn, and the session records a supervisor
+    generation. A producer-delivered turn is never signalled, because a turn that
+    is forwarded *and* signalled would be submitted to the provider twice.
+    """
+
+    from moonmind.omnigent.control_plane import SUPERVISOR_GENERATION_METADATA_KEY
+
+    session, _turn = await _establish(store)
+    async with store.transaction() as repos:
+        await repos.sessions.bind_runtime_authority(
+            "s1",
+            expected_revision=session.revision,
+            expected_fencing_generation=session.fencing_generation,
+            metadata_patch={
+                SUPERVISOR_GENERATION_METADATA_KEY: "omnigent-session-v1"
+            },
+        )
     payloads: list[dict] = []
 
     async def dispatcher(result):
         payloads.append(result.dispatch_payload())
 
     service = CanonicalTurnService(store, dispatcher=dispatcher)
-    await service.submit_turn(
+    producer_delivered = await service.submit_turn(
+        _request(
+            producer="omnigent.checkpoint_resume",
+            source=OmnigentTurnSource.CHECKPOINT_RESUME,
+            checkpoint_ref="artifact://checkpoints/1",
+            turn_attempt_id="ckpt-0",
+            idempotency_key="ckpt-idem-0",
+        )
+    )
+    assert producer_delivered.admitted is True
+    assert producer_delivered.dispatched is False
+    assert payloads == []
+
+    supervisor_delivered = await service.submit_turn(
         _request(
             producer="omnigent.checkpoint_resume",
             source=OmnigentTurnSource.CHECKPOINT_RESUME,
             checkpoint_ref="artifact://checkpoints/1",
             turn_attempt_id="ckpt-1",
             idempotency_key="ckpt-idem-1",
+            supervisor_delivered=True,
         )
     )
+    assert supervisor_delivered.dispatched is True
     assert payloads == [
         {
             "requestId": "ckpt-idem-1",
@@ -967,9 +1010,24 @@ async def test_supervisor_dispatcher_is_the_production_signal_sender(store) -> N
         async def signal_workflow(self, workflow_id, signal_name, arg=None):
             sent.append((workflow_id, signal_name, arg))
 
-    await _establish(store)
+    from moonmind.omnigent.control_plane import SUPERVISOR_GENERATION_METADATA_KEY
+
+    session, _turn = await _establish(store)
+    async with store.transaction() as repos:
+        await repos.sessions.bind_runtime_authority(
+            "s1",
+            expected_revision=session.revision,
+            expected_fencing_generation=session.fencing_generation,
+            metadata_patch={
+                SUPERVISOR_GENERATION_METADATA_KEY: "omnigent-session-v1"
+            },
+        )
     service = CanonicalTurnService(store, dispatcher=SupervisorTurnDispatcher(_Client()))
-    await service.submit_turn(_request(instruction_ref="artifact://instructions/9"))
+    await service.submit_turn(
+        _request(
+            instruction_ref="artifact://instructions/9", supervisor_delivered=True
+        )
+    )
     assert len(sent) == 1
     workflow_id, signal_name, arg = sent[0]
     assert workflow_id == "omnigent-session:s1"
@@ -1089,3 +1147,154 @@ def test_only_turn_submitting_composer_events_map_to_a_source() -> None:
         None,
     ):
         assert canonical_turn_source_for_event(non_turn) is None, non_turn
+
+
+def test_websocket_frames_resolve_a_reviewed_source_or_fail_closed() -> None:
+    """AC9: a WebSocket frame never silently skips canonical admission.
+
+    The frame class is what is reviewed, not a synthesized ``<operation>_frame``
+    label: that label matches no composer-event key, so resolving admission from
+    it made the boundary look satisfied while skipping it. The pinned mutating
+    classes carry terminal input and audio, which are not turns; a frame that
+    does carry a composer event resolves through the same closed mapping as the
+    HTTP composer route; and an unreviewed mutating class fails closed.
+    """
+
+    from moonmind.omnigent.workflow_chat_facade import (
+        NON_TURN_WEBSOCKET_FRAME_CLASSES,
+        WorkflowChatFacadeError,
+        canonical_turn_source_for_websocket_frame,
+    )
+
+    assert NON_TURN_WEBSOCKET_FRAME_CLASSES == frozenset(
+        {"terminal_attach", "dictation_stream"}
+    )
+    for reviewed in sorted(NON_TURN_WEBSOCKET_FRAME_CLASSES):
+        assert canonical_turn_source_for_websocket_frame(reviewed) is None
+
+    assert canonical_turn_source_for_websocket_frame(
+        "some_future_chat_socket", frame_event_type="message"
+    ) is OmnigentTurnSource.WORKFLOW_CHAT
+    assert canonical_turn_source_for_websocket_frame(
+        "terminal_attach", frame_event_type="steering"
+    ) is OmnigentTurnSource.STEERING
+
+    for unreviewed in ("stream_events", "ws_session_updates", "", None):
+        with pytest.raises(WorkflowChatFacadeError):
+            canonical_turn_source_for_websocket_frame(unreviewed)
+
+
+def test_websocket_mutation_routes_are_all_reviewed_for_turn_admission() -> None:
+    """Every pinned mutating WebSocket class must have a reviewed classification.
+
+    This is the guard that keeps the fail-closed branch from becoming a
+    production outage: adding a mutating WebSocket transport class without
+    reviewing whether its frames submit turns fails this test rather than the
+    live relay.
+    """
+
+    from moonmind.omnigent.native_ui_compat import NATIVE_UI_ROUTES
+    from moonmind.omnigent.workflow_chat_facade import (
+        canonical_turn_source_for_websocket_frame,
+    )
+
+    for route in NATIVE_UI_ROUTES:
+        if route.transport != "websocket" or not route.mutation:
+            continue
+        # Must not raise: every mutating class is reviewed one way or the other.
+        canonical_turn_source_for_websocket_frame(route.name)
+
+
+def test_recorded_authority_is_projected_from_the_compiled_intent() -> None:
+    """AC2: the plan a turn is admitted against comes from the recorded intent.
+
+    The compiled execution intent is written once, digest-verified, and is the
+    session's recorded plan. Only the dimensions it actually fixes are recorded;
+    an unfixed dimension stays ``None`` so a submitter that names a value for it
+    is reported as changed rather than silently reusing unknown authority.
+    """
+
+    from moonmind.omnigent.turn_contracts import (
+        immutable_authority_from_compiled_intent,
+    )
+
+    intent = {
+        "request": {
+            "executionProfileRef": "profile-1",
+            "parameters": {
+                "model": "model-a",
+                "effort": "high",
+                "repository": "repo:example",
+                "targetBranch": "refs/heads/work",
+                "publishMode": "pr",
+                "omnigent": {"target": {"launchPolicyRef": "launch-policy:1"}},
+            },
+            "workspaceSpec": {"workspaceLocator": {"workspaceId": "ws-1"}},
+        }
+    }
+    authority = immutable_authority_from_compiled_intent(
+        intent, execution_plan_ref="artifact://intent/1"
+    )
+    assert authority.execution_plan_ref == "artifact://intent/1"
+    assert authority.provider_profile_id == "profile-1"
+    assert authority.repository_ref == "repo:example"
+    assert authority.branch_ref == "refs/heads/work"
+    assert authority.launch_policy_ref == "launch-policy:1"
+    assert authority.publication_authority_ref == "pr"
+    assert authority.workspace_intent_ref == "ws-1"
+    assert authority.model_config_digest is not None
+
+    # No credential, endpoint, or host value is ever projected.
+    dumped = json.dumps(authority.as_dict())
+    for forbidden in ("credential", "endpoint", "secret", "token", "password"):
+        assert forbidden not in dumped
+
+    # A different model is a different digest; the same model is stable.
+    same = immutable_authority_from_compiled_intent(
+        intent, execution_plan_ref="artifact://intent/1"
+    )
+    assert same.authority_digest == authority.authority_digest
+    changed = immutable_authority_from_compiled_intent(
+        {
+            "request": {
+                **intent["request"],
+                "parameters": {**intent["request"]["parameters"], "model": "model-b"},
+            }
+        },
+        execution_plan_ref="artifact://intent/1",
+    )
+    assert changed.model_config_digest != authority.model_config_digest
+    assert changed.changed_dimensions(authority) == ("modelConfigDigest",)
+
+
+def test_pre_cutover_signal_source_matches_the_migration_mapping() -> None:
+    """Replay safety: an omitted turnSource is the migration's historical value.
+
+    A ``submit_authorized_continuation`` payload already in an in-flight history
+    predates the mandatory field. It resolves to exactly the source migration
+    ``358_omnigent_turn_source`` assigns to the ``lineage_kind='continuation'``
+    rows those signals produced, so one turn is classified identically whether it
+    is replayed from history or read from a migrated row. A present-but-unknown
+    source still fails closed.
+    """
+
+    from moonmind.omnigent.turn_contracts import (
+        PRE_CUTOVER_SIGNAL_TURN_SOURCE,
+        resolve_signal_turn_source,
+    )
+
+    migration = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / "api_service/migrations/versions/358_omnigent_turn_source.py"
+    ).read_text(encoding="utf-8")
+    assert (
+        f"SET turn_source = '{PRE_CUTOVER_SIGNAL_TURN_SOURCE.value}'" in migration
+    )
+    assert PRE_CUTOVER_SIGNAL_TURN_SOURCE is (
+        OmnigentTurnSource.REPOSITORY_CONTINUATION
+    )
+    for omitted in (None, "", "   "):
+        assert resolve_signal_turn_source(omitted) is PRE_CUTOVER_SIGNAL_TURN_SOURCE
+    assert resolve_signal_turn_source("remediation") is OmnigentTurnSource.REMEDIATION
+    with pytest.raises(UnknownTurnSourceError):
+        resolve_signal_turn_source("continuation")

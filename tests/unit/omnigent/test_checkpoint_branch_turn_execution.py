@@ -9,7 +9,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.orm import sessionmaker
+
+from api_service.db.models import Base
 
 from api_service.services.checkpoint_branch_service import CheckpointBranchService
 from api_service.services.checkpoint_branch_turn_execution import (
@@ -216,15 +221,35 @@ def _valid_source_checkpoint() -> tuple[bytes, bytes]:
     )
 
 
+@pytest_asyncio.fixture()
+async def control_plane_session_factory(tmp_path):
+    """A real control-plane session factory for the canonical turn boundary.
+
+    ``branch_from_checkpoint`` submits through the canonical turn boundary before
+    any branch mutation (#3707), which reads the canonical session for the
+    checkpoint's scope. This database holds no canonical session, so the
+    production path resolves the pre-canonical case and proceeds -- exercising
+    the real lookup instead of stubbing the boundary out.
+    """
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/branch_cp.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    await engine.dispose()
+
+
 @pytest.mark.asyncio
-async def test_canonical_coordinator_compiles_fresh_branch_restore_authority() -> None:
+async def test_canonical_coordinator_compiles_fresh_branch_restore_authority(
+    control_plane_session_factory,
+) -> None:
     checkpoint_model = StepExecutionCheckpointModel.model_validate_json(
         _valid_source_checkpoint()[0]
     )
     assert checkpoint_model.omnigent is not None
     checkpoint = checkpoint_model.omnigent
     coordinator = OmnigentProfileBoundExecutionCoordinator(
-        session_factory=SimpleNamespace(),
+        session_factory=control_plane_session_factory,
         lease_client=SimpleNamespace(),
         host_repository=SimpleNamespace(),
         host_runtime=SimpleNamespace(),

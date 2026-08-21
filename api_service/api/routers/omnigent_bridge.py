@@ -161,6 +161,7 @@ from moonmind.omnigent.workflow_chat_facade import (
     WorkflowChatFacadeError,
     assert_no_identity_substitution,
     canonical_turn_source_for_event,
+    canonical_turn_source_for_websocket_frame,
     is_read_only,
     match_facade_operation,
     required_capability_for_event,
@@ -3584,6 +3585,27 @@ def _control_plane_store() -> Any:
     return OmnigentControlPlaneStore(async_session_maker)
 
 
+def _canonical_turn_service(store: Any) -> Any:
+    """Bind the one production canonical turn service over ``store``.
+
+    Kept beside :func:`_control_plane_store` as a single explicit module-level
+    seam so the router, the WebSocket frame guard, and the shared claim helper
+    all submit through the same authority *and* the same supervisor delivery
+    path.
+    """
+
+    from moonmind.omnigent.supervisor_turn_dispatch import production_turn_service
+
+    return production_turn_service(store)
+
+
+#: Sentinel meaning "derive the canonical turn source from the composer event
+#: type". A caller that already resolved the source through a different reviewed
+#: classification (a WebSocket frame class) passes it explicitly instead, so no
+#: caller can reach admission with a label the event vocabulary cannot match.
+_DERIVE_TURN_SOURCE: Any = object()
+
+
 async def _admit_canonical_turn(
     *,
     row: Any,
@@ -3591,6 +3613,7 @@ async def _admit_canonical_turn(
     actor: str,
     idempotency_key: str,
     payload_digest: str,
+    turn_source: Any = _DERIVE_TURN_SOURCE,
 ) -> None:
     """Route a turn-submitting Workflow Chat mutation through the canonical boundary.
 
@@ -3618,7 +3641,11 @@ async def _admit_canonical_turn(
     cleanup-racing submission never reaches the provider.
     """
 
-    source = canonical_turn_source_for_event(event_type)
+    source = (
+        canonical_turn_source_for_event(event_type)
+        if turn_source is _DERIVE_TURN_SOURCE
+        else turn_source
+    )
     if source is None:
         return
     chat_binding_id = str(getattr(row, "chat_binding_id", "") or "").strip()
@@ -3627,7 +3654,6 @@ async def _admit_canonical_turn(
 
     from moonmind.omnigent.control_plane import (
         CanonicalTurnRequest,
-        CanonicalTurnService,
         TurnIdempotencyConflictError,
         compute_digest,
     )
@@ -3674,7 +3700,10 @@ async def _admit_canonical_turn(
         f"omnigent-bridge-event://{getattr(row, 'bridge_session_id', '')}/"
         f"workflow-chat-control/{idempotency_key}"
     )
-    service = CanonicalTurnService(store)
+    # One production boundary, one delivery path: the factory binds the
+    # supervisor dispatcher, which fires only for supervisor-owned sessions. A
+    # pre-canonical session keeps the bridge forward as its transport.
+    service = _canonical_turn_service(store)
     try:
         result = await service.submit_turn(
             CanonicalTurnRequest(
@@ -3731,6 +3760,7 @@ async def _claim_facade_message(
     scan_evidence: NativeScanEvidence | None = None,
     request_time: str | None = None,
     request_preconditions: Mapping[str, Any] | None = None,
+    turn_source: Any = _DERIVE_TURN_SOURCE,
 ) -> bool:
     """Atomically claim a native message submission for exactly-once forwarding.
 
@@ -3757,6 +3787,7 @@ async def _claim_facade_message(
         actor=actor,
         idempotency_key=idempotency_key,
         payload_digest=payload_digest,
+        turn_source=turn_source,
     )
 
     event_identity = f"workflow-chat-message:{idempotency_key}"
@@ -6035,6 +6066,19 @@ async def workflow_chat_binding_facade_ws(
     browser_frame_guard = None
     browser_frame_audit = None
     if route.mutation:
+        # Resolve canonical turn admission for this frame class *before* the
+        # relay opens (#3707 AC9). A reviewed non-turn class resolves to ``None``
+        # and skips turn creation; an unreviewed mutating class fails closed here
+        # rather than degrading to a silent bypass once frames start flowing. The
+        # socket is closed with the same compatibility-review code an unknown
+        # transport class gets, so the browser learns nothing about the map.
+        try:
+            frame_turn_source = canonical_turn_source_for_websocket_frame(operation)
+        except WorkflowChatFacadeError:
+            await websocket.close(
+                code=WS_CLOSE_COMPAT_REVIEW, reason=CODE_ROUTE_NOT_ALLOWLISTED
+            )
+            return
 
         async def browser_frame_guard(
             payload: str | bytes, is_binary: bool
@@ -6091,6 +6135,7 @@ async def workflow_chat_binding_facade_ws(
                 payload_digest=evidence.payload_digest,
                 scan_evidence=evidence,
                 request_time=request_time,
+                turn_source=frame_turn_source,
             )
             if not claimed:
                 raise WorkflowChatFacadeError(

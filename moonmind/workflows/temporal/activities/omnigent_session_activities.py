@@ -224,10 +224,14 @@ async def omnigent_resolve_intent_activity(
     """Compile and persist full request authority before child-workflow launch."""
 
     from moonmind.omnigent.control_plane import (
+        IMMUTABLE_AUTHORITY_METADATA_KEY,
         ConflictingSessionAuthorityError,
         FencingScope,
         OmnigentControlPlaneStore,
         compute_digest,
+    )
+    from moonmind.omnigent.turn_contracts import (
+        immutable_authority_from_compiled_intent,
     )
     from moonmind.workflows.temporal.workflows.omnigent_session import (
         canonical_omnigent_session_id,
@@ -299,6 +303,15 @@ async def omnigent_resolve_intent_activity(
                 metadata={
                     "featureGeneration": resolved.admitted_feature_generation,
                     "executionProfileRef": request.execution_profile_ref,
+                    # The recorded immutable execution authority every later
+                    # turn on this session is admitted against (#3707 AC2).
+                    # Written once here, from the digest-verified compiled
+                    # intent; the canonical turn boundary only ever reads it.
+                    IMMUTABLE_AUTHORITY_METADATA_KEY: (
+                        immutable_authority_from_compiled_intent(
+                            intent_payload, execution_plan_ref=intent_ref
+                        ).as_dict()
+                    ),
                 },
             )
         except ConflictingSessionAuthorityError:
@@ -855,6 +868,7 @@ async def omnigent_persist_signal_intents_activity(
         compute_digest,
         recorded_authority_from_session,
     )
+    from moonmind.omnigent.turn_contracts import resolve_signal_turn_source
 
     request = OmnigentPersistSignalsRequest.model_validate(payload)
     store = OmnigentControlPlaneStore(async_session_maker)
@@ -887,7 +901,9 @@ async def omnigent_persist_signal_intents_activity(
             elif kind == "submit_authorized_continuation":
                 turn_id = str(signal.get("turnAttemptId") or "").strip()
                 instruction_ref = str(signal.get("instructionRef") or "").strip()
-                turn_source = str(signal.get("turnSource") or "").strip()
+                turn_source = resolve_signal_turn_source(
+                    signal.get("turnSource")
+                ).value
                 turn = await repos.turn_attempts.get(turn_id) if turn_id else None
                 already_applied = already_applied and bool(
                     turn is not None
@@ -932,19 +948,20 @@ async def omnigent_persist_signal_intents_activity(
                 turn_id = str(signal.get("turnAttemptId") or "").strip()
                 instruction_ref = str(signal.get("instructionRef") or "").strip()
                 request_id = str(signal.get("requestId") or "").strip()
-                turn_source = str(signal.get("turnSource") or "").strip()
-                if (
-                    not turn_id
-                    or not instruction_ref
-                    or not request_id
-                    or not turn_source
-                ):
+                if not turn_id or not instruction_ref or not request_id:
                     raise ValueError("continuation signal is missing compact authority")
                 # The source kind is the one the canonical turn boundary
                 # admitted (#3707); the supervisor never substitutes a default
                 # lineage of its own, so remediation, chat, steering, approval
                 # responses, and checkpoint resumes stay distinguishable in
-                # durable authority.
+                # durable authority. A signal already in an in-flight history
+                # from before the field existed resolves to the one
+                # deterministic pre-cutover source instead of failing the
+                # Activity forever; a present-but-unknown source still fails
+                # closed.
+                turn_source = resolve_signal_turn_source(
+                    signal.get("turnSource")
+                ).value
                 recorded_authority = recorded_authority_from_session(session)
                 await repos.turn_attempts.create(
                     turn_attempt_id=turn_id,

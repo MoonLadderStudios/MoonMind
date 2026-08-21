@@ -29,6 +29,7 @@ with workflow.unsafe.imports_passed_through():
         CompiledSessionIntent,
         reconcile,
     )
+    from moonmind.omnigent.turn_contracts import resolve_signal_turn_source
     from moonmind.schemas.agent_runtime_models import AgentRunResult
     from moonmind.schemas.omnigent_session_models import (
         OmnigentPersistDecisionRequest,
@@ -937,21 +938,27 @@ class MoonMindOmnigentSessionWorkflow:
         """Accept one turn already admitted by the canonical turn boundary.
 
         The supervisor never derives a source kind of its own (#3707): the
-        signal must name the closed-vocabulary source that authorized it, so a
+        signal names the closed-vocabulary source that authorized it, so a
         continuation, remediation, chat message, steering action, approval
         response, or checkpoint resume is distinguishable in durable authority
         without changing the command, fencing, or terminality model.
+
+        Replay/in-flight safety: a signal delivered into history *before* #3707
+        carries no ``turnSource`` at all. Raising on replay would fail the
+        workflow task forever and wedge a run that was already legitimately
+        admitted, so a missing source resolves to the one deterministic
+        pre-cutover value (the same mapping migration ``358_omnigent_turn_source``
+        applies to the rows those signals produced). Any *present* value still
+        fails closed against the closed vocabulary.
         """
 
-        if (
-            not payload.turn_attempt_id
-            or not payload.instruction_ref
-            or not payload.turn_source
-        ):
+        if not payload.turn_attempt_id or not payload.instruction_ref:
             raise ValueError(
-                "authorized continuation requires turnAttemptId, instructionRef, "
-                "and turnSource"
+                "authorized continuation requires turnAttemptId and instructionRef"
             )
+        resolved = resolve_signal_turn_source(payload.turn_source)
+        if payload.turn_source != resolved.value:
+            payload = payload.model_copy(update={"turn_source": resolved.value})
         self._turn_attempt_count += 1
         self._queue_signal_intent("submit_authorized_continuation", payload)
 

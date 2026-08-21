@@ -109,9 +109,12 @@ from .turn_service import (
     CanonicalTurnService,
     CanonicalTurnServiceError,
     IMMUTABLE_AUTHORITY_METADATA_KEY,
+    SUPERVISOR_GENERATION_METADATA_KEY,
     TURN_INSTRUCTION_METADATA_PREFIX,
     TurnProducerNotRegisteredError,
+    TurnSubmissionRefusedError,
     recorded_authority_from_session,
+    session_supervises_turns,
 )
 from .repositories import (
     ChatBindingAliasRepository,
@@ -226,7 +229,10 @@ __all__ = [
     "CanonicalTurnService",
     "CanonicalTurnServiceError",
     "IMMUTABLE_AUTHORITY_METADATA_KEY",
+    "SUPERVISOR_GENERATION_METADATA_KEY",
     "TURN_INSTRUCTION_METADATA_PREFIX",
     "TurnProducerNotRegisteredError",
+    "TurnSubmissionRefusedError",
     "recorded_authority_from_session",
+    "session_supervises_turns",
 ]

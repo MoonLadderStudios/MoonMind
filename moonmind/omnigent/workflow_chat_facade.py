@@ -436,6 +436,50 @@ def canonical_turn_source_for_event(
     return _TURN_SUBMITTING_COMPOSER_EVENTS.get(raw)
 
 
+# --- Canonical turn sources for WebSocket frames (#3707 AC9) -----------------
+# A WebSocket frame is classified by its reviewed *transport class* plus, when the
+# frame carries one, its composer event type -- never by a synthesized
+# ``<operation>_frame`` label, which no composer-event key can match and which
+# therefore made admission look satisfied while silently skipping it.
+#
+# These are the pinned mutating WebSocket classes whose frames carry terminal
+# keystrokes/resize or audio input, reviewed as *not* turn submissions: they
+# change an attached resource, never the session's instruction stream.
+NON_TURN_WEBSOCKET_FRAME_CLASSES: frozenset[str] = frozenset(
+    {"terminal_attach", "dictation_stream"}
+)
+
+
+def canonical_turn_source_for_websocket_frame(
+    route_name: str | None, *, frame_event_type: str | None = None
+) -> OmnigentTurnSource | None:
+    """Return the canonical turn source a WebSocket frame submits, if any.
+
+    ``None`` means the frame is a reviewed non-turn mutation and must not create
+    a turn attempt. A frame that carries a composer event type resolves through
+    exactly the same closed mapping as the HTTP composer route, so a message
+    delivered over a socket and a message delivered over HTTP reach one boundary.
+
+    A mutating WebSocket class that is neither reviewed as non-turn nor resolved
+    to a source fails closed: adding a turn-submitting frame class without
+    reviewing it must be an error, not a silent bypass of admission (#3707 AC9).
+    """
+
+    if frame_event_type is not None:
+        source = canonical_turn_source_for_event(frame_event_type)
+        if source is not None:
+            return source
+    name = str(route_name or "").strip().lower()
+    if name in NON_TURN_WEBSOCKET_FRAME_CLASSES:
+        return None
+    raise WorkflowChatFacadeError(
+        "This WebSocket frame class is not reviewed for canonical turn admission.",
+        failure_class="system_error",
+        status_code=500,
+        code=CODE_OPERATION_DENIED,
+    )
+
+
 # --- Identity-substitution guard (OB-§4.2 steps 4-5, brief §3) ----------------
 # Structural keys that name an upstream/topology/authority identity the browser
 # must never be able to inject through path, query, body, or header. A message
@@ -628,7 +672,9 @@ __all__ = [
     "assert_no_identity_substitution",
     "is_read_only",
     "match_facade_operation",
+    "NON_TURN_WEBSOCKET_FRAME_CLASSES",
     "canonical_turn_source_for_event",
+    "canonical_turn_source_for_websocket_frame",
     "recompute_capabilities",
     "required_capability_for_event",
 ]

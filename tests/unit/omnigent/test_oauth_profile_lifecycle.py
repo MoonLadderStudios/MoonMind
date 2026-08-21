@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import pytest_asyncio
 from pydantic import ValidationError
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -30,6 +31,7 @@ from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.checkpoints import (
     CandidateWorkspaceAuthority,
     OmnigentCheckpointIdentity,
+    OmnigentCheckpointValidation,
     materialize_cold_restore_inputs,
     recovery_mode,
     validate_branch_identity,
@@ -3029,6 +3031,148 @@ def test_checkpoint_live_reattach_requires_every_original_authority() -> None:
     )
 
 
+def _unusable_session_factory():
+    """Any database access from a fail-closed resume path is a contract break."""
+
+    raise AssertionError("an unsafe checkpoint disposition must not touch the database")
+
+
+async def _unreachable_execution_runner(*_args, **_kwargs):
+    raise AssertionError("an unsafe checkpoint disposition must not execute")
+
+
+def test_checkpoint_branch_required_when_only_branch_evidence_remains() -> None:
+    """AC7: no live authority and no restore evidence is an explicit branch.
+
+    Cold restore is never selected merely because live reattach failed: a
+    destroyed host-local path is not restore evidence. When only branch-creation
+    evidence survives, the caller is told to branch instead of being handed a
+    cold restore that cannot succeed.
+    """
+
+    checkpoint = _checkpoint().model_copy(
+        update={
+            "validation": OmnigentCheckpointValidation(
+                valid=False,
+                liveReattachAvailable=False,
+                workspaceColdRestoreAvailable=False,
+                branchCreationAvailable=True,
+                reasons=["workspace_checkpoint_unavailable"],
+            )
+        }
+    )
+    assert (
+        recovery_mode(
+            checkpoint,
+            provider_lease=None,
+            host_lease=None,
+            host_registered=False,
+            session_valid=False,
+            first_message_consistent=False,
+        )
+        is TurnDisposition.BRANCH_REQUIRED
+    )
+
+
+def test_checkpoint_resume_unavailable_when_no_evidence_survives() -> None:
+    """AC7: neither reattach, restore, nor branch evidence means no safe path."""
+
+    checkpoint = _checkpoint().model_copy(
+        update={
+            "validation": OmnigentCheckpointValidation(
+                valid=False,
+                liveReattachAvailable=False,
+                workspaceColdRestoreAvailable=False,
+                branchCreationAvailable=False,
+                reasons=["immutable_input_unavailable"],
+            )
+        }
+    )
+    assert (
+        recovery_mode(
+            checkpoint,
+            provider_lease={"active": True, "leaseId": "provider-lease-1"},
+            host_lease={
+                "status": "assigned",
+                "leaseId": "host-lease-1",
+                "credentialGeneration": 3,
+            },
+            host_registered=True,
+            session_valid=True,
+            first_message_consistent=True,
+        )
+        is TurnDisposition.RESUME_UNAVAILABLE
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("branch_available", "expected"),
+    [
+        (True, "checkpoint resume requires an explicit branch"),
+        (False, "checkpoint resume is unavailable"),
+    ],
+)
+async def test_recover_from_checkpoint_fails_closed_on_unsafe_disposition(
+    branch_available: bool, expected: str
+) -> None:
+    """AC7: the coordinator refuses both unsafe dispositions before mutation.
+
+    ``recover_from_checkpoint`` is the production resume boundary. Neither
+    ``branch_required`` nor ``resume_unavailable`` may fall through to a live
+    reattach or a cold restore, so each raises before any provider, host, or
+    workspace mutation is attempted.
+    """
+
+    coordinator = OmnigentProfileBoundExecutionCoordinator(
+        session_factory=_unusable_session_factory,
+        lease_client=SimpleNamespace(),
+        host_repository=SimpleNamespace(),
+        host_runtime=SimpleNamespace(),
+        run_store=SimpleNamespace(),
+        execution_runner=_unreachable_execution_runner,
+        artifact_gateway=SimpleNamespace(),
+    )
+    checkpoint = _checkpoint().model_copy(
+        update={
+            "validation": OmnigentCheckpointValidation(
+                valid=False,
+                liveReattachAvailable=False,
+                workspaceColdRestoreAvailable=False,
+                branchCreationAvailable=branch_available,
+                reasons=["workspace_checkpoint_unavailable"],
+            )
+        }
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="codex",
+        correlationId="corr-1",
+        idempotencyKey="idem-recover-1",
+        instructionRef="artifact://instructions",
+    )
+    with pytest.raises(ValueError, match=expected):
+        await coordinator.recover_from_checkpoint(
+            request=request,
+            checkpoint=checkpoint,
+            provider_lease=None,
+            host_lease=None,
+            host_registered=False,
+            session_valid=False,
+            first_message_consistent=False,
+            current_credential_generation=3,
+            candidate_workspace=CandidateWorkspaceAuthority(
+                loopId="loop-1",
+                attemptOrdinal=1,
+                headRef="artifact://head",
+                headDigest="sha256:" + "2" * 64,
+                checkpointRef="artifact://workspace-checkpoint",
+                checkpointDigest="sha256:" + "3" * 64,
+            ),
+        )
+
+
 def test_cold_restore_and_branch_preserve_profile_and_exclusive_identity() -> None:
     checkpoint = _checkpoint()
     validate_cold_restore_target(
@@ -3045,8 +3189,28 @@ def test_cold_restore_and_branch_preserve_profile_and_exclusive_identity() -> No
         )
 
 
+@pytest_asyncio.fixture()
+async def control_plane_session_factory(tmp_path):
+    """A real control-plane session factory for the canonical turn boundary.
+
+    ``recover_from_checkpoint`` submits through the canonical turn boundary
+    before any provider mutation (#3707), which reads the canonical session for
+    the checkpoint's scope. This database holds no canonical session, so the
+    production path resolves the pre-canonical case and proceeds -- exercising
+    the real lookup rather than stubbing the boundary out.
+    """
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/recovery_cp.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    await engine.dispose()
+
+
 @pytest.mark.asyncio
-async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness() -> None:
+async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness(
+    control_plane_session_factory,
+) -> None:
     checkpoint = _checkpoint().model_copy(
         update={
             "provider_profile_id": "claude",
@@ -3069,7 +3233,7 @@ async def test_claude_live_recovery_reuses_shared_checkpoint_with_exact_harness(
     )
     runner = AsyncMock(return_value=AgentRunResult(summary="reattached"))
     coordinator = OmnigentProfileBoundExecutionCoordinator(
-        session_factory=lambda: None,
+        session_factory=control_plane_session_factory,
         lease_client=SimpleNamespace(),
         host_repository=SimpleNamespace(),
         host_runtime=SimpleNamespace(),
@@ -3167,7 +3331,9 @@ def test_candidate_workspace_authority_binds_exact_durable_restore_refs() -> Non
 
 
 @pytest.mark.asyncio
-async def test_cold_recovery_routes_pinned_workspace_material_through_workspace_spec() -> None:
+async def test_cold_recovery_routes_pinned_workspace_material_through_workspace_spec(
+    control_plane_session_factory,
+) -> None:
     checkpoint = _checkpoint()
     candidate = CandidateWorkspaceAuthority(
         loopId="mm:loop-1",
@@ -3178,7 +3344,7 @@ async def test_cold_recovery_routes_pinned_workspace_material_through_workspace_
         checkpointDigest="sha256:" + "b" * 64,
     )
     coordinator = OmnigentProfileBoundExecutionCoordinator(
-        session_factory=lambda: None,
+        session_factory=control_plane_session_factory,
         lease_client=SimpleNamespace(),
         host_repository=SimpleNamespace(),
         host_runtime=SimpleNamespace(),

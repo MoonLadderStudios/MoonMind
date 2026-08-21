@@ -169,3 +169,201 @@ def test_new_generation_does_not_reinterpret_admitted_snapshot() -> None:
     # The original admitted snapshot is unchanged (frozen model).
     assert admitted.generation == "gen-1"
     assert admitted.admitted is True
+
+
+# --- #3707 submit_authorized_continuation turnSource cutover ------------------
+
+
+def _pre_cutover_signal():
+    """A payload as it exists in an in-flight history from before #3707.
+
+    The field did not exist, so the key is absent -- not empty. This is exactly
+    what a replayed signal delivers to the current worker build.
+    """
+
+    from moonmind.schemas.omnigent_session_models import OmnigentSessionSignal
+
+    return OmnigentSessionSignal.model_validate(
+        {
+            "requestId": "mm-pre-cutover-1",
+            "turnAttemptId": "turn-pre-cutover-1",
+            "instructionRef": "artifact://instructions/pre-cutover",
+        }
+    )
+
+
+def test_pre_cutover_continuation_signal_replays_with_a_deterministic_source() -> None:
+    """In-flight safety: a signal without turnSource must not wedge the run.
+
+    #3707 made ``turnSource`` mandatory for new submissions. A signal already
+    recorded in a ``MoonMind.OmnigentSession`` history predates the field, and a
+    replayed signal handler that raised on it would fail the workflow task
+    forever for a run that was legitimately admitted. The handler therefore
+    resolves the one deterministic pre-cutover source -- the same value migration
+    ``358_omnigent_turn_source`` gives the rows those signals produced -- and
+    queues exactly one intent carrying it.
+    """
+
+    from moonmind.omnigent.turn_contracts import PRE_CUTOVER_SIGNAL_TURN_SOURCE
+    from moonmind.workflows.temporal.workflows.omnigent_session import (
+        MoonMindOmnigentSessionWorkflow,
+    )
+
+    supervisor = MoonMindOmnigentSessionWorkflow()
+    before = supervisor._turn_attempt_count
+
+    supervisor.submit_authorized_turn(_pre_cutover_signal())
+
+    assert supervisor._turn_attempt_count == before + 1
+    assert len(supervisor._pending_signal_intents) == 1
+    intent = supervisor._pending_signal_intents[0]
+    assert intent["kind"] == "submit_authorized_continuation"
+    assert intent["payload"]["turnSource"] == PRE_CUTOVER_SIGNAL_TURN_SOURCE.value
+    assert intent["payload"]["turnAttemptId"] == "turn-pre-cutover-1"
+
+
+def test_post_cutover_signal_keeps_its_admitted_source_and_fails_closed() -> None:
+    """A present source is never substituted, and an unknown one is refused."""
+
+    from pydantic import ValidationError
+
+    from moonmind.schemas.omnigent_session_models import OmnigentSessionSignal
+    from moonmind.workflows.temporal.workflows.omnigent_session import (
+        MoonMindOmnigentSessionWorkflow,
+    )
+
+    supervisor = MoonMindOmnigentSessionWorkflow()
+    supervisor.submit_authorized_turn(
+        OmnigentSessionSignal.model_validate(
+            {
+                "requestId": "mm-post-cutover-1",
+                "turnAttemptId": "turn-post-cutover-1",
+                "instructionRef": "artifact://instructions/post-cutover",
+                "turnSource": "remediation",
+            }
+        )
+    )
+    assert (
+        supervisor._pending_signal_intents[0]["payload"]["turnSource"]
+        == "remediation"
+    )
+
+    # The compatibility path is only for an *absent* field: the closed
+    # vocabulary still fails closed for anything else, including the pre-#3707
+    # free-form lineage value the column used to hold.
+    with pytest.raises(ValidationError, match="Unknown Omnigent turn source"):
+        OmnigentSessionSignal.model_validate(
+            {
+                "requestId": "mm-bad-1",
+                "turnAttemptId": "turn-bad-1",
+                "instructionRef": "artifact://instructions/bad",
+                "turnSource": "continuation",
+            }
+        )
+
+
+def test_missing_turn_identity_still_fails_the_continuation_signal() -> None:
+    """Compatibility widened one field only; the rest stays fail-closed."""
+
+    from moonmind.schemas.omnigent_session_models import OmnigentSessionSignal
+    from moonmind.workflows.temporal.workflows.omnigent_session import (
+        MoonMindOmnigentSessionWorkflow,
+    )
+
+    supervisor = MoonMindOmnigentSessionWorkflow()
+    with pytest.raises(ValueError, match="turnAttemptId and instructionRef"):
+        supervisor.submit_authorized_turn(
+            OmnigentSessionSignal.model_validate({"requestId": "mm-empty-1"})
+        )
+
+
+@pytest.mark.asyncio
+async def test_pre_cutover_continuation_signal_persists_the_mapped_source(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Activity that owns durable authority applies the same mapping.
+
+    Signal handling and durable persistence are two boundaries; a replayed
+    pre-cutover signal must survive both. This drives the real
+    ``omnigent.persist_signal_intents`` Activity against a real control-plane
+    store and asserts the turn row records the mapped source rather than failing
+    the Activity forever.
+    """
+
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from api_service.db.models import Base
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.turn_contracts import PRE_CUTOVER_SIGNAL_TURN_SOURCE
+    from moonmind.workflows.temporal.activities import (
+        omnigent_session_activities as activities,
+    )
+
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path}/replay_signals.db")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    monkeypatch.setattr("api_service.db.base.async_session_maker", factory)
+
+    store = OmnigentControlPlaneStore(factory)
+    session, _turn = await store.establish_session(
+        session_id="oms_replay",
+        moonmind_workflow_id="mm:w-replay",
+        provider="omnigent",
+        provider_session_ref="prov-replay",
+        chat_binding_id="cb-replay",
+        first_turn_attempt_id="oms_replay-t0",
+        first_turn_idempotency_key="oms_replay-idem-0",
+    )
+
+    payload = _pre_cutover_signal().model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
+    assert "turnSource" not in payload
+
+    result = await activities.omnigent_persist_signal_intents_activity(
+        {
+            "sessionId": "oms_replay",
+            "compiledExecutionIntentRef": "artifact://intent/replay",
+            "compiledExecutionIntentDigest": "sha256:" + "a" * 64,
+            "expectedRevision": session.revision,
+            "fencingGeneration": session.fencing_generation,
+            "signals": [
+                {"kind": "submit_authorized_continuation", "payload": payload}
+            ],
+        }
+    )
+    assert result["appliedIntentCount"] == 1
+
+    async with store.transaction() as repos:
+        turns = await repos.turn_attempts.list_for_session("oms_replay")
+    replayed = [item for item in turns if item.turn_attempt_id == "turn-pre-cutover-1"]
+    assert len(replayed) == 1
+    assert replayed[0].turn_source == PRE_CUTOVER_SIGNAL_TURN_SOURCE.value
+
+    # Redelivery of the same pre-cutover signal is recognized as already
+    # applied. This is the property the mapping has to preserve: the row the old
+    # code wrote (``lineage_kind='continuation'``, migrated to
+    # ``repository_continuation``) is the same source the replayed signal
+    # resolves to, so the idempotency check still matches and no duplicate turn
+    # is created across the cutover.
+    async with store.transaction() as repos:
+        current = await repos.sessions.get("oms_replay")
+    again = await activities.omnigent_persist_signal_intents_activity(
+        {
+            "sessionId": "oms_replay",
+            "compiledExecutionIntentRef": "artifact://intent/replay",
+            "compiledExecutionIntentDigest": "sha256:" + "a" * 64,
+            "expectedRevision": current.revision,
+            "fencingGeneration": current.fencing_generation,
+            "signals": [
+                {"kind": "submit_authorized_continuation", "payload": payload}
+            ],
+        }
+    )
+    assert again["appliedIntentCount"] == 1
+    async with store.transaction() as repos:
+        after = await repos.turn_attempts.list_for_session("oms_replay")
+    assert len(after) == len(turns)
+    await engine.dispose()

@@ -85,6 +85,34 @@ source, and `TURN_PRODUCER_SOURCES` is the inventory of every production
 follow-up producer bound to exactly one source. A producer absent from that
 inventory cannot reach the boundary at all.
 
+Every key in that inventory names a **live production call site**, not an
+intention. An entry with no caller would assert coverage the boundary does not
+have, so a guard test requires each key to be referenced from production code:
+
+| Producer | Source | Production call site |
+|----------|--------|----------------------|
+| `omnigent.workflow_chat.http` | `workflow_chat` | `api_service/api/routers/omnigent_bridge.py` (`_admit_canonical_turn`) |
+| `omnigent.workflow_chat.steering` | `steering` | same |
+| `omnigent.workflow_chat.approval_response` | `approval_response` | same |
+| `omnigent.repository_output_continuation` | `repository_continuation` | `moonmind/omnigent/profile_bound_execution.py` (bounded repository-publication continuation loop) |
+| `omnigent.checkpoint_resume` | `checkpoint_resume` | `moonmind/omnigent/profile_bound_execution.py` (`recover_from_checkpoint`) |
+| `omnigent.linked_branch_workflow` | `linked_branch` | `moonmind/omnigent/profile_bound_execution.py` (`branch_from_checkpoint`) |
+| `omnigent.checkpoint_branch_turn` | `linked_branch` | `api_service/services/checkpoint_branch_turn_execution.py` (`_start_claimed_turn`) |
+| `omnigent.remediation_controller` | `remediation` | same, for a turn carrying an owned remediation context |
+
+`initial` has **no** producer on purpose: a session's first turn is *established*
+with the session (`OmnigentControlPlaneStore.establish_session`), never submitted
+onto an existing one, and the admission gates refuse that source by policy.
+
+Native Workflow Chat WebSocket frames are classified by their reviewed transport
+class, never by a synthesized `<operation>_frame` label (which matches no
+composer-event key and therefore made admission look satisfied while skipping
+it). `canonical_turn_source_for_websocket_frame` returns `None` for the pinned
+non-turn mutating classes (`terminal_attach`, `dictation_stream` -- terminal input
+and audio, not instructions), resolves a frame that carries a composer event
+through the same closed mapping as the HTTP route, and **fails closed** for any
+other mutating class.
+
 `moonmind.omnigent.control_plane.turn_service.CanonicalTurnService` is the only
 application service permitted to submit new work to an existing session. For
 every source kind it owns, once:
@@ -131,10 +159,47 @@ never a second submission authority. A binding with no canonical session row is 
 pre-canonical legacy session and stays on the legacy path rather than being
 migrated outside the #3712 handoff contract.
 
-`moonmind.omnigent.supervisor_turn_dispatch.SupervisorTurnDispatcher` is the one
-production sender of the `submit_authorized_continuation` signal. It runs only
-after the turn attempt and command are durably committed, and it fails closed
-when handed a refused decision.
+`moonmind.omnigent.supervisor_turn_dispatch.production_turn_service` is the one
+seam that constructs `CanonicalTurnService` in production, and it always binds
+`SupervisorTurnDispatcher` -- the only sender of the
+`submit_authorized_continuation` signal. The signal is sent when, and only when,
+**both** conditions hold:
+
+1. the submission declares `supervisor_delivered=True`, meaning the durable
+   supervisor -- not the submitting producer -- delivers the admitted turn; and
+2. the canonical session records a supervisor generation
+   (`session_supervises_turns`), so a `MoonMind.OmnigentSession` workflow exists
+   to receive it.
+
+Both are required because delivery must happen exactly once: a turn that its
+producer forwards *and* that is signalled to the supervisor would be submitted to
+the provider twice. Delivery ownership is therefore declared per submission and
+never inferred from session state. Every producer in the table above forwards its
+own turn today -- the bridge forward for native Workflow Chat, the profile-bound
+runtime for continuations and checkpoint resume, the branch workflow for a linked
+branch -- so all of them submit with producer delivery, and `CanonicalTurnResult`
+records which path each turn took (`supervised`, `dispatched`). The dispatcher
+runs only after the turn attempt and command are durably committed, and it fails
+closed when handed a refused decision.
+
+### Sessions established before plan recording
+
+A canonical session row written before the authority writer below existed has no
+`omnigentImmutableAuthority` metadata. Turn admission refuses same-session reuse
+for it with `execution_plan_not_recorded` / `new_session_required`, and that is
+the intended outcome: unknown immutable authority is never silently reused, so
+new work allocates a new canonical session instead. The writer and the producers
+that depend on it ship in the same change, and canonical rows only exist where
+the #3712 supervisor rollout is enabled, so this is a cutover rather than a
+regression for live sessions.
+
+The recorded immutable execution authority a turn is admitted against is written
+**once**, at session establishment, by `omnigent.resolve_intent`
+(`immutable_authority_from_compiled_intent` over the digest-verified compiled
+execution intent) into session metadata under `omnigentImmutableAuthority`. The
+turn boundary only ever reads it. A dimension the intent does not fix stays
+unset, which is not a wildcard: a submitter naming a value for an unrecorded
+dimension is reported as a changed dimension and branches.
 
 ## Repository boundaries
 
@@ -156,6 +221,21 @@ Historical values map deterministically: `initial` and the pre-#3707 default
 `repository_continuation` (the source kind that describes a same-session
 follow-up). No historical value maps to a source with broader authority than the
 row already had.
+
+### `submit_authorized_continuation` turnSource cutover
+
+#3707 made `turnSource` mandatory for every new continuation submission. Signals
+already delivered into a `MoonMind.OmnigentSession` history predate the field and
+carry no source at all. Raising on them would fail the workflow task forever for
+a run that was legitimately admitted, so both the workflow signal handler and the
+`omnigent.persist_signal_intents` Activity resolve an **absent** source through
+`resolve_signal_turn_source` to `PRE_CUTOVER_SIGNAL_TURN_SOURCE`
+(`repository_continuation`) -- exactly the value `358_omnigent_turn_source`
+assigns to the `lineage_kind='continuation'` rows those signals produced, so one
+turn is classified identically whether it is replayed from history or read from a
+migrated row. A *present* value still fails closed against the closed vocabulary,
+and the one production sender always names the admitted source, so no live
+producer can reach the compatibility path.
 
 The schema migration (`356_omnigent_ctrl_plane`) is additive: it creates the new
 tables and leaves the legacy bridge rows, Temporal histories, and legacy read

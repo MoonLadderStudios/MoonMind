@@ -1256,6 +1256,141 @@ class CheckpointBranchTurnExecutionOwner:
         await self._session.refresh(claimed)
         return claimed
 
+    def _control_plane_store(self) -> Any:
+        """Bind the canonical control-plane store to this owner's engine."""
+
+        from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+
+        bind = getattr(self._session, "bind", None)
+        factory = (
+            async_sessionmaker(bind, expire_on_commit=False)
+            if bind is not None
+            else async_session_maker
+        )
+        return OmnigentControlPlaneStore(factory)
+
+    async def _admit_canonical_branch_turn(
+        self,
+        *,
+        branch: WorkflowCheckpointBranch,
+        turn: WorkflowCheckpointBranchTurn,
+        binding: WorkflowCheckpointBranchGitBinding,
+        agent_request: AgentExecutionRequest,
+    ) -> None:
+        """Submit this Checkpoint Branch turn through the canonical boundary.
+
+        A Checkpoint Branch turn is follow-up Omnigent work, so it is not allowed
+        to be an independent submission authority (#3707). It enters the one
+        canonical boundary naming the artifact-backed checkpoint it branches
+        from, the launcher's own idempotency key, and the immutable authority it
+        intends to run under. The producer is determined by the trigger the turn
+        durably carries, never by a caller-supplied label:
+
+        * a turn with an owned remediation context is the remediation
+          controller's attempt (``omnigent.remediation_controller`` /
+          ``remediation``);
+        * any other turn is an operator-driven linked branch
+          (``omnigent.checkpoint_branch_turn`` / ``linked_branch``).
+
+        Either way the operation *is* a branch, so the expected typed decision
+        refuses same-session reuse: ``new_session_required`` for a linked branch
+        (policy never reuses the source session) and ``branch_required`` for a
+        remediation whose work branch differs from the recorded plan -- which is
+        exactly the remediation-locked-dimension refusal. That refusal is the
+        launcher's authorization to allocate new canonical authority, which is
+        what it goes on to do. ``resume_unavailable`` -- a superseded fencing
+        generation, a stale session revision, or missing checkpoint evidence --
+        means no safe path exists, so the durable owner is never started.
+
+        A source with no canonical session row is a pre-canonical execution: it
+        has no canonical authority to bind, so it stays on the existing path
+        rather than being migrated outside the #3712 handoff contract.
+        """
+
+        from moonmind.omnigent.control_plane import (
+            CanonicalTurnRequest,
+            TurnSubmissionRefusedError,
+            compute_digest,
+        )
+        from moonmind.omnigent.supervisor_turn_dispatch import production_turn_service
+        from moonmind.omnigent.turn_contracts import (
+            ImmutableExecutionAuthority,
+            OmnigentTurnSource,
+        )
+
+        recovery = agent_request.checkpoint_recovery
+        checkpoint = (
+            dict(recovery.get("omnigentCheckpoint") or {})
+            if isinstance(recovery, Mapping)
+            else {}
+        )
+        provider_session_ref = str(
+            checkpoint.get("omnigentSessionId") or ""
+        ).strip()
+        source_workflow_id = str(checkpoint.get("workflowId") or "").strip()
+        instruction_ref = str(turn.instruction_ref or "").strip()
+        checkpoint_ref = str(turn.source_checkpoint_ref or "").strip()
+        if not (provider_session_ref and source_workflow_id and instruction_ref):
+            return
+
+        store = self._control_plane_store()
+        async with store.transaction() as repos:
+            session = await repos.sessions.get_by_scope(
+                source_workflow_id, provider_session_ref
+            )
+        if session is None:
+            return
+
+        remediation_context_ref = str(
+            (turn.diagnostics or {}).get("remediationContextRef") or ""
+        ).strip()
+        if remediation_context_ref:
+            producer = "omnigent.remediation_controller"
+            source = OmnigentTurnSource.REMEDIATION
+        else:
+            producer = "omnigent.checkpoint_branch_turn"
+            source = OmnigentTurnSource.LINKED_BRANCH
+        parameters = dict(agent_request.parameters or {})
+        requested_authority = ImmutableExecutionAuthority(
+            branchRef=str(binding.work_branch or "").strip() or None,
+            publicationAuthorityRef=(
+                str(parameters.get("publishMode") or "").strip() or None
+            ),
+        )
+        launch_key = build_branch_turn_launch_idempotency_key(
+            workflow_id=branch.workflow_id,
+            branch_id=branch.branch_id,
+            branch_turn_id=turn.branch_turn_id,
+        )
+        try:
+            result = await production_turn_service(store).submit_turn(
+                CanonicalTurnRequest(
+                    producer=producer,
+                    session_id=session.session_id,
+                    turn_attempt_id=f"turn-{compute_digest(launch_key)[:32]}",
+                    idempotency_key=launch_key,
+                    instruction_ref=instruction_ref,
+                    source=source,
+                    parent_turn_attempt_id=session.active_turn_attempt_id,
+                    remediation_of_turn_attempt_id=(
+                        session.active_turn_attempt_id
+                        if remediation_context_ref
+                        else None
+                    ),
+                    remediation_gate_ref=remediation_context_ref or None,
+                    checkpoint_ref=checkpoint_ref,
+                    step_execution_id=turn.created_step_execution_id,
+                    requested_authority=requested_authority,
+                )
+            )
+            result.require_new_canonical_authority()
+        except TurnSubmissionRefusedError as exc:
+            raise CheckpointBranchTurnLaunchError(
+                "canonical_turn_not_admitted",
+                "canonical Omnigent turn boundary refused this branch turn: "
+                f"{exc.decision.disposition.value}/{exc.decision.reason_code}",
+            ) from exc
+
     async def _start_claimed_turn(
         self,
         *,
@@ -1289,6 +1424,15 @@ class CheckpointBranchTurnExecutionOwner:
             raise CheckpointBranchTurnLaunchError(
                 "launch_claim_incomplete", "claimed turn has no owner workflow identity"
             )
+        # Canonical turn admission precedes the durable owner start on both the
+        # first launch and the crash-resume path, so no Checkpoint Branch turn
+        # can reach a runtime without a canonical decision recorded for it.
+        await self._admit_canonical_branch_turn(
+            branch=branch,
+            turn=turn,
+            binding=binding,
+            agent_request=agent_request,
+        )
         try:
             source = await self._session.get(
                 TemporalExecutionCanonicalRecord, branch.workflow_id

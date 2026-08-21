@@ -34,7 +34,11 @@ from moonmind.omnigent.checkpoints import (
     recovery_mode,
     validate_cold_restore_target,
 )
-from moonmind.omnigent.turn_contracts import TurnDisposition
+from moonmind.omnigent.turn_contracts import (
+    OmnigentTurnSource,
+    RuntimeAuthorityEvidence,
+    TurnDisposition,
+)
 from moonmind.omnigent.execute import OmnigentSessionStillRunningError
 from moonmind.omnigent.control_plane import metrics as control_plane_metrics
 from moonmind.omnigent.control_plane import spans as control_plane_spans
@@ -1762,6 +1766,92 @@ class OmnigentProfileBoundExecutionCoordinator:
                             )
                         },
                     )
+                    # Canonical turn admission before any provider mutation
+                    # (#3707 AC1): a repository-output continuation is
+                    # follow-up work on the *same* canonical session, so it is
+                    # admitted, journalled, and fenced there instead of being
+                    # submitted straight to the provider.
+                    continuation_decision = await self._submit_canonical_turn(
+                        producer="omnigent.repository_output_continuation",
+                        source=OmnigentTurnSource.REPOSITORY_CONTINUATION,
+                        moonmind_workflow_id=str(
+                            getattr(request.step_execution, "workflow_id", "") or ""
+                        ),
+                        provider_session_ref=session_id,
+                        instruction_ref=(
+                            f"omnigent-continuation://{session_id}/"
+                            f"repository-publication/{continuation_number}"
+                        ),
+                        idempotency_key=continuation_request.idempotency_key,
+                        step_execution_id=(
+                            str(
+                                getattr(
+                                    request.step_execution, "step_execution_id", ""
+                                )
+                                or ""
+                            )
+                            or None
+                        ),
+                        evidence=RuntimeAuthorityEvidence(
+                            providerSessionAttached=True,
+                            providerSessionResumable=True,
+                            hostAttached=bool(host_id),
+                            hostLeaseActive=bool(host_lease.lease_id),
+                            credentialLeaseActive=bool(provider_lease.lease_id),
+                            providerProfileGenerationCurrent=True,
+                            workspaceAvailable=True,
+                        ),
+                    )
+                    if (
+                        continuation_decision is not None
+                        and not continuation_decision.admitted
+                    ):
+                        # A refused continuation is authoritative: the session
+                        # is terminal, read-only, superseded, cleaning up, or
+                        # its immutable authority changed. Stop the bounded
+                        # loop and keep the primary run result; never submit to
+                        # the provider under a refused decision.
+                        disposition = continuation_decision.disposition.value
+                        await emit(
+                            continuation_stage,
+                            "failed",
+                            code="OMNIGENT_CONTINUATION_NOT_ADMITTED",
+                            summary=(
+                                "The canonical Omnigent turn boundary did not "
+                                f"admit this continuation ({disposition})."
+                            ),
+                            failure_class="execution_error",
+                            remediation_action="retry_agent_execution",
+                            metadata={
+                                "continuationNumber": continuation_number,
+                                "turnDisposition": disposition,
+                                "turnReasonCode": (
+                                    continuation_decision.decision.reason_code
+                                ),
+                            },
+                        )
+                        result = result.model_copy(
+                            update={
+                                "failure_class": "execution_error",
+                                "provider_error_code": (
+                                    "OMNIGENT_CONTINUATION_NOT_ADMITTED"
+                                ),
+                                "retry_recommendation": "retry",
+                                "summary": (
+                                    "Repository continuation was not admitted by "
+                                    "the canonical Omnigent turn boundary."
+                                ),
+                                "metadata": {
+                                    **dict(result.metadata or {}),
+                                    **publication_metadata,
+                                    "repositoryContinuationCount": (
+                                        continuation_index
+                                    ),
+                                    "turnDisposition": disposition,
+                                },
+                            }
+                        )
+                        break
                     continuation_bridge = (
                         await self._run_store.bind_profile_authorization(
                             request=continuation_request,
@@ -2447,6 +2537,40 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "checkpoint resume is unavailable: neither live reattach nor "
                 "artifact-backed cold restore has complete evidence"
             )
+        # Canonical turn admission before the provider is touched (#3707 AC1):
+        # a checkpoint resume submits new work onto the *same* canonical
+        # session, so it is admitted, journalled, and fenced there. The evidence
+        # is exactly the disposition the checkpoint evidence already selected,
+        # so the two decisions cannot disagree.
+        live = mode is TurnDisposition.LIVE_REATTACH
+        resume_decision = await self._submit_canonical_turn(
+            producer="omnigent.checkpoint_resume",
+            source=OmnigentTurnSource.CHECKPOINT_RESUME,
+            moonmind_workflow_id=checkpoint.workflow_id,
+            provider_session_ref=str(checkpoint.omnigent_session_id or ""),
+            instruction_ref=(
+                str(request.instruction_ref or "") or checkpoint.external_state_ref
+            ),
+            idempotency_key=request.idempotency_key,
+            checkpoint_ref=checkpoint.workspace_checkpoint_ref,
+            step_execution_id=checkpoint.step_execution_id,
+            evidence=RuntimeAuthorityEvidence(
+                providerSessionAttached=live,
+                providerSessionResumable=live,
+                hostAttached=live,
+                hostLeaseActive=live,
+                credentialLeaseActive=live,
+                providerProfileGenerationCurrent=live,
+                workspaceAvailable=live,
+                checkpointRestorable=(
+                    mode is TurnDisposition.COLD_RESTORE
+                ),
+            ),
+        )
+        if resume_decision is not None:
+            # A refused resume is authoritative and pre-mutation: the session is
+            # terminal, read-only, superseded, or cleaning up.
+            resume_decision.require_same_session()
         if mode is TurnDisposition.LIVE_REATTACH:
             if request.execution_profile_ref != checkpoint.provider_profile_id:
                 raise ValueError("live reattach Provider Profile mismatch")
@@ -2553,6 +2677,26 @@ class OmnigentProfileBoundExecutionCoordinator:
         )
         if request.idempotency_key == checkpoint.idempotency_key:
             raise ValueError("checkpoint branch requires a new idempotency key")
+        # Canonical turn admission before any branch mutation (#3707 AC1). A
+        # linked branch never reuses the source session, so the expected typed
+        # decision is an explicit instruction to allocate new canonical
+        # authority; ``resume_unavailable`` (superseded fence, stale revision,
+        # missing checkpoint evidence) means no safe path exists and the branch
+        # is not created.
+        branch_decision = await self._submit_canonical_turn(
+            producer="omnigent.linked_branch_workflow",
+            source=OmnigentTurnSource.LINKED_BRANCH,
+            moonmind_workflow_id=checkpoint.workflow_id,
+            provider_session_ref=str(checkpoint.omnigent_session_id or ""),
+            instruction_ref=(
+                str(request.instruction_ref or "") or checkpoint.external_state_ref
+            ),
+            idempotency_key=request.idempotency_key,
+            checkpoint_ref=checkpoint.workspace_checkpoint_ref,
+            step_execution_id=checkpoint.step_execution_id,
+        )
+        if branch_decision is not None:
+            branch_decision.require_new_canonical_authority()
         parameters = dict(request.parameters or {})
         restore_material = materialize_cold_restore_inputs(
             checkpoint, checkpoint.validation
@@ -2590,6 +2734,73 @@ class OmnigentProfileBoundExecutionCoordinator:
                         )
                     ),
                 }
+            )
+        )
+
+    async def _submit_canonical_turn(
+        self,
+        *,
+        producer: str,
+        source: OmnigentTurnSource,
+        moonmind_workflow_id: str,
+        provider_session_ref: str,
+        instruction_ref: str,
+        idempotency_key: str,
+        checkpoint_ref: str | None = None,
+        remediation_of_turn_attempt_id: str | None = None,
+        remediation_gate_ref: str | None = None,
+        step_execution_id: str | None = None,
+        evidence: RuntimeAuthorityEvidence | None = None,
+    ) -> Any | None:
+        """Submit one follow-up turn through the canonical boundary (#3707).
+
+        This coordinator owns four production producers of follow-up Omnigent
+        work -- the bounded repository-publication continuation loop, the
+        remediation workspace attempt, checkpoint resume, and
+        branch-from-checkpoint. None of them may be an independent submission
+        authority, so all four enter here, resolve the *same* canonical session
+        by its recorded scope, and receive one typed decision.
+
+        Returns ``None`` when the scope has no canonical session row. That is a
+        pre-canonical execution with no canonical authority to bind: it stays on
+        the existing path rather than being migrated outside the #3712 handoff
+        contract. Every caller must decide explicitly what to do with a returned
+        decision; the helper never proceeds on the caller's behalf.
+        """
+
+        from moonmind.omnigent.control_plane import (
+            CanonicalTurnRequest,
+            OmnigentControlPlaneStore,
+            compute_digest,
+        )
+        from moonmind.omnigent.supervisor_turn_dispatch import (
+            production_turn_service,
+        )
+
+        workflow_id = str(moonmind_workflow_id or "").strip()
+        provider_ref = str(provider_session_ref or "").strip()
+        instruction = str(instruction_ref or "").strip()
+        if not (workflow_id and provider_ref and instruction):
+            return None
+        store = OmnigentControlPlaneStore(self._session_factory)
+        async with store.transaction() as repos:
+            session = await repos.sessions.get_by_scope(workflow_id, provider_ref)
+        if session is None:
+            return None
+        return await production_turn_service(store).submit_turn(
+            CanonicalTurnRequest(
+                producer=producer,
+                session_id=session.session_id,
+                turn_attempt_id=f"turn-{compute_digest(idempotency_key)[:32]}",
+                idempotency_key=idempotency_key,
+                instruction_ref=instruction,
+                source=source,
+                parent_turn_attempt_id=session.active_turn_attempt_id,
+                remediation_of_turn_attempt_id=remediation_of_turn_attempt_id,
+                remediation_gate_ref=remediation_gate_ref,
+                checkpoint_ref=checkpoint_ref,
+                step_execution_id=step_execution_id,
+                evidence=evidence or RuntimeAuthorityEvidence(),
             )
         )
 
