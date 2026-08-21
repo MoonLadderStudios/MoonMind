@@ -5051,6 +5051,9 @@ async def _run_coordinator_failure_case(
         async def mark_host_lease_failed(self, *_args, **_kwargs):
             return None
 
+        async def heartbeat_host_lease(self, lease_id, *, ttl_seconds):
+            return self.lease
+
     runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
     runtime._prepare_skill_projection = AsyncMock(  # type: ignore[method-assign]
         return_value=Path("/tmp/skills")
