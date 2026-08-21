@@ -1400,9 +1400,16 @@ def _capture_resource_projection(manifest: dict[str, Any]) -> dict[str, Any]:
                 "downloadAvailable": bool(artifact_ref)
                 and not artifact_ref.startswith("artifact://"),
             }
-            for key in ("contentType", "sizeBytes", "sourceEventSequence"):
+            for key in (
+                "contentType",
+                "sizeBytes",
+                "sourceEventSequence",
+                "fileId",
+                "filename",
+            ):
                 if item.get(key) is not None:
-                    resource[key] = item[key]
+                    value = item[key]
+                    resource[key] = value[:512] if isinstance(value, str) else value
             if artifact_ref:
                 resource["artifactRef"] = artifact_ref
             if path:

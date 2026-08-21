@@ -12,6 +12,22 @@ from hashlib import sha256
 import json
 from typing import Any, Mapping
 
+from moonmind.omnigent.harness_platform.attestation import (
+    HostHarnessAttestation,
+    compute_attestation_ref,
+)
+from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
+from moonmind.omnigent.harness_platform.capabilities import (
+    ClassAdmissionDecision,
+    ExactHostCapabilityDecision,
+    compute_class_admission_ref,
+    compute_exact_host_capability_decision_ref,
+)
+from moonmind.omnigent.harness_platform.execution_plan import (
+    verify_execution_plan_envelope,
+)
+from moonmind.omnigent.harness_platform.runtime_binding import OmnigentRuntimeBinding
+
 CAPABILITY_SCHEMA_VERSION = "moonmind.omnigent.effective-capabilities.v1"
 
 CAPABILITY_NAMES: tuple[str, ...] = (
@@ -144,6 +160,9 @@ def _text(value: Any) -> str:
 
 
 def _authority_reason(authority: Mapping[str, Any]) -> str | None:
+    authority_failure = _text(authority.get("authorityFailureReason"))
+    if authority_failure:
+        return authority_failure
     required = (
         "agentProfileRef",
         "agentProfileDigest",
@@ -169,6 +188,96 @@ def _authority_reason(authority: Mapping[str, Any]) -> str | None:
         return "session_epoch_stale"
     if authority.get("authorityFresh") is not True:
         return "immutable_authority_stale"
+    return None
+
+
+def _validate_harness_authority(
+    row: Any, metadata: Mapping[str, Any], launch: Mapping[str, Any]
+) -> str | None:
+    """Validate optional generic-harness plan/binding/attestation authority.
+
+    Existing profile-bound realizers do not persist this generic envelope and
+    continue through the established authority path. Once ``harnessAuthority``
+    is present, every referenced immutable object becomes mandatory and must
+    join exactly at the current host and provider session boundary.
+    """
+
+    generic_realizer = _text(launch.get("executionRealizerRef")) == (
+        "generic-omnigent-host@1"
+    )
+    if "harnessAuthority" not in metadata:
+        if generic_realizer or _text(launch.get("executionPlanRef")):
+            return "harness_authority_invalid"
+        return None
+    raw = metadata.get("harnessAuthority")
+    if not isinstance(raw, Mapping):
+        return "harness_authority_invalid"
+    try:
+        plan = verify_execution_plan_envelope(dict(raw["executionPlan"]))
+        binding = OmnigentRuntimeBinding.model_validate(raw["runtimeBinding"])
+        attestation = HostHarnessAttestation.model_validate(
+            raw["hostHarnessAttestation"]
+        )
+        class_decision = ClassAdmissionDecision.model_validate(
+            plan.payload.classAdmissionDecision
+        )
+        decision = ExactHostCapabilityDecision.model_validate(
+            raw["exactHostCapabilityDecision"]
+        )
+        implementation = HarnessImplementationIdentity.model_validate(
+            attestation.harnessImplementation
+        )
+
+        if not attestation.attestationRef or (
+            attestation.attestationRef != compute_attestation_ref(attestation)
+        ):
+            raise ValueError("attestation digest mismatch")
+        if binding.executionPlanRef != plan.planRef:
+            raise ValueError("runtime binding plan mismatch")
+        launch_plan_ref = _text(launch.get("executionPlanRef"))
+        if launch_plan_ref and launch_plan_ref != plan.planRef:
+            raise ValueError("launch snapshot plan mismatch")
+        launch_realizer = _text(launch.get("executionRealizerRef"))
+        if launch_realizer and launch_realizer != plan.payload.executionRealizerRef:
+            raise ValueError("launch snapshot realizer mismatch")
+        if binding.hostHarnessAttestationRef != attestation.attestationRef:
+            raise ValueError("runtime binding attestation mismatch")
+        if binding.exactHostCapabilityDecisionRef != (
+            compute_exact_host_capability_decision_ref(decision)
+        ):
+            raise ValueError("runtime binding decision mismatch")
+        if not decision.exactHostAttested or decision.missingRequired:
+            raise ValueError("exact host admission was not allowed")
+        if decision.classAdmissionRef != compute_class_admission_ref(class_decision):
+            raise ValueError("decision class admission mismatch")
+        if plan.payload.harnessId != attestation.harnessId:
+            raise ValueError("attested harness mismatch")
+        if plan.payload.hostClassRef != attestation.hostClassRef:
+            raise ValueError("attested host class mismatch")
+        if plan.payload.harnessImplementationRef != implementation.implementation_ref():
+            raise ValueError("attested harness implementation mismatch")
+        if not attestation.configured:
+            raise ValueError("attested harness is not configured")
+
+        required = set(class_decision.requiredSatisfied)
+        decided = set(decision.requiredSatisfied)
+        if not required <= decided or any(
+            attestation.capabilities.get(capability) is not True
+            for capability in required
+        ):
+            raise ValueError("required exact-host capability mismatch")
+
+        current_host = _text(getattr(row, "omnigent_host_id", None))
+        current_session = _text(getattr(row, "omnigent_session_id", None))
+        if current_host and (
+            binding.omnigentHostId != current_host
+            or attestation.hostId != current_host
+        ):
+            raise ValueError("current host authority mismatch")
+        if current_session and binding.omnigentSessionId != current_session:
+            raise ValueError("current session authority mismatch")
+    except (KeyError, TypeError, ValueError):
+        return "harness_authority_invalid"
     return None
 
 
@@ -269,6 +378,7 @@ def resolve_bridge_row_capabilities(
         "authorityFresh": evidence.get("fresh") is True,
         "expectedProviderProfileGeneration": evidence.get("providerProfileGeneration"),
         "expectedSessionEpoch": expected_session_epoch,
+        "authorityFailureReason": _validate_harness_authority(row, metadata, launch),
     }
     stale_reason = None
     immutable_preconditions = (

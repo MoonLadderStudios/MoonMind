@@ -6,6 +6,10 @@ Exact-host validation: class-decision ∩ attestation ∩ mounts ∩ model ∩ s
 
 from __future__ import annotations
 
+import json
+from hashlib import sha256
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from moonmind.omnigent.harness_platform.failures import (
@@ -31,6 +35,32 @@ class ExactHostCapabilityDecision(BaseModel):
     requiredSatisfied: tuple[str, ...] = Field(alias="requiredSatisfied")
     missingRequired: tuple[str, ...] = Field(alias="missingRequired")
     degraded: tuple[str, ...] = ()
+
+
+def _decision_ref(prefix: str, value: BaseModel | dict[str, Any]) -> str:
+    payload = (
+        value.model_dump(by_alias=True, mode="json")
+        if isinstance(value, BaseModel)
+        else dict(value)
+    )
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return f"{prefix}:sha256:{sha256(canonical.encode()).hexdigest()}"
+
+
+def compute_class_admission_ref(
+    decision: ClassAdmissionDecision | dict[str, Any],
+) -> str:
+    """Return the immutable reference for a class admission decision."""
+
+    return _decision_ref("class-admission", decision)
+
+
+def compute_exact_host_capability_decision_ref(
+    decision: ExactHostCapabilityDecision | dict[str, Any],
+) -> str:
+    """Return the immutable reference stored by a runtime binding."""
+
+    return _decision_ref("exact-host-capability", decision)
 
 
 def compute_class_admission(
@@ -163,7 +193,7 @@ def validate_exact_host_capabilities(
         )
     return ExactHostCapabilityDecision.model_validate(
         {
-            "classAdmissionRef": "class-admission:sha256:placeholder",
+            "classAdmissionRef": compute_class_admission_ref(class_decision),
             "exactHostAttested": True,
             "requiredSatisfied": sorted(required_capabilities),
             "missingRequired": [],

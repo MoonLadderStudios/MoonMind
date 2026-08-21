@@ -108,6 +108,28 @@ def test_local_artifact_refs_do_not_advertise_unresolvable_ui_actions() -> None:
     assert resource["downloadAvailable"] is False
 
 
+def test_resource_projection_preserves_safe_lookup_identity_for_durable_reads() -> None:
+    projection = _capture_resource_projection(
+        {
+            "sessionFiles": [
+                {
+                    "fileId": "file-1",
+                    "filename": "reports/result.bin",
+                    "artifactRef": "artifact://omnigent/corr/result.bin",
+                    "sizeBytes": 2_000_000,
+                }
+            ]
+        }
+    )
+
+    resource = next(
+        group for group in projection["groups"] if group["groupKey"] == "session_files"
+    )["resources"][0]
+    assert resource["fileId"] == "file-1"
+    assert resource["filename"] == "reports/result.bin"
+    assert resource["path"] == "reports/result.bin"
+
+
 def test_required_evidence_failure_is_reflected_in_bridge_terminal_refs() -> None:
     refs = build_omnigent_terminal_refs(
         OmnigentCaptureBundle(

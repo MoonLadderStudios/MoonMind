@@ -1,0 +1,4390 @@
+{
+  "artifactDigests": {
+    "harnessImplementation": "sha256:df70caa8be51a6871e72606d5d2979d816f1ffe36f2d3506674fffd60f076607",
+    "host": "sha256:2a16d709081159e27f5718a3998cfd821179259413a84bd16f82f7d4b908e334",
+    "moonmindFacade": "sha256:448e30fc16426bc3dabc4238864a12fd0a0aa9c44aa9d5d7e6b5a1a6ae878277",
+    "omnigent": "git:ed9369474f3ea3e28cb1871e731100be5da923e1",
+    "server": "sha256:bc5e484988c4fb38178604da8f7ca6cae58d8e49dc3b25b17c8897d7ee80cdd1",
+    "ui": "sha256:d981a0608c0c55e845c27226f641cfd8ed2815866a12d35ada2f0b3fcc1dd6a7"
+  },
+  "classifiedRouteCount": 126,
+  "inventoryDigest": "sha256:5e3ff3e833c7b410c02ece4f6a86846e10030217963601767d1f9a1729e80b5d",
+  "routeCount": 126,
+  "routes": [
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/policies/{policy_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/policies/{policy_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/policies/{policy_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/default_policies.py",
+      "sourceLine": 367,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/projects/{project_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/projects/{project_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/projects/{project_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/projects.py",
+      "sourceLine": 142,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/scheduled-tasks/{scheduled_task_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/scheduled-tasks/{scheduled_task_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/scheduled-tasks/{scheduled_task_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
+      "sourceLine": 510,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_events.py",
+      "sourceLine": 1926,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
+      "sourceFile": "omnigent/omnigent/server/routes/session_mcp_servers.py",
+      "sourceLine": 149,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/codex_goal",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/codex_goal",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/sessions/{session_id}/codex_goal",
+      "sourceFile": "omnigent/omnigent/server/routes/codex/sessions.py",
+      "sourceLine": 665,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/comments/{comment_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/comments/{comment_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/sessions/{session_id}/comments/{comment_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/comments.py",
+      "sourceLine": 314,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/permissions/{target_user_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/permissions/{target_user_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/sessions/{session_id}/permissions/{target_user_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_permissions.py",
+      "sourceLine": 189,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/policies/{policy_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/policies/{policy_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/sessions/{session_id}/policies/{policy_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/session_policies.py",
+      "sourceLine": 378,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 2115,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/files/{file_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/files/{file_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "DELETE /v1/sessions/{session_id}/resources/files/{file_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1402,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "terminal_close",
+      "historicalRead": "not_applicable",
+      "idempotency": "durable_mutation_receipt",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "DELETE",
+      "mutationReceipt": {
+        "deliveryUnknown": "park_for_reconciliation",
+        "duplicate": "return_original_receipt",
+        "schemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
+      "path": "/v1/sessions/{session_id}/resources/terminals/{terminal_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/terminals/{terminal_id}",
+      "readOnly": false,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "closeTerminal",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "DELETE /v1/sessions/{session_id}/resources/terminals/{terminal_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1120,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "liveness",
+      "historicalRead": "live_only",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/health",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/health",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": null,
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /health",
+      "sourceFile": "omnigent/omnigent/server/app.py",
+      "sourceLine": 1805,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "list_agents",
+      "historicalRead": "durable_journal_or_snapshot",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/agents",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/agents",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "viewTranscript",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/agents",
+      "sourceFile": "omnigent/omnigent/server/routes/builtin_agents.py",
+      "sourceLine": 141,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/branding/logo/{variant}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/branding/logo/{variant}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/branding/logo/{variant}",
+      "sourceFile": "omnigent/omnigent/server/app.py",
+      "sourceLine": 2107,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/harnesses",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/harnesses",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/harnesses",
+      "sourceFile": "omnigent/omnigent/server/routes/harnesses.py",
+      "sourceLine": 18,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "host_liveness",
+      "historicalRead": "live_only",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/hosts",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": null,
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/hosts",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 580,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/hosts/{host_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 638,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}/credentials/detected",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}/credentials/detected",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/hosts/{host_id}/credentials/detected",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 1467,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}/filesystem",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}/filesystem",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/hosts/{host_id}/filesystem",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 991,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}/filesystem/{path:path}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}/filesystem/{path:path}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/hosts/{host_id}/filesystem/{path:path}",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 1029,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}/harnesses/{harness}/model-options",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}/harnesses/{harness}/model-options",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/hosts/{host_id}/harnesses/{harness}/model-options",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 679,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}/worktrees",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}/worktrees",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/hosts/{host_id}/worktrees",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 1507,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "native_server_info",
+      "historicalRead": "durable_journal_or_snapshot",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/info",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/info",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": null,
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/info",
+      "sourceFile": "omnigent/omnigent/server/app.py",
+      "sourceLine": 1951,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "native_current_user",
+      "historicalRead": "durable_journal_or_snapshot",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/me",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/me",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": null,
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/me",
+      "sourceFile": "omnigent/omnigent/server/app.py",
+      "sourceLine": 2138,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/policies",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/policies",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/policies",
+      "sourceFile": "omnigent/omnigent/server/routes/default_policies.py",
+      "sourceLine": 250,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/policies/{policy_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/policies/{policy_id}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/policies/{policy_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/default_policies.py",
+      "sourceLine": 276,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/policy-registry",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/policy-registry",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/policy-registry",
+      "sourceFile": "omnigent/omnigent/server/routes/policy_registry.py",
+      "sourceLine": 35,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/projects",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/projects",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/projects",
+      "sourceFile": "omnigent/omnigent/server/routes/projects.py",
+      "sourceLine": 86,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/projects/{project_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/projects/{project_id}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/projects/{project_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/projects.py",
+      "sourceLine": 98,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/runners",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/runners",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/runners",
+      "sourceFile": "omnigent/omnigent/server/routes/runner_tunnel.py",
+      "sourceLine": 222,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "runner_liveness",
+      "historicalRead": "live_only",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/runners/{runner_id}/status",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/runners/{runner_id}/status",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": null,
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/runners/{runner_id}/status",
+      "sourceFile": "omnigent/omnigent/server/routes/runner_tunnel.py",
+      "sourceLine": 253,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/scheduled-tasks",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/scheduled-tasks",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/scheduled-tasks",
+      "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
+      "sourceLine": 327,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/scheduled-tasks/{scheduled_task_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/scheduled-tasks/{scheduled_task_id}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/scheduled-tasks/{scheduled_task_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
+      "sourceLine": 361,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/scheduled-tasks/{scheduled_task_id}/runs",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/scheduled-tasks/{scheduled_task_id}/runs",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/scheduled-tasks/{scheduled_task_id}/runs",
+      "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
+      "sourceLine": 380,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "list_sessions",
+      "historicalRead": "durable_journal_or_snapshot",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "viewTranscript",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/sessions",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 812,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "list_projects",
+      "historicalRead": "durable_journal_or_snapshot",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/projects",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/projects",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "viewTranscript",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/sessions/projects",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 621,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "get_session",
+      "historicalRead": "durable_journal_or_snapshot",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "viewTranscript",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 700,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/agent",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/agent",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/agent",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_agent.py",
+      "sourceLine": 93,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/agent/contents",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/agent/contents",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/agent/contents",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_agent.py",
+      "sourceLine": 136,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/agent/mcp-servers",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/agent/mcp-servers",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/agent/mcp-servers",
+      "sourceFile": "omnigent/omnigent/server/routes/session_mcp_servers.py",
+      "sourceLine": 91,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/child_sessions",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/child_sessions",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/child_sessions",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_items.py",
+      "sourceLine": 116,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/codex_goal",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/codex_goal",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/codex_goal",
+      "sourceFile": "omnigent/omnigent/server/routes/codex/sessions.py",
+      "sourceLine": 476,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/comments",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/comments",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/comments",
+      "sourceFile": "omnigent/omnigent/server/routes/comments.py",
+      "sourceLine": 243,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/elicitations/{elicitation_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/elicitations/{elicitation_id}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/elicitations/{elicitation_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_elicitations.py",
+      "sourceLine": 133,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "session_items",
+      "historicalRead": "artifact_projection_after_cleanup",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/items",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/items",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "viewTranscript",
+      "responseBounds": {
+        "maxBodyBytes": 10485760,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/items",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_items.py",
+      "sourceLine": 58,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/labels",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/labels",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/labels",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 769,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/owner",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/owner",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/owner",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_permissions.py",
+      "sourceLine": 279,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/permissions",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/permissions",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/permissions",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_permissions.py",
+      "sourceLine": 303,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/policies",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/policies",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/policies",
+      "sourceFile": "omnigent/omnigent/server/routes/session_policies.py",
+      "sourceLine": 237,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/policies/{policy_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/policies/{policy_id}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/policies/{policy_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/session_policies.py",
+      "sourceLine": 272,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 113,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 704,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 723,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}/changes",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}/changes",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/changes",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1898,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}/diff/{relative_path:path}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}/diff/{relative_path:path}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/diff/{relative_path:path}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1929,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1713,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1967,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}/search",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}/search",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/search",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1763,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}/search/{path:path}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}/search/{path:path}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/environments/{environment_id}/search/{path:path}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1810,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "session_files",
+      "historicalRead": "artifact_projection_after_cleanup",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/files",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/files",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "readResources",
+      "responseBounds": {
+        "maxBodyBytes": 10485760,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/files",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1169,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/files/{file_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/files/{file_id}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/files/{file_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1307,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "session_file",
+      "historicalRead": "artifact_projection_after_cleanup",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/files/{file_id}/content",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/files/{file_id}/content",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "readResources",
+      "responseBounds": {
+        "maxBodyBytes": 10485760,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/files/{file_id}/content",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1340,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "terminal_view",
+      "historicalRead": "artifact_projection_after_cleanup",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/terminals",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/terminals",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "viewTerminal",
+      "responseBounds": {
+        "maxBodyBytes": 10485760,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/terminals",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 799,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "terminal_status",
+      "historicalRead": "artifact_projection_after_cleanup",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/terminals/{terminal_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/terminals/{terminal_id}",
+      "readOnly": true,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "viewTerminal",
+      "responseBounds": {
+        "maxBodyBytes": 10485760,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/terminals/{terminal_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1016,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/{resource_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/{resource_id}",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/resources/{resource_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 2184,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "stream_events",
+      "historicalRead": "durable_journal_or_snapshot",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/stream",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/stream",
+      "readOnly": true,
+      "reconnect": "cursor_replay_with_periodic_reauthorization",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "viewTranscript",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "GET /v1/sessions/{session_id}/stream",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_events.py",
+      "sourceLine": 1724,
+      "transport": "sse",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/sharing",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sharing",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/sharing",
+      "sourceFile": "omnigent/omnigent/server/routes/sharing.py",
+      "sourceLine": 99,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "GET",
+      "mutationReceipt": null,
+      "path": "/v1/usage",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/usage",
+      "readOnly": true,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "GET /v1/usage",
+      "sourceFile": "omnigent/omnigent/server/routes/usage.py",
+      "sourceLine": 214,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PATCH",
+      "mutationReceipt": null,
+      "path": "/v1/policies/{policy_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/policies/{policy_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PATCH /v1/policies/{policy_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/default_policies.py",
+      "sourceLine": 304,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PATCH",
+      "mutationReceipt": null,
+      "path": "/v1/projects/{project_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/projects/{project_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PATCH /v1/projects/{project_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/projects.py",
+      "sourceLine": 114,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PATCH",
+      "mutationReceipt": null,
+      "path": "/v1/scheduled-tasks/{scheduled_task_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/scheduled-tasks/{scheduled_task_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PATCH /v1/scheduled-tasks/{scheduled_task_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
+      "sourceLine": 461,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PATCH",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PATCH /v1/sessions/{session_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 1474,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PATCH",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/codex_goal/status",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/codex_goal/status",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PATCH /v1/sessions/{session_id}/codex_goal/status",
+      "sourceFile": "omnigent/omnigent/server/routes/codex/sessions.py",
+      "sourceLine": 604,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PATCH",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/comments/{comment_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/comments/{comment_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PATCH /v1/sessions/{session_id}/comments/{comment_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/comments.py",
+      "sourceLine": 265,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PATCH",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/policies/{policy_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/policies/{policy_id}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PATCH /v1/sessions/{session_id}/policies/{policy_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/session_policies.py",
+      "sourceLine": 302,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PATCH",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PATCH /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 2083,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}/directories",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}/directories",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/hosts/{host_id}/directories",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 1159,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}/harnesses/{harness}/credential",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}/harnesses/{harness}/credential",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/hosts/{host_id}/harnesses/{harness}/credential",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 1356,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}/harnesses/{harness}/install",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}/harnesses/{harness}/install",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/hosts/{host_id}/harnesses/{harness}/install",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 1243,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}/runners",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}/runners",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/hosts/{host_id}/runners",
+      "sourceFile": "omnigent/omnigent/server/routes/hosts.py",
+      "sourceLine": 714,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/imports",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/imports",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/imports",
+      "sourceFile": "omnigent/omnigent/server/routes/imports.py",
+      "sourceLine": 123,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/policies",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/policies",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/policies",
+      "sourceFile": "omnigent/omnigent/server/routes/default_policies.py",
+      "sourceLine": 171,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/projects",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/projects",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/projects",
+      "sourceFile": "omnigent/omnigent/server/routes/projects.py",
+      "sourceLine": 63,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/runners/{runner_id}/token",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/runners/{runner_id}/token",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/runners/{runner_id}/token",
+      "sourceFile": "omnigent/omnigent/server/routes/runner_tunnel.py",
+      "sourceLine": 286,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/scheduled-tasks",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/scheduled-tasks",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/scheduled-tasks",
+      "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
+      "sourceLine": 286,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/scheduled-tasks/{scheduled_task_id}/run",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/scheduled-tasks/{scheduled_task_id}/run",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/scheduled-tasks/{scheduled_task_id}/run",
+      "sourceFile": "omnigent/omnigent/server/routes/scheduled_tasks.py",
+      "sourceLine": 418,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 214,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/agent/mcp-servers",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/agent/mcp-servers",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/agent/mcp-servers",
+      "sourceFile": "omnigent/omnigent/server/routes/session_mcp_servers.py",
+      "sourceLine": 110,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/auto-title",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/auto-title",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/auto-title",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 1415,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "browser_pane",
+      "historicalRead": "not_applicable",
+      "idempotency": "durable_mutation_receipt",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": {
+        "deliveryUnknown": "park_for_reconciliation",
+        "duplicate": "return_original_receipt",
+        "schemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
+      "path": "/v1/sessions/{session_id}/browser/action_claim/{action_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/browser/action_claim/{action_id}",
+      "readOnly": false,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "openBrowser",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/browser/action_claim/{action_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_browser.py",
+      "sourceLine": 133,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "browser_pane",
+      "historicalRead": "not_applicable",
+      "idempotency": "durable_mutation_receipt",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": {
+        "deliveryUnknown": "park_for_reconciliation",
+        "duplicate": "return_original_receipt",
+        "schemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
+      "path": "/v1/sessions/{session_id}/browser/action_request",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/browser/action_request",
+      "readOnly": false,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "openBrowser",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/browser/action_request",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_browser.py",
+      "sourceLine": 61,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "browser_pane",
+      "historicalRead": "not_applicable",
+      "idempotency": "durable_mutation_receipt",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": {
+        "deliveryUnknown": "park_for_reconciliation",
+        "duplicate": "return_original_receipt",
+        "schemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
+      "path": "/v1/sessions/{session_id}/browser/action_result/{action_id}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/browser/action_result/{action_id}",
+      "readOnly": false,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "openBrowser",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/browser/action_result/{action_id}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_browser.py",
+      "sourceLine": 175,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/comments",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/comments",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/comments",
+      "sourceFile": "omnigent/omnigent/server/routes/comments.py",
+      "sourceLine": 208,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/comments/send",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/comments/send",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/comments/send",
+      "sourceFile": "omnigent/omnigent/server/routes/comments.py",
+      "sourceLine": 343,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "resolve_elicitation",
+      "historicalRead": "not_applicable",
+      "idempotency": "durable_mutation_receipt",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": {
+        "deliveryUnknown": "park_for_reconciliation",
+        "duplicate": "return_original_receipt",
+        "schemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
+      "path": "/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
+      "readOnly": false,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": null,
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/elicitations/{elicitation_id}/resolve",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_elicitations.py",
+      "sourceLine": 66,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "post_event",
+      "historicalRead": "not_applicable",
+      "idempotency": "durable_mutation_receipt",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": {
+        "deliveryUnknown": "park_for_reconciliation",
+        "duplicate": "return_original_receipt",
+        "schemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
+      "path": "/v1/sessions/{session_id}/events",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/events",
+      "readOnly": false,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": null,
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/events",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_events.py",
+      "sourceLine": 374,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/hooks/antigravity-elicitation-request",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/hooks/antigravity-elicitation-request",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/hooks/antigravity-elicitation-request",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
+      "sourceLine": 1027,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/hooks/codex-elicitation-request",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/hooks/codex-elicitation-request",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/hooks/codex-elicitation-request",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
+      "sourceLine": 942,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/hooks/cursor-permission-request",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/hooks/cursor-permission-request",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/hooks/cursor-permission-request",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
+      "sourceLine": 1130,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/hooks/native-permission-request",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/hooks/native-permission-request",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/hooks/native-permission-request",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
+      "sourceLine": 1247,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/hooks/permission-request",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/hooks/permission-request",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/hooks/permission-request",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
+      "sourceLine": 142,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/hooks/route-subagent",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/hooks/route-subagent",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/hooks/route-subagent",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
+      "sourceLine": 1380,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/hooks/route-turn",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/hooks/route-turn",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/hooks/route-turn",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
+      "sourceLine": 1514,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/mcp",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/mcp",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/mcp",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_agent.py",
+      "sourceLine": 326,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/policies",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/policies",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/policies",
+      "sourceFile": "omnigent/omnigent/server/routes/session_policies.py",
+      "sourceLine": 154,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/policies/evaluate",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/policies/evaluate",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/policies/evaluate",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_hooks.py",
+      "sourceLine": 537,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}/shell",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}/shell",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/resources/environments/{environment_id}/shell",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 2147,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "resource_upload",
+      "historicalRead": "not_applicable",
+      "idempotency": "durable_mutation_receipt",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": {
+        "deliveryUnknown": "park_for_reconciliation",
+        "duplicate": "return_original_receipt",
+        "schemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
+      "path": "/v1/sessions/{session_id}/resources/files",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/files",
+      "readOnly": false,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "uploadFiles",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/resources/files",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1213,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/files:copy",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/files:copy",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/resources/files:copy",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1443,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "terminal_create",
+      "historicalRead": "not_applicable",
+      "idempotency": "durable_mutation_receipt",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": {
+        "deliveryUnknown": "park_for_reconciliation",
+        "duplicate": "return_original_receipt",
+        "schemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
+      "path": "/v1/sessions/{session_id}/resources/terminals",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/terminals",
+      "readOnly": false,
+      "reconnect": "reauthorize_each_request",
+      "requestBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "createTerminal",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 0,
+        "maxItems": 250
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/resources/terminals",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 917,
+      "transport": "http",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/terminals/{terminal_id}/transfer",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/terminals/{terminal_id}/transfer",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/resources/terminals/{terminal_id}/transfer",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 1037,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/switch-agent",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/switch-agent",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{session_id}/switch-agent",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 2207,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "POST",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{source_id}/fork",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{source_id}/fork",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "POST /v1/sessions/{source_id}/fork",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 1981,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PUT",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/agent",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/agent",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PUT /v1/sessions/{session_id}/agent",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_agent.py",
+      "sourceLine": 213,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PUT",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PUT /v1/sessions/{session_id}/agent/mcp-servers/{server_name}",
+      "sourceFile": "omnigent/omnigent/server/routes/session_mcp_servers.py",
+      "sourceLine": 129,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PUT",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/codex_goal",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/codex_goal",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PUT /v1/sessions/{session_id}/codex_goal",
+      "sourceFile": "omnigent/omnigent/server/routes/codex/sessions.py",
+      "sourceLine": 533,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PUT",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/permissions",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/permissions",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PUT /v1/sessions/{session_id}/permissions",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_permissions.py",
+      "sourceLine": 87,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PUT",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/read-state",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/read-state",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PUT /v1/sessions/{session_id}/read-state",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 665,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PUT",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PUT /v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem/{relative_path:path}",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_resources.py",
+      "sourceLine": 2051,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "PUT",
+      "mutationReceipt": null,
+      "path": "/v1/sharing",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sharing",
+      "readOnly": false,
+      "reconnect": "reject_before_upstream",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "PUT /v1/sharing",
+      "sourceFile": "omnigent/omnigent/server/routes/sharing.py",
+      "sourceLine": 105,
+      "transport": "http",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "dictation_stream",
+      "historicalRead": "not_applicable",
+      "idempotency": "durable_mutation_receipt",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "WEBSOCKET",
+      "mutationReceipt": {
+        "deliveryUnknown": "park_for_reconciliation",
+        "duplicate": "return_original_receipt",
+        "schemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
+      "path": "/v1/dictation/stream",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/dictation/stream",
+      "readOnly": false,
+      "reconnect": "cursor_replay_with_periodic_reauthorization",
+      "requestBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 1048576,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "mutateWorkspace",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 1048576,
+        "maxItems": 250
+      },
+      "routeKey": "WEBSOCKET /v1/dictation/stream",
+      "sourceFile": "omnigent/omnigent/server/routes/dictation.py",
+      "sourceLine": 108,
+      "transport": "websocket",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "WEBSOCKET",
+      "mutationReceipt": null,
+      "path": "/v1/hosts/{host_id}/tunnel",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/hosts/{host_id}/tunnel",
+      "readOnly": true,
+      "reconnect": "reject_before_upgrade",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "WEBSOCKET /v1/hosts/{host_id}/tunnel",
+      "sourceFile": "omnigent/omnigent/server/routes/host_tunnel.py",
+      "sourceLine": 134,
+      "transport": "websocket",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "fail_closed",
+      "facadeOperation": null,
+      "historicalRead": "unsupported",
+      "idempotency": "no_upstream_delivery",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "WEBSOCKET",
+      "mutationReceipt": null,
+      "path": "/v1/runners/{runner_id}/tunnel",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/runners/{runner_id}/tunnel",
+      "readOnly": true,
+      "reconnect": "reject_before_upgrade",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "unsupported",
+      "responseBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 0,
+        "maxItems": 0
+      },
+      "routeKey": "WEBSOCKET /v1/runners/{runner_id}/tunnel",
+      "sourceFile": "omnigent/omnigent/server/routes/runner_tunnel.py",
+      "sourceLine": 345,
+      "transport": "websocket",
+      "unsupportedBehavior": "omnigent_chat_transport_unsupported"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_read_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "ws_session_updates",
+      "historicalRead": "durable_journal_or_snapshot",
+      "idempotency": "read_only",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "WEBSOCKET",
+      "mutationReceipt": null,
+      "path": "/v1/sessions/updates",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/updates",
+      "readOnly": true,
+      "reconnect": "cursor_replay_with_periodic_reauthorization",
+      "requestBounds": {
+        "maxBodyBytes": 0,
+        "maxFrameBytes": 1048576,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "viewTranscript",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 1048576,
+        "maxItems": 250
+      },
+      "routeKey": "WEBSOCKET /v1/sessions/updates",
+      "sourceFile": "omnigent/omnigent/server/routes/sessions/routes_core.py",
+      "sourceLine": 1131,
+      "transport": "websocket",
+      "unsupportedBehavior": "not_applicable"
+    },
+    {
+      "callerPermission": "binding_owner_or_explicit_mutation_grant",
+      "classification": "binding_scoped",
+      "facadeOperation": "terminal_attach",
+      "historicalRead": "not_applicable",
+      "idempotency": "durable_mutation_receipt",
+      "identityVirtualization": "provider_session_id_to_chat_binding_id",
+      "method": "WEBSOCKET",
+      "mutationReceipt": {
+        "deliveryUnknown": "park_for_reconciliation",
+        "duplicate": "return_original_receipt",
+        "schemaVersion": "moonmind.omnigent.mutation-receipt.v1"
+      },
+      "path": "/v1/sessions/{session_id}/resources/terminals/{terminal_id}/attach",
+      "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/v1/sessions/{session_id}/resources/terminals/{terminal_id}/attach",
+      "readOnly": false,
+      "reconnect": "cursor_replay_with_periodic_reauthorization",
+      "requestBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 1048576,
+        "maxPathBytes": 4096,
+        "maxQueryItems": 32
+      },
+      "requiredCapability": "attachTerminal",
+      "responseBounds": {
+        "maxBodyBytes": 1048576,
+        "maxFrameBytes": 1048576,
+        "maxItems": 250
+      },
+      "routeKey": "WEBSOCKET /v1/sessions/{session_id}/resources/terminals/{terminal_id}/attach",
+      "sourceFile": "omnigent/omnigent/server/routes/terminal_attach.py",
+      "sourceLine": 134,
+      "transport": "websocket",
+      "unsupportedBehavior": "not_applicable"
+    }
+  ],
+  "schemaVersion": "moonmind.omnigent.native-ui-route-inventory/v2",
+  "sourceIssue": "MoonLadderStudios/MoonMind#3635",
+  "sseProtocols": [
+    {
+      "accept": "text/event-stream",
+      "facadeCursorBehavior": "durable_sequence_cursor_and_last_event_id",
+      "reconnectAuthorization": "reauthorize_on_connect_and_periodically",
+      "routeKey": "GET /v1/sessions/{session_id}/stream",
+      "upstreamCursorBehavior": "snapshot_then_live_tail_no_server_replay"
+    }
+  ],
+  "uiRouteReferences": [
+    {
+      "path": "/v1/...",
+      "sourceFile": "omnigent/web/src/lib/host.ts"
+    },
+    {
+      "path": "/v1/agents",
+      "sourceFile": "omnigent/web/src/hooks/useAvailableAgents.ts"
+    },
+    {
+      "path": "/v1/conversations/",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts"
+    },
+    {
+      "path": "/v1/conversations/:id/items",
+      "sourceFile": "omnigent/web/src/lib/blocks.ts"
+    },
+    {
+      "path": "/v1/dictation/stream",
+      "sourceFile": "omnigent/web/src/lib/dictation.ts"
+    },
+    {
+      "path": "/v1/harnesses",
+      "sourceFile": "omnigent/web/src/lib/agentLabels.ts"
+    },
+    {
+      "path": "/v1/harnesses",
+      "sourceFile": "omnigent/web/src/lib/harnessSetup.ts"
+    },
+    {
+      "path": "/v1/harnesses",
+      "sourceFile": "omnigent/web/src/shell/HarnessSetupDialog.tsx"
+    },
+    {
+      "path": "/v1/hosts",
+      "sourceFile": "omnigent/web/src/hooks/useHosts.ts"
+    },
+    {
+      "path": "/v1/hosts",
+      "sourceFile": "omnigent/web/src/lib/sessionHost.ts"
+    },
+    {
+      "path": "/v1/hosts/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useHostFilesystem.ts"
+    },
+    {
+      "path": "/v1/hosts/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useHostWorktrees.ts"
+    },
+    {
+      "path": "/v1/hosts/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useHosts.ts"
+    },
+    {
+      "path": "/v1/hosts/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts"
+    },
+    {
+      "path": "/v1/hosts//",
+      "sourceFile": "omnigent/web/src/shell/HarnessCredentialForm.tsx"
+    },
+    {
+      "path": "/v1/hosts/{host_id}/...",
+      "sourceFile": "omnigent/web/src/lib/identity.ts"
+    },
+    {
+      "path": "/v1/hosts/{id}/filesystem",
+      "sourceFile": "omnigent/web/src/hooks/useHostFilesystem.ts"
+    },
+    {
+      "path": "/v1/hosts/{id}/filesystem/{path:path}",
+      "sourceFile": "omnigent/web/src/hooks/useHostFilesystem.ts"
+    },
+    {
+      "path": "/v1/info",
+      "sourceFile": "omnigent/web/src/App.tsx"
+    },
+    {
+      "path": "/v1/info",
+      "sourceFile": "omnigent/web/src/components/CostRoutingControl.tsx"
+    },
+    {
+      "path": "/v1/info",
+      "sourceFile": "omnigent/web/src/embed.tsx"
+    },
+    {
+      "path": "/v1/info",
+      "sourceFile": "omnigent/web/src/lib/CapabilitiesContext.tsx"
+    },
+    {
+      "path": "/v1/info",
+      "sourceFile": "omnigent/web/src/lib/capabilities.ts"
+    },
+    {
+      "path": "/v1/info",
+      "sourceFile": "omnigent/web/src/pages/ChatPage.tsx"
+    },
+    {
+      "path": "/v1/info",
+      "sourceFile": "omnigent/web/src/pages/SetupPage.tsx"
+    },
+    {
+      "path": "/v1/me",
+      "sourceFile": "omnigent/web/src/hooks/useIsAdmin.ts"
+    },
+    {
+      "path": "/v1/me",
+      "sourceFile": "omnigent/web/src/lib/identity.ts"
+    },
+    {
+      "path": "/v1/me",
+      "sourceFile": "omnigent/web/src/pages/PoliciesPage.tsx"
+    },
+    {
+      "path": "/v1/me",
+      "sourceFile": "omnigent/web/src/pages/SettingsPage.tsx"
+    },
+    {
+      "path": "/v1/me",
+      "sourceFile": "omnigent/web/src/pages/SharingPage.tsx"
+    },
+    {
+      "path": "/v1/me",
+      "sourceFile": "omnigent/web/src/shell/settingsNav.tsx"
+    },
+    {
+      "path": "/v1/policies",
+      "sourceFile": "omnigent/web/src/hooks/useDefaultPolicies.ts"
+    },
+    {
+      "path": "/v1/policies/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useDefaultPolicies.ts"
+    },
+    {
+      "path": "/v1/policy-registry",
+      "sourceFile": "omnigent/web/src/hooks/usePolicies.ts"
+    },
+    {
+      "path": "/v1/projects",
+      "sourceFile": "omnigent/web/src/lib/projectsApi.ts"
+    },
+    {
+      "path": "/v1/projects/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/lib/projectsApi.ts"
+    },
+    {
+      "path": "/v1/responses",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts"
+    },
+    {
+      "path": "/v1/runners",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts"
+    },
+    {
+      "path": "/v1/runners/{id}",
+      "sourceFile": "omnigent/web/src/lib/identity.ts"
+    },
+    {
+      "path": "/v1/scheduled-tasks",
+      "sourceFile": "omnigent/web/src/hooks/useScheduledTasks.ts"
+    },
+    {
+      "path": "/v1/scheduled-tasks",
+      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts"
+    },
+    {
+      "path": "/v1/scheduled-tasks/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/lib/scheduledTasksApi.ts"
+    },
+    {
+      "path": "/v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useAgents.ts"
+    },
+    {
+      "path": "/v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useAvailableAgents.ts"
+    },
+    {
+      "path": "/v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts"
+    },
+    {
+      "path": "/v1/sessions",
+      "sourceFile": "omnigent/web/src/hooks/useDirectorySessions.ts"
+    },
+    {
+      "path": "/v1/sessions",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts"
+    },
+    {
+      "path": "/v1/sessions",
+      "sourceFile": "omnigent/web/src/lib/types.ts"
+    },
+    {
+      "path": "/v1/sessions",
+      "sourceFile": "omnigent/web/src/shell/NewChatDialog.tsx"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/components/blocks/TerminalView.tsx"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useAgents.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useAvailableAgents.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useBrowserAgentRelay.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useChildSessions.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useComments.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useFileContent.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useFileDiff.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/usePolicies.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useSessionItems.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useTerminals.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useUnseenConversations.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useWorkspaceChangedFiles.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/hooks/useWriteFileContent.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/lib/codexGoalApi.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/lib/filesApi.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/lib/lastAssistantText.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/lib/permissionsApi.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/lib/sessionsApi.ts"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/pages/ApprovePage.tsx"
+    },
+    {
+      "path": "/v1/sessions/${encodeURIComponent",
+      "sourceFile": "omnigent/web/src/pages/ChatPage.tsx"
+    },
+    {
+      "path": "/v1/sessions/.../resources/files/.../content",
+      "sourceFile": "omnigent/web/src/components/SessionImage.tsx"
+    },
+    {
+      "path": "/v1/sessions/.../resources/terminals/.../attach",
+      "sourceFile": "omnigent/web/src/components/blocks/TerminalView.tsx"
+    },
+    {
+      "path": "/v1/sessions/projects",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts"
+    },
+    {
+      "path": "/v1/sessions/updates",
+      "sourceFile": "omnigent/web/src/lib/identity.ts"
+    },
+    {
+      "path": "/v1/sessions/updates",
+      "sourceFile": "omnigent/web/src/lib/sessionUpdatesSocket.ts"
+    },
+    {
+      "path": "/v1/sessions/updates",
+      "sourceFile": "omnigent/web/src/store/chatStore.ts"
+    },
+    {
+      "path": "/v1/sessions/{id}/",
+      "sourceFile": "omnigent/web/src/hooks/useConversations.ts"
+    },
+    {
+      "path": "/v1/sessions/{id}/",
+      "sourceFile": "omnigent/web/src/lib/sessionHost.ts"
+    },
+    {
+      "path": "/v1/sessions/{id}/agent",
+      "sourceFile": "omnigent/web/src/lib/identity.ts"
+    },
+    {
+      "path": "/v1/sessions/{id}/permissions",
+      "sourceFile": "omnigent/web/src/lib/permissionsApi.ts"
+    },
+    {
+      "path": "/v1/sessions/{id}/resources/terminals/{tid}/attach",
+      "sourceFile": "omnigent/web/src/lib/host.ts"
+    },
+    {
+      "path": "/v1/sessions/{id}/stream",
+      "sourceFile": "omnigent/web/src/lib/sse.ts"
+    },
+    {
+      "path": "/v1/sessions/{id}/stream",
+      "sourceFile": "omnigent/web/src/lib/types.ts"
+    },
+    {
+      "path": "/v1/sessions/{id}/switch-agent",
+      "sourceFile": "omnigent/web/src/shell/SwitchAgentDialog.tsx"
+    },
+    {
+      "path": "/v1/sessions/{session_id}/...",
+      "sourceFile": "omnigent/web/src/lib/identity.ts"
+    },
+    {
+      "path": "/v1/sharing",
+      "sourceFile": "omnigent/web/src/hooks/useSharing.ts"
+    },
+    {
+      "path": "/v1/traces",
+      "sourceFile": "omnigent/web/src/lib/telemetry.ts"
+    },
+    {
+      "path": "/v1/usage",
+      "sourceFile": "omnigent/web/src/lib/usageApi.ts"
+    }
+  ],
+  "unclassifiedRouteCount": 0,
+  "websocketProtocols": [
+    {
+      "clientMessageClasses": [
+        "binary_audio",
+        "stop"
+      ],
+      "maxFrameBytes": 1048576,
+      "routeKey": "WEBSOCKET /v1/dictation/stream",
+      "serverMessageClasses": [
+        "error",
+        "final",
+        "partial",
+        "ready",
+        "stopped"
+      ],
+      "unknownMessageBehavior": "fail_closed"
+    },
+    {
+      "clientMessageClasses": [],
+      "maxFrameBytes": 1048576,
+      "routeKey": "WEBSOCKET /v1/hosts/{host_id}/tunnel",
+      "serverMessageClasses": [],
+      "unknownMessageBehavior": "fail_closed"
+    },
+    {
+      "clientMessageClasses": [],
+      "maxFrameBytes": 1048576,
+      "routeKey": "WEBSOCKET /v1/runners/{runner_id}/tunnel",
+      "serverMessageClasses": [],
+      "unknownMessageBehavior": "fail_closed"
+    },
+    {
+      "clientMessageClasses": [
+        "watch"
+      ],
+      "maxFrameBytes": 1048576,
+      "routeKey": "WEBSOCKET /v1/sessions/updates",
+      "serverMessageClasses": [
+        "changed",
+        "heartbeat",
+        "hosts_changed",
+        "removed",
+        "snapshot"
+      ],
+      "unknownMessageBehavior": "fail_closed"
+    },
+    {
+      "clientMessageClasses": [
+        "binary_input",
+        "resize"
+      ],
+      "maxFrameBytes": 1048576,
+      "routeKey": "WEBSOCKET /v1/sessions/{session_id}/resources/terminals/{terminal_id}/attach",
+      "serverMessageClasses": [
+        "binary_output"
+      ],
+      "unknownMessageBehavior": "fail_closed"
+    }
+  ]
+}

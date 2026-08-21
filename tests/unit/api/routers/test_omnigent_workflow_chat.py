@@ -1459,6 +1459,122 @@ def test_workspace_diff_media_type() -> None:
     assert response.headers["content-type"].startswith("text/x-diff")
 
 
+def test_artifact_backed_resource_index_survives_provider_cleanup() -> None:
+    row = _row(
+        status="completed",
+        omnigent_session_id="",
+        terminal_refs={
+            "resourceProjection": {
+                "schemaVersion": "moonmind.omnigent.resource_projection.v1",
+                "groups": [
+                    {
+                        "groupKey": "workspace_files",
+                        "resources": [
+                            {
+                                "path": "reports/result.bin",
+                                "label": "reports/result.bin",
+                                "status": "available",
+                                "artifactRef": "artifact://omnigent/corr/result.bin",
+                                "sizeBytes": 2_000_000,
+                                "contentType": "application/octet-stream",
+                            }
+                        ],
+                    },
+                ],
+            }
+        },
+    )
+    client, proxy, _store = _build(store=_FakeStore(row=row))
+
+    response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/environments/default/filesystem"
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"][0]["path"] == "reports/result.bin"
+    assert "artifactRef" not in response.text
+    assert proxy.resources == []
+
+
+def test_large_artifact_backed_resource_body_survives_provider_cleanup(
+    monkeypatch,
+) -> None:
+    content = b"x" * 2_000_000
+    row = _row(
+        status="completed",
+        omnigent_session_id="",
+        terminal_refs={
+            "resourceProjection": {
+                "schemaVersion": "moonmind.omnigent.resource_projection.v1",
+                "groups": [
+                    {
+                        "groupKey": "workspace_files",
+                        "resources": [
+                            {
+                                "path": "reports/result.bin",
+                                "status": "available",
+                                "artifactRef": "artifact://omnigent/corr/result.bin",
+                                "sizeBytes": len(content),
+                                "contentType": "application/octet-stream",
+                            }
+                        ],
+                    },
+                    {
+                        "groupKey": "session_files",
+                        "resources": [
+                            {
+                                "fileId": "file-1",
+                                "filename": "result.bin",
+                                "status": "available",
+                                "artifactRef": "artifact://omnigent/corr/session-result.bin",
+                                "sizeBytes": len(content),
+                                "contentType": "application/octet-stream",
+                            }
+                        ],
+                    },
+                ],
+            }
+        },
+    )
+
+    class _Gateway:
+        async def read_bytes(self, artifact_ref: str) -> bytes:
+            assert artifact_ref in {
+                "artifact://omnigent/corr/result.bin",
+                "artifact://omnigent/corr/session-result.bin",
+            }
+            return content
+
+    monkeypatch.setattr(
+        "api_service.api.routers.omnigent_bridge.LocalOmnigentArtifactGateway",
+        _Gateway,
+    )
+    client, proxy, _store = _build(store=_FakeStore(row=row))
+
+    response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/environments/default/filesystem/reports/result.bin"
+        )
+    )
+    session_response = client.get(
+        _path(
+            f"v1/sessions/{_CHAT_BINDING_ID}"
+            "/resources/files/file-1/content"
+        )
+    )
+
+    assert response.status_code == 200
+    assert response.content == content
+    assert response.headers["content-type"].startswith("application/octet-stream")
+    assert session_response.status_code == 200
+    assert session_response.content == content
+    assert proxy.resources == []
+
+
 def test_list_agents_metadata() -> None:
     client, _proxy, _store = _build()
 
@@ -1479,6 +1595,18 @@ def test_liveness_probe_is_local() -> None:
     assert body["state"] == "available"
     assert body["readOnly"] is False
     assert proxy.resources == []  # never touched upstream
+
+
+def test_generic_harness_authority_is_revalidated_at_http_handoff() -> None:
+    metadata = dict(_row().metadata_)
+    metadata["harnessAuthority"] = {}
+    client, proxy, _store = _build(store=_FakeStore(row=_row(metadata_=metadata)))
+
+    response = client.get(_path(f"v1/sessions/{_CHAT_BINDING_ID}"))
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "omnigent_chat_operation_denied"
+    assert proxy.sessions == []
 
 
 # --- SSE/WebSocket replay, reconnect, and revocation -------------------------

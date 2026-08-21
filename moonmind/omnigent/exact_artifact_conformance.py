@@ -32,14 +32,17 @@ Every returned document is validated secret-free through
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
+from hashlib import sha256
 from typing import Any, Mapping
 
 from moonmind.omnigent.conformance import (
     ConformanceContractError,
     assert_secret_free,
 )
+from moonmind.omnigent.native_ui_route_inventory import INVENTORY_SCHEMA_VERSION
 
 EXACT_ARTIFACT_CONFORMANCE_VERSION = "moonmind.omnigent.exact-artifact-conformance/v1"
 
@@ -97,6 +100,29 @@ REQUIRED_CAPABILITIES: Mapping[str, tuple[str, ...]] = {
 
 _DIGEST_REF = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_GIT_DIGEST = re.compile(r"^git:[0-9a-f]{40}$")
+_ROUTE_ARTIFACT_ROLES = (
+    "omnigent",
+    "ui",
+    "server",
+    "host",
+    "harnessImplementation",
+    "moonmindFacade",
+)
+_ROUTE_POLICY_FIELDS = frozenset(
+    {
+        "publicRoute",
+        "callerPermission",
+        "requestBounds",
+        "responseBounds",
+        "identityVirtualization",
+        "reconnect",
+        "idempotency",
+        "historicalRead",
+        "unsupportedBehavior",
+        "mutationReceipt",
+    }
+)
 
 
 class ExactArtifactConformanceError(ValueError):
@@ -151,6 +177,7 @@ def evaluate_exact_artifact_conformance(
     report: Mapping[str, Any],
     *,
     required_digests: Mapping[str, str],
+    required_route_inventory_digest: str | None = None,
 ) -> dict[str, Any]:
     """Project a fail-closed verdict over an exact-artifact probe report.
 
@@ -179,6 +206,179 @@ def evaluate_exact_artifact_conformance(
         raise ExactArtifactConformanceError("report capabilities are required")
 
     failures: list[GateFailure] = []
+
+    # --- Exact stock route inventory and facade classification ---------------
+    route_inventory = report.get("routeInventory")
+    route_projection: dict[str, Any] | None = None
+    if not isinstance(route_inventory, Mapping):
+        failures.append(
+            GateFailure(
+                "route_inventory_missing",
+                "exact stock route inventory evidence is missing",
+            )
+        )
+    else:
+        inventory_digest = route_inventory.get("inventoryDigest")
+        artifact_digests = route_inventory.get("artifactDigests")
+        route_count = route_inventory.get("routeCount")
+        classified_count = route_inventory.get("classifiedRouteCount")
+        unclassified_count = route_inventory.get("unclassifiedRouteCount")
+        routes = route_inventory.get("routes")
+        ui_references = route_inventory.get("uiRouteReferences")
+        websocket_protocols = route_inventory.get("websocketProtocols")
+        sse_protocols = route_inventory.get("sseProtocols")
+        if route_inventory.get("schemaVersion") != INVENTORY_SCHEMA_VERSION:
+            failures.append(
+                GateFailure(
+                    "route_inventory_schema_unsupported",
+                    "exact stock route inventory schema is missing or unsupported",
+                )
+            )
+        if not isinstance(inventory_digest, str) or not _DIGEST.fullmatch(
+            inventory_digest
+        ):
+            failures.append(
+                GateFailure(
+                    "route_inventory_digest_invalid",
+                    "exact stock route inventory digest is missing or invalid",
+                )
+            )
+        else:
+            digest_body = {
+                key: value
+                for key, value in route_inventory.items()
+                if key != "inventoryDigest"
+            }
+            expected_inventory_digest = "sha256:" + sha256(
+                json.dumps(
+                    digest_body, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+            if inventory_digest != expected_inventory_digest:
+                failures.append(
+                    GateFailure(
+                        "route_inventory_digest_invalid",
+                        "exact stock route inventory content does not match its digest",
+                    )
+                )
+        if (
+            required_route_inventory_digest is not None
+            and inventory_digest != required_route_inventory_digest
+        ):
+            failures.append(
+                GateFailure(
+                    "route_inventory_digest_mismatch",
+                    "exact stock route inventory changed without an admitted classification",
+                )
+            )
+        if not isinstance(artifact_digests, Mapping) or set(artifact_digests) != set(
+            _ROUTE_ARTIFACT_ROLES
+        ):
+            failures.append(
+                GateFailure(
+                    "route_inventory_artifacts_invalid",
+                    "route inventory is not bound to every required exact artifact",
+                )
+            )
+        elif not _GIT_DIGEST.fullmatch(str(artifact_digests.get("omnigent") or "")) or any(
+            not _DIGEST.fullmatch(str(artifact_digests.get(role) or ""))
+            for role in _ROUTE_ARTIFACT_ROLES
+            if role != "omnigent"
+        ):
+            failures.append(
+                GateFailure(
+                    "route_inventory_artifacts_invalid",
+                    "route inventory contains an invalid exact artifact digest",
+                )
+            )
+        route_entries_valid = isinstance(routes, list) and bool(routes)
+        route_keys: list[str] = []
+        websocket_route_keys: set[str] = set()
+        sse_route_keys: set[str] = set()
+        actual_classified = 0
+        if route_entries_valid:
+            for route in routes:
+                if not isinstance(route, Mapping):
+                    route_entries_valid = False
+                    continue
+                route_key = route.get("routeKey")
+                classification = route.get("classification")
+                route_keys.append(str(route_key or ""))
+                if route.get("transport") == "websocket" and isinstance(
+                    route_key, str
+                ):
+                    websocket_route_keys.add(route_key)
+                if route.get("transport") == "sse" and isinstance(route_key, str):
+                    sse_route_keys.add(route_key)
+                if classification in {"binding_scoped", "fail_closed"}:
+                    actual_classified += 1
+                else:
+                    route_entries_valid = False
+                if (
+                    not isinstance(route_key, str)
+                    or not route_key
+                    or not _ROUTE_POLICY_FIELDS <= set(route)
+                    or any(
+                        not route.get(field)
+                        for field in _ROUTE_POLICY_FIELDS - {"mutationReceipt"}
+                    )
+                ):
+                    route_entries_valid = False
+            if len(set(route_keys)) != len(route_keys):
+                route_entries_valid = False
+        observed_websocket_keys = {
+            str(protocol.get("routeKey") or "")
+            for protocol in websocket_protocols or ()
+            if isinstance(protocol, Mapping)
+            and isinstance(protocol.get("clientMessageClasses"), list)
+            and isinstance(protocol.get("serverMessageClasses"), list)
+            and protocol.get("unknownMessageBehavior") == "fail_closed"
+        }
+        observed_sse_keys = {
+            str(protocol.get("routeKey") or "")
+            for protocol in sse_protocols or ()
+            if isinstance(protocol, Mapping)
+            and protocol.get("upstreamCursorBehavior")
+            and protocol.get("facadeCursorBehavior")
+            and protocol.get("reconnectAuthorization")
+        }
+        protocol_entries_valid = (
+            isinstance(websocket_protocols, list)
+            and observed_websocket_keys == websocket_route_keys
+            and isinstance(sse_protocols, list)
+            and observed_sse_keys == sse_route_keys
+            and isinstance(ui_references, list)
+            and bool(ui_references)
+            and all(
+                isinstance(reference, Mapping)
+                and str(reference.get("path") or "").startswith("/v1/")
+                and reference.get("sourceFile")
+                for reference in ui_references
+            )
+        )
+        if (
+            not route_entries_valid
+            or not protocol_entries_valid
+            or not isinstance(route_count, int)
+            or route_count != len(routes or ())
+            or classified_count != actual_classified
+            or unclassified_count != route_count - actual_classified
+            or unclassified_count != 0
+        ):
+            failures.append(
+                GateFailure(
+                    "route_inventory_unclassified",
+                    "one or more exact stock routes lack a facade or fail-closed classification",
+                )
+            )
+        route_projection = {
+            "schemaVersion": route_inventory.get("schemaVersion"),
+            "inventoryDigest": inventory_digest,
+            "artifactDigests": dict(artifact_digests or {}),
+            "routeCount": route_count,
+            "classifiedRouteCount": classified_count,
+            "unclassifiedRouteCount": unclassified_count,
+        }
 
     # --- Required runtime capabilities exist in the exact image --------------
     for role, required in REQUIRED_CAPABILITIES.items():
@@ -257,6 +457,7 @@ def evaluate_exact_artifact_conformance(
         "requiredCapabilities": {
             role: list(names) for role, names in REQUIRED_CAPABILITIES.items()
         },
+        "routeInventory": route_projection,
         "failures": [failure.as_dict() for failure in failures],
     }
     try:
@@ -297,6 +498,19 @@ def assert_exact_artifact_evidence(
     observed_images = evidence.get("images")
     if not isinstance(observed_images, Mapping):
         raise ExactArtifactConformanceError("exact-artifact evidence images are missing")
+    route_inventory = evidence.get("routeInventory")
+    if (
+        not isinstance(route_inventory, Mapping)
+        or route_inventory.get("schemaVersion") != INVENTORY_SCHEMA_VERSION
+        or not _DIGEST.fullmatch(str(route_inventory.get("inventoryDigest") or ""))
+        or route_inventory.get("routeCount") != route_inventory.get(
+            "classifiedRouteCount"
+        )
+        or route_inventory.get("unclassifiedRouteCount") != 0
+    ):
+        raise ExactArtifactConformanceError(
+            "exact-artifact route inventory evidence is missing or invalid"
+        )
     if required_digests is not None:
         for role in REQUIRED_IMAGE_ROLES:
             required = required_digests.get(role)

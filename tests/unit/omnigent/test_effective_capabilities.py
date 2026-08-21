@@ -1,5 +1,6 @@
 """Effective native capability contract tests for MoonLadderStudios/MoonMind#3636."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from moonmind.omnigent.effective_capabilities import (
@@ -10,6 +11,21 @@ from moonmind.omnigent.effective_capabilities import (
     resolve_bridge_row_capabilities,
     resolve_effective_capabilities,
 )
+from moonmind.omnigent.harness_platform.attestation import (
+    HostHarnessAttestation,
+    compute_attestation_ref,
+)
+from moonmind.omnigent.harness_platform.capabilities import (
+    ClassAdmissionDecision,
+    ExactHostCapabilityDecision,
+    compute_class_admission_ref,
+    compute_exact_host_capability_decision_ref,
+)
+from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
+from moonmind.omnigent.harness_platform.execution_plan import (
+    create_execution_plan_envelope,
+)
+from moonmind.omnigent.harness_platform.runtime_binding import create_runtime_binding
 
 
 def test_provider_capabilities_are_adapted_to_complete_canonical_namespace():
@@ -42,6 +58,101 @@ def _authority(**overrides):
 
 def _all(value=True):
     return {name: value for name in CAPABILITY_NAMES}
+
+
+def _generic_harness_authority(*, session_id: str = "provider-session"):
+    implementation = HarnessImplementationIdentity.model_validate(
+        {
+            "sourceKind": "core",
+            "package": "omnigent",
+            "version": "1.0.0",
+            "digest": "sha256:" + "a" * 64,
+            "pluginEntryPoint": None,
+        }
+    )
+    plan = create_execution_plan_envelope(
+        {
+            "endpointRef": "default",
+            "agentProfileSnapshotRef": "agent-profile:sha256:" + "1" * 64,
+            "harnessCatalogRef": "harness-catalog:sha256:" + "2" * 64,
+            "harnessId": "opencode-native",
+            "harnessImplementationRef": implementation.implementation_ref(),
+            "agentSource": {"kind": "upstream", "upstreamId": "agent-1"},
+            "credentialBindingSetRef": "credential-bindings:sha256:" + "3" * 64,
+            "credentialBindings": {},
+            "hostClassRef": "omnigent-native-standard@3",
+            "launchPolicyRef": "omnigent-on-demand@1",
+            "executionRealizerRef": "generic-omnigent-host@1",
+            "model": {
+                "qualifiedId": "opencode/test",
+                "effort": None,
+                "routeRef": "opencode-go",
+                "normalizedOptions": {},
+                "modelConfigDigest": "sha256:" + "4" * 64,
+            },
+            "resolvedSkills": {},
+            "classAdmissionDecision": {
+                "requiredSatisfied": ["interrupt"],
+                "preferredSatisfied": [],
+                "degraded": [],
+                "unknown": [],
+            },
+            "runtimeValidationRequirements": ["exact-harness-implementation"],
+            "workspaceIntentRef": "workspace-intent:sha256:" + "5" * 64,
+            "policySnapshotRef": "policy:sha256:" + "6" * 64,
+            "supportCombinationKey": "support:sha256:" + "7" * 64,
+        }
+    )
+    attestation_values = {
+        "hostId": "host-1",
+        "hostClassRef": "omnigent-native-standard@3",
+        "hostImageRef": "example.invalid/host@sha256:" + "8" * 64,
+        "omnigentVersion": "1.0.0",
+        "omnigentBuildDigest": "sha256:" + "9" * 64,
+        "harnessId": "opencode-native",
+        "harnessImplementation": implementation.model_dump(
+            by_alias=True, mode="json"
+        ),
+        "runtimeDependencies": [],
+        "configured": True,
+        "capabilities": {"interrupt": True},
+        "observedAt": datetime.now(UTC),
+    }
+    attestation = HostHarnessAttestation.model_validate(attestation_values)
+    attestation_values["attestationRef"] = compute_attestation_ref(attestation)
+    attestation = HostHarnessAttestation.model_validate(attestation_values)
+    class_decision = ClassAdmissionDecision.model_validate(
+        plan.payload.classAdmissionDecision
+    )
+    exact_decision = ExactHostCapabilityDecision.model_validate(
+        {
+            "classAdmissionRef": compute_class_admission_ref(class_decision),
+            "exactHostAttested": True,
+            "requiredSatisfied": ["interrupt"],
+            "missingRequired": [],
+            "degraded": [],
+        }
+    )
+    decision_ref = compute_exact_host_capability_decision_ref(exact_decision)
+    binding = create_runtime_binding(
+        executionPlanRef=plan.planRef,
+        providerLeases={},
+        hostBindingRef="host-binding:1",
+        hostLeaseRef="host-lease:1",
+        hostLeaseGeneration=1,
+        omnigentHostId="host-1",
+        hostHarnessAttestationRef=attestation.attestationRef,
+        exactHostCapabilityDecisionRef=decision_ref,
+        omnigentSessionId=session_id,
+    )
+    return {
+        "executionPlan": plan.model_dump(by_alias=True, mode="json"),
+        "runtimeBinding": binding.model_dump(by_alias=True, mode="json"),
+        "hostHarnessAttestation": attestation.model_dump(by_alias=True, mode="json"),
+        "exactHostCapabilityDecision": exact_decision.model_dump(
+            by_alias=True, mode="json"
+        ),
+    }
 
 
 def _resolve(**overrides):
@@ -149,6 +260,117 @@ def test_bridge_row_adapter_fails_closed_without_capability_authority():
     )
     result = resolve_bridge_row_capabilities(row, caller_capabilities=_all())
     assert set(result.disabled_reasons.values()) == {"immutable_authority_missing"}
+
+
+def test_bridge_row_adapter_intersects_generic_plan_and_exact_host_authority():
+    grants = _all()
+    row = SimpleNamespace(
+        status="active",
+        omnigent_session_id="provider-session",
+        omnigent_host_id="host-1",
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "executionRealizerRef": "generic-omnigent-host@1",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
+        metadata_={
+            "harnessAuthority": _generic_harness_authority(),
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            },
+        },
+    )
+
+    result = resolve_bridge_row_capabilities(row, caller_capabilities=grants)
+
+    assert all(result.capabilities.values())
+
+
+def test_bridge_row_adapter_rejects_tampered_generic_harness_authority():
+    grants = _all()
+    harness_authority = _generic_harness_authority()
+    harness_authority["hostHarnessAttestation"]["hostId"] = "host-2"
+    row = SimpleNamespace(
+        status="active",
+        omnigent_session_id="provider-session",
+        omnigent_host_id="host-1",
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "executionRealizerRef": "generic-omnigent-host@1",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
+        metadata_={
+            "harnessAuthority": harness_authority,
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            },
+        },
+    )
+
+    result = resolve_bridge_row_capabilities(row, caller_capabilities=grants)
+
+    assert set(result.capabilities.values()) == {False}
+    assert set(result.disabled_reasons.values()) == {"harness_authority_invalid"}
+
+
+def test_bridge_row_adapter_requires_authority_for_generic_realizer():
+    grants = _all()
+    row = SimpleNamespace(
+        status="active",
+        provider_profile_id="provider-1",
+        credential_generation=4,
+        effective_launch_snapshot_json={
+            "executionProfileRef": "agent-profile://p/versions/7",
+            "executionProfileDigest": "sha256:agent",
+            "launchPolicyRef": "policy://launch/3",
+            "snapshotRef": "artifact://launch",
+            "executionRealizerRef": "generic-omnigent-host@1",
+            "policyAuthority": {
+                "snapshotRef": "artifact://policy",
+                "policyDigest": "sha256:policy",
+            },
+        },
+        metadata_={
+            "capabilityAuthority": {
+                "fresh": True,
+                "providerProfileGeneration": 4,
+                "upstream": grants,
+                "agentProfile": grants,
+                "launchPolicy": grants,
+                "state": {"sessionEpoch": 2, "capabilities": grants},
+            }
+        },
+    )
+
+    result = resolve_bridge_row_capabilities(row, caller_capabilities=grants)
+
+    assert set(result.disabled_reasons.values()) == {"harness_authority_invalid"}
 
 
 def test_caller_authority_separates_owner_from_approver_and_viewer():

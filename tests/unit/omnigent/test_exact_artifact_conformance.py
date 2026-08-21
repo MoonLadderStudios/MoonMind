@@ -6,6 +6,8 @@ Source issue: MoonLadderStudios/MoonMind#3710.
 from __future__ import annotations
 
 import copy
+import json
+from hashlib import sha256
 
 import pytest
 
@@ -37,6 +39,45 @@ def _capabilities(role: str) -> list[dict[str, object]]:
 
 
 def _passing_report(**overrides) -> dict[str, object]:
+    route_inventory = {
+        "schemaVersion": "moonmind.omnigent.native-ui-route-inventory/v2",
+        "artifactDigests": {
+            "omnigent": "git:" + "1" * 40,
+            "ui": "sha256:" + "2" * 64,
+            "server": "sha256:" + "3" * 64,
+            "host": "sha256:" + "4" * 64,
+            "harnessImplementation": "sha256:" + "5" * 64,
+            "moonmindFacade": "sha256:" + "6" * 64,
+        },
+        "routes": [
+            {
+                "routeKey": "GET /health",
+                "transport": "http",
+                "classification": "binding_scoped",
+                "publicRoute": "/api/workflow-chat-bindings/{chatBindingId}/omnigent/health",
+                "callerPermission": "binding_owner_or_explicit_read_grant",
+                "requestBounds": {"maxBodyBytes": 0},
+                "responseBounds": {"maxBodyBytes": 1024},
+                "identityVirtualization": "provider_session_id_to_chat_binding_id",
+                "reconnect": "reauthorize_each_request",
+                "idempotency": "read_only",
+                "historicalRead": "live_only",
+                "unsupportedBehavior": "not_applicable",
+                "mutationReceipt": None,
+            }
+        ],
+        "uiRouteReferences": [
+            {"path": "/v1/info", "sourceFile": "omnigent/web/src/lib/api.ts"}
+        ],
+        "websocketProtocols": [],
+        "sseProtocols": [],
+        "routeCount": 1,
+        "classifiedRouteCount": 1,
+        "unclassifiedRouteCount": 0,
+    }
+    route_inventory["inventoryDigest"] = "sha256:" + sha256(
+        json.dumps(route_inventory, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     report = {
         "sourceCommit": COMMIT,
         "images": {
@@ -45,6 +86,7 @@ def _passing_report(**overrides) -> dict[str, object]:
             "ui": f"ghcr.io/moonladderstudios/moonmind-ui@{UI_DIGEST}",
         },
         "capabilities": {role: _capabilities(role) for role in REQUIRED_CAPABILITIES},
+        "routeInventory": route_inventory,
         "secretScan": {"status": "passed"},
     }
     report.update(overrides)
@@ -204,6 +246,65 @@ def test_ui_no_root_v1_capability_required() -> None:
     )
 
 
+def test_missing_route_inventory_fails_exact_artifact_gate() -> None:
+    report = _passing_report()
+    del report["routeInventory"]
+
+    projection = evaluate_exact_artifact_conformance(
+        report, required_digests=REQUIRED_DIGESTS
+    )
+
+    assert any(
+        failure["code"] == "route_inventory_missing"
+        for failure in projection["failures"]
+    )
+
+
+def test_unclassified_exact_stock_route_fails_exact_artifact_gate() -> None:
+    report = _passing_report()
+    report["routeInventory"]["routes"][0]["classification"] = "unclassified"
+    report["routeInventory"]["unclassifiedRouteCount"] = 1
+    report["routeInventory"]["classifiedRouteCount"] = 0
+
+    projection = evaluate_exact_artifact_conformance(
+        report, required_digests=REQUIRED_DIGESTS
+    )
+
+    assert any(
+        failure["code"] == "route_inventory_unclassified"
+        for failure in projection["failures"]
+    )
+
+
+def test_missing_transport_protocol_classification_fails_exact_artifact_gate() -> None:
+    report = _passing_report()
+    report["routeInventory"]["routes"][0]["transport"] = "sse"
+
+    projection = evaluate_exact_artifact_conformance(
+        report, required_digests=REQUIRED_DIGESTS
+    )
+
+    assert any(
+        failure["code"] == "route_inventory_unclassified"
+        for failure in projection["failures"]
+    )
+
+
+def test_route_inventory_digest_drift_fails_exact_artifact_gate() -> None:
+    report = _passing_report()
+
+    projection = evaluate_exact_artifact_conformance(
+        report,
+        required_digests=REQUIRED_DIGESTS,
+        required_route_inventory_digest="sha256:" + "e" * 64,
+    )
+
+    assert any(
+        failure["code"] == "route_inventory_digest_mismatch"
+        for failure in projection["failures"]
+    )
+
+
 def test_secret_like_material_in_evidence_is_rejected() -> None:
     report = _passing_report()
     report["capabilities"]["server"][0]["detail"] = "token=ghp_deadbeefdeadbeefdead"
@@ -272,5 +373,12 @@ def test_assert_evidence_rejects_digest_mismatch() -> None:
 def test_assert_evidence_rejects_unknown_schema() -> None:
     projection = _passing_projection()
     projection["schemaVersion"] = "some.other/v9"
+    with pytest.raises(ExactArtifactConformanceError):
+        assert_exact_artifact_evidence(projection, expected_commit=COMMIT)
+
+
+def test_assert_evidence_rejects_missing_route_inventory() -> None:
+    projection = _passing_projection()
+    del projection["routeInventory"]
     with pytest.raises(ExactArtifactConformanceError):
         assert_exact_artifact_evidence(projection, expected_commit=COMMIT)

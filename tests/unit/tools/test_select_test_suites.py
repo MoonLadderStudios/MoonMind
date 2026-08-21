@@ -366,8 +366,19 @@ def test_omnigent_frontend_integration_selects_gate_and_browser(
     assert outputs["frontend_browser_chromium"] == "true"
 
 
-def test_omnigent_native_ui_facade_backend_change_selects_browser() -> None:
-    outputs = _outputs(["api_service/api/routers/omnigent_native_ui.py"])
+@pytest.mark.parametrize(
+    "changed_path",
+    [
+        "api_service/api/routers/omnigent_native_ui.py",
+        "api_service/api/routers/omnigent_bridge.py",
+        "moonmind/omnigent/native_ui_route_inventory.py",
+        "moonmind/omnigent/effective_capabilities.py",
+    ],
+)
+def test_omnigent_native_ui_facade_backend_change_selects_browser(
+    changed_path: str,
+) -> None:
+    outputs = _outputs([changed_path])
 
     assert outputs["frontend_browser_chromium"] == "true"
 
@@ -423,6 +434,7 @@ def test_docs_only_change_never_selects_omnigent_gate() -> None:
         "moonmind/omnigent/exact_artifact_conformance.py",
         "tools/omnigent_exact_artifact_probe.py",
         "tools/run_omnigent_exact_artifact_conformance.py",
+        "tools/generate_omnigent_route_inventory.py",
     ],
 )
 def test_deployable_artifact_change_selects_exact_artifact(changed_path: str) -> None:

@@ -192,6 +192,17 @@ def test_global_updates_ws_relays_through_binding_scope() -> None:
     assert disconnect.code == 1000
 
 
+def test_generic_harness_authority_is_revalidated_before_websocket_upgrade() -> None:
+    metadata = dict(_row().metadata_)
+    metadata["harnessAuthority"] = {}
+    client = _build(store=_FakeStore(row=_row(metadata_=metadata)))
+
+    disconnect = _connect_expect_close(client, _ws_path("v1/sessions/updates"))
+
+    assert disconnect.code == WS_CLOSE_CAPABILITY_DENIED
+    assert disconnect.reason == "omnigent_chat_operation_denied"
+
+
 def test_relay_keeps_server_to_browser_socket_alive_without_browser_input(
     monkeypatch,
 ) -> None:

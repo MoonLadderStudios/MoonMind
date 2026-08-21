@@ -3241,6 +3241,138 @@ def _durable_terminal_snapshot(
     return snapshot
 
 
+_DURABLE_RESOURCE_GROUPS = {
+    "changed_files": "changed_files",
+    "workspace_files": "workspace_files",
+    "workspace_file": "workspace_files",
+    "workspace_diff": "diffs",
+    "session_files": "session_files",
+    "session_file": "session_files",
+}
+_DURABLE_RESOURCE_MAX_ITEMS = 100
+_DURABLE_RESOURCE_MAX_BYTES = 10 * 1024 * 1024
+_RESOURCE_PROJECTION_SCHEMA_VERSION = "moonmind.omnigent.resource_projection.v1"
+
+
+def _durable_resource_group(row: Any, operation_name: str) -> list[dict[str, Any]] | None:
+    """Return one validated artifact-backed resource group, if published."""
+
+    group_key = _DURABLE_RESOURCE_GROUPS.get(operation_name)
+    if group_key is None:
+        return None
+    projection = (getattr(row, "terminal_refs", None) or {}).get(
+        "resourceProjection"
+    )
+    if not isinstance(projection, Mapping) or projection.get(
+        "schemaVersion"
+    ) != _RESOURCE_PROJECTION_SCHEMA_VERSION:
+        return None
+    groups = projection.get("groups")
+    if not isinstance(groups, list) or len(groups) > 32:
+        return None
+    for group in groups:
+        if not isinstance(group, Mapping) or group.get("groupKey") != group_key:
+            continue
+        resources = group.get("resources")
+        if not isinstance(resources, list) or len(resources) > _DURABLE_RESOURCE_MAX_ITEMS:
+            return None
+        return [dict(item) for item in resources if isinstance(item, Mapping)]
+    return None
+
+
+def _durable_resource_available(row: Any, operation_name: str) -> bool:
+    return _durable_resource_group(row, operation_name) is not None
+
+
+async def _serve_durable_resource(
+    row: Any, *, operation_name: str, resource_value: str | None
+) -> dict[str, Any] | Response:
+    """Serve a captured resource without reviving provider/host authority."""
+
+    resources = _durable_resource_group(row, operation_name)
+    if resources is None:
+        raise WorkflowChatFacadeError(
+            "Captured resource evidence is unavailable.",
+            failure_class="integration_error",
+            status_code=503,
+            code="omnigent_bridge_terminal_evidence_unavailable",
+        )
+
+    if operation_name in {"changed_files", "workspace_files", "session_files"}:
+        visible_keys = {
+            "label",
+            "status",
+            "path",
+            "fileId",
+            "filename",
+            "contentType",
+            "sizeBytes",
+            "sourceEventSequence",
+            "unavailableReason",
+        }
+        data = [
+            {key: value for key, value in resource.items() if key in visible_keys}
+            for resource in resources
+        ]
+        identities = [
+            str(item.get("fileId") or item.get("path") or item.get("filename") or "")
+            for item in data
+        ]
+        identities = [item for item in identities if item]
+        return {
+            "object": "list",
+            "data": data,
+            "first_id": identities[0] if identities else None,
+            "last_id": identities[-1] if identities else None,
+            "has_more": False,
+        }
+
+    lookup_key = "fileId" if operation_name == "session_file" else "path"
+    requested = str(resource_value or "")
+    resource = next(
+        (item for item in resources if str(item.get(lookup_key) or "") == requested),
+        None,
+    )
+    artifact_ref = str((resource or {}).get("artifactRef") or "").strip()
+    if resource is None or not artifact_ref.startswith("artifact://omnigent/"):
+        raise WorkflowChatFacadeError(
+            "The captured resource was not found.",
+            failure_class="user_error",
+            status_code=404,
+            code="omnigent_bridge_terminal_resource_not_found",
+        )
+    declared_size = resource.get("sizeBytes")
+    if isinstance(declared_size, int) and declared_size > _DURABLE_RESOURCE_MAX_BYTES:
+        raise WorkflowChatFacadeError(
+            "The captured resource exceeds the response limit.",
+            failure_class="user_error",
+            status_code=413,
+            code=CODE_PAYLOAD_TOO_LARGE,
+        )
+    try:
+        content = await LocalOmnigentArtifactGateway().read_bytes(artifact_ref)
+    except (OmnigentArtifactError, OSError) as exc:
+        raise WorkflowChatFacadeError(
+            "The captured resource is unavailable.",
+            failure_class="integration_error",
+            status_code=503,
+            code="omnigent_bridge_terminal_evidence_unavailable",
+        ) from exc
+    if len(content) > _DURABLE_RESOURCE_MAX_BYTES:
+        raise WorkflowChatFacadeError(
+            "The captured resource exceeds the response limit.",
+            failure_class="user_error",
+            status_code=413,
+            code=CODE_PAYLOAD_TOO_LARGE,
+        )
+    media_type = (
+        "text/x-diff"
+        if operation_name == "workspace_diff"
+        else str(resource.get("contentType") or "application/octet-stream")
+    )
+    return Response(content=content, media_type=media_type)
+
+
 def _terminal_items_query(query_params: Any) -> tuple[int, str | None, str | None, str]:
     """Validate the stock transcript pagination query for durable replay."""
 
@@ -4722,6 +4854,7 @@ async def _dispatch_workflow_chat_facade(
             reason="identity_substitution",
         )
         raise
+    _validate_native_match_paths(match)
 
     # 5. Liveness probe is served locally and never forwarded upstream.
     if operation.name == "liveness":
@@ -4772,10 +4905,17 @@ async def _dispatch_workflow_chat_facade(
         and is_read_only(session_status)
         and not provider_session_id
     )
+    serve_durable_resource = (
+        operation.name in _DURABLE_RESOURCE_GROUPS
+        and is_read_only(session_status)
+        and not provider_session_id
+        and _durable_resource_available(row, operation.name)
+    )
     if (
         operation.requires_provider_session
         and not provider_session_id
         and not serve_durable_terminal_snapshot
+        and not serve_durable_resource
     ):
         raise WorkflowChatFacadeError(
             "The Workflow Chat binding has no active provider session yet.",
@@ -4803,7 +4943,11 @@ async def _dispatch_workflow_chat_facade(
         if config.host_protocol_mode == HOST_PROTOCOL_MODE_EMBEDDED
         else proxy
     )
-    if operation.name != "stream_events" and facade is None:
+    if (
+        operation.name != "stream_events"
+        and facade is None
+        and not serve_durable_resource
+    ):
         raise WorkflowChatFacadeError(
             "The Omnigent bridge host protocol mode does not support this route.",
             failure_class="system_error",
@@ -5245,6 +5389,12 @@ async def _dispatch_workflow_chat_facade(
 
     # 12. Read-only resource indexes and content.
     resource_value = params.get("res_path") or params.get("file_id")
+    if serve_durable_resource:
+        return await _serve_durable_resource(
+            row,
+            operation_name=operation.name,
+            resource_value=resource_value,
+        )
     result = await facade.get_resource(
         operation.name, provider_session_id, resource_value
     )

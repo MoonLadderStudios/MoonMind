@@ -425,6 +425,79 @@ def negotiate_ws_subprotocol(
     )
 
 
+def route_policy(route: NativeUiRoute) -> dict[str, Any]:
+    """Project the complete admission contract for one reviewed route.
+
+    This projection is deliberately data, rather than behavior hidden in the
+    router. The exact-artifact inventory can therefore attach the same policy
+    dimensions to stock routes and fail CI when either the upstream surface or
+    this classification changes.
+    """
+
+    long_lived = route.transport in {TRANSPORT_SSE, TRANSPORT_WEBSOCKET}
+    resource_read = route.operation_class in {
+        CLASS_RESOURCE_READ,
+        CLASS_EXEC_LOG,
+        CLASS_TERMINAL_VIEW,
+    }
+    if route.mutation:
+        caller_permission = "binding_owner_or_explicit_mutation_grant"
+        idempotency = "durable_mutation_receipt"
+        historical_read = "not_applicable"
+        mutation_receipt: dict[str, Any] | None = {
+            "schemaVersion": "moonmind.omnigent.mutation-receipt.v1",
+            "deliveryUnknown": "park_for_reconciliation",
+            "duplicate": "return_original_receipt",
+        }
+    else:
+        caller_permission = "binding_owner_or_explicit_read_grant"
+        idempotency = "read_only"
+        mutation_receipt = None
+        historical_read = (
+            "artifact_projection_after_cleanup"
+            if resource_read
+            else "durable_journal_or_snapshot"
+            if route.operation_class in {CLASS_SESSION_READ, CLASS_STREAM}
+            else "live_only"
+        )
+    return {
+        "publicRoute": (
+            "/api/workflow-chat-bindings/{chatBindingId}/omnigent/"
+            + (route.pattern.pattern.strip("^$") if route.pattern else route.name)
+        ),
+        "callerPermission": caller_permission,
+        "requestBounds": {
+            "maxPathBytes": 4096,
+            "maxQueryItems": 32,
+            "maxBodyBytes": 1_048_576 if route.mutation else 0,
+            "maxFrameBytes": (
+                1_048_576 if route.transport == TRANSPORT_WEBSOCKET else 0
+            ),
+        },
+        "responseBounds": {
+            "maxBodyBytes": 10_485_760 if resource_read else 1_048_576,
+            "maxItems": 250,
+            "maxFrameBytes": (
+                1_048_576 if route.transport == TRANSPORT_WEBSOCKET else 0
+            ),
+        },
+        "identityVirtualization": "provider_session_id_to_chat_binding_id",
+        "reconnect": (
+            "cursor_replay_with_periodic_reauthorization"
+            if long_lived
+            else "reauthorize_each_request"
+        ),
+        "idempotency": idempotency,
+        "historicalRead": historical_read,
+        "unsupportedBehavior": (
+            "not_applicable"
+            if route.disposition == DISPOSITION_SERVED
+            else CODE_COMPAT_REVIEW_REQUIRED
+        ),
+        "mutationReceipt": mutation_receipt,
+    }
+
+
 def compatibility_map() -> dict[str, Any]:
     """Return the versioned native-UI compatibility map for diagnostics/tests.
 
@@ -452,6 +525,7 @@ def compatibility_map() -> dict[str, Any]:
                 "pathPattern": route.pattern.pattern if route.pattern else None,
                 "subprotocols": list(route.subprotocols),
                 "frameOperations": list(route.frame_operations),
+                **route_policy(route),
             }
             for route in NATIVE_UI_ROUTES
         ],
@@ -506,6 +580,7 @@ __all__ = [
     "classify_native_ui_http",
     "compatibility_map",
     "negotiate_ws_subprotocol",
+    "route_policy",
     "upstream_websocket_path",
     "upstream_http_path",
 ]

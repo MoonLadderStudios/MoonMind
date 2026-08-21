@@ -48,6 +48,9 @@ from moonmind.omnigent.exact_artifact_conformance import (  # noqa: E402
     ExactArtifactConformanceError,
     evaluate_exact_artifact_conformance,
 )
+from moonmind.omnigent.native_ui_route_inventory import (  # noqa: E402
+    generate_native_ui_route_inventory,
+)
 
 IN_IMAGE_PROBE = "tools/omnigent_exact_artifact_probe.py"
 IN_IMAGE_ROLES = ("server", "worker")
@@ -59,6 +62,9 @@ IN_IMAGE_ROLES = ("server", "worker")
 # comes from the artifact under test and never from the mount.
 PROBE_MOUNT = "/probe"
 APP_ROOT = "/app"
+ROUTE_INVENTORY_FIXTURE = (
+    REPO_ROOT / "tests/fixtures/omnigent/native_ui_network_contract_v2.json"
+)
 
 
 class DriverError(RuntimeError):
@@ -154,6 +160,7 @@ def assemble_report(
     source_commit: str,
     in_image_probes: Mapping[str, Sequence[Mapping[str, Any]]],
     runtime_evidence: Mapping[str, Any],
+    route_inventory: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the exact-artifact report from probe + runtime evidence.
 
@@ -168,8 +175,21 @@ def assemble_report(
         "sourceCommit": source_commit,
         "images": dict(images),
         "capabilities": _merge_capabilities(in_image_probes, runtime_caps),
+        "routeInventory": dict(
+            route_inventory or generate_native_ui_route_inventory(REPO_ROOT)
+        ),
         "secretScan": runtime_evidence.get("secretScan") or {"status": "unknown"},
     }
+
+
+def load_required_route_inventory_digest(path: Path = ROUTE_INVENTORY_FIXTURE) -> str:
+    """Load the reviewed inventory digest checked into the repository."""
+
+    document = json.loads(path.read_text(encoding="utf-8"))
+    digest = document.get("inventoryDigest") if isinstance(document, Mapping) else None
+    if not isinstance(digest, str) or not digest.startswith("sha256:"):
+        raise DriverError("reviewed route inventory fixture has no valid digest")
+    return digest
 
 
 def load_required_digests(
@@ -250,7 +270,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         required_digests = load_required_digests(args.compatibility_manifest, images)
         projection = evaluate_exact_artifact_conformance(
-            report, required_digests=required_digests
+            report,
+            required_digests=required_digests,
+            required_route_inventory_digest=load_required_route_inventory_digest(),
         )
     except (DriverError, ExactArtifactConformanceError, OSError, json.JSONDecodeError) as exc:
         print(f"::error::exact-artifact conformance could not be evaluated: {exc}")

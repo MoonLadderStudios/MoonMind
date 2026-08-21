@@ -219,10 +219,14 @@ OMNIGENT_CONTRACT_GLOBS = (
 # facade behavior, which must additionally exercise the compiled production
 # browser suite (issue #3710 required PR gate item 7).
 OMNIGENT_FACADE_EXACT = {
+    "moonmind/omnigent/bridge_artifacts.py",
+    "moonmind/omnigent/effective_capabilities.py",
     "moonmind/omnigent/native_ui.py",
     "moonmind/omnigent/native_ui_compat.py",
+    "moonmind/omnigent/native_ui_route_inventory.py",
     "moonmind/omnigent/workflow_chat_facade.py",
     "moonmind/omnigent/native_outbound_scan.py",
+    "api_service/api/routers/omnigent_bridge.py",
     "api_service/api/routers/omnigent_native_ui.py",
     "api_service/api/routers/omnigent_catalog.py",
     "frontend/src/entrypoints/WorkflowChatNative.tsx",
@@ -262,6 +266,7 @@ EXACT_ARTIFACT_EXACT = {
     "moonmind/omnigent/exact_artifact_conformance.py",
     "tools/omnigent_exact_artifact_probe.py",
     "tools/run_omnigent_exact_artifact_conformance.py",
+    "tools/generate_omnigent_route_inventory.py",
 }
 
 EXACT_ARTIFACT_PREFIXES = (
