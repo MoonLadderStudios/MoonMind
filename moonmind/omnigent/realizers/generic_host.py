@@ -202,6 +202,7 @@ class GenericOmnigentHostRealizer:
         existing_host_authority = False
         cleanup_deferred = False
         binding = None
+        host_authority_binding_ref: str | None = None
         try:
             acquired = await runtime_authority.acquire(
                 request=request,
@@ -233,6 +234,7 @@ class GenericOmnigentHostRealizer:
                 provider_leases=dict(acquired.provider_leases),
                 credential_handles=handles_by_slot,
             )
+            host_authority_binding_ref = binding.runtimeBindingRef
             await turn_commands.bind_runtime_authority(
                 session_id=command_claim.session_id,
                 execution_plan_ref=plan.planRef,
@@ -408,7 +410,7 @@ class GenericOmnigentHostRealizer:
                 try:
                     await host_runtime.cleanup(
                         plan.planRef,
-                        binding.runtimeBindingRef if binding is not None else None,
+                        host_authority_binding_ref,
                         command_authority=command_authority,
                     )
                     cleanup_complete = True

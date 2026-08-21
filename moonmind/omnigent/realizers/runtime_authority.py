@@ -252,6 +252,16 @@ class ProviderProfileRuntimeAuthority:
         command_authority: dict[str, Any],
     ) -> None:
         self._validate_command_authority(command_authority)
+        cleanup = getattr(self._credential_materializer, "cleanup", None)
+        if callable(cleanup):
+            # Credential state is destroyed while Provider Profile capacity is
+            # still fenced. A cleanup failure deliberately retains the leases
+            # for durable reconciliation rather than exposing stale material to
+            # a subsequent owner.
+            await cleanup(
+                authority.credential_handles,
+                command_authority=command_authority,
+            )
         for lease in reversed(authority.leases):
             await self._lease_client.release_lease(lease)
 

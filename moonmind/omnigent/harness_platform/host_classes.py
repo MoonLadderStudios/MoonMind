@@ -362,7 +362,13 @@ def _opencode_host_class_data(image_ref: str) -> dict[str, object]:
             "mountedSkills": True,
             "mountedTools": True,
         },
-        "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
+        "runtime": {
+            "uid": 1000,
+            "gid": 1000,
+            "home": "/home/app",
+            "startupScript": "start-opencode-host.sh",
+            "credentialGenerationEnv": "OPENCODE_CREDENTIAL_GENERATION",
+        },
     }
 
 

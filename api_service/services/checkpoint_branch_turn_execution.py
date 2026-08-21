@@ -482,7 +482,15 @@ class CheckpointBranchTurnExecutionOwner:
             raise CheckpointBranchTurnLaunchError(
                 "branch_head_stale", "expected branch head version does not match"
             )
-        if branch.current_head_checkpoint_ref != turn.source_checkpoint_ref:
+        # A successfully launched turn advances ``current_head_checkpoint_ref``
+        # to its output checkpoint.  Exact idempotent delivery must reattach to
+        # that already-owned turn, not reinterpret its immutable source as a
+        # fresh claim against the now-advanced branch head.  Unlaunched turns
+        # still require the current head to match before any side effect.
+        if (
+            not turn.created_step_execution_id
+            and branch.current_head_checkpoint_ref != turn.source_checkpoint_ref
+        ):
             raise CheckpointBranchTurnLaunchError(
                 "branch_head_checkpoint_changed",
                 "turn source no longer matches the persisted branch head",
@@ -967,12 +975,13 @@ class CheckpointBranchTurnExecutionOwner:
             CanonicalSessionBootstrap,
             CanonicalTurnCommandService,
         )
-
-        source_command = self._turn_commands or CanonicalTurnCommandService(
-            self._bound_session_factory()
-        )
         from moonmind.omnigent.control_plane.repositories import (
             ControlPlaneRepositories,
+            OmnigentControlPlaneStore,
+        )
+
+        source_command = self._turn_commands or CanonicalTurnCommandService(
+            OmnigentControlPlaneStore(self._bound_session_factory())
         )
 
         canonical_claim = await source_command.claim_with_repositories(

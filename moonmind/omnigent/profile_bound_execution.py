@@ -44,6 +44,10 @@ from moonmind.omnigent.remediation_workspace import (
     RemediationWorkspaceOwner,
     SandboxRemediationWorkspaceOwner,
 )
+from moonmind.omnigent.repository_sources import (
+    RepositorySourceError,
+    normalize_repository_source,
+)
 from moonmind.omnigent.execution_profiles import (
     PROFILES,
     selection_from_request,
@@ -2723,13 +2727,9 @@ class OmnigentProfileBoundExecutionCoordinator:
         source = cls._repository_source(request)
         if not source:
             return None
-        from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
-
         try:
-            normalized, kind = OmnigentOAuthHostRuntime._normalize_repository_source(
-                source
-            )
-        except OmnigentOAuthHostError:
+            normalized, kind = normalize_repository_source(source)
+        except RepositorySourceError:
             return None
         return normalized if kind == "github_https" else None
 

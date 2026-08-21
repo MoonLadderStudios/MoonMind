@@ -115,6 +115,16 @@ class HostCleanupService(Protocol):
     ) -> None: ...
 
 
+class HostRealizationContextService(Protocol):
+    async def prepare_realization(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        authority: Mapping[str, Any],
+    ) -> None: ...
+
+
 class GenericOmnigentHostRuntime:
     """Harness-neutral host realization.
 
@@ -133,6 +143,7 @@ class GenericOmnigentHostRuntime:
         registration_waiter: HostRegistrationWaiter | None = None,
         image_attestor: HostImageAttestor | None = None,
         cleanup_service: HostCleanupService | None = None,
+        context_service: HostRealizationContextService | None = None,
     ) -> None:
         self._launcher = launcher
         self._workspace_service = workspace_service
@@ -141,6 +152,7 @@ class GenericOmnigentHostRuntime:
         self._registration_waiter = registration_waiter
         self._image_attestor = image_attestor
         self._cleanup_service = cleanup_service
+        self._context_service = context_service
 
     def assert_ready(self) -> None:
         """Fail before command, credential, lease, workspace, or host effects."""
@@ -227,6 +239,12 @@ class GenericOmnigentHostRuntime:
             runtime_binding_ref=runtime_binding_ref,
             command_authority=command_authority,
         )
+        if self._context_service is not None:
+            await self._context_service.prepare_realization(
+                request=request,
+                plan=plan,
+                authority=side_effect_authority,
+            )
 
         # Validate materializer compatibility with HostClass
         materializer_refs = [
@@ -314,7 +332,11 @@ class GenericOmnigentHostRuntime:
                 credential_handles=credential_handles,
                 authority=side_effect_authority,
             )
-            host_id = str(launch_result.get("hostId") or "").strip()
+            launched_host_id = str(launch_result.get("hostId") or "").strip()
+            expected_host_name = str(
+                launch_result.get("expectedHostName") or ""
+            ).strip()
+            host_id = launched_host_id
             host_binding_ref = str(
                 launch_result.get("hostBindingRef") or ""
             ).strip()
@@ -323,18 +345,18 @@ class GenericOmnigentHostRuntime:
             ).strip()
             host_lease_generation = launch_result.get("hostLeaseGeneration")
             if (
-                not host_id
+                (not launched_host_id and not expected_host_name)
                 or not host_binding_ref
                 or not host_lease_ref
                 or not isinstance(host_lease_generation, int)
                 or host_lease_generation < 1
             ):
-                if host_id:
+                if launched_host_id or expected_host_name:
                     try:
                         await self.cleanup(
                             plan.planRef,
                             runtime_binding_ref,
-                            host_id=host_id,
+                            host_id=launched_host_id or None,
                             command_authority=command_authority,
                         )
                     except Exception as cleanup_error:
@@ -346,7 +368,7 @@ class GenericOmnigentHostRuntime:
                     "host launcher omitted exact fenced host authority",
                     code=(
                         HarnessPlatformFailure.OMNIGENT_CLEANUP_DEFERRED
-                        if not host_id
+                        if not (launched_host_id or expected_host_name)
                         else HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY
                     ),
                 )
@@ -354,11 +376,11 @@ class GenericOmnigentHostRuntime:
         try:
             # ``assert_ready`` established both dependencies before launch.
             reg = await self._registration_waiter.wait_for_registration(  # type: ignore[union-attr]
-                expected_host_id=host_id,
+                expected_host_id=launched_host_id or None,
                 authority=side_effect_authority,
             )
             host_id = str(reg.get("hostId") or host_id)
-            if host_id != str(launch_result["hostId"]):
+            if launched_host_id and host_id != launched_host_id:
                 raise HarnessPlatformError(
                     "registered host differs from fenced launch authority",
                     code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
@@ -429,7 +451,7 @@ class GenericOmnigentHostRuntime:
                     if plan.payload.supportIdentity is not None
                     else hc.architectures[0]
                 ),
-                expectedHostId=str(launch_result["hostId"]),
+                expectedHostId=host_id,
                 currentHostLeaseGeneration=host_lease_generation,
                 expectedVendorRuntimes=list(host_entry.runtimeDependencies),
             )

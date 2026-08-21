@@ -16,7 +16,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 from moonmind.config.settings import settings
@@ -32,6 +31,10 @@ from moonmind.omnigent.oauth_hosts import (
     validate_preflight_result,
 )
 from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
+from moonmind.omnigent.repository_sources import (
+    RepositorySourceError,
+    normalize_repository_source,
+)
 from moonmind.publish.service import PublishService
 from moonmind.repositories.lore_adapter import (
     LORE_UNSUPPORTED_RUNTIME_LANE,
@@ -217,7 +220,6 @@ _PLACEHOLDER_DIGEST = "0" * 64
 _SAFE_NETWORK = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$")
 _SAFE_STEP_EXECUTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,510}[A-Za-z0-9]$")
-_GITHUB_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # Bound restore-input materialization so a hostile or oversized artifact ref
 # cannot exhaust the authorized workspace before the host launches. The limit is
 # enforced both per ref and cumulatively across every accepted ref so the
@@ -3588,36 +3590,12 @@ class OmnigentOAuthHostRuntime:
     def _normalize_repository_source(repository_source: str) -> tuple[str, str]:
         """Resolve an authored repository identity to a clone source and kind."""
 
-        value = str(repository_source or "").strip()
-        if not value:
+        try:
+            return normalize_repository_source(repository_source)
+        except RepositorySourceError as exc:
             raise OmnigentOAuthHostError(
-                "repository source is required to materialize the workspace",
-                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
-            )
-        # A ``file://`` URL is still a local on-disk read and must be authorized
-        # like any other local path, not treated as a trusted remote.
-        if value.startswith("file://"):
-            return value, "local"
-        if value.startswith(("http://", "https://", "git@", "ssh://")):
-            kind = "remote"
-            if value.startswith(("http://", "https://")):
-                # Only inject GitHub credentials when the URL host is exactly
-                # github.com. A substring check would misclassify hosts such as
-                # ``evil.com/github.com`` or ``github.com.evil.com`` as GitHub and
-                # leak the token to an attacker-controlled origin.
-                host = (urlsplit(value).hostname or "").lower()
-                if host == "github.com":
-                    kind = "github_https"
-            return value, kind
-        if value.startswith(("/", "./", "../")) or Path(value).is_absolute():
-            return value, "local"
-        if _GITHUB_SLUG.fullmatch(value):
-            suffix = "" if value.endswith(".git") else ".git"
-            return f"https://github.com/{value}{suffix}", "github_https"
-        raise OmnigentOAuthHostError(
-            "unsupported repository source; expected owner/repo, URL, or path",
-            code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
-        )
+                str(exc), code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED"
+            ) from exc
 
     def _authorize_local_repository_source(self, source: str) -> None:
         """Reject a local repository source outside the authorized source root.

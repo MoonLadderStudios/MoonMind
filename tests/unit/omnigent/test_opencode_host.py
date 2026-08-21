@@ -393,29 +393,21 @@ def test_exact_host_preflight_with_credential_file():
     materialize_opencode_auth_json(api_key=key, provider_profile_ref="p", provider_lease_ref="l", credential_generation=5, host_root=tmp)
     hc = get_opencode_host_class()
     att = _make_attestation()
-    # With credential file verification
+    # Pure host attestation and outer credential-file verification remain
+    # separate architecture boundaries.
     validate_opencode_exact_host_preflight(
         attestation=att,
         expectedHostClassRef=hc.ref,
         expectedImageRef=hc.imageRef,
         expectedOmnigentBuildDigest="sha256:" + "b" * 64,
         expectedImplementation={"package": "omnigent", "version": "1.0.0", "digest": "sha256:" + "a" * 64, "pluginEntryPoint": None},
-        verify_credential_file=True,
-        credential_host_root=tmp,
         expectedCredentialGeneration=5,
     )
+    verify_opencode_auth_file(host_root=tmp, expected_generation=5)
     cleanup_opencode_auth(host_root=tmp)
-    # Without file should fail when verification requested but file missing
+    # The outer verifier fails once cleanup removes the file.
     with pytest.raises(HarnessPlatformError):
-        validate_opencode_exact_host_preflight(
-            attestation=att,
-            expectedHostClassRef=hc.ref,
-            expectedImageRef=hc.imageRef,
-            expectedOmnigentBuildDigest="sha256:" + "b" * 64,
-            expectedImplementation={"package": "omnigent", "version": "1.0.0", "digest": "sha256:" + "a" * 64, "pluginEntryPoint": None},
-            verify_credential_file=True,
-            credential_host_root=tmp,
-        )
+        verify_opencode_auth_file(host_root=tmp)
 
 
 def test_image_does_not_install_unrelated_harnesses():

@@ -16,9 +16,14 @@ from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
 from moonmind.omnigent.control_plane.turn_commands import (
     CanonicalTurnCommandService,
 )
+from moonmind.omnigent.control_plane.repositories import OmnigentControlPlaneStore
 from moonmind.omnigent.execute import run_omnigent_execution
 from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
 from moonmind.omnigent.host_runtime import GenericOmnigentHostRuntime
+from moonmind.omnigent.realizers.deployment_adapters import (
+    DeploymentGenericHostServices,
+    TrustedCredentialMaterializer,
+)
 from moonmind.omnigent.realizers.generic_host import GenericRealizerDependencies
 from moonmind.omnigent.realizers.runtime_authority import (
     ProviderProfileRuntimeAuthority,
@@ -33,6 +38,14 @@ def build_generic_realizer_dependencies(
     factory = session_factory or async_session_maker
     artifact_gateway = LocalOmnigentArtifactGateway()
     run_store = OmnigentBridgeSessionStore(factory)
+    credential_materializer = TrustedCredentialMaterializer(
+        session_factory=factory
+    )
+    host_services = DeploymentGenericHostServices(
+        session_factory=factory,
+        artifact_gateway=artifact_gateway,
+        credential_materializer=credential_materializer,
+    )
 
     async def execute(request: Any) -> Any:
         return await run_omnigent_execution(
@@ -43,12 +56,23 @@ def build_generic_realizer_dependencies(
 
     return GenericRealizerDependencies(
         runtime_binding_store=DbRuntimeBindingStore(factory),
-        runtime_authority=ProviderProfileRuntimeAuthority(session_factory=factory),
-        # Concrete host services are registered by the deployment adapter.
-        # The empty runtime fails its readiness gate before acquiring authority
-        # when that registration is absent.
-        host_runtime=GenericOmnigentHostRuntime(),
-        turn_command_service=CanonicalTurnCommandService(factory),
+        runtime_authority=ProviderProfileRuntimeAuthority(
+            session_factory=factory,
+            credential_materializer=credential_materializer,
+        ),
+        host_runtime=GenericOmnigentHostRuntime(
+            launcher=host_services,
+            workspace_service=host_services,
+            skill_service=host_services,
+            egress_service=host_services,
+            registration_waiter=host_services,
+            image_attestor=host_services,
+            cleanup_service=host_services,
+            context_service=host_services,
+        ),
+        turn_command_service=CanonicalTurnCommandService(
+            OmnigentControlPlaneStore(factory)
+        ),
         execution_driver=execute,
     )
 

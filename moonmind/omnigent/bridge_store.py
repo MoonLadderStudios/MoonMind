@@ -31,6 +31,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
 from moonmind.omnigent.bridge_events import bounded_deduplication_key
 from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
+from moonmind.omnigent.control_plane.identities import (
+    EGRESS_CLEANUP_AUTHORITY_KEY,
+    EGRESS_CLEANUP_AUTHORITY_VERSION,
+)
+from moonmind.omnigent.control_plane.repositories import OmnigentControlPlaneStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.utils.logging import redact_sensitive_payload
 
@@ -56,9 +61,6 @@ PROVIDER_SESSION_DELETED_KEY = "provider_session_deleted_at"
 EMBEDDED_LAUNCH_KEY = "embedded_runner_launch"
 EMBEDDED_LIFECYCLE_KEY = "embedded_runner_lifecycle"
 EMBEDDED_LIFECYCLE_VERSION = 1
-EGRESS_CLEANUP_AUTHORITY_KEY = "egress_cleanup_authority"
-EGRESS_CLEANUP_AUTHORITY_VERSION = 1
-
 EMBEDDED_RUNNER_STATES = frozenset(
     {
         "launch_reserved",
@@ -431,6 +433,7 @@ class OmnigentBridgeSessionStore:
 
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
+        self._control_plane_store = OmnigentControlPlaneStore(session_factory)
 
     async def claim_canonical_turn_command(
         self,
@@ -453,7 +456,7 @@ class OmnigentBridgeSessionStore:
 
         launch = dict(row.effective_launch_snapshot_json or {})
 
-        return await CanonicalTurnCommandService(self._session_factory).claim(
+        return await CanonicalTurnCommandService(self._control_plane_store).claim(
             workflow_id=str(row.moonmind_workflow_id),
             provider_session_ref=str(row.omnigent_session_id or ""),
             chat_binding_id=str(row.chat_binding_id or "") or None,
@@ -483,7 +486,7 @@ class OmnigentBridgeSessionStore:
             CanonicalTurnCommandService,
         )
 
-        return await CanonicalTurnCommandService(self._session_factory).settle(
+        return await CanonicalTurnCommandService(self._control_plane_store).settle(
             idempotency_key=idempotency_key,
             outcome=outcome,
             provider_receipt_id=provider_receipt_id,

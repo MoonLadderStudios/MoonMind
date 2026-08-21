@@ -758,7 +758,7 @@ async def test_workflow_chat_uses_canonical_turn_and_command_authority(
         first_turn_attempt_id="initial-chat-command",
         first_turn_idempotency_key="initial-chat-command-idempotency",
     )
-    service = CanonicalTurnCommandService(session_factory)
+    service = CanonicalTurnCommandService(store)
 
     claim = await service.claim(
         workflow_id="wf-chat-command",
@@ -815,7 +815,7 @@ async def test_workflow_chat_uses_canonical_turn_and_command_authority(
 async def test_initial_command_uses_the_single_bootstrap_turn(
     store, session_factory
 ) -> None:
-    service = CanonicalTurnCommandService(session_factory)
+    service = CanonicalTurnCommandService(store)
 
     claim = await service.claim(
         workflow_id="wf-initial-command",

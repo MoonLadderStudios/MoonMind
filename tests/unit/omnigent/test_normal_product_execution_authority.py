@@ -28,6 +28,14 @@ from moonmind.omnigent.realizers.codex_profile_bound import CodexProfileBoundRea
 from moonmind.omnigent.realizers.runtime_authority import (
     ProviderProfileRuntimeAuthority,
 )
+from moonmind.omnigent.realizers.deployment_adapters import (
+    DeploymentGenericHostServices,
+    TrustedCredentialMaterializer,
+)
+from moonmind.omnigent.realizers.registry import (
+    get_default_registry,
+    reset_default_registry,
+)
 from moonmind.omnigent.harness_platform.support import (
     compute_support_combination_key,
 )
@@ -154,6 +162,43 @@ def test_normal_product_plan_freezes_registered_authority(
     assert "providerLeaseRef" not in serialized
     assert "credentialGeneration" not in serialized
     assert "hostLeaseRef" not in serialized
+
+
+def test_default_registry_composes_every_generic_host_production_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """The shipped registry must be executable without test dependency injection."""
+
+    monkeypatch.setenv("WORKFLOW_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv(
+        "OMNIGENT_GENERIC_RUNTIME_ROOT", str(tmp_path / "generic-runtime")
+    )
+    reset_default_registry()
+    try:
+        realizer = get_default_registry().require("generic-omnigent-host@1")
+        dependencies = realizer._production_dependencies()
+
+        assert isinstance(
+            dependencies.runtime_authority, ProviderProfileRuntimeAuthority
+        )
+        materializer = dependencies.runtime_authority._credential_materializer
+        assert isinstance(materializer, TrustedCredentialMaterializer)
+        assert isinstance(dependencies.host_runtime, GenericOmnigentHostRuntime)
+
+        services = dependencies.host_runtime._launcher
+        assert isinstance(services, DeploymentGenericHostServices)
+        assert dependencies.host_runtime._workspace_service is services
+        assert dependencies.host_runtime._skill_service is services
+        assert dependencies.host_runtime._egress_service is services
+        assert dependencies.host_runtime._registration_waiter is services
+        assert dependencies.host_runtime._image_attestor is services
+        assert dependencies.host_runtime._cleanup_service is services
+        assert dependencies.host_runtime._context_service is services
+        assert services._credential_materializer is materializer
+        dependencies.host_runtime.assert_ready()
+    finally:
+        reset_default_registry()
 
 
 @pytest.mark.parametrize(

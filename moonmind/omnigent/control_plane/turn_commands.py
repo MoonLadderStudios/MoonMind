@@ -13,19 +13,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from .identities import (
+    canonical_followup_turn_attempt_id,
+    canonical_omnigent_session_id,
+    canonical_omnigent_turn_attempt_id,
+    canonical_turn_claim_token,
+    canonical_turn_command_id,
+    canonical_turn_command_key,
+)
 from .records import (
     APPLIED_OUTCOMES,
     ConflictingSessionAuthorityError,
     ControlPlaneOutcome,
     TURN_STATE_ACCEPTED,
     TURN_STATE_DELIVERY_UNKNOWN,
-    compute_digest,
 )
-from .identities import (
-    canonical_omnigent_session_id,
-    canonical_omnigent_turn_attempt_id,
-)
-from .repositories import OmnigentControlPlaneStore
 
 
 class CanonicalTurnAuthorityUnavailable(RuntimeError):
@@ -59,10 +61,6 @@ class CanonicalSessionBootstrap:
     execution_plan_ref: str | None = None
 
 
-def _stable_ref(prefix: str, *parts: object) -> str:
-    return f"{prefix}_{compute_digest(list(parts))[:40]}"
-
-
 def _lineage_kind(command_type: str) -> str:
     normalized = command_type.strip().lower().replace(".", "_")
     if "remediation" in normalized:
@@ -81,8 +79,10 @@ class CanonicalTurnCommandService:
 
     OWNER_CLASS = "canonical_turn_command"
 
-    def __init__(self, session_factory: Any) -> None:
-        self._store = OmnigentControlPlaneStore(session_factory)
+    def __init__(self, store: Any) -> None:
+        # Persistence is an injected capability; this application service does
+        # not import or construct a SQL-backed repository implementation.
+        self._store = store
 
     async def claim(
         self,
@@ -126,8 +126,8 @@ class CanonicalTurnCommandService:
     ) -> CanonicalTurnCommandClaim:
         """Claim within an existing application transaction."""
 
-        canonical_key = f"omnigent-turn-command:{idempotency_key}"
-        claim_token = _stable_ref("otc", canonical_key, "delivery")
+        canonical_key = canonical_turn_command_key(idempotency_key)
+        claim_token = canonical_turn_claim_token(canonical_key)
         session = None
         bootstrap_turn = None
         if chat_binding_id:
@@ -244,7 +244,9 @@ class CanonicalTurnCommandService:
                 # provider-facing command.
                 turn = bootstrap_turn
             else:
-                turn_id = _stable_ref("ota", session.session_id, canonical_key)
+                turn_id = canonical_followup_turn_attempt_id(
+                    session.session_id, canonical_key
+                )
                 turn = await repos.turn_attempts.create(
                     turn_attempt_id=turn_id,
                     session_id=session.session_id,
@@ -260,8 +262,8 @@ class CanonicalTurnCommandService:
                     expected_fencing_generation=session.fencing_generation,
                     active_turn_attempt_id=turn.turn_attempt_id,
                 )
-            command_id = _stable_ref(
-                "ocm", session.session_id, canonical_key, command_type
+            command_id = canonical_turn_command_id(
+                session.session_id, canonical_key, command_type
             )
             command = await repos.commands.record(
                 command_id=command_id,
@@ -312,8 +314,8 @@ class CanonicalTurnCommandService:
     ) -> ControlPlaneOutcome:
         """Settle the command and advance its turn without session terminality."""
 
-        canonical_key = f"omnigent-turn-command:{idempotency_key}"
-        claim_token = _stable_ref("otc", canonical_key, "delivery")
+        canonical_key = canonical_turn_command_key(idempotency_key)
+        claim_token = canonical_turn_claim_token(canonical_key)
         async with self._store.transaction() as repos:
             command = await repos.commands.get_by_idempotency_key(canonical_key)
             if command is None or not command.turn_attempt_id:
