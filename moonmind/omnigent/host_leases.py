@@ -33,25 +33,31 @@ class HostLeaseAuthority(BaseModel):
 
 
 class OmnigentHostLeaseRepository(Protocol):
-    async def acquire(self, **kwargs: Any) -> HostLeaseAuthority: ...
+    async def acquire(self, **kwargs: Any) -> HostLeaseAuthority:
+        raise NotImplementedError
 
-    async def mark_ready(self, lease_ref: str, **kwargs: Any) -> HostLeaseAuthority: ...
+    async def mark_ready(self, lease_ref: str, **kwargs: Any) -> HostLeaseAuthority:
+        raise NotImplementedError
 
     async def record_launch(
         self, lease_ref: str, **kwargs: Any
-    ) -> HostLeaseAuthority: ...
+    ) -> HostLeaseAuthority:
+        raise NotImplementedError
 
     async def claim_cleanup(
         self, lease_ref: str, **kwargs: Any
-    ) -> HostLeaseAuthority: ...
+    ) -> HostLeaseAuthority:
+        raise NotImplementedError
 
     async def mark_cleaned(
         self, lease_ref: str, **kwargs: Any
-    ) -> HostLeaseAuthority: ...
+    ) -> HostLeaseAuthority:
+        raise NotImplementedError
 
     async def heartbeat(
         self, lease_ref: str, **kwargs: Any
-    ) -> HostLeaseAuthority: ...
+    ) -> HostLeaseAuthority:
+        raise NotImplementedError
 
 
 def _identity(prefix: str, *parts: str) -> str:

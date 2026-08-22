@@ -14,7 +14,8 @@ from moonmind.omnigent.provider_leases import AcquiredProviderLease
 
 
 class SecretResolver(Protocol):
-    async def resolve(self, ref: Any) -> str: ...
+    async def resolve(self, ref: Any) -> str:
+        raise NotImplementedError
 
 
 @dataclass

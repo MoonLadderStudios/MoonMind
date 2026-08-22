@@ -20,11 +20,14 @@ from moonmind.provider_profiles.lease_client import (
 
 
 class ProviderLeaseClient(Protocol):
-    async def acquire_execution_lease(self, **kwargs: Any) -> CredentialLease: ...
+    async def acquire_execution_lease(self, **kwargs: Any) -> CredentialLease:
+        raise NotImplementedError
 
-    async def inspect_lease(self, lease: CredentialLease) -> dict[str, Any]: ...
+    async def inspect_lease(self, lease: CredentialLease) -> dict[str, Any]:
+        raise NotImplementedError
 
-    async def release_lease(self, lease: CredentialLease) -> None: ...
+    async def release_lease(self, lease: CredentialLease) -> None:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)

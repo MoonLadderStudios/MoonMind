@@ -77,7 +77,8 @@ class OmnigentExecutionPlanUsageStore(Protocol):
         identity: ExecutionPlanUsageIdentity,
         request_payload: dict[str, Any],
         compile_fn: Any,
-    ) -> OmnigentExecutionPlanEnvelope: ...
+    ) -> OmnigentExecutionPlanEnvelope:
+        raise NotImplementedError
 
 
 class OmnigentRuntimeBindingStore(Protocol):

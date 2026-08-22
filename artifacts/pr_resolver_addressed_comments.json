@@ -143,5 +143,55 @@
     "id": 3834654046,
     "disposition": "addressed",
     "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675516,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675523,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675531,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675538,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675542,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675545,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675548,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675553,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675556,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675558,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
   }
 ]

@@ -76,7 +76,8 @@ class PlanningSkillResolver(Protocol):
         *,
         request: AgentExecutionRequest,
         profile: OmnigentAgentProfileV2,
-    ) -> ResolvedSkillSet: ...
+    ) -> ResolvedSkillSet:
+        raise NotImplementedError
 
 
 class ArtifactPlanningSkillResolver:
