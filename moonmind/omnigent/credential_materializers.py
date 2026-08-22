@@ -83,7 +83,8 @@ class DockerCommandBackend(Protocol):
         *,
         input_bytes: bytes | None = None,
         timeout_seconds: float = 60.0,
-    ) -> tuple[int, bytes, bytes]: ...
+    ) -> tuple[int, bytes, bytes]:
+        raise NotImplementedError
 
 
 class LocalDockerCommandBackend:
@@ -107,15 +108,18 @@ class CredentialMaterializerImplementation(Protocol):
 
     async def materialize(
         self, context: CredentialMaterializationContext
-    ) -> CredentialRuntimeHandle: ...
+    ) -> CredentialRuntimeHandle:
+        raise NotImplementedError
 
-    async def attest(self, handle: CredentialRuntimeHandle) -> dict[str, Any]: ...
+    async def attest(self, handle: CredentialRuntimeHandle) -> dict[str, Any]:
+        raise NotImplementedError
 
     async def cleanup(
         self,
         handle: CredentialRuntimeHandle,
         expected_generation: int,
-    ) -> CredentialCleanupResult: ...
+    ) -> CredentialCleanupResult:
+        raise NotImplementedError
 
 
 def credential_runtime_identity(

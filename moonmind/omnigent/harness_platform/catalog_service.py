@@ -34,13 +34,17 @@ from moonmind.omnigent.harness_platform.failures import (
 
 
 class OmnigentInventoryClient(Protocol):
-    async def get_version(self) -> str: ...
+    async def get_version(self) -> str:
+        raise NotImplementedError
 
-    async def list_harnesses(self) -> list[dict[str, Any]]: ...
+    async def list_harnesses(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
 
-    async def list_agents(self) -> list[dict[str, Any]]: ...
+    async def list_agents(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
 
-    async def list_hosts(self) -> list[dict[str, Any]]: ...
+    async def list_hosts(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
@@ -54,11 +58,14 @@ class OmnigentHarnessCatalogRepository(Protocol):
     async def persist(
         self,
         result: HarnessCatalogSyncResult,
-    ) -> HarnessCatalogSyncResult: ...
+    ) -> HarnessCatalogSyncResult:
+        raise NotImplementedError
 
-    async def load(self, catalog_ref: str) -> HarnessCatalogSyncResult | None: ...
+    async def load(self, catalog_ref: str) -> HarnessCatalogSyncResult | None:
+        raise NotImplementedError
 
-    async def latest(self, endpoint_ref: str) -> HarnessCatalogSyncResult | None: ...
+    async def latest(self, endpoint_ref: str) -> HarnessCatalogSyncResult | None:
+        raise NotImplementedError
 
 
 def _canonical_digest(value: Any) -> str:

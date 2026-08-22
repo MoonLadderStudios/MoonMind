@@ -113,5 +113,35 @@
     "id": 3834451476,
     "disposition": "not-applicable",
     "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+  },
+  {
+    "id": 3834654018,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654023,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654030,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654035,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654040,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654046,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
   }
 ]
