@@ -1029,7 +1029,7 @@ class RecurringWorkflowsService:
                     "initialParameters": initial_parameters,
                 },
             }
-            task_snapshot_ref, task_snapshot_digest = (
+            task_input_snapshot_ref, task_input_snapshot_digest = (
                 await persist_json_artifact(
                     artifact_service=artifact_service,
                     principal=principal,
@@ -1049,10 +1049,10 @@ class RecurringWorkflowsService:
                     agent_profile_snapshot=snapshot,
                     provider_profile=provider_profile,
                     initial_parameters=initial_parameters,
-                    authored_request_ref=task_snapshot_ref,
-                    authored_request_digest=task_snapshot_digest,
-                    task_input_snapshot_ref=task_snapshot_ref,
-                    task_input_snapshot_digest=task_snapshot_digest,
+                    authored_request_ref=task_input_snapshot_ref,
+                    authored_request_digest=task_input_snapshot_digest,
+                    task_input_snapshot_ref=task_input_snapshot_ref,
+                    task_input_snapshot_digest=task_input_snapshot_digest,
                     db_session=self._session,
                 )
             except Exception as exc:
@@ -1077,7 +1077,7 @@ class RecurringWorkflowsService:
                 "agentProfileSnapshot": snapshot,
                 "initialParameters": initial_parameters,
                 "omnigentAuthorityArtifactRefs": [
-                    task_snapshot_ref,
+                    task_input_snapshot_ref,
                     *persisted_plan.artifact_refs,
                 ],
             }

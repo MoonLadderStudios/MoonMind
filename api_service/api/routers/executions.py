@@ -11276,7 +11276,7 @@ async def _create_execution_from_workflow_request(
             )
 
     persisted_omnigent_plan = None
-    prelaunch_task_snapshot_ref = ""
+    prelaunch_task_input_snapshot_ref = ""
     if canonical_target_runtime == "omnigent":
         if session is None:
             raise _invalid_workflow_request(
@@ -11313,8 +11313,8 @@ async def _create_execution_from_workflow_request(
         artifact_service = get_temporal_artifact_service(session)
         principal_id = str(getattr(user, "id", "") or "system")
         (
-            prelaunch_task_snapshot_ref,
-            prelaunch_task_snapshot_digest,
+            prelaunch_task_input_snapshot_ref,
+            prelaunch_task_input_snapshot_digest,
         ) = await persist_json_artifact(
             artifact_service=artifact_service,
             principal=principal_id,
@@ -11330,10 +11330,10 @@ async def _create_execution_from_workflow_request(
                 agent_profile_snapshot=profile_snapshot,
                 provider_profile=selected_provider_profile,
                 initial_parameters=initial_parameters,
-                authored_request_ref=prelaunch_task_snapshot_ref,
-                authored_request_digest=prelaunch_task_snapshot_digest,
-                task_input_snapshot_ref=prelaunch_task_snapshot_ref,
-                task_input_snapshot_digest=prelaunch_task_snapshot_digest,
+                authored_request_ref=prelaunch_task_input_snapshot_ref,
+                authored_request_digest=prelaunch_task_input_snapshot_digest,
+                task_input_snapshot_ref=prelaunch_task_input_snapshot_ref,
+                task_input_snapshot_digest=prelaunch_task_input_snapshot_digest,
                 db_session=session,
             )
         except Exception as exc:
@@ -11397,7 +11397,7 @@ async def _create_execution_from_workflow_request(
         attachment_refs=attachment_index,
     )
     if persisted_omnigent_plan is not None:
-        snapshot_ref = prelaunch_task_snapshot_ref
+        snapshot_ref = prelaunch_task_input_snapshot_ref
         records_to_bind = [record]
         if isinstance(record, TemporalExecutionRecord):
             canonical_record = await session.get(
