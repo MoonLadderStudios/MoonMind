@@ -508,8 +508,7 @@ def test_step_execution_manifest_start_write_keeps_replay_patch_guard() -> None:
         "                    )"
     )
     non_agent_guard = (
-        'tool_type != "agent_runtime"\n'
-        "                        and step_execution_manifest_enabled"
+        'if tool_type != "agent_runtime" and step_execution_manifest_enabled:'
     )
     start_manifest_call = (
         "await self._record_step_execution_manifest(\n"

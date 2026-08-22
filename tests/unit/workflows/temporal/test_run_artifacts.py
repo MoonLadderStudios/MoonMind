@@ -3674,8 +3674,11 @@ def test_activity_result_retryable_allows_empty_assistant_turn_recovery() -> Non
 def test_agent_runtime_retry_classification_is_patch_gated() -> None:
     source = inspect.getsource(MoonMindRunWorkflow._run_execution_stage)
 
-    assert "workflow.patched(RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH)" in source
-    assert "self._activity_result_retryable(" in source
+    patch_guard = source.index("RUN_AGENT_RUNTIME_RETRY_CLASSIFICATION_PATCH")
+    classifier = source.index("self._activity_result_retryable(")
+
+    assert "workflow.patched(" in source[:patch_guard]
+    assert patch_guard < classifier
 
 
 def test_activity_result_provider_failure_summary_ignores_generic_activity_failure() -> None:
