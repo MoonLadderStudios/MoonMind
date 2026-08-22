@@ -20,12 +20,14 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.executions import _get_service, get_temporal_client, router
+from api_service.db.base import get_async_session
 from moonmind.omnigent.remediation_workspace import (
     RemediationLoopHead,
     RemediationWorkspaceBinding,
     RemediationWorkspaceError,
     SandboxRemediationWorkspaceOwner,
 )
+from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationAttemptOutput,
     RemediationWorkspaceHead,
@@ -140,6 +142,14 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     service.create_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: service
     app.dependency_overrides[get_temporal_client] = AsyncMock
+    provider_profile = SimpleNamespace(
+        profile_id="omnigent-codex", provider_id="openai"
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(return_value=provider_profile),
+        commit=AsyncMock(),
+    )
+    app.dependency_overrides[get_async_session] = lambda: db_session
     _override_user_dependencies(app, is_superuser=False)
     profile_snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
@@ -160,10 +170,40 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
             "workspace": {},
         },
     }
-    with patch(
-        "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
-        AsyncMock(return_value=profile_snapshot),
-    ), TestClient(app) as client:
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_plan_3480",
+        taskInputSnapshotRef="art_task_3480",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    compiled_plan = SimpleNamespace(
+        binding=plan_binding,
+        artifact_refs=("art_profile_3480", "art_skills_3480", "art_plan_3480"),
+        resolved_skillset_ref="art_skills_3480",
+    )
+    with (
+        patch(
+            "api_service.api.routers.executions."
+            "resolve_default_agent_profile_snapshot",
+            AsyncMock(return_value=profile_snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service."
+            "persist_json_artifact",
+            AsyncMock(return_value=("art_task_3480", "sha256:" + "c" * 64)),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service."
+            "compile_and_persist_execution_plan",
+            AsyncMock(return_value=compiled_plan),
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+        TestClient(app) as client,
+    ):
         response = client.post("/api/executions", json={
             "type": "workflow",
             "payload": {
@@ -189,6 +229,9 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     assert authored["workflow"]["runtime"]["executionProfileRef"] == "omnigent-codex"
     assert authored["agentProfileSnapshot"]["profileId"] == (
         "omnigent-bootstrap-default"
+    )
+    assert authored["omnigentExecutionPlan"] == plan_binding.model_dump(
+        mode="json", by_alias=True, exclude_none=True
     )
 
     # Cross the real deterministic workflow compiler boundary.  This is the
