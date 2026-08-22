@@ -127,6 +127,7 @@ from moonmind.runtime_intent import (
     RuntimeIntentValidationError,
     validate_runtime_tier_intent,
 )
+from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.manifest_ingest_models import (
     ManifestNodePageModel,
     ManifestStatusSnapshotModel,
@@ -17068,6 +17069,51 @@ async def continue_in_new_workflow(
     initial_params = service._full_rerun_parameters(canonical.parameters or {})
     if payload.initial_parameters:
         initial_params.update(payload.initial_parameters)
+    source_plan_payload = (canonical.parameters or {}).get(
+        "omnigentExecutionPlan"
+    )
+    candidate_plan_payload = initial_params.get("omnigentExecutionPlan")
+    if isinstance(source_plan_payload, Mapping):
+        try:
+            source_plan = OmnigentExecutionPlanBinding.model_validate(
+                source_plan_payload
+            )
+            candidate_plan = OmnigentExecutionPlanBinding.model_validate(
+                candidate_plan_payload
+            )
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_execution_plan_conflict",
+                    "message": (
+                        "The linked continuation must reuse the source "
+                        "Workflow's immutable Omnigent execution plan."
+                    ),
+                },
+            ) from exc
+        if candidate_plan != source_plan:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "continuation_execution_plan_conflict",
+                    "message": (
+                        "The linked continuation must reuse the source "
+                        "Workflow's immutable Omnigent execution plan."
+                    ),
+                },
+            )
+    elif isinstance(candidate_plan_payload, Mapping):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "continuation_execution_plan_conflict",
+                "message": (
+                    "A linked continuation cannot introduce authored "
+                    "Omnigent execution-plan authority."
+                ),
+            },
+        )
     if payload.instructions:
         workflow_payload = initial_params.get("workflow")
         if not isinstance(workflow_payload, dict):

@@ -1,197 +1,107 @@
 [
   {
-    "id": 3833763098,
-    "disposition": "addressed",
-    "rationale": "DbOmnigentHostLeaseRepository no longer inherits the in-memory implementation, so it has no uninitialized superclass state."
-  },
-  {
-    "id": 3833763118,
-    "disposition": "addressed",
-    "rationale": "DbRuntimeBindingStore no longer inherits the in-memory implementation, removing the invalid superclass initialization contract."
-  },
-  {
-    "id": 3833763123,
-    "disposition": "addressed",
-    "rationale": "The tool attestation shell probe is now assembled with an explicit join."
-  },
-  {
-    "id": 3833763133,
-    "disposition": "addressed",
-    "rationale": "The credential mount attestation shell probe is now assembled with an explicit join."
-  },
-  {
-    "id": 3833763140,
-    "disposition": "addressed",
-    "rationale": "The provider-config volume attestation shell probe is now assembled with an explicit join."
-  },
-  {
-    "id": 3833763153,
-    "disposition": "addressed",
-    "rationale": "The consumed OpenCode payload reference is explicitly deleted instead of assigning an unused empty value."
-  },
-  {
-    "id": 3833763164,
-    "disposition": "addressed",
-    "rationale": "The consumed provider-config payload reference is explicitly deleted instead of assigning an unused empty value."
-  },
-  {
-    "id": 3833763178,
+    "id": "3834838609",
     "disposition": "not-applicable",
-    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+    "rationale": "The commented migration was removed when the branch incorporated main; Alembic revision metadata remains framework-required in the current migration."
   },
   {
-    "id": 3833763190,
+    "id": "3834838614",
     "disposition": "not-applicable",
-    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+    "rationale": "The commented migration was removed when the branch incorporated main; Alembic down_revision metadata remains framework-required in the current migration."
   },
   {
-    "id": 3833763202,
+    "id": "3834838617",
     "disposition": "not-applicable",
-    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+    "rationale": "branch_labels is Alembic module metadata consumed by migration discovery, not an unused application variable."
   },
   {
-    "id": 3833815223,
-    "disposition": "addressed",
-    "rationale": "The generic realizer now heartbeats both the CAS-fenced runtime binding and exact host lease throughout session execution, with regression coverage."
-  },
-  {
-    "id": 3833815227,
-    "disposition": "addressed",
-    "rationale": "Durable generic artifacts now attach an ExecutionRef built from the owning Step Execution."
-  },
-  {
-    "id": 3833815230,
-    "disposition": "addressed",
-    "rationale": "Unqualified Pi/provider-config enrollment is no longer exposed through the guided preset or API-key setup surface until pinned runtime evidence exists."
-  },
-  {
-    "id": 3833815237,
-    "disposition": "addressed",
-    "rationale": "Generic readiness now applies Agent Profile visibility and ownership filtering before compiling targets."
-  },
-  {
-    "id": 3833815241,
-    "disposition": "addressed",
-    "rationale": "integration.omnigent.execute now binds to the Docker- and workspace-capable agent-runtime fleet and handler implementation."
-  },
-  {
-    "id": 3833815244,
+    "id": "3834838619",
     "disposition": "not-applicable",
-    "rationale": "The current branch already applies the shared Provider Profile visibility filter before explicit v2 profile selection, following the merge from main."
+    "rationale": "depends_on is Alembic module metadata consumed by migration discovery, not an unused application variable."
   },
   {
-    "id": 3833815247,
+    "id": "3834838625",
     "disposition": "addressed",
-    "rationale": "The immutable plan now carries workspace mutation authority, the launcher mounts read-only workspaces read-only, and exact-host attestation verifies the mode."
+    "rationale": "Removed the duplicate import form and now references ControlPlaneOutcome through the existing module alias."
   },
   {
-    "id": 3833815251,
-    "disposition": "addressed",
-    "rationale": "Planning retains the immutable catalog selection while requiring a fresh endpoint observation to attest the same endpoint, build, and exact implementation."
-  },
-  {
-    "id": 3833815255,
-    "disposition": "addressed",
-    "rationale": "OpenCode rotation validates candidate secret material and generation before updating the managed secret or durable profile authority."
-  },
-  {
-    "id": 3833815257,
-    "disposition": "addressed",
-    "rationale": "Validate and smoke dispatch v2 documents to a catalog-, source-, Host Class-, provider-, and model-aware v2 readiness implementation."
-  },
-  {
-    "id": 3833815262,
-    "disposition": "addressed",
-    "rationale": "Planning persists the capture policy, exact-host binding passes it to the session driver, and capture generation honors stream and evidence opt-outs."
-  },
-  {
-    "id": 4997551919,
+    "id": "3834838632",
     "disposition": "not-applicable",
-    "rationale": "This is the automated review summary and contains no independent actionable finding."
+    "rationale": "The target integration test was removed by the merge from main and no effectless statement exists in the current branch."
   },
   {
-    "id": 3834451476,
+    "id": "4998696944",
     "disposition": "not-applicable",
-    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+    "rationale": "This is the automated review summary and contains no separate actionable request."
   },
   {
-    "id": 3834654018,
+    "id": "3834853390",
     "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "rationale": "The compact handoff now carries execution-specific instruction and input references with SHA-256 digests, and reconstruction verifies and preserves them."
   },
   {
-    "id": 3834654023,
+    "id": "3834853394",
     "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "rationale": "Plan-bound reconstruction now projects startingBranch and targetBranch from the frozen workflow.git snapshot."
   },
   {
-    "id": 3834654030,
-    "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "id": "3834853398",
+    "disposition": "not-applicable",
+    "rationale": "The reviewed deployment path was superseded by the merge from main; the replacement generic realizer persists cleanup authority before launch and performs lifecycle cleanup."
   },
   {
-    "id": 3834654035,
+    "id": "3834853401",
     "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "rationale": "Plan-bound reconstruction now enforces the frozen model and effort and projects them into the nested Omnigent session fields."
   },
   {
-    "id": 3834654040,
+    "id": "3834853407",
     "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "rationale": "The continuation route validates that any candidate execution plan exactly matches the canonical source binding before creating the continuation."
   },
   {
-    "id": 3834654046,
+    "id": "3834853412",
     "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "rationale": "Managed schedule refresh now recompiles admitted plan authority against current evidence and atomically replaces the scheduled action input."
   },
   {
-    "id": 3834675516,
+    "id": "3834853413",
     "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "rationale": "Failures before durable session ownership now release the acquired provider-profile lease; after binding, session metadata durably owns the lease."
   },
   {
-    "id": 3834675523,
-    "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "id": "3834853416",
+    "disposition": "not-applicable",
+    "rationale": "The current generic execution path passes the execution plan, runtime binding, host class, launch policy, and realizer snapshot into bridge authorization binding."
   },
   {
-    "id": 3834675531,
+    "id": "3834853420",
     "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "rationale": "Reconstruction now discriminates agent sources, selects importedAgentId for bundles, and fails when the required identity is absent."
   },
   {
-    "id": 3834675538,
-    "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "id": "3834853421",
+    "disposition": "not-applicable",
+    "rationale": "The reviewed adapter was superseded by the merge from main; the current default registry supports omnigent-provider-config@1 through DockerOmnigentProviderConfigMaterializer."
   },
   {
-    "id": 3834675542,
-    "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "id": "3834939667",
+    "disposition": "not-applicable",
+    "rationale": "revision is required Alembic discovery metadata."
   },
   {
-    "id": 3834675545,
-    "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "id": "3834939682",
+    "disposition": "not-applicable",
+    "rationale": "down_revision is required Alembic migration-chain metadata."
   },
   {
-    "id": 3834675548,
-    "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "id": "3834939686",
+    "disposition": "not-applicable",
+    "rationale": "branch_labels is required Alembic discovery metadata."
   },
   {
-    "id": 3834675553,
-    "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
-  },
-  {
-    "id": 3834675556,
-    "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
-  },
-  {
-    "id": 3834675558,
-    "disposition": "addressed",
-    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+    "id": "3834939693",
+    "disposition": "not-applicable",
+    "rationale": "depends_on is required Alembic discovery metadata."
   }
 ]

@@ -260,6 +260,50 @@ async def test_continue_creates_linked_workflow_and_pins_source(monkeypatch) -> 
 
 
 @pytest.mark.asyncio
+async def test_continue_rejects_authored_execution_plan_replacement(
+    monkeypatch,
+) -> None:
+    engine, sessions = await _database()
+    user = SimpleNamespace(id=uuid4())
+    source_plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art_plan_source",
+        "taskInputSnapshotRef": "art_task_source",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+    replacement = {
+        **source_plan,
+        "planRef": "omnigent-execution-plan:sha256:" + "c" * 64,
+        "planDigest": "sha256:" + "c" * 64,
+        "planArtifactRef": "art_plan_replacement",
+    }
+    await _seed_canonical(
+        sessions, owner_id=str(user.id), omnigent_plan=source_plan
+    )
+    _patch_collaborators(monkeypatch)
+    service = _FakeService()
+
+    with pytest.raises(HTTPException) as excinfo:
+        async with sessions() as session:
+            await ex.continue_in_new_workflow(
+                workflow_id="mm:source",
+                payload=_payload(
+                    initialParameters={"omnigentExecutionPlan": replacement}
+                ),
+                service=service,  # type: ignore[arg-type]
+                session=session,
+                user=user,
+                _submit_enabled=None,
+            )
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["code"] == "continuation_execution_plan_conflict"
+    assert service.create_calls == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_continue_is_idempotent_on_repeat_key(monkeypatch) -> None:
     engine, sessions = await _database()
     user = SimpleNamespace(id=uuid4())

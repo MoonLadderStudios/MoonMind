@@ -190,6 +190,21 @@ class OmnigentResolveIntentRequest(_OmnigentSessionModel):
     logical_step_id: str | None = Field(
         None, alias="logicalStepId", min_length=1, max_length=255
     )
+    execution_instruction_ref: str | None = Field(
+        None, alias="executionInstructionRef", min_length=1, max_length=65536
+    )
+    execution_instruction_digest: str | None = Field(
+        None, alias="executionInstructionDigest"
+    )
+    execution_input_refs: list[str] = Field(
+        default_factory=list,
+        alias="executionInputRefs",
+        max_length=128,
+        exclude_if=lambda value: not value,
+    )
+    execution_input_refs_digest: str | None = Field(
+        None, alias="executionInputRefsDigest"
+    )
     admitted_feature_generation: Literal[OMNIGENT_SESSION_FEATURE_GENERATION] = Field(
         OMNIGENT_SESSION_FEATURE_GENERATION,
         alias="admittedFeatureGeneration",
@@ -204,6 +219,39 @@ class OmnigentResolveIntentRequest(_OmnigentSessionModel):
             raise ValueError(
                 "resolve intent requires exactly one persisted plan authority"
             )
+        if self.request is not None and any(
+            (
+                self.execution_instruction_ref,
+                self.execution_instruction_digest,
+                self.execution_input_refs,
+                self.execution_input_refs_digest,
+            )
+        ):
+            raise ValueError(
+                "legacy request authority cannot carry compact execution inputs"
+            )
+        if (self.execution_instruction_ref is None) != (
+            self.execution_instruction_digest is None
+        ):
+            raise ValueError(
+                "execution instruction ref and digest must be recorded atomically"
+            )
+        if bool(self.execution_input_refs) != bool(
+            self.execution_input_refs_digest
+        ):
+            raise ValueError(
+                "execution input refs and digest must be recorded atomically"
+            )
+        for digest in (
+            self.execution_instruction_digest,
+            self.execution_input_refs_digest,
+        ):
+            if digest is not None and not _DIGEST_PATTERN.match(digest):
+                raise ValueError("compact execution input digest must be sha256")
+        self.execution_input_refs = [
+            _require_compact_identifier(item, field_name="executionInputRefs[]")
+            for item in self.execution_input_refs
+        ]
         return self
 
 

@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import re
@@ -618,6 +620,28 @@ class MoonMindAgentRun:
             )
             if request.step_execution is not None:
                 payload["logicalStepId"] = request.step_execution.logical_step_id
+            execution_instruction = str(request.instruction_ref or "").strip()
+            if execution_instruction:
+                payload["executionInstructionRef"] = execution_instruction
+                payload["executionInstructionDigest"] = (
+                    "sha256:"
+                    + hashlib.sha256(execution_instruction.encode("utf-8")).hexdigest()
+                )
+            execution_input_refs = [
+                str(item).strip()
+                for item in request.input_refs
+                if str(item).strip()
+            ]
+            if execution_input_refs:
+                payload["executionInputRefs"] = execution_input_refs
+                encoded_refs = json.dumps(
+                    execution_input_refs,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                payload["executionInputRefsDigest"] = (
+                    "sha256:" + hashlib.sha256(encoded_refs).hexdigest()
+                )
         else:
             payload["request"] = request.model_dump(
                 mode="json", by_alias=True, exclude_none=True

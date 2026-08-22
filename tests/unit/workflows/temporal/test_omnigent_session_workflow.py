@@ -167,6 +167,10 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
             "requiredCapabilities": ["readResources"],
             "workflow": {
                 "instructions": "Root instructions must not replace a selected step.",
+                "git": {
+                    "startingBranch": "main",
+                    "targetBranch": "authority-fix",
+                },
                 "inputAttachments": [{"artifactId": "art-workflow"}],
                 "steps": [
                     {"id": "prepare", "instructions": "Prepare the workspace."},
@@ -203,7 +207,14 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
             resolvedSkills={"resolvedSkillSetRef": "artifact:art-skills"},
             harnessId="opencode-native",
             launchPolicyRef="opencode-on-demand@1",
-            agentSource={"upstreamId": "opencode-ai/opencode"},
+            agentSource={
+                "kind": "upstream",
+                "upstreamId": "opencode-ai/opencode",
+            },
+            modelConfig=SimpleNamespace(
+                qualifiedId="opencode/gpt-5",
+                effort="high",
+            ),
         )
     )
     monkeypatch.setattr(
@@ -226,6 +237,69 @@ async def test_compact_plan_handoff_reconstructs_selected_authored_step(
     assert request.idempotency_key == "step-execution-1"
     assert request.input_refs == ["art-top-level", "art-workflow", "art-step"]
     assert request.resolved_skillset_ref == "art-skills"
+    assert request.workspace_spec["startingBranch"] == "main"
+    assert request.workspace_spec["targetBranch"] == "authority-fix"
+    assert request.parameters["model"] == "opencode/gpt-5"
+    assert request.parameters["effort"] == "high"
+    assert request.parameters["omnigent"]["agent"]["agentId"] == (
+        "opencode-ai/opencode"
+    )
+    assert request.parameters["omnigent"]["session"]["modelOverride"] == (
+        "opencode/gpt-5"
+    )
+    assert request.parameters["omnigent"]["session"]["reasoningEffort"] == (
+        "high"
+    )
+
+    continuation_instruction = "Continue using only the selected evidence."
+    continuation_refs = ["art-continuation", "art-selected-evidence"]
+    continued = await omnigent_session_activities._reconstruct_plan_bound_request(
+        binding=binding,
+        plan=plan,
+        workflow_id="workflow-2",
+        step_execution_id="step-execution-2",
+        agent_run_id="agent-run-2",
+        logical_step_id="implement",
+        execution_instruction_ref=continuation_instruction,
+        execution_instruction_digest=(
+            omnigent_session_activities._digest_bytes(
+                continuation_instruction.encode("utf-8")
+            )
+        ),
+        execution_input_refs=continuation_refs,
+        execution_input_refs_digest=(
+            omnigent_session_activities._digest_bytes(
+                json.dumps(
+                    continuation_refs, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            )
+        ),
+    )
+    assert continued.instruction_ref == continuation_instruction
+    assert continued.input_refs[-2:] == continuation_refs
+
+    bundle_plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            **{
+                **vars(plan.payload),
+                "agentSource": {
+                    "kind": "bundle",
+                    "importedAgentId": "imported-agent-42",
+                },
+            }
+        )
+    )
+    bundled = await omnigent_session_activities._reconstruct_plan_bound_request(
+        binding=binding,
+        plan=bundle_plan,
+        workflow_id="workflow-3",
+        step_execution_id="step-execution-3",
+        agent_run_id="agent-run-3",
+        logical_step_id="implement",
+    )
+    assert bundled.parameters["omnigent"]["agent"]["agentId"] == (
+        "imported-agent-42"
+    )
 
 
 def test_activity_request_carries_one_atomic_runtime_binding_fence() -> None:
@@ -552,7 +626,6 @@ async def test_side_effect_rejects_obsolete_runtime_binding_fence(
     """A delayed cleanup/host owner cannot claim current live authority."""
 
     import moonmind.omnigent.control_plane as control_plane_module
-    from moonmind.omnigent.control_plane import ControlPlaneOutcome
 
     plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
     old_ref = "omnigent-runtime-binding:sha256:" + "b" * 64
@@ -583,7 +656,7 @@ async def test_side_effect_rejects_obsolete_runtime_binding_fence(
         async def claim_command(self, *_args: object, **_kwargs: object):
             return SimpleNamespace(
                 record=command,
-                outcome=ControlPlaneOutcome.APPLIED,
+                outcome=control_plane_module.ControlPlaneOutcome.APPLIED,
             )
 
     class Sessions:
@@ -1395,6 +1468,8 @@ def test_agent_run_compact_intent_patch_preserves_legacy_activity_shape() -> Non
     assert compact["omnigentExecutionPlan"] == binding.model_dump(
         mode="json", by_alias=True
     )
+    assert compact["executionInstructionRef"] == "art_task"
+    assert compact["executionInstructionDigest"].startswith("sha256:")
     assert "request" not in compact
     assert "providerPayload" not in json.dumps(compact)
     assert legacy["request"]["parameters"]["providerPayload"] == (
@@ -1730,6 +1805,8 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
             return session
 
         async def bind_runtime_authority(self, _session_id: str, **_kwargs: object):
+            if captured.get("failBind"):
+                raise RuntimeError("simulated control-plane bind failure")
             captured["boundRuntimeAuthority"] = dict(_kwargs)
             return session
 
@@ -1747,6 +1824,9 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
             return SimpleNamespace(
                 lease_id="profile-lease-1", owner_id=kwargs["owner_id"]
             )
+
+        async def release_lease(self, lease: object) -> None:
+            captured["releasedLeaseId"] = lease.lease_id
 
     class FakeDbSession:
         reads = 0
@@ -1825,3 +1905,22 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
     assert safe["workflowId"] == omnigent_session_workflow_id("oms_123")
     assert "canonicalSessionId" not in safe
     assert captured["boundRuntimeAuthority"]["credential_generation"] == 4  # type: ignore[index]
+
+    captured["failBind"] = True
+    FakeDbSession.reads = 0
+    ensure_provider_lease = (
+        omnigent_session_activities
+        .omnigent_ensure_provider_profile_lease_activity
+    )
+    with pytest.raises(RuntimeError, match="control-plane bind failure"):
+        await ensure_provider_lease(
+            {
+                "sessionId": "oms_123",
+                "compiledExecutionIntentRef": "art_intent_123",
+                "compiledExecutionIntentDigest": "sha256:" + "a" * 64,
+                "expectedRevision": 7,
+                "fencingGeneration": 1,
+                "commandId": "cmd-2",
+            }
+        )
+    assert captured["releasedLeaseId"] == "profile-lease-1"

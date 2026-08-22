@@ -819,7 +819,9 @@ async def test_update_definition_cannot_replace_recorded_omnigent_plan(
             )
 
 
-async def test_managed_refresh_preserves_recorded_omnigent_plan() -> None:
+async def test_managed_refresh_recompiles_recorded_omnigent_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     service = RecurringWorkflowsService(AsyncMock(spec=AsyncSession))
     definition = SimpleNamespace(
         target={
@@ -830,8 +832,15 @@ async def test_managed_refresh_preserves_recorded_omnigent_plan() -> None:
             }
         }
     )
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(
+        service,
+        "_refresh_omnigent_execution_plan_target",
+        refresh,
+    )
 
-    assert await service._refresh_managed_bootstrap_target(definition) is False
+    assert await service._refresh_managed_bootstrap_target(definition) is True
+    refresh.assert_awaited_once()
 
 
 async def test_managed_bootstrap_policy_cutover_refreshes_schedule_action(

@@ -439,6 +439,17 @@ async def _load_intent_request(
             logical_step_id=(
                 str(payload.get("logicalStepId") or "").strip() or None
             ),
+            execution_instruction_ref=(
+                str(payload.get("executionInstructionRef") or "").strip() or None
+            ),
+            execution_instruction_digest=(
+                str(payload.get("executionInstructionDigest") or "").strip()
+                or None
+            ),
+            execution_input_refs=list(payload.get("executionInputRefs") or []),
+            execution_input_refs_digest=(
+                str(payload.get("executionInputRefsDigest") or "").strip() or None
+            ),
         )
     binding = parsed.omnigent_execution_plan or agent_request.omnigent_execution_plan
     if binding is not None:
@@ -457,6 +468,10 @@ async def _reconstruct_plan_bound_request(
     step_execution_id: str,
     agent_run_id: str,
     logical_step_id: str | None = None,
+    execution_instruction_ref: str | None = None,
+    execution_instruction_digest: str | None = None,
+    execution_input_refs: list[str] | None = None,
+    execution_input_refs_digest: str | None = None,
 ) -> AgentExecutionRequest:
     """Reload authored input and project it through immutable plan authority."""
 
@@ -517,6 +532,12 @@ async def _reconstruct_plan_bound_request(
         instruction = str(workflow.get("instructions") or "").strip()
     if not instruction:
         raise ValueError("task-input snapshot lacks authored execution instructions")
+    if execution_instruction_ref is not None:
+        if _digest_bytes(execution_instruction_ref.encode("utf-8")) != (
+            execution_instruction_digest
+        ):
+            raise ValueError("execution instruction digest mismatch")
+        instruction = execution_instruction_ref
 
     profile_refs = {
         item.providerProfileRef
@@ -534,23 +555,55 @@ async def _reconstruct_plan_bound_request(
     }.get(plan.payload.harnessId)
     if not execution_target:
         raise ValueError("execution plan harness lacks a product execution target")
+    agent_source = plan.payload.agentSource
+    source_kind = str(agent_source.get("kind") or "").strip()
+    if source_kind == "upstream":
+        planned_agent_id = str(agent_source.get("upstreamId") or "").strip()
+    elif source_kind == "bundle":
+        planned_agent_id = str(agent_source.get("importedAgentId") or "").strip()
+    else:
+        raise ValueError("execution plan has an unsupported Agent source kind")
+    if not planned_agent_id:
+        raise ValueError("execution plan Agent source identity is unavailable")
+
+    model_config = plan.payload.modelConfig
+    planned_model = str(model_config.qualifiedId or "").strip() or None
+    planned_effort = str(model_config.effort or "").strip() or None
+    for field, planned in (("model", planned_model), ("effort", planned_effort)):
+        authored = str(authored_parameters.get(field) or "").strip() or None
+        if authored is not None and authored != planned:
+            raise ValueError(
+                f"authored {field} conflicts with persisted execution plan"
+            )
+        if planned is not None:
+            authored_parameters[field] = planned
     omnigent = dict(authored_parameters.get("omnigent") or {})
+    session_parameters = dict(omnigent.get("session") or {})
+    for field, planned in (
+        ("modelOverride", planned_model),
+        ("reasoningEffort", planned_effort),
+    ):
+        authored = str(session_parameters.get(field) or "").strip() or None
+        if authored is not None and authored != planned:
+            raise ValueError(
+                f"authored Omnigent session {field} conflicts with persisted "
+                "execution plan"
+            )
+        if planned is not None:
+            session_parameters[field] = planned
     omnigent.update(
         {
             "executionTargetRef": execution_target,
             "launchPolicyRef": plan.payload.launchPolicyRef,
             "agent": {
                 **dict(omnigent.get("agent") or {}),
-                "agentId": str(
-                    plan.payload.agentSource.get("upstreamId") or ""
-                ).strip()
-                or None,
+                "agentId": planned_agent_id,
                 "harnessOverride": plan.payload.harnessId,
             },
             "session": {
                 "hostType": "managed",
                 "allowEmptyWorkspace": True,
-                **dict(omnigent.get("session") or {}),
+                **session_parameters,
             },
         }
     )
@@ -590,6 +643,27 @@ async def _reconstruct_plan_bound_request(
         if isinstance(workflow.get("workspace"), Mapping)
         else {}
     )
+    git_authority = workflow.get("git")
+    if isinstance(git_authority, Mapping):
+        for key in ("startingBranch", "targetBranch"):
+            value = str(git_authority.get(key) or "").strip()
+            if value:
+                workspace_spec[key] = value
+    execution_refs = [
+        str(item).strip()
+        for item in (execution_input_refs or [])
+        if str(item).strip()
+    ]
+    if execution_refs:
+        if _digest_bytes(
+            json.dumps(
+                execution_refs, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ) != execution_input_refs_digest:
+            raise ValueError("execution input refs digest mismatch")
+        for ref in execution_refs:
+            if ref not in attachment_refs:
+                attachment_refs.append(ref)
     if "workspaceLocator" not in workspace_spec:
         if not workflow_id or not step_execution_id:
             raise ValueError(
@@ -1338,6 +1412,10 @@ async def omnigent_resolve_intent_activity(
             step_execution_id=resolved.step_execution_id,
             agent_run_id=resolved.agent_run_id,
             logical_step_id=resolved.logical_step_id,
+            execution_instruction_ref=resolved.execution_instruction_ref,
+            execution_instruction_digest=resolved.execution_instruction_digest,
+            execution_input_refs=resolved.execution_input_refs,
+            execution_input_refs_digest=resolved.execution_input_refs_digest,
         )
     if (
         request.agent_kind != "external"
@@ -1378,6 +1456,22 @@ async def omnigent_resolve_intent_activity(
         **(
             {"logicalStepId": resolved.logical_step_id}
             if resolved.logical_step_id is not None
+            else {}
+        ),
+        **(
+            {
+                "executionInstructionRef": resolved.execution_instruction_ref,
+                "executionInstructionDigest": resolved.execution_instruction_digest,
+            }
+            if resolved.execution_instruction_ref is not None
+            else {}
+        ),
+        **(
+            {
+                "executionInputRefs": resolved.execution_input_refs,
+                "executionInputRefsDigest": resolved.execution_input_refs_digest,
+            }
+            if resolved.execution_input_refs
             else {}
         ),
         "omnigentExecutionPlan": request.omnigent_execution_plan.model_dump(
@@ -2354,6 +2448,16 @@ async def omnigent_ensure_provider_profile_lease_activity(
             "not the legacy session supervisor"
         )
     profile = acquired_profile
+
+    async def await_before_session_ownership(awaitable: Any) -> Any:
+        """Release acquired capacity when a pre-bind persistence step fails."""
+
+        try:
+            return await awaitable
+        except BaseException:
+            await lease_client.release_lease(lease)
+            raise
+
     runtime_binding = None
     runtime_binding_state = None
     replacing_runtime_authority = False
@@ -2379,8 +2483,10 @@ async def omnigent_ensure_provider_profile_lease_activity(
             }
         runtime_store = DbRuntimeBindingStore(async_session_maker)
         execution_scope_ref = str(session_authority.moonmind_workflow_id or "")
-        current_runtime_state = await runtime_store.get_current_state(
-            execution_plan.planRef, execution_scope_ref
+        current_runtime_state = await await_before_session_ownership(
+            runtime_store.get_current_state(
+                execution_plan.planRef, execution_scope_ref
+            )
         )
         replacing_runtime_authority = bool(
             current_runtime_state is not None
@@ -2404,26 +2510,31 @@ async def omnigent_ensure_provider_profile_lease_activity(
                 "to be drained before reconciliation"
             )
         if current_runtime_state is None:
-            runtime_binding = await runtime_store.create_initial(
-                execution_plan_ref=execution_plan.planRef,
-                execution_scope_ref=execution_scope_ref,
-                provider_leases=provider_leases,
+            runtime_binding = await await_before_session_ownership(
+                runtime_store.create_initial(
+                    execution_plan_ref=execution_plan.planRef,
+                    execution_scope_ref=execution_scope_ref,
+                    provider_leases=provider_leases,
+                )
             )
         elif not replacing_runtime_authority:
             runtime_binding = current_runtime_state.binding
         else:
-            runtime_binding = await runtime_store.reconcile_provider_leases(
-                current_runtime_state.binding.runtimeBindingRef,
-                provider_leases=provider_leases,
-                expected_revision=current_runtime_state.revision,
-                expected_fencing_generation=(
-                    current_runtime_state.fencing_generation
-                ),
+            runtime_binding = await await_before_session_ownership(
+                runtime_store.reconcile_provider_leases(
+                    current_runtime_state.binding.runtimeBindingRef,
+                    provider_leases=provider_leases,
+                    expected_revision=current_runtime_state.revision,
+                    expected_fencing_generation=(
+                        current_runtime_state.fencing_generation
+                    ),
+                )
             )
-        runtime_binding_state = await runtime_store.get_state(
-            runtime_binding.runtimeBindingRef
+        runtime_binding_state = await await_before_session_ownership(
+            runtime_store.get_state(runtime_binding.runtimeBindingRef)
         )
         if runtime_binding_state is None:
+            await lease_client.release_lease(lease)
             raise RuntimeError("persisted runtime binding could not be reloaded")
         if (
             session_authority.credential_generation is not None
@@ -2436,6 +2547,7 @@ async def omnigent_ensure_provider_profile_lease_activity(
                 session_authority.provider_profile_generation or 0
             )
             if provider_generation > runtime_binding_state.fencing_generation:
+                await lease_client.release_lease(lease)
                 raise ValueError(
                     "session Provider Profile fence is ahead of runtime binding"
                 )
@@ -2444,61 +2556,70 @@ async def omnigent_ensure_provider_profile_lease_activity(
                     provider_generation + 1
                     != runtime_binding_state.fencing_generation
                 ):
+                    await lease_client.release_lease(lease)
                     raise ValueError(
                         "runtime binding skipped a Provider Profile fencing generation"
                     )
-                async with store.transaction() as repos:
-                    session_authority = (
-                        await repos.sessions.acquire_fencing_generation(
-                            request.session_id,
-                            FencingScope.PROVIDER_PROFILE_LEASE,
-                            expected_revision=session_authority.revision,
+                try:
+                    async with store.transaction() as repos:
+                        session_authority = (
+                            await repos.sessions.acquire_fencing_generation(
+                                request.session_id,
+                                FencingScope.PROVIDER_PROFILE_LEASE,
+                                expected_revision=session_authority.revision,
+                            )
                         )
-                    )
-    async with store.transaction() as repos:
-        runtime_metadata = {
-            "providerLeaseRef": lease.lease_id,
-            "providerLeaseOwnerId": lease.owner_id,
-            "providerRuntimeId": runtime_id,
-            **(
-                {
-                    "runtimeBindingRef": runtime_binding.runtimeBindingRef,
-                    "runtimeBindingRevision": runtime_binding_state.revision,
-                    "runtimeBindingFencingGeneration": (
-                        runtime_binding_state.fencing_generation
+                except BaseException:
+                    await lease_client.release_lease(lease)
+                    raise
+    try:
+        async with store.transaction() as repos:
+            runtime_metadata = {
+                "providerLeaseRef": lease.lease_id,
+                "providerLeaseOwnerId": lease.owner_id,
+                "providerRuntimeId": runtime_id,
+                **(
+                    {
+                        "runtimeBindingRef": runtime_binding.runtimeBindingRef,
+                        "runtimeBindingRevision": runtime_binding_state.revision,
+                        "runtimeBindingFencingGeneration": (
+                            runtime_binding_state.fencing_generation
+                        ),
+                        "executionPlanRef": execution_plan.planRef,
+                    }
+                    if runtime_binding is not None
+                    and runtime_binding_state is not None
+                    and execution_plan is not None
+                    else {}
+                ),
+            }
+            if replacing_runtime_authority:
+                updated = await repos.sessions.replace_provider_runtime_authority(
+                    request.session_id,
+                    expected_revision=session_authority.revision,
+                    expected_fencing_generation=request.fencing_generation,
+                    expected_provider_profile_generation=int(
+                        session_authority.provider_profile_generation or 0
                     ),
-                    "executionPlanRef": execution_plan.planRef,
-                }
-                if runtime_binding is not None
-                and runtime_binding_state is not None
-                and execution_plan is not None
-                else {}
-            ),
-        }
-        if replacing_runtime_authority:
-            updated = await repos.sessions.replace_provider_runtime_authority(
-                request.session_id,
-                expected_revision=session_authority.revision,
-                expected_fencing_generation=request.fencing_generation,
-                expected_provider_profile_generation=int(
-                    session_authority.provider_profile_generation or 0
-                ),
-                provider_profile_id=profile_id,
-                credential_generation=int(profile.credential_generation),
-                metadata_patch=runtime_metadata,
-            )
-        else:
-            updated = await repos.sessions.bind_runtime_authority(
-                request.session_id,
-                expected_revision=session_authority.revision,
-                expected_fencing_generation=request.fencing_generation,
-                provider_profile_id=profile_id,
-                provider_profile_generation=(
-                    session_authority.provider_profile_generation
-                ),
-                credential_generation=int(profile.credential_generation),
-                metadata_patch=runtime_metadata,
-            )
+                    provider_profile_id=profile_id,
+                    credential_generation=int(profile.credential_generation),
+                    metadata_patch=runtime_metadata,
+                )
+            else:
+                updated = await repos.sessions.bind_runtime_authority(
+                    request.session_id,
+                    expected_revision=session_authority.revision,
+                    expected_fencing_generation=request.fencing_generation,
+                    provider_profile_id=profile_id,
+                    provider_profile_generation=(
+                        session_authority.provider_profile_generation
+                    ),
+                    credential_generation=int(profile.credential_generation),
+                    metadata_patch=runtime_metadata,
+                )
+    except BaseException:
+        await lease_client.release_lease(lease)
+        raise
     if runtime_binding_state is not None:
         await _project_runtime_binding_to_execution(
             workflow_id=str(updated.moonmind_workflow_id or ""),
