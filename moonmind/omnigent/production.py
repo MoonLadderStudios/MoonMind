@@ -234,7 +234,9 @@ def build_generic_omnigent_execution_services(
         host_lease_repository=host_leases,
         host_runtime=host_runtime,
         planned_host_resolver=OmnigentPlannedHostResolver(
-            catalog_repository=catalogs, host_class_selector=selector
+            catalog_repository=catalogs,
+            host_class_selector=selector,
+            artifact_gateway=artifacts,
         ),
         session_driver=session_driver,
         session_cleanup_service=OmnigentSessionCleanupService(client),

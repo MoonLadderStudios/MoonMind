@@ -32,6 +32,8 @@ class OmnigentOAuthHostJanitor:
         run_store: Any | None = None,
         lease_client: ProviderProfileLeaseClient | None = None,
         artifact_gateway: Any | None = None,
+        runtime_binding_store: Any | None = None,
+        control_plane_store: Any | None = None,
         heartbeat_timeout_seconds: int = 90,
     ) -> None:
         self._repository = repository
@@ -40,8 +42,73 @@ class OmnigentOAuthHostJanitor:
         self._run_store = run_store
         self._lease_client = lease_client
         self._artifact_gateway = artifact_gateway
+        self._runtime_binding_store = runtime_binding_store
+        self._control_plane_store = control_plane_store
         self._heartbeat_timeout = timedelta(
             seconds=max(30, heartbeat_timeout_seconds)
+        )
+
+    async def _runtime_binding_cleanup_authority(
+        self, *, binding: Any, lease: Any
+    ) -> Any | None:
+        """Load the current fenced binding before plan-bound cleanup."""
+
+        if self._runtime_binding_store is None:
+            return None
+        state = await self._runtime_binding_store.get_state_for_host_lease(
+            lease.lease_id
+        )
+        if state is None:
+            execution_scope_ref = str(
+                getattr(lease, "holder_workflow_id", None) or ""
+            ).strip()
+            if execution_scope_ref and self._control_plane_store is not None:
+                async with self._control_plane_store.transaction() as repositories:
+                    session = await repositories.sessions.get(
+                        execution_scope_ref
+                    )
+                if session is not None:
+                    execution_scope_ref = str(
+                        session.moonmind_workflow_id or ""
+                    ).strip()
+            current = (
+                await self._runtime_binding_store.get_current_state_for_execution_scope(
+                    execution_scope_ref
+                )
+                if execution_scope_ref
+                else None
+            )
+            if current is not None:
+                raise ValueError(
+                    "janitor host lease is fenced by replacement runtime authority"
+                )
+            # Historical host leases predate execution-plan bindings and retain
+            # their legacy cleanup authority.
+            return None
+        runtime = state.binding
+        if (
+            runtime.hostBindingRef != binding.binding_ref
+            or runtime.hostLeaseRef != lease.lease_id
+            or runtime.omnigentHostId != lease.omnigent_host_id
+            or not any(
+                acquired.providerProfileRef == lease.provider_profile_id
+                and acquired.credentialGeneration
+                == lease.credential_generation
+                for acquired in runtime.providerLeases.values()
+            )
+        ):
+            raise ValueError(
+                "janitor host authority conflicts with current runtime binding"
+            )
+        return state
+
+    async def _complete_runtime_binding_cleanup(self, state: Any | None) -> None:
+        if state is None or self._runtime_binding_store is None:
+            return
+        await self._runtime_binding_store.mark_cleanup_complete(
+            state.binding.runtimeBindingRef,
+            expected_revision=state.revision,
+            expected_fencing_generation=state.fencing_generation,
         )
 
     async def _claim_cleanup(self, lease: Any) -> Any | None:
@@ -275,6 +342,11 @@ class OmnigentOAuthHostJanitor:
                 raise OmnigentOAuthHostError(
                     "host lease cleanup is already owned by another worker"
                 )
+            runtime_binding_state = (
+                await self._runtime_binding_cleanup_authority(
+                    binding=binding, lease=lease
+                )
+            )
             claimed = await self._claim_cleanup(lease)
             if claimed is None:
                 raise OmnigentOAuthHostError(
@@ -301,6 +373,9 @@ class OmnigentOAuthHostJanitor:
                     completed=True,
                     cleanup_evidence=cleanup_evidence,
                     lease_released=provider_released,
+                )
+                await self._complete_runtime_binding_cleanup(
+                    runtime_binding_state
                 )
             except Exception as exc:
                 await self._record_terminal_cleanup(
@@ -440,6 +515,12 @@ class OmnigentOAuthHostJanitor:
                 and not stale
             ):
                 continue
+            binding = await self._repository.validate_binding(lease.binding_ref)
+            runtime_binding_state = (
+                await self._runtime_binding_cleanup_authority(
+                    binding=binding, lease=lease
+                )
+            )
             if lease.status in CLEANUP_CLAIMABLE_HOST_STATES:
                 claimed = await self._claim_cleanup(lease)
                 if claimed is None:
@@ -448,7 +529,6 @@ class OmnigentOAuthHostJanitor:
                     # next durable scan; never clean from the stale snapshot.
                     continue
                 lease = claimed
-            binding = await self._repository.validate_binding(lease.binding_ref)
             if lease.omnigent_session_id:
                 try:
                     await self._client.get_session(lease.omnigent_session_id)
@@ -490,6 +570,9 @@ class OmnigentOAuthHostJanitor:
                 completed=True,
                 cleanup_evidence=cleanup_evidence,
                 lease_released=provider_released,
+            )
+            await self._complete_runtime_binding_cleanup(
+                runtime_binding_state
             )
             actions.append(
                 {

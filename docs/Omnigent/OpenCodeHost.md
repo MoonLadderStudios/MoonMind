@@ -128,6 +128,9 @@ credentialSlots:
   - id: primary-model
     acceptedAuthModels: [own-auth]
     acceptedProviderIds: [opencode, opencode-go]
+hostClassRef: omnigent-opencode@1
+launchPolicyRef: opencode-on-demand@1
+executionRealizerRef: generic-omnigent-host@1
 model:
   qualifiedId: opencode-go/<model-id>
 allowedLaunchPolicyRefs: [omnigent-on-demand@1]

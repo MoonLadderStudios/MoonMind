@@ -186,6 +186,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          import hashlib
           import json
           import os
           from datetime import datetime, timedelta, timezone
@@ -285,6 +286,114 @@ jobs:
                   "native Workflow Chat acceptance evidence does not satisfy its "
                   "retirement criterion"
               )
+          # Execution admission consumes a distinct, protected exact-combination
+          # projection. It is derived only after the credentialed matrix and its
+          # complete evidence manifest validate; the API cannot manufacture this
+          # authority from the plan it is trying to admit.
+          from moonmind.omnigent.execution_support_evidence import (
+              ProtectedExecutionSupportEvidence,
+          )
+          from moonmind.omnigent.session_supervisor_rollback import (
+              SUPERVISOR_ROLLBACK_POLICY_VERSION,
+          )
+          from moonmind.schemas.omnigent_session_models import (
+              OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+              OMNIGENT_SESSION_FEATURE_GENERATION,
+          )
+          support_fields = {
+              "omnigentServerBuildRef", "omnigentHostBuildRef",
+              "harnessImplementationRef", "vendorRuntimeRefs",
+              "agentSourceRef", "materializerRefs",
+              "providerCompatibilityClass", "hostClassRef", "architecture",
+              "launchPolicyRef", "modelConfigDigest", "executionRealizerRef",
+              "requiredCapabilitiesDigest",
+          }
+          workflow_chat_digest = "sha256:" + hashlib.sha256(
+              workflow_chat_path.read_bytes()
+          ).hexdigest()
+          protected_run_ref = (
+              f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+              f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          )
+          support_entries = []
+          for combination_id, combination in sorted(
+              workflow_chat["combinations"].items()
+          ):
+              if combination.get("status") != "passed":
+                  continue
+              identity = combination.get("bindingIdentity") or {}
+              candidate = {
+                  "schemaVersion": (
+                      "moonmind.omnigent-protected-execution-support-evidence/v1"
+                  ),
+                  "evidenceIssuer": (
+                      "moonmind-protected-omnigent-conformance@1"
+                  ),
+                  "status": "passed",
+                  "sourceCommit": workflow_chat["sourceCommit"],
+                  "protectedRunRef": protected_run_ref,
+                  "evidenceManifestRef": str(
+                      workflow_chat_path.relative_to(root)
+                  ),
+                  "evidenceManifestDigest": workflow_chat_digest,
+                  "generatedAt": workflow_chat["generatedAt"],
+                  "expiresAt": workflow_chat["expiresAt"],
+                  "supportClassification": (
+                      "connected_host"
+                      if combination.get("hostMode") == "static_compose"
+                      else "fully_managed"
+                  ),
+                  "supportCombinationKey": identity.get(
+                      "supportCombinationKey"
+                  ),
+                  "supportIdentity": {
+                      field: identity.get(field) for field in support_fields
+                  },
+                  "hostImageRef": combination.get("hostImageRef"),
+                  "policySnapshotDigest": identity.get(
+                      "policySnapshotDigest"
+                  ),
+                  "effectiveLaunchSnapshotDigest": identity.get(
+                      "effectiveLaunchSnapshotDigest"
+                  ),
+                  "policyGateRef": (
+                      "github-actions:omnigent-live-conformance/"
+                      f"{os.environ['GITHUB_RUN_ID']}/"
+                      f"{os.environ['GITHUB_RUN_ATTEMPT']}/{combination_id}"
+                  ),
+                  "policyQualified": True,
+                  "exactArtifactsVerified": True,
+                  "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
+                  "replayCompatibilityVersion": (
+                      OMNIGENT_SESSION_COMPATIBILITY_VERSION
+                  ),
+                  "rollbackPolicyVersion": (
+                      SUPERVISOR_ROLLBACK_POLICY_VERSION
+                  ),
+              }
+              support_entries.append(
+                  ProtectedExecutionSupportEvidence.model_validate(
+                      candidate
+                  ).model_dump(mode="json", by_alias=True)
+              )
+          if not support_entries:
+              raise SystemExit(
+                  "protected execution support has no passing combinations"
+              )
+          (root / "execution-support-evidence.json").write_text(
+              json.dumps(
+                  {
+                      "schemaVersion": (
+                          "moonmind.omnigent-protected-execution-support-index/v1"
+                      ),
+                      "sourceCommit": workflow_chat["sourceCommit"],
+                      "entries": support_entries,
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ) + "\n",
+              encoding="utf-8",
+          )
           authority_fields = {
               "authoredWorkflowRef", "taskInputSnapshotRef", "compiledRuntimeRequestRef",
               "executionProfileRef", "launchPolicyRef", "effectiveLaunchSnapshotRef",

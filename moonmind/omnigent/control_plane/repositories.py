@@ -667,15 +667,138 @@ class SessionRepository(_RepositoryBase):
             row.runtime_binding_ref = runtime_binding_ref
         if metadata_patch:
             metadata = dict(row.metadata_ or {})
+            next_binding_revision = metadata_patch.get("runtimeBindingRevision")
+            current_binding_revision = metadata.get("runtimeBindingRevision")
+            if next_binding_revision is not None and current_binding_revision is not None:
+                if int(next_binding_revision) < int(current_binding_revision):
+                    raise FencingConflictError(
+                        f"Session {session_id!r} received a stale runtime binding revision"
+                    )
             for key, value in metadata_patch.items():
                 existing = metadata.get(key)
-                if existing is not None and value is not None and existing != value:
+                mutable_binding_projection = key in {
+                    "runtimeBindingRef",
+                    "runtimeBindingRevision",
+                    "runtimeBindingFencingGeneration",
+                    "runtimeBindingState",
+                }
+                if (
+                    existing is not None
+                    and value is not None
+                    and existing != value
+                    and not mutable_binding_projection
+                ):
                     raise ConflictingSessionAuthorityError(
                         f"Session {session_id!r} metadata {key!r} already has "
                         "different immutable authority"
                     )
                 metadata[key] = value
             row.metadata_ = metadata
+        row.revision = row.revision + 1
+        await self._session.flush()
+        await self._session.refresh(row)
+        return _session_record(row)
+
+    async def replace_provider_runtime_authority(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        expected_fencing_generation: int,
+        expected_provider_profile_generation: int,
+        provider_profile_id: str,
+        credential_generation: int,
+        metadata_patch: dict[str, Any],
+    ) -> SessionRecord:
+        """Project one already-fenced Provider Profile lease replacement.
+
+        The runtime-binding aggregate owns the replacement decision. This
+        projection is permitted only before host/session realization and only
+        after both the binding fence and Provider Profile lease fence advanced.
+        """
+
+        row = await self._load(session_id, for_update=True)
+        if row is None:
+            raise ConflictingSessionAuthorityError(
+                f"Unknown canonical session {session_id!r}"
+            )
+        conflict = self._check_session_fence(
+            row,
+            expected_revision=expected_revision,
+            expected_fencing_generation=expected_fencing_generation,
+            expected_provider_profile_generation=(
+                expected_provider_profile_generation
+            ),
+            expected_host_lease_generation=None,
+        )
+        if conflict is ControlPlaneOutcome.FENCING_CONFLICT:
+            raise FencingConflictError(
+                f"Session {session_id!r} Provider Profile fence changed"
+            )
+        if conflict is ControlPlaneOutcome.REVISION_CONFLICT:
+            raise RevisionConflictError(
+                f"Session {session_id!r} revision changed before Provider "
+                "Profile replacement"
+            )
+        if row.provider_profile_id not in {None, provider_profile_id}:
+            raise ConflictingSessionAuthorityError(
+                f"Session {session_id!r} cannot replace its Provider Profile"
+            )
+        if any(
+            value is not None
+            for value in (
+                row.host_binding_ref,
+                row.host_lease_ref,
+                row.provider_session_ref,
+            )
+        ):
+            raise ConflictingSessionAuthorityError(
+                f"Session {session_id!r} must drain live host/session authority "
+                "before Provider Profile replacement"
+            )
+
+        metadata = dict(row.metadata_ or {})
+        current_binding_revision = int(
+            metadata.get("runtimeBindingRevision") or 0
+        )
+        current_binding_fence = int(
+            metadata.get("runtimeBindingFencingGeneration") or 0
+        )
+        next_binding_revision = int(
+            metadata_patch.get("runtimeBindingRevision") or 0
+        )
+        next_binding_fence = int(
+            metadata_patch.get("runtimeBindingFencingGeneration") or 0
+        )
+        if (
+            next_binding_revision <= current_binding_revision
+            or next_binding_fence <= current_binding_fence
+        ):
+            raise FencingConflictError(
+                f"Session {session_id!r} Provider Profile replacement lacks "
+                "a newer runtime-binding revision and fence"
+            )
+        for immutable_key in (
+            "executionPlanRef",
+            "providerLeaseOwnerId",
+            "providerRuntimeId",
+        ):
+            current_value = metadata.get(immutable_key)
+            next_value = metadata_patch.get(immutable_key)
+            if (
+                current_value is not None
+                and next_value is not None
+                and current_value != next_value
+            ):
+                raise ConflictingSessionAuthorityError(
+                    f"Session {session_id!r} cannot replace immutable "
+                    f"metadata {immutable_key!r}"
+                )
+
+        row.provider_profile_id = provider_profile_id
+        row.credential_generation = credential_generation
+        metadata.update(metadata_patch)
+        row.metadata_ = metadata
         row.revision = row.revision + 1
         await self._session.flush()
         await self._session.refresh(row)

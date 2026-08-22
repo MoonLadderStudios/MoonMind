@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import re
@@ -230,6 +232,9 @@ OMNIGENT_SESSION_SUPERVISOR_PATCH_ID = (
 )
 OMNIGENT_SESSION_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-session-admission-v1"
+)
+OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID = (
+    "agent-run-omnigent-compact-resolve-intent-v1"
 )
 OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-execution-plan-admission-v1"
@@ -579,6 +584,69 @@ class MoonMindAgentRun:
         # Older direct AgentRun callers do not have a Step Execution envelope.
         # Their immutable request idempotency key is the canonical fallback.
         return owner_workflow_id, request.idempotency_key
+
+    @staticmethod
+    def _omnigent_resolve_intent_payload(
+        request: AgentExecutionRequest,
+        *,
+        workflow_id: str,
+        step_execution_id: str,
+        agent_run_id: str,
+        admitted_feature_generation: str,
+        compact_plan_authority: bool,
+    ) -> dict[str, Any]:
+        """Build the replay-versioned AgentRun-to-Activity handoff.
+
+        Histories created before the compact contract must continue to emit the
+        request body recorded in their Activity command. New plan-bound runs
+        carry only immutable plan/task refs and digests; the Activity reloads
+        authored input from the artifact system.
+        """
+
+        payload: dict[str, Any] = {
+            "workflowId": workflow_id,
+            "stepExecutionId": step_execution_id,
+            "agentRunId": agent_run_id,
+            "admittedFeatureGeneration": admitted_feature_generation,
+        }
+        if compact_plan_authority:
+            binding = request.omnigent_execution_plan
+            if binding is None:
+                raise ValueError(
+                    "compact Omnigent intent handoff requires persisted plan authority"
+                )
+            payload["omnigentExecutionPlan"] = binding.model_dump(
+                mode="json", by_alias=True
+            )
+            if request.step_execution is not None:
+                payload["logicalStepId"] = request.step_execution.logical_step_id
+            execution_instruction = str(request.instruction_ref or "").strip()
+            if execution_instruction:
+                payload["executionInstructionRef"] = execution_instruction
+                payload["executionInstructionDigest"] = (
+                    "sha256:"
+                    + hashlib.sha256(execution_instruction.encode("utf-8")).hexdigest()
+                )
+            execution_input_refs = [
+                str(item).strip()
+                for item in request.input_refs
+                if str(item).strip()
+            ]
+            if execution_input_refs:
+                payload["executionInputRefs"] = execution_input_refs
+                encoded_refs = json.dumps(
+                    execution_input_refs,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                payload["executionInputRefsDigest"] = (
+                    "sha256:" + hashlib.sha256(encoded_refs).hexdigest()
+                )
+        else:
+            payload["request"] = request.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        return payload
 
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
         try:
@@ -4305,6 +4373,9 @@ class MoonMindAgentRun:
         use_omnigent_session_admission = workflow.patched(
             OMNIGENT_SESSION_ADMISSION_PATCH_ID
         )
+        use_compact_omnigent_resolve_intent = workflow.patched(
+            OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID
+        )
         use_omnigent_execution_plan_admission = workflow.patched(
             OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID
         )
@@ -5071,15 +5142,25 @@ class MoonMindAgentRun:
                     self._external_agent_id = validated_id
 
                     if execution_style == "streaming_gateway":
-                        session_admitted = use_omnigent_session_supervisor
+                        plan_bound_session = (
+                            validated_id == "omnigent"
+                            and request.omnigent_execution_plan is not None
+                        )
+                        session_admitted = (
+                            use_omnigent_session_supervisor or plan_bound_session
+                        )
+                        recorded_plan_realizer: str | None = None
                         admitted_feature_generation = (
                             OMNIGENT_SESSION_FEATURE_GENERATION
                         )
                         if (
                             validated_id == "omnigent"
                             and request.execution_profile_ref
-                            and use_omnigent_session_supervisor
-                            and use_omnigent_session_admission
+                            and session_admitted
+                            and (
+                                use_omnigent_session_admission
+                                or plan_bound_session
+                            )
                         ):
                             owner_workflow_id, step_execution_id = (
                                 self._omnigent_owner_identities(request)
@@ -5092,6 +5173,9 @@ class MoonMindAgentRun:
                                     agentRunId=workflow.info().workflow_id,
                                     executionProfileRef=(
                                         request.execution_profile_ref
+                                    ),
+                                    omnigentExecutionPlan=(
+                                        request.omnigent_execution_plan
                                     ),
                                     executionPlanRef=(
                                         str(
@@ -5123,6 +5207,30 @@ class MoonMindAgentRun:
                             admitted_feature_generation = (
                                 admission.admitted_feature_generation
                             )
+                            recorded_plan_realizer = (
+                                admission.execution_realizer_ref
+                            )
+                            if (
+                                plan_bound_session
+                                and not recorded_plan_realizer
+                            ):
+                                raise ValueError(
+                                    "plan-bound admission omitted execution realizer authority"
+                                )
+                            if recorded_plan_realizer == "codex-profile-bound@1":
+                                # Codex remains on its recorded coordinator;
+                                # the generic session supervisor must never
+                                # become an implicit replacement realizer.
+                                session_admitted = False
+                            elif (
+                                plan_bound_session
+                                and recorded_plan_realizer
+                                != "generic-omnigent-host@1"
+                            ):
+                                raise ValueError(
+                                    "plan realizer does not own the Omnigent "
+                                    "session-supervisor path"
+                                )
                         if (
                             validated_id == "omnigent"
                             and request.execution_profile_ref
@@ -5133,19 +5241,19 @@ class MoonMindAgentRun:
                             )
                             resolved_input = await self._execute_routed_activity(
                                 "omnigent.resolve_intent",
-                                {
-                                    "request": request.model_dump(
-                                        mode="json",
-                                        by_alias=True,
-                                        exclude_none=True,
-                                    ),
-                                    "workflowId": owner_workflow_id,
-                                    "stepExecutionId": step_execution_id,
-                                    "agentRunId": workflow.info().workflow_id,
-                                    "admittedFeatureGeneration": (
+                                self._omnigent_resolve_intent_payload(
+                                    request,
+                                    workflow_id=owner_workflow_id,
+                                    step_execution_id=step_execution_id,
+                                    agent_run_id=workflow.info().workflow_id,
+                                    admitted_feature_generation=(
                                         admitted_feature_generation
                                     ),
-                                },
+                                    compact_plan_authority=(
+                                        use_compact_omnigent_resolve_intent
+                                        and plan_bound_session
+                                    ),
+                                ),
                                 cancellation_type=(
                                     ActivityCancellationType.TRY_CANCEL
                                 ),
@@ -5223,15 +5331,20 @@ class MoonMindAgentRun:
                                 else RunStatus.failed
                             )
                         else:
-                            # Histories that predate the supervisor patch remain
-                            # on the legacy one-activity path for replay safety.
+                            # Historical sessions retain their recorded lane.
+                            # New plan-bound Codex work also uses the one-
+                            # activity dispatcher because that boundary invokes
+                            # the exact recorded realizer from the persisted
+                            # plan instead of the generic supervisor.
                             stc_seconds = min(
                                 max(int(timeout_seconds), 60),
                                 86400,
                             )
                             act_name = f"integration.{validated_id}.execute"
                             if (
-                                validated_id == "omnigent"
+                                recorded_plan_realizer
+                                != "codex-profile-bound@1"
+                                and validated_id == "omnigent"
                                 and request.execution_profile_ref
                                 and workflow.patched(
                                     OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID

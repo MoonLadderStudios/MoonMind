@@ -52,6 +52,14 @@ from moonmind.omnigent.execution_profiles import (
     PROFILES,
     selection_from_request,
 )
+from moonmind.omnigent.harness_platform.execution_plan import (
+    OmnigentExecutionPlanEnvelope,
+)
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
+)
+from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
 from moonmind.omnigent.mounted_tool_preflight import MountedToolPreflightError
 from moonmind.omnigent.oauth_hosts import (
     HEARTBEAT_HOST_STATES,
@@ -667,6 +675,7 @@ class OmnigentProfileBoundExecutionCoordinator:
         artifact_gateway: Any,
         artifact_service: Any | None = None,
         workspace_owner: RemediationWorkspaceOwner | None = None,
+        execution_plan: OmnigentExecutionPlanEnvelope | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._lease_client = lease_client
@@ -678,6 +687,112 @@ class OmnigentProfileBoundExecutionCoordinator:
         self._artifact_service = artifact_service or artifact_gateway
         self._workspace_owner = workspace_owner or SandboxRemediationWorkspaceOwner(
             os.getenv("WORKFLOW_WORKSPACE_ROOT", "/work/agent_jobs")
+        )
+        self._execution_plan = execution_plan
+
+    @staticmethod
+    def _canonical_digest(value: Mapping[str, Any]) -> str:
+        body = json.dumps(
+            dict(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode("utf-8")
+        return "sha256:" + hashlib.sha256(body).hexdigest()
+
+    def _require_recorded_plan_request(
+        self, request: AgentExecutionRequest
+    ) -> OmnigentExecutionPlanEnvelope | None:
+        """Validate immutable Codex authority before coordinator persistence."""
+
+        plan = self._execution_plan
+        if plan is None:
+            # Existing histories may still use the legacy coordinator directly.
+            # New realizer-dispatched plans always provide this argument.
+            return None
+        binding = request.omnigent_execution_plan
+        if (
+            binding is None
+            or binding.plan_ref != plan.planRef
+            or binding.plan_digest
+            != "sha256:" + plan.planRef.rsplit(":", 1)[-1]
+        ):
+            raise HarnessPlatformError(
+                "Codex request does not carry the admitted execution plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        credential = plan.payload.credentialBindings.get("primary-model")
+        if (
+            credential is None
+            or credential.providerProfileRef != request.execution_profile_ref
+        ):
+            raise HarnessPlatformError(
+                "Codex Provider Profile conflicts with the admitted plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        if plan.payload.executionRealizerRef != "codex-profile-bound@1":
+            raise HarnessPlatformError(
+                "Codex coordinator received a plan for another realizer",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
+            )
+        requested_target, requested_policy = selection_from_request(
+            request.parameters
+        )
+        if requested_policy and requested_policy != plan.payload.launchPolicyRef:
+            raise HarnessPlatformError(
+                "Codex launch policy conflicts with the admitted plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        if requested_target:
+            profile = PROFILES.get(requested_target)
+            if (
+                profile is None
+                or profile.harness != plan.payload.harnessId
+                or profile.default_policy_ref != plan.payload.launchPolicyRef
+            ):
+                raise HarnessPlatformError(
+                    "Codex execution target conflicts with the admitted plan",
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                )
+        return plan
+
+    def _require_recorded_launch(
+        self,
+        *,
+        policy_snapshot: Mapping[str, Any],
+        effective_launch: Mapping[str, Any],
+    ) -> None:
+        plan = self._execution_plan
+        if plan is None:
+            return
+        payload = plan.payload
+        if (
+            payload.policySnapshotDigest is None
+            or payload.effectiveLaunchSnapshotDigest is None
+            or self._canonical_digest(policy_snapshot)
+            != payload.policySnapshotDigest
+            or self._canonical_digest(effective_launch)
+            != payload.effectiveLaunchSnapshotDigest
+            or str(effective_launch.get("launchPolicyRef") or "")
+            != payload.launchPolicyRef
+            or str(effective_launch.get("harness") or "") != payload.harnessId
+            or str(effective_launch.get("hostImageRef") or "")
+            != str(payload.hostImageRef or "")
+        ):
+            raise HarnessPlatformError(
+                "Codex launch authority has drifted from the admitted plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+
+    async def _write_plan_runtime_evidence(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: Mapping[str, Any],
+    ) -> str:
+        return await self._artifact_gateway.write_json(
+            request=request,
+            name=name,
+            payload=dict(payload),
+            link_type="omnigent_runtime_authority",
         )
 
     async def _execute_with_host_lease_heartbeat(
@@ -796,6 +911,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 await asyncio.sleep(retry_after)
 
     async def execute(self, request: AgentExecutionRequest) -> AgentRunResult:
+        recorded_plan = self._require_recorded_plan_request(request)
         budget_rejection = _profile_bound_max_budget_rejection(request)
         if budget_rejection is not None:
             return budget_rejection
@@ -878,6 +994,7 @@ class OmnigentProfileBoundExecutionCoordinator:
             return provider_result.model_copy(update={"metadata": metadata})
 
         provider_lease: CredentialLease | None = None
+        runtime_binding_ref: str | None = None
         host_lease = None
         binding = None
         effective_launch: dict[str, Any] | None = None
@@ -1044,6 +1161,14 @@ class OmnigentProfileBoundExecutionCoordinator:
                     provider_profile_id=profile_id,
                     follow_up_retrieval=follow_up_block,
                 )
+            # New Codex plans are admitted from immutable artifact digests. The
+            # legacy coordinator may resolve mutable catalog rows only to prove
+            # that they still equal that authority, and must do so before lease
+            # acquisition or any host/provider mutation.
+            self._require_recorded_launch(
+                policy_snapshot=policy_snapshot,
+                effective_launch=effective_launch,
+            )
             if (
                 self._repository_mutation_required(request)
                 and not effective_launch["repositoryMutation"]
@@ -1078,7 +1203,10 @@ class OmnigentProfileBoundExecutionCoordinator:
                 ) from exc
             remediation = self._remediation_workspace(request)
             if remediation is not None:
-                if request.agent_kind != "external" or request.agent_id != "omnigent":
+                if (
+                    request.agent_kind != "external"
+                    or request.agent_id != "omnigent"
+                ):
                     raise OmnigentOAuthHostError(
                         "remediation workspace requires external/omnigent execution",
                         code="REMEDIATION_WORKSPACE_RUNTIME_MISMATCH",
@@ -1234,6 +1362,30 @@ class OmnigentProfileBoundExecutionCoordinator:
                     "providerLeaseId": provider_lease.lease_id,
                 },
             )
+            if recorded_plan is not None:
+                runtime_binding_store = DbRuntimeBindingStore(
+                    self._session_factory
+                )
+                runtime_binding = await runtime_binding_store.create_initial(
+                    execution_plan_ref=recorded_plan.planRef,
+                    execution_scope_ref=workflow_id,
+                    provider_leases={
+                        "primary-model": {
+                            "providerProfileRef": profile_id,
+                            "providerLeaseRef": provider_lease.lease_id,
+                            "credentialGeneration": int(
+                                getattr(profile, "credential_generation", 0)
+                                or 0
+                            ),
+                            "credentialRuntimeRef": (
+                                "credential://provider-profile/"
+                                f"{profile_id}/generation/"
+                                f"{int(getattr(profile, 'credential_generation', 0) or 0)}"
+                            ),
+                        }
+                    },
+                )
+                runtime_binding_ref = runtime_binding.runtimeBindingRef
             current_stage = "host_binding_resolution"
             selected_on_demand = effective_launch["hostMode"] == "on_demand_docker"
             binding = await self._hosts.create_or_update_static_binding(
@@ -1490,6 +1642,108 @@ class OmnigentProfileBoundExecutionCoordinator:
                     event_type="mounted_tool_preflight_ready",
                     metadata=dict(preflight["mountedTools"]),
                 )
+            if recorded_plan is not None and runtime_binding_ref is not None:
+                # Persist the exact live observations as separate bounded
+                # artifacts. They are derived from the completed host preflight,
+                # never manufactured by the immutable plan itself.
+                host_attestation_ref = await self._write_plan_runtime_evidence(
+                    request=request,
+                    name="codex-host-harness-attestation.json",
+                    payload={
+                        "planRef": recorded_plan.planRef,
+                        "hostId": host_id,
+                        "hostRegistration": dict(
+                            preflight.get("hostRegistrationEvidence") or {}
+                        ),
+                        "harness": preflight.get("harness")
+                        or effective_launch.get("harness"),
+                        "egressEvidenceRef": preflight.get("egressEvidenceRef"),
+                    },
+                )
+                capability_ref = await self._write_plan_runtime_evidence(
+                    request=request,
+                    name="codex-exact-host-capability-decision.json",
+                    payload={
+                        "planRef": recorded_plan.planRef,
+                        "hostId": host_id,
+                        "classAdmissionDecision": (
+                            recorded_plan.payload.classAdmissionDecision
+                        ),
+                        "mountedTools": dict(preflight.get("mountedTools") or {}),
+                    },
+                )
+                workspace_ref = await self._write_plan_runtime_evidence(
+                    request=request,
+                    name="codex-workspace-resolution.json",
+                    payload={
+                        "planRef": recorded_plan.planRef,
+                        "hostId": host_id,
+                        "workspaceResolution": dict(workspace_resolution or {}),
+                    },
+                )
+                model_ref = await self._write_plan_runtime_evidence(
+                    request=request,
+                    name="codex-model-option-attestation.json",
+                    payload={
+                        "planRef": recorded_plan.planRef,
+                        "hostId": host_id,
+                        "model": recorded_plan.payload.modelConfig.model_dump(
+                            mode="json", by_alias=True
+                        ),
+                        "preflightStatus": preflight.get("status"),
+                    },
+                )
+                skill_ref = await self._write_plan_runtime_evidence(
+                    request=request,
+                    name="codex-skill-delivery-attestation.json",
+                    payload={
+                        "planRef": recorded_plan.planRef,
+                        "hostId": host_id,
+                        "resolvedSkills": recorded_plan.payload.resolvedSkills,
+                        "activeSkillsPath": preflight.get("activeSkillsPath"),
+                        "skillDeliveryAttested": preflight.get(
+                            "skillDeliveryAttested"
+                        ),
+                    },
+                )
+                runtime_state = await DbRuntimeBindingStore(
+                    self._session_factory
+                ).get_state(runtime_binding_ref)
+                if runtime_state is None:
+                    raise HarnessPlatformError(
+                        "Codex runtime binding disappeared before host attestation",
+                        code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                    )
+                updated_binding = await DbRuntimeBindingStore(
+                    self._session_factory
+                ).update_with_host(
+                    runtime_binding_ref,
+                    host_binding_ref=binding.binding_ref,
+                    host_lease_ref=host_lease.lease_id,
+                    # The OAuth lane binds one deterministic host lease to one
+                    # acquired credential generation; that generation is its
+                    # durable replacement fence.
+                    host_lease_generation=host_lease.credential_generation,
+                    omnigent_host_id=host_id,
+                    host_harness_attestation_ref=host_attestation_ref,
+                    exact_host_capability_decision_ref=capability_ref,
+                    workspace_resolution_ref=workspace_ref,
+                    model_option_attestation_ref=model_ref,
+                    skill_delivery_attestation_ref=skill_ref,
+                    cleanup_authority_refs=[
+                        value
+                        for value in (
+                            str(preflight.get("egressEvidenceRef") or ""),
+                            f"host-lease:{host_lease.lease_id}",
+                        )
+                        if value
+                    ],
+                    expected_revision=runtime_state.revision,
+                    expected_fencing_generation=(
+                        runtime_state.fencing_generation
+                    ),
+                )
+                runtime_binding_ref = updated_binding.runtimeBindingRef
             if host_lease.status == "ready":
                 host_lease = await self._hosts.transition_host_lease(
                     host_lease.lease_id,
@@ -1531,6 +1785,50 @@ class OmnigentProfileBoundExecutionCoordinator:
                 ttl_seconds=int(effective_launch["limits"]["timeoutSeconds"]),
             )
             result = collect_deferred_bridge_terminal(result)
+            if recorded_plan is not None and runtime_binding_ref is not None:
+                provider_session_id = str(
+                    (result.metadata or {}).get("omnigentSessionId") or ""
+                ).strip()
+                if provider_session_id:
+                    bridge_row = await self._run_store.get_existing(
+                        request.idempotency_key
+                    )
+                    if (
+                        bridge_row is not None
+                        and bridge_row.omnigent_session_id is None
+                    ):
+                        bridge_row = await self._run_store.attach_session(
+                            request.idempotency_key, provider_session_id
+                        )
+                    chat_binding_ref = await self._run_store.ensure_chat_binding_id(
+                        bridge.bridge_session_id
+                    )
+                    runtime_state = await DbRuntimeBindingStore(
+                        self._session_factory
+                    ).get_state(runtime_binding_ref)
+                    if runtime_state is None or not chat_binding_ref:
+                        raise HarnessPlatformError(
+                            "Codex session authority could not be bound",
+                            code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                        )
+                    updated_binding = await DbRuntimeBindingStore(
+                        self._session_factory
+                    ).update_with_session(
+                        runtime_binding_ref,
+                        omnigent_session_id=provider_session_id,
+                        omnigent_runner_ref=(
+                            str(bridge_row.omnigent_runner_id)
+                            if bridge_row is not None
+                            and bridge_row.omnigent_runner_id
+                            else None
+                        ),
+                        chat_binding_ref=chat_binding_ref,
+                        expected_revision=runtime_state.revision,
+                        expected_fencing_generation=(
+                            runtime_state.fencing_generation
+                        ),
+                    )
+                    runtime_binding_ref = updated_binding.runtimeBindingRef
             publish_mode = str(
                 (request.parameters or {}).get("publishMode") or "none"
             ).strip().lower()
@@ -1839,6 +2137,40 @@ class OmnigentProfileBoundExecutionCoordinator:
             # evidence is deliberately added later by the workspace capture
             # activity; neither boundary is allowed to infer the other plane.
             result_metadata = dict(result.metadata or {})
+            runtime_binding_authority = None
+            if recorded_plan is not None and runtime_binding_ref is not None:
+                runtime_binding_authority = await DbRuntimeBindingStore(
+                    self._session_factory
+                ).get_state(runtime_binding_ref)
+                if runtime_binding_authority is None:
+                    raise HarnessPlatformError(
+                        "Codex runtime binding disappeared before capture",
+                        code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                    )
+                result_metadata.update(
+                    {
+                        "executionPlanRef": recorded_plan.planRef,
+                        "executionPlanDigest": (
+                            "sha256:" + recorded_plan.planRef.rsplit(":", 1)[-1]
+                        ),
+                        "runtimeBindingRef": (
+                            runtime_binding_authority.binding.runtimeBindingRef
+                        ),
+                        "runtimeBindingRevision": (
+                            runtime_binding_authority.revision
+                        ),
+                        "runtimeBindingFencingGeneration": (
+                            runtime_binding_authority.fencing_generation
+                        ),
+                        "supportCombinationIdentity": (
+                            recorded_plan.payload.supportIdentity.model_dump(
+                                mode="json", by_alias=True
+                            )
+                            if recorded_plan.payload.supportIdentity is not None
+                            else None
+                        ),
+                    }
+                )
             result_metadata["omnigentCheckpointCapture"] = {
                 "providerProfileId": profile_id,
                 "credentialRef": (
@@ -1849,6 +2181,7 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "providerLeaseRef": provider_lease.lease_id,
                 "hostBindingRef": binding.binding_ref,
                 "hostLeaseRef": host_lease.lease_id,
+                "hostLeaseGeneration": host_lease.credential_generation,
                 "endpointRef": binding.endpoint_ref,
                 "omnigentHostId": host_id,
                 "bridgeSessionId": (
@@ -1887,6 +2220,38 @@ class OmnigentProfileBoundExecutionCoordinator:
                 "outputBranch": self._target_branch(request),
                 "publicationState": str(
                     (request.parameters or {}).get("publishMode") or "none"
+                ),
+                **(
+                    {
+                        "executionPlanRef": recorded_plan.planRef,
+                        "runtimeBindingRef": (
+                            runtime_binding_authority.binding.runtimeBindingRef
+                        ),
+                        "runtimeBindingRevision": (
+                            runtime_binding_authority.revision
+                        ),
+                        "runtimeBindingFencingGeneration": (
+                            runtime_binding_authority.fencing_generation
+                        ),
+                        "hostHarnessAttestationRef": (
+                            runtime_binding_authority.binding.hostHarnessAttestationRef
+                        ),
+                        "exactHostCapabilityDecisionRef": (
+                            runtime_binding_authority.binding.exactHostCapabilityDecisionRef
+                        ),
+                        "workspaceResolutionRef": (
+                            runtime_binding_authority.binding.workspaceResolutionRef
+                        ),
+                        "modelOptionAttestationRef": (
+                            runtime_binding_authority.binding.modelOptionAttestationRef
+                        ),
+                        "skillDeliveryAttestationRef": (
+                            runtime_binding_authority.binding.skillDeliveryAttestationRef
+                        ),
+                    }
+                    if recorded_plan is not None
+                    and runtime_binding_authority is not None
+                    else {}
                 ),
             }
             result = result.model_copy(update={"metadata": result_metadata})
@@ -2269,6 +2634,39 @@ class OmnigentProfileBoundExecutionCoordinator:
                         ignore_errors=True,
                     )
             janitor_required = provider_lease is not None and not lease_released
+            if (
+                recorded_plan is not None
+                and runtime_binding_ref is not None
+                and safe_to_release_provider
+                and lease_released
+            ):
+                runtime_store = DbRuntimeBindingStore(self._session_factory)
+                runtime_state = await runtime_store.get_state(
+                    runtime_binding_ref
+                )
+                if runtime_state is not None:
+                    completed_binding = await runtime_store.mark_cleanup_complete(
+                        runtime_binding_ref,
+                        expected_revision=runtime_state.revision,
+                        expected_fencing_generation=(
+                            runtime_state.fencing_generation
+                        ),
+                    )
+                    runtime_binding_ref = completed_binding.runtimeBindingRef
+                    completed_state = await runtime_store.get_state(
+                        runtime_binding_ref
+                    )
+                    if authority_result is not None and completed_state is not None:
+                        authority_result.metadata.update(
+                            {
+                                "runtimeBindingRef": runtime_binding_ref,
+                                "runtimeBindingRevision": completed_state.revision,
+                                "runtimeBindingFencingGeneration": (
+                                    completed_state.fencing_generation
+                                ),
+                                "runtimeBindingState": completed_state.state,
+                            }
+                        )
             # Emit the single unified, bounded, credential-free authority chain
             # (MoonLadderStudios/MoonMind#3561) before terminal so Workflow Detail
             # exposes one workspace -> runtime -> publication -> terminal ->

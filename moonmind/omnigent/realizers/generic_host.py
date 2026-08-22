@@ -238,7 +238,7 @@ class GenericOmnigentHostRealizer:
                 idempotency_key=request.idempotency_key,
             )
             materializers = {
-                slot: str(value["materializerRef"])
+                slot: value.materializerRef
                 for slot, value in plan.payload.credentialBindings.items()
             }
             provider_authority = {

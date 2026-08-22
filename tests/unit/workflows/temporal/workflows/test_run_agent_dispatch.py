@@ -1693,6 +1693,50 @@ class TestMapAgentRunResult(unittest.TestCase):
 class TestBuildAgentExecutionRequest(unittest.TestCase):
     """Verify the _build_agent_execution_request helper."""
 
+    def test_build_agent_execution_request_propagates_persisted_omnigent_plan(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        binding = {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "art_plan_1",
+            "taskInputSnapshotRef": "art_task_input_1",
+            "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        }
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "omnigentExecutionPlan": binding,
+                    }
+                },
+                node_id="node-omnigent-plan",
+                tool_name="omnigent",
+            )
+
+        assert request.omnigent_execution_plan is not None
+        assert request.step_execution is not None
+        self.assertEqual(
+            request.omnigent_execution_plan.plan_ref,
+            binding["planRef"],
+        )
+        self.assertEqual(
+            request.step_execution.omnigent_execution_plan,
+            request.omnigent_execution_plan,
+        )
+
     def test_build_agent_execution_request_propagates_steps(self) -> None:
         from unittest.mock import patch
 

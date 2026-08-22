@@ -4056,6 +4056,36 @@ def test_full_retry_recovery_from_patch_rejects_non_string_source_ids():
         )
 
 
+def test_full_rerun_preserves_immutable_omnigent_plan_authority() -> None:
+    plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art_plan_3706",
+        "taskInputSnapshotRef": "art_task_3706",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+
+    rerun = TemporalExecutionService._full_rerun_parameters(
+        {
+            "omnigentExecutionPlan": plan,
+            "agentRunId": "old-agent-run",
+            "recoveryCheckpointRef": "art_stale_checkpoint",
+            "workflow": {
+                "instructions": "Preserve the planned choices.",
+                "dependsOn": ["old-step"],
+                "recovery": {"kind": "old-recovery"},
+            },
+        }
+    )
+
+    assert rerun["omnigentExecutionPlan"] == plan
+    assert "agentRunId" not in rerun
+    assert "recoveryCheckpointRef" not in rerun
+    assert rerun["workflow"] == {
+        "instructions": "Preserve the planned choices."
+    }
+
+
 def test_full_retry_recovery_from_patch_rejects_forged_source_ids():
     with pytest.raises(
         TemporalExecutionValidationError,

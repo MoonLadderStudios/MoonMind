@@ -38,6 +38,8 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import (
+    HostClass,
+    LaunchPolicy,
     OmnigentHostClassSelector,
     get_launch_policy,
 )
@@ -776,10 +778,12 @@ class OmnigentPlannedHostResolver:
         *,
         catalog_repository: OmnigentHarnessCatalogRepository,
         host_class_selector: OmnigentHostClassSelector | None = None,
+        artifact_gateway: OmnigentArtifactGateway | None = None,
         architecture: str | None = None,
     ) -> None:
         self._catalogs = catalog_repository
         self._selector = host_class_selector or OmnigentHostClassSelector()
+        self._artifacts = artifact_gateway
         self._architecture = architecture or os.getenv(
             "MOONMIND_OMNIGENT_HOST_ARCHITECTURE", "linux/amd64"
         )
@@ -813,14 +817,133 @@ class OmnigentPlannedHostResolver:
             omnigent_build_digest=catalog.snapshot.omnigentBuildDigest,
             integration_mode=harness.capabilities.integrationMode or "native-server",
             materializer_refs=[
-                str(item["materializerRef"])
+                item.materializerRef
                 for item in plan.payload.credentialBindings.values()
             ],
-            architecture=self._architecture,
+            architecture=plan.payload.hostArchitecture or self._architecture,
             requested_host_mode=policy.hostMode,
             requested_host_class_ref=plan.payload.hostClassRef,
         )
+        if plan.payload.hostImageRef is not None:
+            host_class, policy = await self._resolve_exact_launch(
+                plan=plan,
+                host_class=host_class,
+            )
         return host_class, policy
+
+    async def _resolve_exact_launch(
+        self,
+        *,
+        plan: OmnigentExecutionPlanEnvelope,
+        host_class: HostClass,
+    ) -> tuple[HostClass, LaunchPolicy]:
+        """Rehydrate runtime inputs from the plan's immutable launch artifact."""
+
+        if self._artifacts is None:
+            raise HarnessPlatformError(
+                "exact execution plan launch artifact cannot be resolved",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        raw = await self._artifacts.read_bytes(
+            str(plan.payload.effectiveLaunchSnapshotRef)
+        )
+        if "sha256:" + hashlib.sha256(raw).hexdigest() != (
+            plan.payload.effectiveLaunchSnapshotDigest
+        ):
+            raise HarnessPlatformError(
+                "effective launch artifact digest conflicts with the plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        try:
+            launch = json.loads(raw)
+            if not isinstance(launch, Mapping):
+                raise TypeError("effective launch artifact is not an object")
+            from moonmind.omnigent.execution_profiles import (
+                validate_effective_launch_snapshot,
+            )
+
+            validate_effective_launch_snapshot(launch)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise HarnessPlatformError(
+                "effective launch artifact is invalid",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            ) from exc
+        expected = {
+            "launchPolicyRef": plan.payload.launchPolicyRef,
+            "hostImageRef": plan.payload.hostImageRef,
+            "harness": plan.payload.harnessId,
+        }
+        if any(
+            str(launch.get(key) or "") != str(value)
+            for key, value in expected.items()
+        ):
+            raise HarnessPlatformError(
+                "effective launch artifact conflicts with the execution plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        architecture = str(plan.payload.hostArchitecture or "").strip()
+        normalized_architectures = tuple(
+            value if "/" in value else f"linux/{value}"
+            for value in (
+                str(item).strip() for item in (launch.get("architectures") or [])
+            )
+            if value
+        )
+        if architecture not in normalized_architectures:
+            raise HarnessPlatformError(
+                "effective launch architecture conflicts with the execution plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        exact_host = HostClass.model_validate(
+            {
+                **host_class.model_dump(mode="json", by_alias=True),
+                "imageRef": plan.payload.hostImageRef,
+                "omnigentBuildDigest": plan.payload.omnigentHostBuildDigest,
+                "architectures": [architecture],
+                "runtime": {
+                    **host_class.runtime,
+                    "uid": int(launch.get("runtimeUid") or 1000),
+                    "gid": int(launch.get("runtimeGid") or 1000),
+                },
+                "features": {
+                    **host_class.features,
+                    "readOnlyRoot": launch.get("readOnlyRoot") is True,
+                    "restrictedEgress": bool(launch.get("enforcedEgress")),
+                },
+            }
+        )
+        limits = launch.get("limits")
+        capture = launch.get("capture")
+        cleanup = launch.get("cleanup")
+        if not all(isinstance(value, Mapping) for value in (limits, capture, cleanup)):
+            raise HarnessPlatformError(
+                "effective launch artifact lacks bounded runtime policy",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        policy_id, separator, version = plan.payload.launchPolicyRef.rpartition("@")
+        if not separator:
+            raise HarnessPlatformError(
+                "execution plan launch policy identity is invalid",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        exact_policy = LaunchPolicy.model_validate(
+            {
+                "policyId": policy_id,
+                "version": int(version),
+                "hostMode": launch.get("hostMode"),
+                "hostClassSelector": {"requiredFeatures": []},
+                "isolation": {
+                    "runDedicated": launch.get("hostMode")
+                    in {"on-demand", "on_demand_docker"}
+                },
+                "limits": dict(limits),
+                "network": {"egressPolicyRef": launch.get("egressProfileRef")},
+                "capture": dict(capture),
+                "cleanup": dict(cleanup),
+                "controlCapabilities": list(launch.get("controlCapabilities") or []),
+            }
+        )
+        return exact_host, exact_policy
 
 
 __all__ = [

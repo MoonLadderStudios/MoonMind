@@ -620,6 +620,8 @@ def _workflow_chat_binding_identity(module, combination):
         "modelConfigDigest": "sha256:" + "e" * 64,
         "executionRealizerRef": combination.execution_realizer_ref,
         "requiredCapabilitiesDigest": "sha256:" + "f" * 64,
+        "policySnapshotDigest": "sha256:" + "6" * 64,
+        "effectiveLaunchSnapshotDigest": "sha256:" + "9" * 64,
     }
     return {
         **fields,

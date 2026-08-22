@@ -17,7 +17,11 @@ from moonmind.omnigent.credential_materializers import (
 )
 from moonmind.omnigent.generic_host_janitor import GenericOmnigentHostJanitor
 from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
-from moonmind.omnigent.harness_platform.catalog import TrustState
+from moonmind.omnigent.harness_platform.catalog import (
+    HarnessImplementationIdentity,
+    HarnessRecord,
+    TrustState,
+)
 from moonmind.omnigent.harness_platform.catalog_service import (
     InMemoryHarnessCatalogRepository,
     OmnigentHarnessCatalogService,
@@ -33,6 +37,7 @@ from moonmind.omnigent.harness_platform.failures import (
 from moonmind.omnigent.harness_platform.host_classes import HostClass, get_launch_policy
 from moonmind.omnigent.harness_platform.planning_service import (
     OmnigentExecutionPlanningService,
+    OmnigentPlannedHostResolver,
     _ref,
 )
 from moonmind.omnigent.harness_platform.stores import (
@@ -295,6 +300,133 @@ def _plan(model: str):
             "supportCombinationKey": "omnigent-support-combination:sha256:" + "0" * 64,
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_planned_host_resolver_uses_exact_launch_artifact() -> None:
+    implementation = HarnessImplementationIdentity.model_validate(
+        {
+            "sourceKind": "core",
+            "package": "omnigent",
+            "version": "1.0.0",
+            "digest": "sha256:" + "3" * 64,
+        }
+    )
+    harness = HarnessRecord.model_validate(
+        {
+            "id": "opencode-native",
+            "label": "OpenCode",
+            "implementation": implementation.model_dump(
+                mode="json", by_alias=True
+            ),
+            "capabilities": {
+                "integrationMode": "native-server",
+                "authModel": "own-auth",
+            },
+        }
+    )
+    current_host = HostClass.model_validate(
+        {
+            "hostClassId": "omnigent-opencode",
+            "version": 1,
+            "imageRef": "ghcr.io/example/current@sha256:" + "c" * 64,
+            "omnigentVersion": "1.0.0",
+            "omnigentBuildDigest": "sha256:" + "b" * 64,
+            "architectures": ["linux/amd64"],
+            "declaredHarnessImplementations": [
+                {
+                    "harnessId": "opencode-native",
+                    "implementationRef": implementation.implementation_ref(),
+                    "runtimeDependencies": [],
+                }
+            ],
+            "integrationModes": ["native-server"],
+            "materializerRefs": ["opencode-auth-json@1"],
+            "features": {
+                "readOnlyRoot": True,
+                "restrictedEgress": True,
+                "workspaceBind": True,
+            },
+            "runtime": {"uid": 2000, "gid": 2000, "home": "/home/app"},
+        }
+    )
+    exact_image = "ghcr.io/example/admitted@sha256:" + "a" * 64
+    launch = {
+        "schemaVersion": 3,
+        "launchPolicyRef": "omnigent-on-demand@1",
+        "harness": "opencode-native",
+        "hostImageRef": exact_image,
+        "hostMode": "on_demand_docker",
+        "architectures": ["amd64"],
+        "runtimeUid": 1000,
+        "runtimeGid": 1000,
+        "readOnlyRoot": True,
+        "enforcedEgress": True,
+        "egressProfileRef": "moonmind-omnigent-egress@1",
+        "limits": {
+            "cpuMillis": 2000,
+            "memoryMiB": 4096,
+            "processes": 256,
+            "timeoutSeconds": 5400,
+            "temporaryStorageMiB": 256,
+        },
+        "capture": {"required": True},
+        "cleanup": {"mode": "remove", "janitor": True},
+        "controlCapabilities": ["interrupt", "terminate"],
+    }
+    canonical = json.dumps(launch, sort_keys=True, separators=(",", ":"))
+    launch["snapshotRef"] = (
+        "omnigent-launch:sha256:"
+        + hashlib.sha256(canonical.encode()).hexdigest()
+    )
+    raw = json.dumps(launch, sort_keys=True, separators=(",", ":")).encode()
+    payload = _plan("opencode-go/model").payload.model_dump(
+        mode="json", by_alias=True
+    )
+    payload.update(
+        {
+            "harnessImplementationRef": implementation.implementation_ref(),
+            "hostImageRef": exact_image,
+            "omnigentHostBuildDigest": "sha256:" + "b" * 64,
+            "hostArchitecture": "linux/amd64",
+            "policySnapshotDigest": "sha256:" + "d" * 64,
+            "effectiveLaunchSnapshotRef": "artifact:launch-1",
+            "effectiveLaunchSnapshotDigest": (
+                "sha256:" + hashlib.sha256(raw).hexdigest()
+            ),
+        }
+    )
+    plan = create_execution_plan_envelope(payload)
+
+    class Catalogs:
+        async def load(self, ref: str):
+            assert ref == plan.payload.harnessCatalogRef
+            return SimpleNamespace(
+                snapshot=SimpleNamespace(
+                    harnesses=(harness,),
+                    omnigentVersion="1.0.0",
+                    omnigentBuildDigest="sha256:" + "b" * 64,
+                )
+            )
+
+    class Selector:
+        def select(self, **_kwargs):
+            return current_host
+
+    class Artifacts:
+        async def read_bytes(self, ref: str) -> bytes:
+            assert ref == "artifact:launch-1"
+            return raw
+
+    host, policy = await OmnigentPlannedHostResolver(
+        catalog_repository=Catalogs(),
+        host_class_selector=Selector(),
+        artifact_gateway=Artifacts(),
+    )(plan)
+
+    assert host.imageRef == exact_image
+    assert host.runtime["uid"] == 1000
+    assert policy.limits["timeoutSeconds"] == 5400
 
 
 @pytest.mark.asyncio

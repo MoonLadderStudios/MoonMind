@@ -453,6 +453,78 @@ async def test_supervisor_runtime_authority_bind_is_fenced_and_idempotent(store)
 
 
 @pytest.mark.asyncio
+async def test_provider_runtime_replacement_advances_both_fences(store) -> None:
+    async with store.transaction() as repos:
+        created = await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="omnigent"
+        )
+        provider_owner = await repos.sessions.acquire_fencing_generation(
+            "s1",
+            FencingScope.PROVIDER_PROFILE_LEASE,
+            expected_revision=created.revision,
+        )
+        initial = await repos.sessions.bind_runtime_authority(
+            "s1",
+            expected_revision=provider_owner.revision,
+            expected_fencing_generation=created.fencing_generation,
+            provider_profile_id="provider-1",
+            provider_profile_generation=1,
+            credential_generation=5,
+            metadata_patch={
+                "executionPlanRef": "plan-1",
+                "providerLeaseRef": "provider-lease-1",
+                "providerLeaseOwnerId": "owner-1",
+                "providerRuntimeId": "opencode",
+                "runtimeBindingRef": "binding-1",
+                "runtimeBindingRevision": 1,
+                "runtimeBindingFencingGeneration": 1,
+            },
+        )
+        replacement_owner = await repos.sessions.acquire_fencing_generation(
+            "s1",
+            FencingScope.PROVIDER_PROFILE_LEASE,
+            expected_revision=initial.revision,
+        )
+        replaced = await repos.sessions.replace_provider_runtime_authority(
+            "s1",
+            expected_revision=replacement_owner.revision,
+            expected_fencing_generation=created.fencing_generation,
+            expected_provider_profile_generation=2,
+            provider_profile_id="provider-1",
+            credential_generation=6,
+            metadata_patch={
+                "executionPlanRef": "plan-1",
+                "providerLeaseRef": "provider-lease-2",
+                "providerLeaseOwnerId": "owner-1",
+                "providerRuntimeId": "opencode",
+                "runtimeBindingRef": "binding-2",
+                "runtimeBindingRevision": 2,
+                "runtimeBindingFencingGeneration": 2,
+            },
+        )
+
+    assert replaced.credential_generation == 6
+    assert replaced.provider_profile_generation == 2
+    assert replaced.metadata["runtimeBindingRef"] == "binding-2"
+    assert replaced.metadata["providerLeaseRef"] == "provider-lease-2"
+
+    with pytest.raises(FencingConflictError):
+        async with store.transaction() as repos:
+            await repos.sessions.replace_provider_runtime_authority(
+                "s1",
+                expected_revision=replaced.revision,
+                expected_fencing_generation=created.fencing_generation,
+                expected_provider_profile_generation=1,
+                provider_profile_id="provider-1",
+                credential_generation=7,
+                metadata_patch={
+                    "runtimeBindingRevision": 3,
+                    "runtimeBindingFencingGeneration": 3,
+                },
+            )
+
+
+@pytest.mark.asyncio
 async def test_supervisor_terminal_evidence_is_immutable(store) -> None:
     """MoonLadderStudios/MoonMind#3705 keeps historical reads authoritative."""
 

@@ -68,3 +68,39 @@ def test_session_execution_authority_migration_upgrade_and_downgrade(
             call("omnigent_sessions", "execution_plan_ref"),
         ]
     )
+
+
+def test_execution_scoped_runtime_authority_migration(monkeypatch) -> None:
+    migration = importlib.import_module(
+        "api_service.migrations.versions.361_omnigent_execution_authority"
+    )
+    assert migration.down_revision == "360_omnigent_authority"
+    operations = MagicMock()
+    monkeypatch.setattr(migration, "op", operations)
+
+    migration.upgrade()
+
+    assert [item.args[1].name for item in operations.add_column.call_args_list] == [
+        "execution_scope_ref",
+        "runner_ref",
+        "chat_binding_ref",
+    ]
+    operations.create_unique_constraint.assert_called_once_with(
+        "uq_omnigent_runtime_binding_plan_scope",
+        "omnigent_runtime_bindings",
+        ["execution_plan_ref", "execution_scope_ref"],
+    )
+
+    operations.reset_mock()
+    migration.downgrade()
+
+    operations.drop_constraint.assert_called_once_with(
+        "uq_omnigent_runtime_binding_plan_scope",
+        "omnigent_runtime_bindings",
+        type_="unique",
+    )
+    assert [item.args[1] for item in operations.drop_column.call_args_list] == [
+        "chat_binding_ref",
+        "runner_ref",
+        "execution_scope_ref",
+    ]

@@ -285,6 +285,10 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
         "${MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST:-"
         "/workspace/omnigent-evidence/acceptance-manifest.json}"
     )
+    assert api_env["MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE"] == (
+        "${MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE:-"
+        "/workspace/omnigent-evidence/execution-support-evidence.json}"
+    )
     assert api_env["MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE"] == (
         "${MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE:-"
         "/workspace/omnigent-evidence/exact-artifact-projection.json}"

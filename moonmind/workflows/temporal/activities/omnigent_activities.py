@@ -152,6 +152,15 @@ def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
     if checkpoint_payload is None:
         return None
     checkpoint = OmnigentCheckpointIdentity.model_validate(checkpoint_payload)
+    if checkpoint.execution_plan_ref is not None:
+        binding = request.omnigent_execution_plan
+        if (
+            binding is None
+            or binding.plan_ref != checkpoint.execution_plan_ref
+        ):
+            raise ValueError(
+                "checkpoint execution plan does not match the admitted request"
+            )
     candidate_workspace = CandidateWorkspaceAuthority(
         loopId=f"{checkpoint.workflow_id}:{checkpoint.logical_step_id}",
         attemptOrdinal=checkpoint.attempt_ordinal,
@@ -306,12 +315,52 @@ async def _resolve_live_recovery_authority(
         in {bridge.first_message_item_id, bridge.first_message_pending_id}
         and bridge.first_message_state in {"posted", "terminal"}
     )
+    runtime_binding_current = True
+    if checkpoint.execution_plan_ref is not None:
+        from moonmind.omnigent.harness_platform.stores import (
+            DbRuntimeBindingStore,
+        )
+
+        runtime_state = await DbRuntimeBindingStore(
+            session_factory
+        ).get_state(str(checkpoint.runtime_binding_ref or ""))
+        runtime_binding_current = bool(
+            runtime_state is not None
+            and runtime_state.binding.executionPlanRef
+            == checkpoint.execution_plan_ref
+            and runtime_state.binding.runtimeBindingRef
+            == checkpoint.runtime_binding_ref
+            and runtime_state.revision
+            == checkpoint.runtime_binding_revision
+            and runtime_state.fencing_generation
+            == checkpoint.runtime_binding_fencing_generation
+            and runtime_state.binding.hostBindingRef
+            == checkpoint.host_binding_ref
+            and runtime_state.binding.hostLeaseRef
+            == checkpoint.host_lease_ref
+            and runtime_state.binding.omnigentHostId
+            == checkpoint.omnigent_host_id
+            and runtime_state.binding.omnigentSessionId
+            == checkpoint.omnigent_session_id
+            and any(
+                authority.providerProfileRef
+                == checkpoint.provider_profile_id
+                and authority.providerLeaseRef
+                == checkpoint.provider_lease_ref
+                and authority.credentialGeneration
+                == checkpoint.credential_generation
+                for authority in runtime_state.binding.providerLeases.values()
+            )
+        )
     return {
         "provider_lease": provider_lease,
         "host_lease": host_lease,
-        "host_registered": host_registered,
-        "session_valid": session_valid,
-        "first_message_consistent": first_message_consistent,
+        "host_registered": host_registered and runtime_binding_current,
+        "session_valid": session_valid and runtime_binding_current,
+        "first_message_consistent": (
+            first_message_consistent and runtime_binding_current
+        ),
+        "runtime_binding_current": runtime_binding_current,
         "current_credential_generation": current_generation,
         "checkpoint_credential_generation": checkpoint.credential_generation,
     }
@@ -325,13 +374,51 @@ async def _try_generic_realizer_dispatch(
     artifact_gateway: Any | None = None,
     run_store: Any | None = None,
 ) -> AgentRunResult | None:
-    """Load or plan immutable generic authority, then dispatch its realizer.
+    """Load or plan immutable generic authority, then dispatch its realizer."""
 
-    A normal product request may already carry ``executionPlanRef``. The v2
-    authoring path instead carries an immutable ``agentProfileRef`` and is
-    compiled through the production planning service. Harness identities never
-    steer this Activity.
-    """
+    from moonmind.omnigent.harness_platform.failures import (
+        HarnessPlatformError,
+        HarnessPlatformFailure,
+        remediation_for,
+    )
+
+    binding = request.omnigent_execution_plan
+    if binding is not None:
+        try:
+            from api_service.db.base import async_session_maker
+            if plan_store is None:
+                from moonmind.omnigent.harness_platform.stores import (
+                    DbExecutionPlanStore,
+                )
+
+                plan_store = DbExecutionPlanStore(async_session_maker)
+            persisted = await plan_store.load(binding.plan_ref)
+            if persisted is None:
+                raise ValueError("persisted Omnigent execution plan is unavailable")
+            expected_digest = "sha256:" + persisted.planRef.rsplit(":", 1)[-1]
+            if expected_digest != binding.plan_digest:
+                raise ValueError(
+                    "persisted Omnigent execution plan digest mismatch"
+                )
+            if realizer_registry is None:
+                from moonmind.omnigent.realizers.registry import get_default_registry
+
+                realizer_registry = get_default_registry()
+            realizer = realizer_registry.require(
+                persisted.payload.executionRealizerRef
+            )
+            return await realizer.execute(request, persisted)
+        except Exception:
+            return AgentRunResult(
+                summary="Admitted Omnigent execution-plan dispatch failed.",
+                failureClass="integration_error",
+                providerErrorCode=(
+                    HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value
+                ),
+                retryRecommendation=remediation_for(
+                    HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value
+                ),
+            )
 
     params = request.parameters if isinstance(request.parameters, dict) else {}
     omnigent = (
@@ -356,11 +443,6 @@ async def _try_generic_realizer_dispatch(
     if not plan_ref and not attempted_generic:
         return None
 
-    from moonmind.omnigent.harness_platform.failures import (
-        HarnessPlatformError,
-        HarnessPlatformFailure,
-        remediation_for,
-    )
     from moonmind.omnigent.settings import generic_host_enabled
 
     if not generic_host_enabled() and not plan_ref:
@@ -667,6 +749,8 @@ async def omnigent_oauth_host_janitor_activity(
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+    from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
     from moonmind.omnigent.oauth_host_janitor import OmnigentOAuthHostJanitor
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
@@ -696,6 +780,8 @@ async def omnigent_oauth_host_janitor_activity(
             run_store=OmnigentBridgeSessionStore(async_session_maker),
             lease_client=ProviderProfileLeaseClient(TemporalClientAdapter()),
             artifact_gateway=_OnDemandTemporalArtifactService(async_session_maker),
+            runtime_binding_store=DbRuntimeBindingStore(async_session_maker),
+            control_plane_store=OmnigentControlPlaneStore(async_session_maker),
         )
         payload = dict(request or {})
         action_kind = str(payload.get("actionKind") or "").strip()

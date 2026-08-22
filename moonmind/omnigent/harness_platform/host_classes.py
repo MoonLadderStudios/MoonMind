@@ -414,6 +414,12 @@ _register_policy(
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
 )
 _register_policy(
+    "opencode-on-demand",
+    "on-demand",
+    ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
+)
+_register_policy("opencode-static", "static-connected", ["workspaceBind"])
+_register_policy(
     "codex-on-demand",
     "on-demand",
     ["readOnlyRoot", "restrictedEgress", "workspaceBind"],

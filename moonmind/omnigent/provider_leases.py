@@ -73,7 +73,7 @@ class OmnigentProviderLeaseCoordinator:
 
         by_profile: dict[str, list[str]] = {}
         for slot, binding in plan.payload.credentialBindings.items():
-            by_profile.setdefault(binding["providerProfileRef"], []).append(slot)
+            by_profile.setdefault(binding.providerProfileRef, []).append(slot)
         acquired: list[AcquiredProviderLease] = []
         try:
             for profile_ref in sorted(by_profile):

@@ -281,11 +281,17 @@ is online, and busy only when no online runner is idle.
 
 ### Deployed release-support evidence
 
-The Omnigent catalog reports release support from three published documents:
-the #3508 acceptance manifest, the Tier-1 exact-artifact projection, and the
-protected-live readiness projection. Compose bind-mounts
+The Omnigent catalog and execution admission consume four published documents:
+the #3508 acceptance manifest, protected exact-combination execution support,
+the Tier-1 exact-artifact projection, and the protected-live readiness
+projection. The protected execution-support document qualifies the exact
+support-combination key, immutable host image, policy and effective-launch
+digests, feature generation, replay contract, rollback policy, and realizer;
+it also records the fixed `moonmind-protected-omnigent-conformance@1` issuer.
+The API fails closed before scheduling when that evidence is absent, stale,
+issued by another authority, insufficient, or mismatched. Compose bind-mounts
 `${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}` read-only at
-`/workspace/omnigent-evidence` and defaults all three refs to files inside it,
+`/workspace/omnigent-evidence` and defaults all four refs to files inside it,
 so the default deployment needs no per-file configuration. Populate it with:
 
 ```bash
