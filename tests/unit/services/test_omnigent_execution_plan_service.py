@@ -171,12 +171,18 @@ def _protected_support_evidence(plan_payload) -> dict[str, object]:
 async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
     monkeypatch, harness: str, policy: str, realizer: str
 ) -> None:
+    monkeypatch.setenv("MOONMIND_OMNIGENT_EVIDENCE_POLICY", "either")
     monkeypatch.setattr(service, "DbExecutionPlanStore", _PlanStore)
     monkeypatch.setattr(
         service,
         "load_protected_execution_support_evidence",
         _protected_support_evidence,
     )
+    # Also mock the resolver to use the protected evidence directly for this hermetic test
+    def _mock_resolve(plan_payload, **_kwargs):
+        return _protected_support_evidence(plan_payload), "supported"
+
+    monkeypatch.setattr(service, "resolve_execution_evidence", _mock_resolve)
     async def resolve_policy(**_kwargs):
         return _policy_snapshot(harness=harness, policy=policy)
 
