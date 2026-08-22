@@ -86,6 +86,7 @@ services:
       # real acceptance, exact-artifact, and protected-live status. No env
       # configuration is required for the default deployment path.
       - MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST=${MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST:-/workspace/omnigent-evidence/acceptance-manifest.json}
+      - MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE=${MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE:-/workspace/omnigent-evidence/execution-support-evidence.json}
       - MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE=${MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE:-/workspace/omnigent-evidence/exact-artifact-projection.json}
       - MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION=${MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION:-/workspace/omnigent-evidence/live-health-projection.json}
       # The API needs DOCKER_HOST only for its remaining direct Docker paths

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -8,8 +9,9 @@ import pytest
 from api_service.services import omnigent_execution_plan_service as service
 from api_service.services.omnigent_policies import bootstrap_document
 from moonmind.omnigent.policies import compile_policy_snapshot
-from moonmind.omnigent.harness_platform.execution_plan import (
-    execution_plan_support_evidence,
+from moonmind.omnigent.execution_support_evidence import (
+    EXECUTION_SUPPORT_EVIDENCE_ISSUER,
+    EXECUTION_SUPPORT_EVIDENCE_VERSION,
 )
 from moonmind.omnigent.session_supervisor_rollback import (
     SUPERVISOR_ROLLBACK_POLICY_VERSION,
@@ -127,6 +129,37 @@ def _policy_snapshot(
     )
 
 
+def _protected_support_evidence(plan_payload) -> dict[str, object]:
+    now = datetime.now(UTC)
+    return {
+        "schemaVersion": EXECUTION_SUPPORT_EVIDENCE_VERSION,
+        "evidenceIssuer": EXECUTION_SUPPORT_EVIDENCE_ISSUER,
+        "status": "passed",
+        "sourceCommit": "abc1234",
+        "protectedRunRef": "https://example.invalid/actions/runs/123",
+        "evidenceManifestRef": "artifact://protected-evidence-manifest",
+        "evidenceManifestDigest": "sha256:" + "6" * 64,
+        "generatedAt": now.isoformat(),
+        "expiresAt": (now + timedelta(days=7)).isoformat(),
+        "supportClassification": "fully_managed",
+        "supportCombinationKey": plan_payload.supportCombinationKey,
+        "supportIdentity": plan_payload.supportIdentity.model_dump(
+            mode="json", by_alias=True
+        ),
+        "hostImageRef": plan_payload.hostImageRef,
+        "policySnapshotDigest": plan_payload.policySnapshotDigest,
+        "effectiveLaunchSnapshotDigest": (
+            plan_payload.effectiveLaunchSnapshotDigest
+        ),
+        "policyGateRef": "deployment-ready",
+        "policyQualified": True,
+        "exactArtifactsVerified": True,
+        "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
+        "replayCompatibilityVersion": OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        "rollbackPolicyVersion": SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    }
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("harness", "policy", "realizer"),
@@ -139,6 +172,11 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
     monkeypatch, harness: str, policy: str, realizer: str
 ) -> None:
     monkeypatch.setattr(service, "DbExecutionPlanStore", _PlanStore)
+    monkeypatch.setattr(
+        service,
+        "load_protected_execution_support_evidence",
+        _protected_support_evidence,
+    )
     async def resolve_policy(**_kwargs):
         return _policy_snapshot(harness=harness, policy=policy)
 
@@ -199,12 +237,12 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
     assert admission.rollbackPolicyVersion == SUPERVISOR_ROLLBACK_POLICY_VERSION
     support_artifact_id = admission.supportEvidenceRef.removeprefix("artifact:")
     support_payload = json.loads(artifacts.payloads[support_artifact_id])
-    assert support_payload == execution_plan_support_evidence(
-        result.envelope.payload,
-        feature_generation=OMNIGENT_SESSION_FEATURE_GENERATION,
-        replay_compatibility_version=OMNIGENT_SESSION_COMPATIBILITY_VERSION,
-        rollback_policy_version=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    assert support_payload["schemaVersion"] == EXECUTION_SUPPORT_EVIDENCE_VERSION
+    assert (
+        support_payload["supportCombinationKey"]
+        == result.envelope.payload.supportCombinationKey
     )
+    assert support_payload["policyQualified"] is True
     assert result.binding.plan_ref == result.envelope.planRef
     serialized = json.dumps(
         result.envelope.model_dump(mode="json", by_alias=True), sort_keys=True

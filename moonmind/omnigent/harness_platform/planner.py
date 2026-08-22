@@ -391,6 +391,9 @@ def compile_execution_plan(
             "policySnapshotDigest": policy_snapshot_digest,
             "effectiveLaunchSnapshotRef": effective_launch_snapshot_ref,
             "effectiveLaunchSnapshotDigest": effective_launch_snapshot_digest,
+            "supportIdentity": support_payload.model_dump(
+                by_alias=True, mode="json"
+            ),
             "supportCombinationKey": support_key,
         }
     )

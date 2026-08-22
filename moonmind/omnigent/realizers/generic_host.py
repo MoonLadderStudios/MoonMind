@@ -21,7 +21,6 @@ materializers, Agent Profiles, conformance evidence.
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from moonmind.omnigent.harness_platform.execution_plan import OmnigentExecutionPlanEnvelope
@@ -127,20 +126,12 @@ class GenericOmnigentHostRealizer:
                 run_store=run_store,
             )
 
-        # Fallback: direct driver (no host materialization in this stub)
-        # This path still validates that the realizer contains no per-harness
-        # execution branches – the harnessId is data, not a branch.
         from moonmind.omnigent.host_runtime import GenericOmnigentHostRuntime
 
-        # Use shared services for workspace/skills/egress/cleanup extraction
-        # (Phase 2). For now, GenericOmnigentHostRuntime is a thin wrapper
-        # that validates attestation via harness_platform.
-
-        # If no host_runtime injected, create one with default services
+        # The default path must cross the production host boundary. Tests inject
+        # or patch that boundary explicitly; runtime environment names never
+        # authorize a synthetic host identity.
         host_runtime = GenericOmnigentHostRuntime()
-        # In hermetic tests, host_runtime.realize may be mocked to attest
-        # without docker; we attempt but fall back to direct execution if no
-        # docker backend.
         try:
             host_ctx = await host_runtime.realize(
                 request=request,
@@ -153,31 +144,14 @@ class GenericOmnigentHostRealizer:
             session_factory = self._session_factory or async_session_maker
             artifact_gateway = LocalOmnigentArtifactGateway()
             run_store = OmnigentBridgeSessionStore(session_factory)
-            return await run_omnigent_execution(enriched, artifact_gateway=artifact_gateway, run_store=run_store)
+            return await run_omnigent_execution(
+                enriched,
+                artifact_gateway=artifact_gateway,
+                run_store=run_store,
+            )
         except HarnessPlatformError:
             raise
         except Exception as exc:
-            # In test environments without docker, fall back to direct driver
-            # with a synthetic host ctx that still validates attestation logic
-            # but does not require container launch.
-            if os.getenv("PYTEST_CURRENT_TEST"):
-                # Hermetic: synthesize attestation and proceed to driver
-                from api_service.db.base import async_session_maker
-                from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
-                from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-
-                session_factory = self._session_factory or async_session_maker
-                artifact_gateway = LocalOmnigentArtifactGateway()
-                run_store = OmnigentBridgeSessionStore(session_factory)
-                # Synthesize minimal host ctx for harness-neutral execution
-                synthetic_ctx = {
-                    "hostId": f"host_synthetic_{plan.payload.harnessId}",
-                    "workspacePath": "/workspaces/run",
-                    "hostClassRef": plan.payload.hostClassRef,
-                    "launchPolicyRef": plan.payload.launchPolicyRef,
-                }
-                enriched = self._bind_host_to_request(request, synthetic_ctx)
-                return await run_omnigent_execution(enriched, artifact_gateway=artifact_gateway, run_store=run_store)
             raise HarnessPlatformError(
                 f"generic host realization failed: {exc}",
                 code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
@@ -192,9 +166,18 @@ class GenericOmnigentHostRealizer:
         parameters = dict(request.parameters or {})
         omnigent = dict(parameters.get("omnigent") or {})
         session = dict(omnigent.get("session") or {})
+        host_id = str(
+            host_ctx.get("hostId") or host_ctx.get("omnigentHostId") or ""
+        ).strip()
+        workspace_path = str(host_ctx.get("workspacePath") or "").strip()
+        if not host_id or not workspace_path:
+            raise HarnessPlatformError(
+                "generic host realization returned incomplete live authority",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
+            )
         session["hostType"] = "external"
-        session["hostId"] = host_ctx.get("hostId") or host_ctx.get("omnigentHostId") or "host_synthetic"
-        session["workspace"] = host_ctx.get("workspacePath") or "/workspaces/run"
+        session["hostId"] = host_id
+        session["workspace"] = workspace_path
         omnigent["session"] = session
         omnigent["_moonmindProfileAuthorization"] = {
             "hostClassRef": host_ctx.get("hostClassRef"),
@@ -218,7 +201,9 @@ class GenericOmnigentHostRealizer:
                 pass
         # 2. Clean up materialized credential state
         try:
-            from moonmind.omnigent.harness_platform.materializers import cleanup_opencode_auth
+            from moonmind.omnigent.harness_platform.materializers import (
+                cleanup_opencode_auth,
+            )
 
             # Best-effort cleanup for opencode; other materializers have their own cleanup
             cleanup_opencode_auth(host_root="/")

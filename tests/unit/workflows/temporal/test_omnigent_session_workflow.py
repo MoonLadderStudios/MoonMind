@@ -26,6 +26,7 @@ from moonmind.omnigent.reconciler import (
     classify_provider_status,
 )
 from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
     AgentRunResult,
     OmnigentExecutionPlanBinding,
 )
@@ -35,6 +36,7 @@ from moonmind.omnigent.session_supervisor_rollback import (
 )
 from moonmind.schemas.omnigent_session_models import (
     OMNIGENT_SESSION_FEATURE_GENERATION,
+    OmnigentResolveIntentRequest,
     OmnigentPersistFailureRequest,
     OmnigentFailureAuthorityRequest,
     OmnigentSessionAdmissionDecision,
@@ -104,6 +106,126 @@ def test_workflow_input_is_compact_closed_and_reference_only() -> None:
         _workflow_input(compiledExecutionIntentRef="/tmp/intent.json")
     with pytest.raises(ValidationError):
         _workflow_input(admittedFeatureGeneration="omnigent-session-v2")
+
+
+def test_agent_run_resolve_handoff_is_compact_with_legacy_replay_decode() -> None:
+    binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "a" * 64,
+        planDigest="sha256:" + "a" * 64,
+        planArtifactRef="art-plan",
+        taskInputSnapshotRef="art-task",
+        taskInputSnapshotDigest="sha256:" + "b" * 64,
+    )
+    compact = OmnigentResolveIntentRequest(
+        workflowId="workflow-1",
+        stepExecutionId="step-1",
+        agentRunId="agent-run-1",
+        omnigentExecutionPlan=binding,
+    ).model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    assert set(compact) == {
+        "workflowId",
+        "stepExecutionId",
+        "agentRunId",
+        "omnigentExecutionPlan",
+        "admittedFeatureGeneration",
+        "compatibilityVersion",
+    }
+    assert len(json.dumps(compact)) < 1_500
+    assert "request" not in compact
+
+    legacy = OmnigentResolveIntentRequest.model_validate(
+        {
+            "workflowId": "workflow-1",
+            "stepExecutionId": "step-1",
+            "agentRunId": "agent-run-1",
+            "request": {"persisted": "legacy-history-payload"},
+        }
+    )
+    assert legacy.request == {"persisted": "legacy-history-payload"}
+
+    with pytest.raises(ValidationError, match="exactly one persisted plan authority"):
+        OmnigentResolveIntentRequest(
+            workflowId="workflow-1",
+            stepExecutionId="step-1",
+            agentRunId="agent-run-1",
+            omnigentExecutionPlan=binding,
+            request={"persisted": "ambiguous-authority-payload"},
+        )
+
+
+@pytest.mark.asyncio
+async def test_compact_plan_handoff_reconstructs_selected_authored_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = {
+        "schemaVersion": "task-input-snapshot/v1",
+        "attachmentRefs": [{"artifactRef": "art-top-level"}],
+        "draft": {
+            "repository": "MoonLadderStudios/MoonMind",
+            "targetRuntime": "omnigent",
+            "requiredCapabilities": ["readResources"],
+            "workflow": {
+                "instructions": "Root instructions must not replace a selected step.",
+                "inputAttachments": [{"artifactId": "art-workflow"}],
+                "steps": [
+                    {"id": "prepare", "instructions": "Prepare the workspace."},
+                    {
+                        "id": "implement",
+                        "instructions": "Implement the selected change.",
+                        "inputAttachments": [{"ref": "art-step"}],
+                    },
+                ],
+            },
+        },
+    }
+    snapshot_digest = omnigent_session_activities._digest_bytes(
+        omnigent_session_activities._json_bytes(snapshot)
+    )
+    binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "1" * 64,
+        planDigest="sha256:" + "1" * 64,
+        planArtifactRef="art-plan",
+        taskInputSnapshotRef="art-task-snapshot",
+        taskInputSnapshotDigest=snapshot_digest,
+    )
+    plan = SimpleNamespace(
+        payload=SimpleNamespace(
+            authority=SimpleNamespace(
+                taskInputSnapshotRef=binding.task_input_snapshot_ref,
+                taskInputSnapshotDigest=binding.task_input_snapshot_digest,
+            ),
+            credentialBindings={
+                "primary-model": SimpleNamespace(
+                    providerProfileRef="provider-profile-1"
+                )
+            },
+            resolvedSkills={"resolvedSkillSetRef": "artifact:art-skills"},
+            harnessId="opencode-native",
+            launchPolicyRef="opencode-on-demand@1",
+            agentSource={"upstreamId": "opencode-ai/opencode"},
+        )
+    )
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_read_json_artifact",
+        AsyncMock(return_value=snapshot),
+    )
+
+    request = await omnigent_session_activities._reconstruct_plan_bound_request(
+        binding=binding,
+        plan=plan,
+        workflow_id="workflow-1",
+        step_execution_id="step-execution-1",
+        agent_run_id="agent-run-1",
+        logical_step_id="implement",
+    )
+
+    assert request.instruction_ref == "Implement the selected change."
+    assert request.instruction_ref != binding.task_input_snapshot_ref
+    assert request.idempotency_key == "step-execution-1"
+    assert request.input_refs == ["art-top-level", "art-workflow", "art-step"]
+    assert request.resolved_skillset_ref == "art-skills"
 
 
 def test_activity_request_carries_one_atomic_runtime_binding_fence() -> None:
@@ -328,14 +450,21 @@ async def test_plan_admission_rejects_mismatched_support_artifact(
     monkeypatch.setattr(
         omnigent_session_activities, "_read_json_artifact", read_support
     )
-    from moonmind.omnigent.harness_platform import execution_plan
+    from moonmind.omnigent import execution_support_evidence
 
     monkeypatch.setattr(
-        execution_plan,
-        "execution_plan_support_evidence",
-        lambda *_args, **_kwargs: {
-            "supportCombinationKey": "support:expected"
-        },
+        execution_support_evidence,
+        "validate_protected_execution_support_evidence",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    def reject_mismatch(*_args, **_kwargs) -> None:
+        raise ValueError("protected support evidence conflicts with the execution plan")
+
+    monkeypatch.setattr(
+        execution_support_evidence,
+        "assert_protected_evidence_matches_plan",
+        reject_mismatch,
     )
 
     with pytest.raises(ValueError, match="support evidence conflicts"):
@@ -883,6 +1012,20 @@ async def test_snapshot_requires_stable_marked_turn_before_idle_terminal(
     await omnigent_session_activities.omnigent_observe_snapshot_activity(request)
     assert len(writes) == 2
 
+    # The provider snapshot may remain byte-identical after terminal state is
+    # recorded. Resource authority changed, so persist a new bounded index for
+    # harvest/cleanup instead of deduplicating against pre-terminal evidence.
+    session.terminal_state = "completed"
+    session.terminal_evidence_ref = "artifact://terminal-evidence"
+    await omnigent_session_activities.omnigent_observe_snapshot_activity(request)
+    assert len(writes) == 3
+    terminal_resource_index = dict(writes[-1]["bounded_index"])
+    assert terminal_resource_index["evidence"] == {
+        "observedAt": terminal_resource_index["evidence"]["observedAt"],
+        "terminalEvidenceAvailable": True,
+        "artifactsAvailable": True,
+    }
+
     session.cleanup_state = "host_stopped"
     client_state["available"] = False
     unavailable = (
@@ -1117,7 +1260,11 @@ async def test_timeout_reconciles_authoritative_snapshot_before_terminal_intent(
                     mode="json", by_alias=True, exclude_none=True
                 ),
                 "phase": "turn_in_flight",
-                "timeoutAt": (now - timedelta(seconds=1)).isoformat(),
+                # SQLite persistence returns this UTC contract timestamp
+                # without tzinfo; the workflow clock remains UTC-aware.
+                "timeoutAt": (
+                    now.replace(tzinfo=None) - timedelta(seconds=1)
+                ).isoformat(),
             }
         if activity_name == "omnigent.heartbeat_host_lease":
             return {"hostLeaseHeartbeat": "renewed"}
@@ -1186,6 +1333,7 @@ def test_agent_run_patch_preserves_legacy_replay_and_selects_new_supervisor() ->
 
     assert "OMNIGENT_SESSION_SUPERVISOR_PATCH_ID" in source
     assert "OMNIGENT_SESSION_ADMISSION_PATCH_ID" in source
+    assert "OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID" in source
     assert '"omnigent.evaluate_session_admission"' in source
     assert '"MoonMind.OmnigentSession"' in source
     assert "omnigent_session_workflow_id" in source
@@ -1193,6 +1341,53 @@ def test_agent_run_patch_preserves_legacy_replay_and_selects_new_supervisor() ->
     assert '"cancel_or_interrupt_requested"' in source
     assert "OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID" in source
     assert '"integration.omnigent.profile_bound_execute"' in source
+    resolve_call = source.split('"omnigent.resolve_intent"', 1)[1].split(
+        "cancellation_type", 1
+    )[0]
+    assert "_omnigent_resolve_intent_payload" in resolve_call
+    assert "compact_plan_authority" in resolve_call
+
+
+def test_agent_run_compact_intent_patch_preserves_legacy_activity_shape() -> None:
+    binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "1" * 64,
+        planDigest="sha256:" + "1" * 64,
+        planArtifactRef="art_plan",
+        taskInputSnapshotRef="art_task",
+        taskInputSnapshotDigest="sha256:" + "2" * 64,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="profile-1",
+        omnigentExecutionPlan=binding,
+        correlationId="workflow-1",
+        idempotencyKey="step-1",
+        instructionRef="art_task",
+        parameters={"providerPayload": "must-not-enter-new-history"},
+    )
+    common = {
+        "workflow_id": "workflow-1",
+        "step_execution_id": "step-1",
+        "agent_run_id": "agent-run-1",
+        "admitted_feature_generation": OMNIGENT_SESSION_FEATURE_GENERATION,
+    }
+
+    compact = MoonMindAgentRun._omnigent_resolve_intent_payload(
+        request, compact_plan_authority=True, **common
+    )
+    legacy = MoonMindAgentRun._omnigent_resolve_intent_payload(
+        request, compact_plan_authority=False, **common
+    )
+
+    assert compact["omnigentExecutionPlan"] == binding.model_dump(
+        mode="json", by_alias=True
+    )
+    assert "request" not in compact
+    assert "providerPayload" not in json.dumps(compact)
+    assert legacy["request"]["parameters"]["providerPayload"] == (
+        "must-not-enter-new-history"
+    )
 
 
 # ---------------------------------------------------------------------------

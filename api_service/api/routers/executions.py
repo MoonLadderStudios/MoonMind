@@ -12157,6 +12157,7 @@ async def create_remediation_execution(
         "profileId",
         "providerProfile",
         "agentProfile",
+        "omnigent",
         "idempotencyKey",
         "schedule",
         "runtimeInheritance",

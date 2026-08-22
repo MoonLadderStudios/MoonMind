@@ -231,6 +231,9 @@ OMNIGENT_SESSION_SUPERVISOR_PATCH_ID = (
 OMNIGENT_SESSION_ADMISSION_PATCH_ID = (
     "agent-run-omnigent-session-admission-v1"
 )
+OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID = (
+    "agent-run-omnigent-compact-resolve-intent-v1"
+)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID = (
     "agent-run-managed-status-rollout-tolerance-v1"
@@ -576,6 +579,47 @@ class MoonMindAgentRun:
         # Older direct AgentRun callers do not have a Step Execution envelope.
         # Their immutable request idempotency key is the canonical fallback.
         return owner_workflow_id, request.idempotency_key
+
+    @staticmethod
+    def _omnigent_resolve_intent_payload(
+        request: AgentExecutionRequest,
+        *,
+        workflow_id: str,
+        step_execution_id: str,
+        agent_run_id: str,
+        admitted_feature_generation: str,
+        compact_plan_authority: bool,
+    ) -> dict[str, Any]:
+        """Build the replay-versioned AgentRun-to-Activity handoff.
+
+        Histories created before the compact contract must continue to emit the
+        request body recorded in their Activity command. New plan-bound runs
+        carry only immutable plan/task refs and digests; the Activity reloads
+        authored input from the artifact system.
+        """
+
+        payload: dict[str, Any] = {
+            "workflowId": workflow_id,
+            "stepExecutionId": step_execution_id,
+            "agentRunId": agent_run_id,
+            "admittedFeatureGeneration": admitted_feature_generation,
+        }
+        if compact_plan_authority:
+            binding = request.omnigent_execution_plan
+            if binding is None:
+                raise ValueError(
+                    "compact Omnigent intent handoff requires persisted plan authority"
+                )
+            payload["omnigentExecutionPlan"] = binding.model_dump(
+                mode="json", by_alias=True
+            )
+            if request.step_execution is not None:
+                payload["logicalStepId"] = request.step_execution.logical_step_id
+        else:
+            payload["request"] = request.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        return payload
 
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
         try:
@@ -4302,6 +4346,9 @@ class MoonMindAgentRun:
         use_omnigent_session_admission = workflow.patched(
             OMNIGENT_SESSION_ADMISSION_PATCH_ID
         )
+        use_compact_omnigent_resolve_intent = workflow.patched(
+            OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID
+        )
         requested_execution_profile_ref = request.execution_profile_ref
         resiliency_policy: Mapping[str, Any] = {}
         if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
@@ -5153,19 +5200,19 @@ class MoonMindAgentRun:
                             )
                             resolved_input = await self._execute_routed_activity(
                                 "omnigent.resolve_intent",
-                                {
-                                    "request": request.model_dump(
-                                        mode="json",
-                                        by_alias=True,
-                                        exclude_none=True,
-                                    ),
-                                    "workflowId": owner_workflow_id,
-                                    "stepExecutionId": step_execution_id,
-                                    "agentRunId": workflow.info().workflow_id,
-                                    "admittedFeatureGeneration": (
+                                self._omnigent_resolve_intent_payload(
+                                    request,
+                                    workflow_id=owner_workflow_id,
+                                    step_execution_id=step_execution_id,
+                                    agent_run_id=workflow.info().workflow_id,
+                                    admitted_feature_generation=(
                                         admitted_feature_generation
                                     ),
-                                },
+                                    compact_plan_authority=(
+                                        use_compact_omnigent_resolve_intent
+                                        and plan_bound_session
+                                    ),
+                                ),
                                 cancellation_type=(
                                     ActivityCancellationType.TRY_CANCEL
                                 ),

@@ -282,12 +282,8 @@ async def _resolve_intent(payload: dict[str, Any]) -> dict[str, Any]:
     STATE["workflow_id"] = str(payload["workflowId"])
     STATE["step_execution_id"] = str(payload["stepExecutionId"])
     STATE["agent_run_id"] = str(payload["agentRunId"])
-    request_payload = payload.get("request")
-    execution_plan = (
-        request_payload.get("omnigentExecutionPlan")
-        if isinstance(request_payload, dict)
-        else None
-    )
+    assert "request" not in payload
+    execution_plan = payload.get("omnigentExecutionPlan")
     STATE["execution_plan"] = execution_plan
     session_id = canonical_omnigent_session_id(
         workflow_id=str(payload["workflowId"]),

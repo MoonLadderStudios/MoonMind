@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from typing import Any, Mapping
@@ -156,6 +157,43 @@ def _bind_terminal_evidence_ref(
     )
     return terminal.model_copy(
         update={"result_ref": evidence_ref, "result": result}
+    )
+
+
+def _bind_terminal_plan_authority(
+    terminal: OmnigentSessionTerminalResult,
+    *,
+    plan_binding: OmnigentExecutionPlanBinding | None,
+    runtime_binding_state: Any | None,
+) -> OmnigentSessionTerminalResult:
+    """Project immutable plan and current fenced binding into a result."""
+
+    if plan_binding is None:
+        return terminal
+    metadata = dict(terminal.result.metadata)
+    metadata.update(
+        {
+            "executionPlanRef": plan_binding.plan_ref,
+            "executionPlanDigest": plan_binding.plan_digest,
+        }
+    )
+    if runtime_binding_state is not None:
+        metadata.update(
+            {
+                "runtimeBindingRef": (
+                    runtime_binding_state.binding.runtimeBindingRef
+                ),
+                "runtimeBindingRevision": runtime_binding_state.revision,
+                "runtimeBindingFencingGeneration": (
+                    runtime_binding_state.fencing_generation
+                ),
+                "runtimeBindingState": runtime_binding_state.state,
+            }
+        )
+    return terminal.model_copy(
+        update={
+            "result": terminal.result.model_copy(update={"metadata": metadata})
+        }
     )
 
 
@@ -382,9 +420,29 @@ async def _load_intent_request(
     if _digest_bytes(body) != parsed.compiled_execution_intent_digest:
         raise ValueError("agent execution request snapshot digest mismatch")
     raw_request = payload.get("request")
-    if not isinstance(raw_request, Mapping):
-        raise ValueError("agent execution request snapshot is missing request data")
-    agent_request = AgentExecutionRequest.model_validate(raw_request)
+    if isinstance(raw_request, Mapping):
+        # Replay path for request snapshots created before the compact
+        # plan/task-snapshot contract. New snapshots never persist authored
+        # request bodies here.
+        agent_request = AgentExecutionRequest.model_validate(raw_request)
+    else:
+        binding_payload = payload.get("omnigentExecutionPlan")
+        if not isinstance(binding_payload, Mapping):
+            raise ValueError("intent snapshot lacks persisted execution-plan authority")
+        binding_from_intent = OmnigentExecutionPlanBinding.model_validate(
+            binding_payload
+        )
+        plan = await _load_verified_execution_plan(binding_from_intent)
+        agent_request = await _reconstruct_plan_bound_request(
+            binding=binding_from_intent,
+            plan=plan,
+            workflow_id=str(payload.get("workflowId") or ""),
+            step_execution_id=str(payload.get("stepExecutionId") or ""),
+            agent_run_id=str(payload.get("agentRunId") or ""),
+            logical_step_id=(
+                str(payload.get("logicalStepId") or "").strip() or None
+            ),
+        )
     binding = parsed.omnigent_execution_plan or agent_request.omnigent_execution_plan
     if binding is not None:
         if agent_request.omnigent_execution_plan != binding:
@@ -392,6 +450,189 @@ async def _load_intent_request(
         plan = await _load_verified_execution_plan(binding)
         agent_request = _bind_request_to_execution_plan(agent_request, plan)
     return agent_request
+
+
+async def _reconstruct_plan_bound_request(
+    *,
+    binding: OmnigentExecutionPlanBinding,
+    plan: Any,
+    workflow_id: str,
+    step_execution_id: str,
+    agent_run_id: str,
+    logical_step_id: str | None = None,
+) -> AgentExecutionRequest:
+    """Reload authored input and project it through immutable plan authority."""
+
+    snapshot = await _read_json_artifact(binding.task_input_snapshot_ref)
+    if _digest_bytes(_json_bytes(snapshot)) != binding.task_input_snapshot_digest:
+        raise ValueError("task-input snapshot digest conflicts with execution plan")
+    authority = plan.payload.authority
+    if authority is None or (
+        authority.taskInputSnapshotRef != binding.task_input_snapshot_ref
+        or authority.taskInputSnapshotDigest != binding.task_input_snapshot_digest
+    ):
+        raise ValueError("task-input snapshot is not owned by the execution plan")
+
+    draft = snapshot.get("draft")
+    target = snapshot.get("target")
+    if isinstance(draft, Mapping):
+        workflow = dict(draft.get("workflow") or {})
+        repository = str(draft.get("repository") or "").strip()
+        required_capabilities = list(draft.get("requiredCapabilities") or [])
+        authored_parameters: dict[str, Any] = {
+            "repository": repository,
+            "targetRuntime": str(draft.get("targetRuntime") or "omnigent"),
+            "requiredCapabilities": required_capabilities,
+            "workflow": workflow,
+        }
+    elif isinstance(target, Mapping):
+        raw_parameters = target.get("initialParameters")
+        if not isinstance(raw_parameters, Mapping):
+            raise ValueError("scheduled task snapshot lacks authored parameters")
+        authored_parameters = dict(raw_parameters)
+        workflow_value = authored_parameters.get("workflow")
+        workflow = (
+            dict(workflow_value) if isinstance(workflow_value, Mapping) else {}
+        )
+        repository = str(authored_parameters.get("repository") or "").strip()
+        required_capabilities = list(
+            authored_parameters.get("requiredCapabilities") or []
+        )
+    else:
+        raise ValueError("task-input snapshot has an unsupported authority shape")
+
+    selected_workflow = workflow
+    steps = workflow.get("steps")
+    if logical_step_id and isinstance(steps, list):
+        matches = [
+            item
+            for item in steps
+            if isinstance(item, Mapping)
+            and str(item.get("id") or "").strip() == logical_step_id
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "task-input snapshot lacks the selected logical Step authority"
+            )
+        selected_workflow = dict(matches[0])
+    instruction = str(selected_workflow.get("instructions") or "").strip()
+    if not instruction:
+        instruction = str(workflow.get("instructions") or "").strip()
+    if not instruction:
+        raise ValueError("task-input snapshot lacks authored execution instructions")
+
+    profile_refs = {
+        item.providerProfileRef
+        for item in plan.payload.credentialBindings.values()
+    }
+    if len(profile_refs) != 1:
+        raise ValueError("execution plan has ambiguous Provider Profile authority")
+    resolved_skillset_ref = str(
+        plan.payload.resolvedSkills.get("resolvedSkillSetRef") or ""
+    ).removeprefix("artifact:")
+    execution_target = {
+        "codex-native": "omnigent-codex@1",
+        "opencode-native": "omnigent-opencode@1",
+        "pi-native": "omnigent-pi@1",
+    }.get(plan.payload.harnessId)
+    if not execution_target:
+        raise ValueError("execution plan harness lacks a product execution target")
+    omnigent = dict(authored_parameters.get("omnigent") or {})
+    omnigent.update(
+        {
+            "executionTargetRef": execution_target,
+            "launchPolicyRef": plan.payload.launchPolicyRef,
+            "agent": {
+                **dict(omnigent.get("agent") or {}),
+                "agentId": str(
+                    plan.payload.agentSource.get("upstreamId") or ""
+                ).strip()
+                or None,
+                "harnessOverride": plan.payload.harnessId,
+            },
+            "session": {
+                "hostType": "managed",
+                "allowEmptyWorkspace": True,
+                **dict(omnigent.get("session") or {}),
+            },
+        }
+    )
+    authored_parameters.update(
+        {
+            "repository": repository,
+            "targetRuntime": "omnigent",
+            "requiredCapabilities": required_capabilities,
+            "workflow": workflow,
+            "omnigent": omnigent,
+        }
+    )
+    publish = workflow.get("publish")
+    if isinstance(publish, Mapping) and publish.get("mode"):
+        authored_parameters["publishMode"] = publish["mode"]
+    attachment_refs: list[str] = []
+    for values in (
+        snapshot.get("attachmentRefs") or [],
+        workflow.get("inputAttachments") or [],
+        selected_workflow.get("inputAttachments") or [],
+    ):
+        if not isinstance(values, list):
+            continue
+        for item in values:
+            if not isinstance(item, Mapping):
+                continue
+            ref = str(
+                item.get("artifactRef")
+                or item.get("artifactId")
+                or item.get("ref")
+                or ""
+            ).strip()
+            if ref and ref not in attachment_refs:
+                attachment_refs.append(ref)
+    workspace_spec = (
+        dict(workflow.get("workspace") or {})
+        if isinstance(workflow.get("workspace"), Mapping)
+        else {}
+    )
+    if "workspaceLocator" not in workspace_spec:
+        if not workflow_id or not step_execution_id:
+            raise ValueError(
+                "compact plan handoff lacks workspace owner identity"
+            )
+        workspace_id = hashlib.sha256(
+            f"{workflow_id}:{step_execution_id}".encode("utf-8")
+        ).hexdigest()[:24]
+        workspace_spec["workspaceLocator"] = {
+            "kind": "sandbox",
+            "workspaceId": workspace_id,
+            "relativePath": "repo",
+        }
+    return AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef=next(iter(profile_refs)),
+        omnigentExecutionPlan=binding,
+        correlationId=workflow_id,
+        # The Step Execution is the durable side-effect/idempotency owner. It
+        # also owns the sandbox workspace locator reconstructed above; using an
+        # AgentRun-local synthetic key here would make the production workspace
+        # resolver compute a different owner identity.
+        idempotencyKey=step_execution_id,
+        instructionRef=instruction,
+        resolvedSkillsetRef=resolved_skillset_ref,
+        inputRefs=[ref for ref in attachment_refs if ref],
+        workspaceSpec=workspace_spec,
+        parameters=authored_parameters,
+        timeoutPolicy=(
+            dict(workflow.get("timeoutPolicy") or {})
+            if isinstance(workflow.get("timeoutPolicy"), Mapping)
+            else {}
+        ),
+        retryPolicy=(
+            dict(workflow.get("retryPolicy") or {})
+            if isinstance(workflow.get("retryPolicy"), Mapping)
+            else {}
+        ),
+    )
 
 
 def _bind_request_to_execution_plan(
@@ -446,8 +687,9 @@ async def _validate_plan_admission_authority(persisted: Any) -> None:
     if admission_authority is None:
         return
 
-    from moonmind.omnigent.harness_platform.execution_plan import (
-        execution_plan_support_evidence,
+    from moonmind.omnigent.execution_support_evidence import (
+        assert_protected_evidence_matches_plan,
+        validate_protected_execution_support_evidence,
     )
     from moonmind.omnigent.session_supervisor_rollback import (
         SUPERVISOR_ROLLBACK_POLICY_VERSION,
@@ -476,14 +718,13 @@ async def _validate_plan_admission_authority(persisted: Any) -> None:
         admission_authority.supportEvidenceDigest
     ):
         raise ValueError("execution support evidence digest conflicts with the plan")
-    expected_support_evidence = execution_plan_support_evidence(
-        persisted.payload,
-        feature_generation=OMNIGENT_SESSION_FEATURE_GENERATION,
-        replay_compatibility_version=OMNIGENT_SESSION_COMPATIBILITY_VERSION,
-        rollback_policy_version=SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    protected_evidence = validate_protected_execution_support_evidence(
+        support_evidence,
+        expected_source_commit=(
+            os.getenv("MOONMIND_SOURCE_COMMIT", "").strip() or None
+        ),
     )
-    if support_evidence != expected_support_evidence:
-        raise ValueError("execution support evidence conflicts with the plan")
+    assert_protected_evidence_matches_plan(protected_evidence, persisted.payload)
 
 
 async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
@@ -1045,7 +1286,23 @@ async def omnigent_resolve_intent_activity(
     from api_service.db.base import async_session_maker
 
     resolved = OmnigentResolveIntentRequest.model_validate(payload)
-    request = AgentExecutionRequest.model_validate(resolved.request)
+    if resolved.request is not None:
+        # Replay-only decode for Activity inputs already persisted in Temporal.
+        request = AgentExecutionRequest.model_validate(resolved.request)
+        plan_binding = request.omnigent_execution_plan
+    else:
+        plan_binding = resolved.omnigent_execution_plan
+        if plan_binding is None:
+            raise ValueError("resolve intent lacks persisted plan authority")
+        execution_plan = await _load_verified_execution_plan(plan_binding)
+        request = await _reconstruct_plan_bound_request(
+            binding=plan_binding,
+            plan=execution_plan,
+            workflow_id=resolved.workflow_id,
+            step_execution_id=resolved.step_execution_id,
+            agent_run_id=resolved.agent_run_id,
+            logical_step_id=resolved.logical_step_id,
+        )
     if (
         request.agent_kind != "external"
         or request.agent_id.strip().lower() != "omnigent"
@@ -1077,12 +1334,19 @@ async def omnigent_resolve_intent_activity(
     turn_attempt_id = canonical_omnigent_turn_attempt_id(session_id)
     chat_binding_id = "omc_" + compute_digest(["chat", session_id])[:40]
     intent_payload = {
-        "schemaVersion": "omnigent-agent-execution-request-snapshot/v1",
+        "schemaVersion": "omnigent-plan-bound-intent-snapshot/v1",
         "sessionId": session_id,
         "workflowId": resolved.workflow_id,
         "stepExecutionId": resolved.step_execution_id,
         "agentRunId": resolved.agent_run_id,
-        "request": request.model_dump(mode="json", by_alias=True, exclude_none=True),
+        **(
+            {"logicalStepId": resolved.logical_step_id}
+            if resolved.logical_step_id is not None
+            else {}
+        ),
+        "omnigentExecutionPlan": request.omnigent_execution_plan.model_dump(
+            mode="json", by_alias=True
+        ),
     }
     intent_body = _json_bytes(intent_payload)
     intent_digest = _digest_bytes(intent_body)
@@ -1116,10 +1380,19 @@ async def omnigent_resolve_intent_activity(
                     "executionProfileRef": request.execution_profile_ref,
                     **(
                         {
-                            "executionPlanRef": request.omnigent_execution_plan.plan_ref,
-                            "executionPlanDigest": request.omnigent_execution_plan.plan_digest,
-                            "executionPlanArtifactRef": request.omnigent_execution_plan.plan_artifact_ref,
-                            "taskInputSnapshotRef": request.omnigent_execution_plan.task_input_snapshot_ref,
+                            "executionPlanRef": (
+                                request.omnigent_execution_plan.plan_ref
+                            ),
+                            "executionPlanDigest": (
+                                request.omnigent_execution_plan.plan_digest
+                            ),
+                            "executionPlanArtifactRef": (
+                                request.omnigent_execution_plan.plan_artifact_ref
+                            ),
+                            "taskInputSnapshotRef": (
+                                request.omnigent_execution_plan
+                                .task_input_snapshot_ref
+                            ),
                         }
                         if request.omnigent_execution_plan is not None
                         else {}
@@ -1448,6 +1721,11 @@ async def omnigent_load_reconciliation_inputs_activity(
             result_evidence_ref,
             metadata_key=metadata_key,
         )
+        terminal = _bind_terminal_plan_authority(
+            terminal,
+            plan_binding=request.omnigent_execution_plan,
+            runtime_binding_state=runtime_binding_state,
+        )
         response["terminalResult"] = terminal.model_dump(
             mode="json", by_alias=True
         )
@@ -1762,12 +2040,55 @@ async def omnigent_persist_signal_intents_activity(
     )
 
     request = OmnigentPersistSignalsRequest.model_validate(payload)
+    execution_plan = (
+        await _load_verified_execution_plan(request.omnigent_execution_plan)
+        if request.omnigent_execution_plan is not None
+        else None
+    )
     store = OmnigentControlPlaneStore(async_session_maker)
     applied = 0
     async with store.transaction() as repos:
         session = await repos.sessions.load_for_update(request.session_id)
         if session is None:
             raise KeyError(request.session_id)
+
+        # Workflow Chat, continuation, steering, cancellation, and cleanup
+        # signals all enter through this journal. Once a plan-bound session has
+        # live authority, reject an old supervisor task instead of applying its
+        # intent to a replacement host/session binding.
+        if execution_plan is not None:
+            if session.metadata.get("executionPlanRef") != execution_plan.planRef:
+                raise ValueError(
+                    "signal session conflicts with persisted execution plan"
+                )
+            recorded_runtime_ref = str(
+                session.metadata.get("runtimeBindingRef") or ""
+            )
+            if recorded_runtime_ref:
+                _runtime_store, runtime_state = (
+                    await _load_current_runtime_binding(
+                        execution_plan_ref=execution_plan.planRef,
+                        execution_scope_ref=str(
+                            session.moonmind_workflow_id or ""
+                        ),
+                        recorded_runtime_binding_ref=recorded_runtime_ref,
+                    )
+                )
+                if (
+                    request.runtime_binding_ref
+                    != runtime_state.binding.runtimeBindingRef
+                    or request.runtime_binding_revision
+                    != runtime_state.revision
+                    or request.runtime_binding_fencing_generation
+                    != runtime_state.fencing_generation
+                ):
+                    raise ValueError(
+                        "signal runtime-binding authority is obsolete"
+                    )
+            elif request.runtime_binding_ref is not None:
+                raise ValueError(
+                    "signal supplied runtime authority before acquisition"
+                )
 
         already_applied = True
         for item in request.signals:
@@ -1984,18 +2305,53 @@ async def omnigent_ensure_provider_profile_lease_activity(
             create_runtime_binding,
         )
 
-        provider_leases = {
-            slot: {
+        provider_leases: dict[str, dict[str, Any]] = {}
+        for slot, binding in execution_plan.payload.credentialBindings.items():
+            credential_runtime_ref = (
+                f"credential-runtime:{lease.lease_id}:"
+                f"{int(profile.credential_generation)}"
+            )
+            if (
+                execution_plan.payload.executionRealizerRef
+                == "generic-omnigent-host@1"
+            ):
+                from moonmind.omnigent.harness_platform.materializers import (
+                    get_materializer,
+                    materialize_credential,
+                )
+
+                registered = get_materializer(binding.materializerRef)
+                if registered.requiredSecretRoles:
+                    from moonmind.omnigent.realizers.deployment_adapters import (
+                        credential_runtime_ref as compute_credential_runtime_ref,
+                    )
+
+                    credential_runtime_ref = compute_credential_runtime_ref(
+                        execution_plan_ref=execution_plan.planRef,
+                        provider_profile_ref=binding.providerProfileRef,
+                        provider_lease_ref=lease.lease_id,
+                        credential_generation=int(
+                            profile.credential_generation
+                        ),
+                        materializer_ref=binding.materializerRef,
+                    )
+                else:
+                    credential_runtime_ref = str(
+                        materialize_credential(
+                            materializer_ref=binding.materializerRef,
+                            provider_profile_ref=binding.providerProfileRef,
+                            provider_lease_ref=lease.lease_id,
+                            credential_generation=int(
+                                profile.credential_generation
+                            ),
+                        )["credentialRuntimeRef"]
+                    )
+            provider_leases[slot] = {
                 "providerProfileRef": binding.providerProfileRef,
                 "providerLeaseRef": lease.lease_id,
                 "credentialGeneration": int(profile.credential_generation),
-                "credentialRuntimeRef": (
-                    f"credential-runtime:{lease.lease_id}:"
-                    f"{int(profile.credential_generation)}"
-                ),
+                "credentialRuntimeRef": credential_runtime_ref,
             }
-            for slot, binding in execution_plan.payload.credentialBindings.items()
-        }
         runtime_store = DbRuntimeBindingStore(async_session_maker)
         execution_scope_ref = str(session_authority.moonmind_workflow_id or "")
         current_runtime_state = await runtime_store.get_current_state(
@@ -2163,6 +2519,301 @@ async def _omnigent_client_context():
     return http_client, client
 
 
+class _SessionEvidenceArtifactGateway:
+    """Persist generic-host evidence through the canonical artifact service."""
+
+    async def read(
+        self,
+        *,
+        artifact_id: str,
+        principal: str,
+        allow_restricted_raw: bool = False,
+    ) -> tuple[Any, bytes]:
+        from api_service.db.base import async_session_maker
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        del principal
+        async with async_session_maker() as session:
+            return await TemporalArtifactService(
+                TemporalArtifactRepository(session)
+            ).read(
+                artifact_id=_artifact_id(artifact_id),
+                principal=_ARTIFACT_PRINCIPAL,
+                allow_restricted_raw=allow_restricted_raw,
+            )
+
+    async def write_json(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        name: str,
+        payload: Any,
+        link_type: str,
+    ) -> str:
+        del request
+        return await _write_json_artifact(
+            name=name,
+            artifact_type=link_type,
+            payload=payload,
+        )
+
+
+def _generic_command_authority(
+    request: OmnigentSessionActivityRequest,
+) -> dict[str, Any]:
+    if not request.command_id:
+        raise ValueError("generic host side effect requires command authority")
+    return {
+        "commandId": request.command_id,
+        "claimToken": (
+            f"omnigent-session:{request.session_id}:{request.command_id}"
+        ),
+        "sessionId": request.session_id,
+        "turnAttemptId": request.turn_attempt_id or request.command_id,
+        "expectedSessionRevision": request.expected_revision,
+        "fencingGeneration": request.fencing_generation,
+    }
+
+
+async def _materialize_generic_credentials(
+    *,
+    request: OmnigentSessionActivityRequest,
+    plan: Any,
+    runtime_state: Any,
+    session_factory: Any,
+    materializer: Any,
+) -> list[dict[str, Any]]:
+    """Materialize only the generations recorded by the current binding."""
+
+    from api_service.db.models import ManagedAgentProviderProfile
+    from moonmind.omnigent.harness_platform.materializers import (
+        get_materializer,
+        materialize_credential,
+    )
+
+    command_authority = _generic_command_authority(request)
+    handles: list[dict[str, Any]] = []
+    for slot, planned_binding in sorted(
+        plan.payload.credentialBindings.items()
+    ):
+        acquired = runtime_state.binding.providerLeases.get(slot)
+        if acquired is None:
+            raise ValueError(
+                f"runtime binding has no acquired authority for slot {slot}"
+            )
+        if acquired.providerProfileRef != planned_binding.providerProfileRef:
+            raise ValueError(
+                f"runtime binding Provider Profile conflicts for slot {slot}"
+            )
+        async with session_factory() as db_session:
+            profile = await db_session.get(
+                ManagedAgentProviderProfile,
+                acquired.providerProfileRef,
+            )
+        if profile is None or not profile.enabled:
+            raise ValueError("acquired Provider Profile is no longer available")
+        if int(profile.credential_generation) != acquired.credentialGeneration:
+            raise ValueError(
+                "Provider Profile generation changed after runtime binding"
+            )
+        registered = get_materializer(planned_binding.materializerRef)
+        if registered.requiredSecretRoles:
+            handle = await materializer.materialize(
+                profile=profile,
+                binding=planned_binding.model_dump(
+                    mode="json", by_alias=True
+                ),
+                provider_lease_ref=acquired.providerLeaseRef,
+                credential_generation=acquired.credentialGeneration,
+                execution_plan_ref=plan.planRef,
+                command_authority=command_authority,
+            )
+        else:
+            handle = materialize_credential(
+                materializer_ref=planned_binding.materializerRef,
+                provider_profile_ref=acquired.providerProfileRef,
+                provider_lease_ref=acquired.providerLeaseRef,
+                credential_generation=acquired.credentialGeneration,
+            )
+        if str(handle.get("credentialRuntimeRef") or "") != (
+            acquired.credentialRuntimeRef
+        ):
+            raise ValueError(
+                "materialized credential handle conflicts with runtime binding"
+            )
+        handles.append({**handle, "credentialSlot": slot})
+    return handles
+
+
+async def _ensure_generic_plan_host(
+    *,
+    request: OmnigentSessionActivityRequest,
+    agent_request: AgentExecutionRequest,
+    plan: Any,
+    session: Any,
+    control_store: Any,
+) -> dict[str, Any]:
+    """Run the recorded generic realizer without entering OAuth ownership."""
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
+    from moonmind.omnigent.harness_platform.host_classes import (
+        get_host_class,
+        get_launch_policy,
+    )
+    from moonmind.omnigent.host_runtime import GenericOmnigentHostRuntime
+    from moonmind.omnigent.realizers.deployment_adapters import (
+        DeploymentGenericHostServices,
+        TrustedCredentialMaterializer,
+    )
+
+    current_ref = str(session.metadata.get("runtimeBindingRef") or "")
+    runtime_store, runtime_state = await _load_current_runtime_binding(
+        execution_plan_ref=plan.planRef,
+        execution_scope_ref=str(session.moonmind_workflow_id or ""),
+        recorded_runtime_binding_ref=current_ref,
+    )
+    materializer = TrustedCredentialMaterializer(
+        session_factory=async_session_maker
+    )
+    credential_handles = await _materialize_generic_credentials(
+        request=request,
+        plan=plan,
+        runtime_state=runtime_state,
+        session_factory=async_session_maker,
+        materializer=materializer,
+    )
+    evidence_gateway = _SessionEvidenceArtifactGateway()
+    services = DeploymentGenericHostServices(
+        session_factory=async_session_maker,
+        artifact_gateway=evidence_gateway,
+        credential_materializer=materializer,
+    )
+    host_runtime = GenericOmnigentHostRuntime(
+        launcher=services,
+        workspace_service=services,
+        skill_service=services,
+        egress_service=services,
+        registration_waiter=services,
+        image_attestor=services,
+        cleanup_service=services,
+        context_service=services,
+    )
+    host = await host_runtime.realize(
+        request=agent_request,
+        plan=plan,
+        host_class=get_host_class(plan.payload.hostClassRef),
+        launch_policy=get_launch_policy(plan.payload.launchPolicyRef),
+        credential_handles=credential_handles,
+        runtime_binding_ref=runtime_state.binding.runtimeBindingRef,
+        command_authority=_generic_command_authority(request),
+    )
+    required = {
+        "hostBindingRef",
+        "hostLeaseRef",
+        "hostLeaseGeneration",
+        "omnigentHostId",
+        "hostHarnessAttestationRef",
+        "exactHostCapabilityDecisionRef",
+        "workspaceResolutionRef",
+        "modelOptionAttestationRef",
+        "skillDeliveryAttestationRef",
+    }
+    missing = sorted(key for key in required if not host.get(key))
+    if missing:
+        raise ValueError(
+            "generic realizer omitted exact host authority: "
+            + ", ".join(missing)
+        )
+    updated_binding = await runtime_store.update_with_host(
+        runtime_state.binding.runtimeBindingRef,
+        host_binding_ref=str(host["hostBindingRef"]),
+        host_lease_ref=str(host["hostLeaseRef"]),
+        host_lease_generation=int(host["hostLeaseGeneration"]),
+        omnigent_host_id=str(host["omnigentHostId"]),
+        host_harness_attestation_ref=str(
+            host["hostHarnessAttestationRef"]
+        ),
+        exact_host_capability_decision_ref=str(
+            host["exactHostCapabilityDecisionRef"]
+        ),
+        workspace_resolution_ref=str(host["workspaceResolutionRef"]),
+        model_option_attestation_ref=str(
+            host["modelOptionAttestationRef"]
+        ),
+        skill_delivery_attestation_ref=str(
+            host["skillDeliveryAttestationRef"]
+        ),
+        cleanup_authority_refs=[
+            str(host["hostLeaseRef"]),
+            *[
+                str(handle["cleanupRef"])
+                for handle in credential_handles
+                if handle.get("cleanupRef")
+            ],
+        ],
+        expected_revision=runtime_state.revision,
+        expected_fencing_generation=runtime_state.fencing_generation,
+    )
+    updated_state = await runtime_store.get_state(
+        updated_binding.runtimeBindingRef
+    )
+    if updated_state is None:
+        raise RuntimeError("generic host runtime binding could not be reloaded")
+    primary_lease = updated_binding.providerLeases["primary-model"]
+    bridge_store = OmnigentBridgeSessionStore(async_session_maker)
+    bridge = await bridge_store.bind_profile_authorization(
+        request=agent_request,
+        endpoint_ref=plan.payload.endpointRef,
+        provider_profile_id=primary_lease.providerProfileRef,
+        provider_lease_id=primary_lease.providerLeaseRef,
+        credential_generation=primary_lease.credentialGeneration,
+        host_binding_ref=str(host["hostBindingRef"]),
+        host_lease_ref=str(host["hostLeaseRef"]),
+        omnigent_host_id=str(host["omnigentHostId"]),
+        workspace=str(host.get("workspacePath") or "") or None,
+    )
+    async with control_store.transaction() as repositories:
+        updated_session = await repositories.sessions.bind_runtime_authority(
+            request.session_id,
+            expected_revision=session.revision,
+            expected_fencing_generation=request.fencing_generation,
+            host_binding_ref=str(host["hostBindingRef"]),
+            host_lease_ref=str(host["hostLeaseRef"]),
+            host_lease_generation=int(host["hostLeaseGeneration"]),
+            credential_generation=primary_lease.credentialGeneration,
+            metadata_patch={
+                "omnigentHostRef": str(host["omnigentHostId"]),
+                "hostHarness": plan.payload.harnessId,
+                "endpointRef": plan.payload.endpointRef,
+                "bridgeSessionRef": bridge.bridge_session_id,
+                "runtimeBindingRef": updated_binding.runtimeBindingRef,
+                "runtimeBindingRevision": updated_state.revision,
+                "runtimeBindingFencingGeneration": (
+                    updated_state.fencing_generation
+                ),
+                "runtimeBindingState": updated_state.state,
+            },
+        )
+    await _project_runtime_binding_to_execution(
+        workflow_id=str(updated_session.moonmind_workflow_id or ""),
+        state=updated_state,
+    )
+    settled = await _settle_command(request)
+    settled.update(
+        {
+            "revision": updated_session.revision,
+            "hostLeaseGeneration": updated_session.host_lease_generation,
+            "runtimeBindingRef": updated_binding.runtimeBindingRef,
+            "runtimeBindingRevision": updated_state.revision,
+        }
+    )
+    return settled
+
+
 async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Materialize and bind one exact host without returning mutable paths."""
 
@@ -2212,6 +2863,19 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
     provider_lease_id = str(session.metadata.get("providerLeaseRef") or "")
     if not provider_lease_id:
         raise ValueError("Provider Profile lease reference is missing")
+
+    if (
+        execution_plan is not None
+        and execution_plan.payload.executionRealizerRef
+        == "generic-omnigent-host@1"
+    ):
+        return await _ensure_generic_plan_host(
+            request=request,
+            agent_request=agent_request,
+            plan=execution_plan,
+            session=session,
+            control_store=store,
+        )
 
     hosts = OmnigentOAuthHostRepository(async_session_maker)
     binding = await hosts.get_binding_for_profile(session.provider_profile_id)
@@ -2882,6 +3546,7 @@ async def omnigent_submit_turn_activity(payload: Mapping[str, Any]) -> dict[str,
     from moonmind.omnigent.execute import (
         _persisted_pre_dispatch_item_ids,
         _build_omnigent_first_message,
+        _first_message_text,
         _first_message_marker,
         _snapshot_item_ids,
         _snapshot_contains_first_message_marker,
@@ -2939,6 +3604,25 @@ async def omnigent_submit_turn_activity(payload: Mapping[str, Any]) -> dict[str,
     durable_bridge = await bridge_store.get_existing(
         agent_request.idempotency_key
     )
+    if durable_bridge is not None and session.metadata.get(
+        "bridgeSessionRef"
+    ) != durable_bridge.bridge_session_id:
+        # The active turn's bridge row is durable correlation authority for
+        # transcript and terminal evidence. Continuations receive a distinct
+        # bridge row, so advance the canonical session projection before the
+        # provider message side effect.
+        async with store.transaction() as repos:
+            current = await repos.sessions.get(request.session_id)
+            if current is None:
+                raise KeyError(request.session_id)
+            session = await repos.sessions.bind_runtime_authority(
+                request.session_id,
+                expected_revision=current.revision,
+                expected_fencing_generation=request.fencing_generation,
+                metadata_patch={
+                    "bridgeSessionRef": durable_bridge.bridge_session_id,
+                },
+            )
     if durable_bridge is not None and durable_bridge.first_message_state in {
         "posted",
         "terminal",
@@ -2960,8 +3644,12 @@ async def omnigent_submit_turn_activity(payload: Mapping[str, Any]) -> dict[str,
         prompt=selection.prompt,
         artifact_gateway=LocalOmnigentArtifactGateway(),
     )
-    digest = hashlib.sha256(_json_bytes(message)).hexdigest()
     marker = _first_message_marker(request=agent_request)
+    if marker not in _first_message_text(message):
+        message["data"]["content"][0]["text"] = (
+            f"{_first_message_text(message)}\n\n{marker}".strip()
+        )
+    digest = hashlib.sha256(_json_bytes(message)).hexdigest()
     await bridge_store.mark_prepared(
         agent_request.idempotency_key, digest=digest, marker=marker
     )
@@ -3283,13 +3971,17 @@ async def omnigent_observe_snapshot_activity(
     status = normalize_omnigent_observation(snapshot)
     observed_at = datetime.now(UTC)
     digest = compute_digest(snapshot)
+    bridge_store = OmnigentBridgeSessionStore(async_session_maker)
+    bridge_ref = str(session.metadata.get("bridgeSessionRef") or "").strip()
     bridge = (
-        await OmnigentBridgeSessionStore(async_session_maker).get_existing(
-            active_turn.idempotency_key
-        )
-        if active_turn is not None
+        await bridge_store.get_bridge_session(bridge_ref)
+        if bridge_ref
         else None
     )
+    if bridge is None and active_turn is not None:
+        # Replay compatibility for a session recorded before active bridge
+        # identity was projected into canonical session metadata.
+        bridge = await bridge_store.get_existing(active_turn.idempotency_key)
     marker = str(getattr(bridge, "first_message_marker", "") or "").strip()
     baseline_item_ids = (
         _persisted_pre_dispatch_item_ids(bridge) if bridge is not None else None
@@ -3429,20 +4121,33 @@ async def omnigent_observe_snapshot_activity(
         if turn_complete or correlated_failure
         else "turn:pending"
     )
+    resource_frontier = compute_digest(
+        {
+            "cleanupState": session.cleanup_state,
+            "terminalState": session.terminal_state,
+            "terminalEvidenceRef": session.terminal_evidence_ref,
+            "hostLeaseRef": session.host_lease_ref,
+            "providerLeaseRef": session.metadata.get("providerLeaseRef"),
+        }
+    )
     async with store.transaction() as repos:
         await repos.observations.append(
             observation_id=(
                 "oob_"
                 + uuid5(
                     NAMESPACE_URL,
-                    f"{request.session_id}:snapshot:{digest}:{turn_confirmation}",
+                    f"{request.session_id}:snapshot:{digest}:"
+                    f"{turn_confirmation}:{resource_frontier}",
                 ).hex
             ),
             session_id=request.session_id,
             observation_type="provider_snapshot",
             source="provider_authoritative_snapshot",
             observed_at=observed_at,
-            deduplication_key=f"provider-snapshot:{digest}:{turn_confirmation}",
+            deduplication_key=(
+                f"provider-snapshot:{digest}:{turn_confirmation}:"
+                f"{resource_frontier}"
+            ),
             source_digest=digest,
             bounded_index=bounded,
         )
@@ -3688,7 +4393,42 @@ async def omnigent_persist_failure_activity(
                 ),
             },
         )
+    runtime_state = None
+    if request.omnigent_execution_plan is not None:
+        execution_plan = await _load_verified_execution_plan(
+            request.omnigent_execution_plan
+        )
+        recorded_runtime_ref = str(
+            session.metadata.get("runtimeBindingRef")
+            or request.runtime_binding_ref
+            or ""
+        )
+        if recorded_runtime_ref:
+            _runtime_store, runtime_state = (
+                await _load_current_runtime_binding(
+                    execution_plan_ref=execution_plan.planRef,
+                    execution_scope_ref=str(
+                        session.moonmind_workflow_id or ""
+                    ),
+                    recorded_runtime_binding_ref=recorded_runtime_ref,
+                )
+            )
+            if request.runtime_binding_ref is not None and (
+                request.runtime_binding_ref
+                != runtime_state.binding.runtimeBindingRef
+                or request.runtime_binding_revision != runtime_state.revision
+                or request.runtime_binding_fencing_generation
+                != runtime_state.fencing_generation
+            ):
+                raise ValueError(
+                    "failure recorder runtime-binding authority is obsolete"
+                )
     terminal = OmnigentSessionTerminalResult(status=status, result=result)
+    terminal = _bind_terminal_plan_authority(
+        terminal,
+        plan_binding=request.omnigent_execution_plan,
+        runtime_binding_state=runtime_state,
+    )
     failure_ref = await _write_json_artifact(
         name=(
             "omnigent.session.cleanup-incomplete.json"
@@ -3875,6 +4615,7 @@ async def omnigent_publish_workspace_activity(
 
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
+    from moonmind.omnigent.execution_profiles import selection_from_request
     from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
     from moonmind.omnigent.profile_bound_execution import (
         OmnigentProfileBoundExecutionCoordinator,
@@ -3926,27 +4667,32 @@ async def omnigent_publish_workspace_activity(
         workspace_locator = workspace_intent.workspace_locator_payload()
         publish_mode = workspace_intent.publish_mode
         base_branch = workspace_intent.starting_branch
-    github_token = await OmnigentProfileBoundExecutionCoordinator._github_token(
-        agent_request
-    )
-    http_client, client = await _omnigent_client_context()
-    try:
-        publication = await OmnigentOAuthHostRuntime(
-            client=client
-        ).publish_workspace(
-            workspace_locator=workspace_locator,
-            current_workflow_id=workflow_id,
-            current_step_execution_id=step_execution_id,
-            publication_identity=agent_request.idempotency_key,
-            publish_mode=publish_mode,
-            base_branch=base_branch,
-            repository=str(
-                (agent_request.parameters or {}).get("repository") or ""
-            ).strip(),
-            github_token=github_token,
+    if publish_mode == "none":
+        publication = {"status": "skipped", "publishMode": "none"}
+    else:
+        github_token = await (
+            OmnigentProfileBoundExecutionCoordinator._github_token(
+                agent_request
+            )
         )
-    finally:
-        await http_client.aclose()
+        http_client, client = await _omnigent_client_context()
+        try:
+            publication = await OmnigentOAuthHostRuntime(
+                client=client
+            ).publish_workspace(
+                workspace_locator=workspace_locator,
+                current_workflow_id=workflow_id,
+                current_step_execution_id=step_execution_id,
+                publication_identity=agent_request.idempotency_key,
+                publish_mode=publish_mode,
+                base_branch=base_branch,
+                repository=str(
+                    (agent_request.parameters or {}).get("repository") or ""
+                ).strip(),
+                github_token=github_token,
+            )
+        finally:
+            await http_client.aclose()
     publication_ref = str(session.metadata.get("publicationEvidenceRef") or "")
     if not publication_ref:
         publication_ref = await _write_json_artifact(
@@ -3965,6 +4711,108 @@ async def omnigent_publish_workspace_activity(
                 expected_fencing_generation=request.fencing_generation,
                 metadata_patch={"publicationEvidenceRef": publication_ref},
             )
+    execution_plan = (
+        await _load_verified_execution_plan(request.omnigent_execution_plan)
+        if request.omnigent_execution_plan is not None
+        else None
+    )
+    runtime_state = None
+    if execution_plan is not None:
+        from moonmind.omnigent.harness_platform.stores import (
+            DbRuntimeBindingStore,
+        )
+
+        runtime_state = await DbRuntimeBindingStore(
+            async_session_maker
+        ).get_current_state(
+            execution_plan.planRef,
+            str(session.moonmind_workflow_id or ""),
+        )
+        if runtime_state is None:
+            raise ValueError(
+                "terminal capture requires the current runtime binding"
+            )
+    async with store.transaction() as repos:
+        attempts = await repos.turn_attempts.list_for_session(
+            request.session_id, limit=100, latest=False
+        )
+    first_turn = attempts[0] if attempts else None
+    external_state_ref = await _write_json_artifact(
+        name="omnigent.session.external-state.json",
+        artifact_type="omnigent.session_external_state",
+        payload={
+            "schemaVersion": "omnigent-session-external-state/v1",
+            "omnigentSessionId": session.provider_session_ref,
+            "lastCommittedBridgeEventCursor": session.provider_event_cursor,
+            "firstMessage": {
+                "digest": (
+                    first_turn.instruction_digest if first_turn is not None else None
+                ),
+                "responseIdentifiers": {
+                    "itemId": (
+                        first_turn.provider_item_id
+                        if first_turn is not None
+                        else None
+                    )
+                },
+            },
+            "runtimeBindingRef": (
+                runtime_state.binding.runtimeBindingRef
+                if runtime_state is not None
+                else None
+            ),
+        },
+    )
+    checkpoint_capture: dict[str, Any] = {}
+    if execution_plan is not None and runtime_state is not None:
+        runtime_binding = runtime_state.binding
+        provider_authority = runtime_binding.providerLeases.get(
+            "primary-model"
+        )
+        if provider_authority is None:
+            raise ValueError(
+                "terminal capture lacks primary Provider Profile authority"
+            )
+        execution_target, _policy = selection_from_request(
+            agent_request.parameters
+        )
+        checkpoint_capture = {
+            "executionPlanRef": execution_plan.planRef,
+            "runtimeBindingRef": runtime_binding.runtimeBindingRef,
+            "runtimeBindingRevision": runtime_state.revision,
+            "runtimeBindingFencingGeneration": (
+                runtime_state.fencing_generation
+            ),
+            "providerProfileId": provider_authority.providerProfileRef,
+            "credentialRef": (
+                "credential://provider-profile/"
+                f"{provider_authority.providerProfileRef}/generation/"
+                f"{provider_authority.credentialGeneration}"
+            ),
+            "credentialGeneration": provider_authority.credentialGeneration,
+            "providerLeaseRef": provider_authority.providerLeaseRef,
+            "hostBindingRef": runtime_binding.hostBindingRef,
+            "hostLeaseRef": runtime_binding.hostLeaseRef,
+            "hostLeaseGeneration": runtime_binding.hostLeaseGeneration,
+            "endpointRef": execution_plan.payload.endpointRef,
+            "omnigentHostId": runtime_binding.omnigentHostId,
+            "omnigentSessionId": runtime_binding.omnigentSessionId,
+            "bridgeSessionId": session.metadata.get("bridgeSessionRef"),
+            "externalStateRef": external_state_ref,
+            "idempotencyKey": agent_request.idempotency_key,
+            "captureManifestRef": harvested_ref,
+            "executionProfileRef": execution_target,
+            "launchPolicyRef": execution_plan.payload.launchPolicyRef,
+            "workspaceLocator": workspace_locator,
+            "sourceBranch": (
+                (agent_request.workspace_spec or {}).get("startingBranch")
+                or "detached"
+            ),
+            "outputBranch": (
+                (agent_request.workspace_spec or {}).get("targetBranch")
+            ),
+            "publicationState": publish_mode,
+        }
     status = (
         "completed"
         if session.terminal_state == "completed"
@@ -3996,6 +4844,12 @@ async def omnigent_publish_workspace_activity(
             "chatBindingId": session.chat_binding_id,
             "terminalState": session.terminal_state,
             "publicationEvidenceRef": publication_ref,
+            "externalStateRef": external_state_ref,
+            **(
+                {"omnigentCheckpointCapture": checkpoint_capture}
+                if checkpoint_capture
+                else {}
+            ),
         },
     )
     terminal = OmnigentSessionTerminalResult(status=status, result=result)
@@ -4055,6 +4909,72 @@ async def omnigent_stop_provider_session_activity(
     return {"commandId": request.command_id, "outcome": "provider_stopped"}
 
 
+async def _stop_generic_plan_host(
+    *,
+    request: OmnigentSessionActivityRequest,
+    plan: Any,
+    session: Any,
+) -> dict[str, Any]:
+    """Stop only the host fenced by the current execution binding."""
+
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.host_runtime import GenericOmnigentHostRuntime
+    from moonmind.omnigent.realizers.deployment_adapters import (
+        DeploymentGenericHostServices,
+        TrustedCredentialMaterializer,
+    )
+
+    runtime_ref = str(session.metadata.get("runtimeBindingRef") or "")
+    _runtime_store, runtime_state = await _load_current_runtime_binding(
+        execution_plan_ref=plan.planRef,
+        execution_scope_ref=str(session.moonmind_workflow_id or ""),
+        recorded_runtime_binding_ref=runtime_ref,
+    )
+    if runtime_state.binding.hostLeaseRef != session.host_lease_ref:
+        raise ValueError("generic cleanup host lease is no longer current")
+    materializer = TrustedCredentialMaterializer(
+        session_factory=async_session_maker
+    )
+    services = DeploymentGenericHostServices(
+        session_factory=async_session_maker,
+        artifact_gateway=_SessionEvidenceArtifactGateway(),
+        credential_materializer=materializer,
+    )
+    host_runtime = GenericOmnigentHostRuntime(
+        launcher=services,
+        workspace_service=services,
+        skill_service=services,
+        egress_service=services,
+        registration_waiter=services,
+        image_attestor=services,
+        cleanup_service=services,
+        context_service=services,
+    )
+    await host_runtime.cleanup(
+        plan.planRef,
+        runtime_state.binding.runtimeBindingRef,
+        host_id=runtime_state.binding.omnigentHostId,
+        command_authority=_generic_command_authority(request),
+    )
+    evidence_ref = await _write_json_artifact(
+        name="omnigent.generic-host.cleanup.json",
+        artifact_type="omnigent.generic_host.cleanup",
+        payload={
+            "schemaVersion": "moonmind.omnigent-generic-host-cleanup/v1",
+            "executionPlanRef": plan.planRef,
+            "runtimeBindingRef": runtime_state.binding.runtimeBindingRef,
+            "hostBindingRef": runtime_state.binding.hostBindingRef,
+            "hostLeaseRef": runtime_state.binding.hostLeaseRef,
+            "hostLeaseGeneration": (
+                runtime_state.binding.hostLeaseGeneration
+            ),
+            "commandId": request.command_id,
+            "status": "cleaned",
+        },
+    )
+    return {"evidenceRef": evidence_ref}
+
+
 async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, Any]:
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
@@ -4076,7 +4996,22 @@ async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, A
     if session is None:
         raise KeyError(request.session_id)
     cleanup_evidence: Mapping[str, Any] = {}
-    if session.host_lease_ref:
+    plan = (
+        await _load_verified_execution_plan(request.omnigent_execution_plan)
+        if request.omnigent_execution_plan is not None
+        else None
+    )
+    if (
+        plan is not None
+        and plan.payload.executionRealizerRef == "generic-omnigent-host@1"
+        and session.host_lease_ref
+    ):
+        cleanup_evidence = await _stop_generic_plan_host(
+            request=request,
+            plan=plan,
+            session=session,
+        )
+    elif session.host_lease_ref:
         lease = await hosts.get_host_lease(session.host_lease_ref)
         if lease is not None and lease.status in CLEANUP_CLAIMABLE_HOST_STATES:
             # Cleanup must be fenced, not assumed. The janitor or another
@@ -4140,6 +5075,74 @@ async def omnigent_stop_host_activity(payload: Mapping[str, Any]) -> dict[str, A
     return settled
 
 
+async def _cleanup_generic_credentials(
+    *,
+    request: OmnigentSessionActivityRequest,
+    plan: Any,
+    runtime_state: Any,
+) -> None:
+    """Destroy materialized credentials before releasing profile capacity."""
+
+    from api_service.db.base import async_session_maker
+    from api_service.db.models import OmnigentCredentialRuntimeRecord
+    from moonmind.omnigent.harness_platform.materializers import get_materializer
+    from moonmind.omnigent.realizers.deployment_adapters import (
+        TrustedCredentialMaterializer,
+    )
+
+    handles: list[dict[str, Any]] = []
+    async with async_session_maker() as db_session:
+        for slot, planned in sorted(
+            plan.payload.credentialBindings.items()
+        ):
+            if not get_materializer(planned.materializerRef).requiredSecretRoles:
+                continue
+            acquired = runtime_state.binding.providerLeases.get(slot)
+            if acquired is None:
+                raise ValueError(
+                    f"cleanup runtime binding has no slot {slot}"
+                )
+            record = await db_session.get(
+                OmnigentCredentialRuntimeRecord,
+                acquired.credentialRuntimeRef,
+            )
+            if record is None:
+                raise ValueError(
+                    "credential cleanup authority is unavailable"
+                )
+            if (
+                record.provider_profile_ref != acquired.providerProfileRef
+                or record.provider_lease_ref != acquired.providerLeaseRef
+                or record.credential_generation
+                != acquired.credentialGeneration
+                or record.materializer_ref != planned.materializerRef
+            ):
+                raise ValueError(
+                    "credential cleanup authority conflicts with runtime binding"
+                )
+            handles.append(
+                {
+                    "credentialRuntimeRef": record.credential_runtime_ref,
+                    "providerProfileRef": record.provider_profile_ref,
+                    "providerLeaseRef": record.provider_lease_ref,
+                    "credentialGeneration": record.credential_generation,
+                    "materializerRef": record.materializer_ref,
+                    "targetPath": record.target_path,
+                    "accessMode": record.access_mode,
+                    "cleanupRef": record.cleanup_ref,
+                    "attestationRef": record.attestation_ref,
+                    "credentialSlot": slot,
+                }
+            )
+    if handles:
+        await TrustedCredentialMaterializer(
+            session_factory=async_session_maker
+        ).cleanup(
+            handles,
+            command_authority=_generic_command_authority(request),
+        )
+
+
 async def omnigent_release_leases_activity(
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -4174,6 +5177,15 @@ async def omnigent_release_leases_activity(
             execution_scope_ref=str(session.moonmind_workflow_id or ""),
             recorded_runtime_binding_ref=runtime_ref,
         )
+        plan = await _load_verified_execution_plan(
+            request.omnigent_execution_plan
+        )
+        if plan.payload.executionRealizerRef == "generic-omnigent-host@1":
+            await _cleanup_generic_credentials(
+                request=request,
+                plan=plan,
+                runtime_state=runtime_state,
+            )
     lease_ref = str(session.metadata.get("providerLeaseRef") or "")
     owner_id = str(session.metadata.get("providerLeaseOwnerId") or "")
     runtime_id = str(session.metadata.get("providerRuntimeId") or "")

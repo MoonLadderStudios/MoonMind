@@ -328,6 +328,63 @@ def test_checkpoint_recovery_request_builds_validated_candidate_workspace() -> N
     assert candidate.checkpoint_ref == checkpoint.workspace_checkpoint_ref
 
 
+def test_checkpoint_recovery_requires_the_admitted_execution_plan() -> None:
+    from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
+
+    plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
+    checkpoint = _checkpoint().model_copy(
+        update={
+            "execution_plan_ref": plan_ref,
+            "runtime_binding_ref": (
+                "omnigent-runtime-binding:sha256:" + "b" * 64
+            ),
+            "runtime_binding_revision": 2,
+            "runtime_binding_fencing_generation": 3,
+        }
+    )
+    checkpoint_payload = checkpoint.model_dump(
+        by_alias=True, mode="json", exclude_none=True
+    )
+    binding = OmnigentExecutionPlanBinding(
+        planRef=plan_ref,
+        planDigest="sha256:" + "a" * 64,
+        planArtifactRef="art-plan",
+        taskInputSnapshotRef="art-input",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef=checkpoint.provider_profile_id,
+        correlationId="recovery-workflow",
+        idempotencyKey="recovery-step",
+        omnigentExecutionPlan=binding,
+        checkpointRecovery={"omnigentCheckpoint": checkpoint_payload},
+    )
+
+    parsed = _checkpoint_recovery_from_request(request)
+    assert parsed is not None
+    assert parsed[0].execution_plan_ref == plan_ref
+
+    mismatched = request.model_copy(
+        update={
+            "omnigent_execution_plan": binding.model_copy(
+                update={
+                    "plan_ref": (
+                        "omnigent-execution-plan:sha256:" + "d" * 64
+                    ),
+                    "plan_digest": "sha256:" + "d" * 64,
+                }
+            )
+        }
+    )
+    with pytest.raises(
+        ValueError,
+        match="checkpoint execution plan does not match the admitted request",
+    ):
+        _checkpoint_recovery_from_request(mismatched)
+
+
 def test_checkpoint_branch_request_requires_explicit_action_and_new_boundary() -> None:
     from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
 
@@ -418,7 +475,9 @@ def test_checkpoint_branch_request_rejects_source_idempotency_boundary() -> None
 
 
 @pytest.mark.asyncio
-async def test_live_recovery_authority_requires_matching_current_records() -> None:
+async def test_live_recovery_authority_requires_matching_current_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
 
     checkpoint = _checkpoint().model_copy(
@@ -430,6 +489,14 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
             "last_bridge_event_cursor": "4",
             "first_message_id": "message-1",
             "first_message_digest": "sha256:" + "a" * 64,
+            "execution_plan_ref": (
+                "omnigent-execution-plan:sha256:" + "b" * 64
+            ),
+            "runtime_binding_ref": (
+                "omnigent-runtime-binding:sha256:" + "c" * 64
+            ),
+            "runtime_binding_revision": 4,
+            "runtime_binding_fencing_generation": 5,
         }
     )
     provider = SimpleNamespace(credential_generation=checkpoint.credential_generation)
@@ -491,6 +558,37 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
         first_message_pending_id=None,
         first_message_state="posted",
     )
+
+    provider_authority = SimpleNamespace(
+        providerProfileRef=checkpoint.provider_profile_id,
+        providerLeaseRef=checkpoint.provider_lease_ref,
+        credentialGeneration=checkpoint.credential_generation,
+    )
+    runtime_state = SimpleNamespace(
+        binding=SimpleNamespace(
+            executionPlanRef=checkpoint.execution_plan_ref,
+            runtimeBindingRef=checkpoint.runtime_binding_ref,
+            hostBindingRef=checkpoint.host_binding_ref,
+            hostLeaseRef=checkpoint.host_lease_ref,
+            omnigentHostId=checkpoint.omnigent_host_id,
+            omnigentSessionId=checkpoint.omnigent_session_id,
+            providerLeases={"primary-model": provider_authority},
+        ),
+        revision=checkpoint.runtime_binding_revision,
+        fencing_generation=checkpoint.runtime_binding_fencing_generation,
+    )
+
+    class RuntimeBindingStore:
+        def __init__(self, _session_factory):
+            pass
+
+        async def get_state(self, binding_ref):
+            assert binding_ref == checkpoint.runtime_binding_ref
+            return runtime_state
+
+    from moonmind.omnigent.harness_platform import stores
+
+    monkeypatch.setattr(stores, "DbRuntimeBindingStore", RuntimeBindingStore)
     authority = await _resolve_live_recovery_authority(
         checkpoint=checkpoint,
         session_factory=Session,
@@ -506,10 +604,28 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
     assert authority["host_registered"] is True
     assert authority["session_valid"] is True
     assert authority["first_message_consistent"] is True
+    assert authority["runtime_binding_current"] is True
     assert (
         authority["current_credential_generation"]
         == checkpoint.credential_generation
     )
+
+    runtime_state.revision += 1
+    stale_authority = await _resolve_live_recovery_authority(
+        checkpoint=checkpoint,
+        session_factory=Session,
+        host_repository=SimpleNamespace(
+            get_host_lease=lambda _lease_id: _async_value(host)
+        ),
+        run_store=SimpleNamespace(
+            get_bridge_session=lambda _bridge_id: _async_value(bridge)
+        ),
+    )
+
+    assert stale_authority["runtime_binding_current"] is False
+    assert stale_authority["host_registered"] is False
+    assert stale_authority["session_valid"] is False
+    assert stale_authority["first_message_consistent"] is False
 
 
 @pytest.mark.asyncio

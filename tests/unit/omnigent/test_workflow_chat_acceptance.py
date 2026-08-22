@@ -102,6 +102,8 @@ def _binding_identity(combination: WorkflowChatCombination) -> dict[str, object]
     }
     return {
         **fields,
+        "policySnapshotDigest": "sha256:" + "6" * 64,
+        "effectiveLaunchSnapshotDigest": "sha256:" + "9" * 64,
         "supportCombinationKey": compute_support_combination_key(
             SupportKeyPayload.model_validate(fields)
         ),
@@ -743,9 +745,9 @@ def test_every_claimed_combination_appears_in_the_protected_matrix() -> None:
         "codex-static-connected-through-omnigent",
         "opencode-through-generic-omnigent-host",
     } <= set(inventory)
-    assert inventory["opencode-through-generic-omnigent-host"].execution_realizer_ref == (
-        "generic-omnigent-host@1"
-    )
+    opencode = inventory["opencode-through-generic-omnigent-host"]
+    assert opencode.execution_realizer_ref == "generic-omnigent-host@1"
+    assert opencode.launch_policy_ref == "opencode-on-demand@1"
     host_modes = {
         combination.host_mode
         for combination in inventory.values()

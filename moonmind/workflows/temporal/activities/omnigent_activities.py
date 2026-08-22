@@ -154,6 +154,15 @@ def _checkpoint_recovery_from_request(request: AgentExecutionRequest):
     if checkpoint_payload is None:
         return None
     checkpoint = OmnigentCheckpointIdentity.model_validate(checkpoint_payload)
+    if checkpoint.execution_plan_ref is not None:
+        binding = request.omnigent_execution_plan
+        if (
+            binding is None
+            or binding.plan_ref != checkpoint.execution_plan_ref
+        ):
+            raise ValueError(
+                "checkpoint execution plan does not match the admitted request"
+            )
     candidate_workspace = CandidateWorkspaceAuthority(
         loopId=f"{checkpoint.workflow_id}:{checkpoint.logical_step_id}",
         attemptOrdinal=checkpoint.attempt_ordinal,
@@ -308,12 +317,52 @@ async def _resolve_live_recovery_authority(
         in {bridge.first_message_item_id, bridge.first_message_pending_id}
         and bridge.first_message_state in {"posted", "terminal"}
     )
+    runtime_binding_current = True
+    if checkpoint.execution_plan_ref is not None:
+        from moonmind.omnigent.harness_platform.stores import (
+            DbRuntimeBindingStore,
+        )
+
+        runtime_state = await DbRuntimeBindingStore(
+            session_factory
+        ).get_state(str(checkpoint.runtime_binding_ref or ""))
+        runtime_binding_current = bool(
+            runtime_state is not None
+            and runtime_state.binding.executionPlanRef
+            == checkpoint.execution_plan_ref
+            and runtime_state.binding.runtimeBindingRef
+            == checkpoint.runtime_binding_ref
+            and runtime_state.revision
+            == checkpoint.runtime_binding_revision
+            and runtime_state.fencing_generation
+            == checkpoint.runtime_binding_fencing_generation
+            and runtime_state.binding.hostBindingRef
+            == checkpoint.host_binding_ref
+            and runtime_state.binding.hostLeaseRef
+            == checkpoint.host_lease_ref
+            and runtime_state.binding.omnigentHostId
+            == checkpoint.omnigent_host_id
+            and runtime_state.binding.omnigentSessionId
+            == checkpoint.omnigent_session_id
+            and any(
+                authority.providerProfileRef
+                == checkpoint.provider_profile_id
+                and authority.providerLeaseRef
+                == checkpoint.provider_lease_ref
+                and authority.credentialGeneration
+                == checkpoint.credential_generation
+                for authority in runtime_state.binding.providerLeases.values()
+            )
+        )
     return {
         "provider_lease": provider_lease,
         "host_lease": host_lease,
-        "host_registered": host_registered,
-        "session_valid": session_valid,
-        "first_message_consistent": first_message_consistent,
+        "host_registered": host_registered and runtime_binding_current,
+        "session_valid": session_valid and runtime_binding_current,
+        "first_message_consistent": (
+            first_message_consistent and runtime_binding_current
+        ),
+        "runtime_binding_current": runtime_binding_current,
         "current_credential_generation": current_generation,
         "checkpoint_credential_generation": checkpoint.credential_generation,
     }

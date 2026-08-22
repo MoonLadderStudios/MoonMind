@@ -43,7 +43,10 @@ class CodexProfileBoundRealizer:
     ) -> AgentRunResult:
         # Validate plan is for codex-profile-bound
         if plan.payload.executionRealizerRef != self.ref:
-            from moonmind.omnigent.harness_platform.failures import HarnessPlatformError, HarnessPlatformFailure
+            from moonmind.omnigent.harness_platform.failures import (
+                HarnessPlatformError,
+                HarnessPlatformFailure,
+            )
 
             raise HarnessPlatformError(
                 f"plan realizer {plan.payload.executionRealizerRef} != {self.ref}",
@@ -57,8 +60,14 @@ class CodexProfileBoundRealizer:
         from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
         from moonmind.omnigent.oauth_host_runtime import OmnigentOAuthHostRuntime
         from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostRepository
-        from moonmind.omnigent.profile_bound_execution import OmnigentProfileBoundExecutionCoordinator
-        from moonmind.omnigent.settings import resolved_api_token, resolved_proxy_forward_headers, resolved_server_url
+        from moonmind.omnigent.profile_bound_execution import (
+            OmnigentProfileBoundExecutionCoordinator,
+        )
+        from moonmind.omnigent.settings import (
+            resolved_api_token,
+            resolved_proxy_forward_headers,
+            resolved_server_url,
+        )
         from moonmind.provider_profiles.lease_client import ProviderProfileLeaseClient
         from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
         from moonmind.workflows.temporal.client import TemporalClientAdapter
@@ -74,6 +83,7 @@ class CodexProfileBoundRealizer:
                 session_factory=session_factory,
                 run_store=run_store,
                 artifact_gateway=artifact_gateway,
+                execution_plan=plan,
             )
             return await coordinator.execute(request)
 
@@ -84,7 +94,10 @@ class CodexProfileBoundRealizer:
                 client=http_client,
                 upstream_header_allowlist=resolved_proxy_forward_headers(),
             )
-            from moonmind.repositories.lore_runtime import build_lore_repository_adapter_from_environment
+            from moonmind.repositories.lore_runtime import (
+                build_lore_repository_adapter_from_environment,
+            )
+
             lore_adapter = build_lore_repository_adapter_from_environment()
             host_repository = OmnigentOAuthHostRepository(session_factory)
             coordinator = OmnigentProfileBoundExecutionCoordinator(
@@ -98,6 +111,7 @@ class CodexProfileBoundRealizer:
                 run_store=run_store,
                 execution_runner=run_omnigent_execution,
                 artifact_gateway=artifact_gateway,
+                execution_plan=plan,
             )
             return await coordinator.execute(request)
 

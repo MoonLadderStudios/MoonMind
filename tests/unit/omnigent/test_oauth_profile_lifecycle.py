@@ -805,6 +805,17 @@ def test_checkpoint_rejects_partial_policy_authority_evidence() -> None:
         OmnigentCheckpointIdentity.model_validate(payload)
 
 
+def test_checkpoint_rejects_partial_plan_and_runtime_binding_authority() -> None:
+    payload = _checkpoint().model_dump(by_alias=True, mode="json")
+    payload["executionPlanRef"] = "omnigent-execution-plan:sha256:" + "a" * 64
+
+    with pytest.raises(
+        ValidationError,
+        match="execution-plan/runtime-binding authority is incomplete",
+    ):
+        OmnigentCheckpointIdentity.model_validate(payload)
+
+
 def test_restore_rejects_checkpoint_bound_to_a_different_policy_snapshot() -> None:
     snapshot = compile_policy_snapshot(
         policy_id="restricted",

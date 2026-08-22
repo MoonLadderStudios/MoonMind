@@ -28,7 +28,9 @@ from moonmind.omnigent.harness_platform.execution_plan import (
     AdmissionAuthority,
     OmnigentExecutionPlanEnvelope,
     create_execution_plan_envelope,
-    execution_plan_support_evidence,
+)
+from moonmind.omnigent.execution_support_evidence import (
+    load_protected_execution_support_evidence,
 )
 from moonmind.omnigent.harness_platform.host_classes import get_host_class
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
@@ -746,12 +748,10 @@ async def compile_and_persist_execution_plan(
         OMNIGENT_SESSION_FEATURE_GENERATION,
     )
 
-    support_evidence = execution_plan_support_evidence(
-        plan.payload,
-        feature_generation=OMNIGENT_SESSION_FEATURE_GENERATION,
-        replay_compatibility_version=OMNIGENT_SESSION_COMPATIBILITY_VERSION,
-        rollback_policy_version=SUPERVISOR_ROLLBACK_POLICY_VERSION,
-    )
+    # This is protected release/conformance authority, not an assertion
+    # synthesized from the plan under consideration. Missing or non-exact
+    # evidence rejects the request before the execution is scheduled.
+    support_evidence = load_protected_execution_support_evidence(plan.payload)
     support_evidence_ref, support_evidence_digest = await persist_json_artifact(
         artifact_service=artifact_service,
         principal=principal,

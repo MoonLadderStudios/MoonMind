@@ -4932,6 +4932,43 @@ def test_api_idempotent_omnigent_retry_reuses_recorded_plan_before_resolution(
     temporal_service.create_execution.assert_not_awaited()
 
 
+def test_admitted_omnigent_execution_rejects_in_place_input_reinterpretation(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    test_client, temporal_service, user = client
+    monkeypatch.setattr(settings.temporal_dashboard, "actions_enabled", True)
+    record = _build_execution_record(owner_id=str(user.id))
+    record.parameters = {
+        "targetRuntime": "omnigent",
+        "workflow": {"instructions": "Use the admitted authority."},
+        "omnigentExecutionPlan": {
+            "planRef": "omnigent-execution-plan:sha256:" + "d" * 64,
+            "planDigest": "sha256:" + "d" * 64,
+            "planArtifactRef": "art-existing-plan",
+            "taskInputSnapshotRef": "art-existing-task",
+            "taskInputSnapshotDigest": "sha256:" + "e" * 64,
+        },
+    }
+    temporal_service.describe_execution.return_value = record
+
+    response = test_client.post(
+        "/api/executions/mm:wf-1/update",
+        json={
+            "updateName": "UpdateInputs",
+            "parametersPatch": {
+                "workflow": {"instructions": "Reinterpret current defaults."}
+            },
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == (
+        "omnigent_execution_plan_replacement_required"
+    )
+    temporal_service.update_execution.assert_not_awaited()
+
+
 def test_create_execution_rejects_agent_profile_execution_target_mismatch(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
@@ -5890,6 +5927,61 @@ def test_create_remediation_convenience_route_expands_to_task_create_contract(
     }
     assert kwargs["initial_parameters"]["publishMode"] == "pr"
     assert kwargs["initial_parameters"]["workflow"]["publish"]["mode"] == "pr"
+
+
+def test_create_remediation_preserves_authored_omnigent_plan_selection(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    test_client, _service, user = client
+    create_from_workflow = AsyncMock(
+        return_value=_serialize_execution(
+            _build_execution_record(owner_id=str(user.id)), user=user
+        )
+    )
+
+    with patch.object(
+        executions_module,
+        "_create_execution_from_workflow_request",
+        new=create_from_workflow,
+    ):
+        response = test_client.post(
+            "/api/executions/mm:target-workflow/remediation",
+            json={
+                "repository": "MoonLadderStudios/MoonMind",
+                "instructions": "Repair through the selected OpenCode authority.",
+                "targetRuntime": "omnigent",
+                "runtime": {"mode": "omnigent"},
+                "agentProfile": {
+                    "profileId": "opencode-default",
+                    "providerProfileRef": "opencode-go-default",
+                },
+                "omnigent": {
+                    "executionTargetRef": "omnigent-opencode@1",
+                    "launchPolicyRef": "opencode-on-demand@1",
+                },
+                "remediation": {
+                    "mode": "snapshot",
+                    "authorityMode": "observe_only",
+                    "trigger": {"type": "manual"},
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    request = create_from_workflow.await_args.kwargs["request"]
+    assert request.payload["targetRuntime"] == "omnigent"
+    assert request.payload["agentProfile"] == {
+        "profileId": "opencode-default",
+        "providerProfileRef": "opencode-go-default",
+    }
+    assert request.payload["omnigent"] == {
+        "executionTargetRef": "omnigent-opencode@1",
+        "launchPolicyRef": "opencode-on-demand@1",
+    }
+    assert request.payload["workflow"]["remediation"]["target"] == {
+        "workflowId": "mm:target-workflow"
+    }
+
 
 def test_create_remediation_convenience_route_uses_top_level_overrides(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],

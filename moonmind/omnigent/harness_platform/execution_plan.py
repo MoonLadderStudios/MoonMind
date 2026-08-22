@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from moonmind.omnigent.harness_platform.support import SupportKeyPayload
+
 from moonmind.omnigent.harness_platform.credential_bindings import CredentialBinding
 from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
@@ -200,6 +202,9 @@ class OmnigentExecutionPlanPayload(BaseModel):
     effectiveLaunchSnapshotDigest: str | None = Field(
         default=None, alias="effectiveLaunchSnapshotDigest"
     )
+    supportIdentity: SupportKeyPayload | None = Field(
+        default=None, alias="supportIdentity"
+    )
     supportCombinationKey: str = Field(alias="supportCombinationKey")
 
     @model_validator(mode="after")
@@ -244,36 +249,12 @@ def canonical_payload_bytes(payload: OmnigentExecutionPlanPayload | dict[str, An
         "effectiveLaunchSnapshotRef",
         "effectiveLaunchSnapshotDigest",
         "admissionAuthority",
+        "supportIdentity",
     ):
         if data.get(optional_v1_field) is None:
             data.pop(optional_v1_field, None)
     # Normalize: sorted keys, no whitespace, utf-8, normalized enums/null
     return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
-
-
-def execution_plan_support_evidence(
-    payload: OmnigentExecutionPlanPayload,
-    *,
-    feature_generation: str,
-    replay_compatibility_version: str,
-    rollback_policy_version: str,
-) -> dict[str, Any]:
-    """Build the canonical, secret-free admission evidence for one plan."""
-
-    return {
-        "schemaVersion": "moonmind.omnigent-execution-support-evidence.v1",
-        "supportCombinationKey": payload.supportCombinationKey,
-        "hostImageRef": payload.hostImageRef,
-        "omnigentHostBuildDigest": payload.omnigentHostBuildDigest,
-        "hostArchitecture": payload.hostArchitecture,
-        "harnessImplementationRef": payload.harnessImplementationRef,
-        "effectiveLaunchSnapshotRef": payload.effectiveLaunchSnapshotRef,
-        "effectiveLaunchSnapshotDigest": payload.effectiveLaunchSnapshotDigest,
-        "executionRealizerRef": payload.executionRealizerRef,
-        "featureGeneration": feature_generation,
-        "replayCompatibilityVersion": replay_compatibility_version,
-        "rollbackPolicyVersion": rollback_policy_version,
-    }
 
 
 def compute_plan_ref(payload: OmnigentExecutionPlanPayload | dict[str, Any]) -> str:

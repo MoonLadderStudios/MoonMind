@@ -3,10 +3,10 @@
 
 Source issue: MoonLadderStudios/MoonMind#3710.
 
-The Omnigent catalog reports release-support status from three published
-documents: the #3508 browser acceptance manifest, the Tier-1 exact
-deployable-artifact projection, and the protected-live readiness projection.
-CI publishes each one as a GitHub Actions run artifact; this tool copies the
+The Omnigent catalog and execution admission consume four published documents:
+the #3508 browser acceptance manifest, protected exact-combination execution
+support, the Tier-1 exact deployable-artifact projection, and the protected-live
+readiness projection. CI publishes each one as a GitHub Actions run artifact; this tool copies the
 newest unexpired document *for the deployed commit* into the durable evidence
 directory Compose bind-mounts read-only at ``/workspace/omnigent-evidence``.
 
@@ -59,7 +59,7 @@ class EvidenceSource:
         self.commit_field = commit_field
 
 
-# The three documents the catalog reads, in the order they are reported.
+# The protected documents consumed by the catalog and execution admission.
 EVIDENCE_SOURCES: tuple[EvidenceSource, ...] = (
     EvidenceSource(
         key="acceptance",
@@ -67,6 +67,14 @@ EVIDENCE_SOURCES: tuple[EvidenceSource, ...] = (
         artifact_prefix="omnigent-live-published-matrix-",
         member="published-matrix.json",
         destination="acceptance-manifest.json",
+        commit_field="sourceCommit",
+    ),
+    EvidenceSource(
+        key="executionSupport",
+        workflow="omnigent-live-conformance.yml",
+        artifact_prefix="omnigent-live-published-matrix-",
+        member="execution-support-evidence.json",
+        destination="execution-support-evidence.json",
         commit_field="sourceCommit",
     ),
     EvidenceSource(

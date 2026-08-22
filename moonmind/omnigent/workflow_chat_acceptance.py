@@ -253,7 +253,7 @@ WORKFLOW_CHAT_COMBINATIONS: tuple[WorkflowChatCombination, ...] = (
         combination_id="opencode-through-generic-omnigent-host",
         harness_id="opencode-native",
         host_class_ref="omnigent-opencode@1",
-        launch_policy_ref="omnigent-on-demand@1",
+        launch_policy_ref="opencode-on-demand@1",
         execution_realizer_ref="generic-omnigent-host@1",
         compose_profile="omnigent-host-codex",
         compose_services=("omnigent",),
@@ -1508,6 +1508,10 @@ _BINDING_IDENTITY_FIELDS = (
     "executionRealizerRef",
     "requiredCapabilitiesDigest",
 )
+_EXECUTION_SUPPORT_IDENTITY_FIELDS = (
+    "policySnapshotDigest",
+    "effectiveLaunchSnapshotDigest",
+)
 
 
 def _validate_binding_identity(
@@ -1524,7 +1528,9 @@ def _validate_binding_identity(
     payload = _require_mapping(
         identity, field=f"combinations.{combination.combination_id}.bindingIdentity"
     )
-    expected_keys = set(_BINDING_IDENTITY_FIELDS) | {
+    expected_keys = set(_BINDING_IDENTITY_FIELDS) | set(
+        _EXECUTION_SUPPORT_IDENTITY_FIELDS
+    ) | {
         "supportCombinationKey",
         "providerProfileClass",
     }
@@ -1568,6 +1574,8 @@ def _validate_binding_identity(
             "workflow Chat acceptance support combination key does not recompute: "
             f"{combination.combination_id}"
         )
+    for field in _EXECUTION_SUPPORT_IDENTITY_FIELDS:
+        _require_sha256_ref(payload.get(field), field=f"bindingIdentity.{field}")
 
 
 def build_workflow_chat_acceptance_manifest(

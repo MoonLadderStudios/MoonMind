@@ -15921,6 +15921,12 @@ class TemporalCheckpointActivities:
             stepExecutionId=build_step_execution_id(model.identity),
             attemptOrdinal=model.identity.execution_ordinal,
             boundary=model.boundary,
+            executionPlanRef=capture.get("executionPlanRef"),
+            runtimeBindingRef=capture.get("runtimeBindingRef"),
+            runtimeBindingRevision=capture.get("runtimeBindingRevision"),
+            runtimeBindingFencingGeneration=capture.get(
+                "runtimeBindingFencingGeneration"
+            ),
             providerProfileId=capture["providerProfileId"],
             credentialRef=capture["credentialRef"],
             credentialGeneration=capture["credentialGeneration"],

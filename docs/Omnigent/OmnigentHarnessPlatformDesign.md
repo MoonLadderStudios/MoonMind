@@ -958,7 +958,7 @@ credentialBindings:
     materializerRef: opencode-auth-json@1
 
 hostClassRef: omnigent-native-standard@3
-launchPolicyRef: omnigent-on-demand@1
+launchPolicyRef: opencode-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 
 model:
@@ -1538,7 +1538,7 @@ model:
   modelConfigDigest: sha256:...
 
 hostClassRef: omnigent-native-standard@3
-launchPolicyRef: omnigent-on-demand@1
+launchPolicyRef: opencode-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 ```
 

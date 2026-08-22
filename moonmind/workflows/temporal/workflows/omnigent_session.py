@@ -62,6 +62,25 @@ MAX_PENDING_SIGNAL_INTENTS = 100
 # independently of the much longer lease expiry.
 HOST_LEASE_HEARTBEAT_TIMEOUT_SECONDS = 90
 
+
+def _align_with_workflow_clock(
+    value: datetime,
+    workflow_now: datetime,
+) -> datetime:
+    """Normalize persistence timestamps to Temporal's deterministic clock.
+
+    SQLite and older serialized state may return a timezone-naive timestamp,
+    while Temporal's workflow clock is UTC-aware. The missing timezone is UTC
+    by contract, so attach the workflow clock's zone before comparing. Keep the
+    inverse case for direct unit construction with a naive clock.
+    """
+
+    if value.tzinfo is None and workflow_now.tzinfo is not None:
+        return value.replace(tzinfo=workflow_now.tzinfo)
+    if value.tzinfo is not None and workflow_now.tzinfo is None:
+        return value.replace(tzinfo=None)
+    return value
+
 # A reconciler decision may authorize several independently retryable cleanup or
 # publication phases, but never more than this fixed, bounded sequence.
 BOUNDED_COMMAND_ACTIVITIES: dict[DecisionKind, tuple[str, ...]] = {
@@ -531,6 +550,7 @@ class MoonMindOmnigentSessionWorkflow:
         deadline = decision.next_deadline or (
             now + timedelta(seconds=SNAPSHOT_INTERVAL_SECONDS)
         )
+        deadline = _align_with_workflow_clock(deadline, now)
         wait_seconds = max(
             0.001,
             min(
@@ -733,7 +753,11 @@ class MoonMindOmnigentSessionWorkflow:
                 timeout_at = datetime.fromisoformat(
                     str(timeout_at_raw).replace("Z", "+00:00")
                 )
-                timeout_elapsed = workflow.now() >= timeout_at
+                now = workflow.now()
+                timeout_elapsed = now >= _align_with_workflow_clock(
+                    timeout_at,
+                    now,
+                )
 
             # Persisted signal intent mutates canonical revision/desired state.
             # Re-load before reconciling so no command is issued against the
