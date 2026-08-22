@@ -66,7 +66,7 @@ type AgentProfileEditor = {
   sourceKind?: 'upstream' | 'bundle'; sourceRef?: string; bundleDigest?: string;
   endpointRef?: string; executionProfileRef?: string; launchPolicyRef?: string;
   policyRef?: string; providerRuntime?: string;
-  preset?: 'codex' | 'opencode' | 'pi-experimental'; defaultModel?: string;
+  preset?: 'codex' | 'opencode'; defaultModel?: string;
   workspaceMutation?: 'read_only' | 'allowed' | 'checkpoint_branch';
   skillsText?: string; toolsText?: string; captureStream?: boolean;
   captureEvidence?: boolean; continuationCheckpoint?: boolean;
@@ -546,10 +546,10 @@ export default function OmnigentInventoryPage({ payload }: { payload: BootPayloa
         <label><span>Display name</span><input value={agentEditor.name} disabled={agentEditor.mode === 'version'} onChange={(event) => setAgentEditor({ ...agentEditor, name: event.target.value })} required /></label>
         <label><span>Description</span><input value={agentEditor.description} disabled={agentEditor.mode !== 'create'} onChange={(event) => setAgentEditor({ ...agentEditor, description: event.target.value })} /></label>
         {agentEditor.mode === 'create' ? <>
-          <label><span>Omnigent agent</span><select value={agentEditor.preset} onChange={(event) => { const preset = event.target.value as 'codex' | 'opencode' | 'pi-experimental'; setAgentEditor({ ...agentEditor, preset, id: preset === 'codex' ? 'omnigent-codex-default' : preset === 'opencode' ? 'omnigent-opencode-default' : 'omnigent-pi-default', name: preset === 'codex' ? 'Codex via Omnigent' : preset === 'opencode' ? 'OpenCode via Omnigent' : 'Pi via Omnigent (experimental)', sourceRef: '', defaultModel: '', launchPolicyRef: preset === 'codex' ? 'on-demand@1' : 'omnigent-on-demand@1' }); }}><option value="codex">Codex via Omnigent</option><option value="opencode">OpenCode via Omnigent</option><option value="pi-experimental">Pi via Omnigent (experimental)</option></select></label>
-          <label><span>Harness</span><input value={agentEditor.preset === 'codex' ? 'codex-native' : agentEditor.preset === 'pi-experimental' ? 'pi-native' : 'opencode-native'} readOnly /></label>
+          <label><span>Omnigent agent</span><select value={agentEditor.preset} onChange={(event) => { const preset = event.target.value as 'codex' | 'opencode'; setAgentEditor({ ...agentEditor, preset, id: preset === 'codex' ? 'omnigent-codex-default' : 'omnigent-opencode-default', name: preset === 'codex' ? 'Codex via Omnigent' : 'OpenCode via Omnigent', sourceRef: '', defaultModel: '', launchPolicyRef: preset === 'codex' ? 'on-demand@1' : 'omnigent-on-demand@1' }); }}><option value="codex">Codex via Omnigent</option><option value="opencode">OpenCode via Omnigent</option></select></label>
+          <label><span>Harness</span><input value={agentEditor.preset === 'codex' ? 'codex-native' : 'opencode-native'} readOnly /></label>
           <label><span>Provider credential slot</span><input value="primary-model" readOnly /></label>
-          <label><span>Default model</span><input placeholder={agentEditor.preset === 'pi-experimental' ? 'provider/model-id' : 'opencode-go/model-id'} value={agentEditor.defaultModel || ''} onChange={(event) => setAgentEditor({ ...agentEditor, defaultModel: event.target.value })} required /></label>
+          <label><span>Default model</span><input placeholder="opencode-go/model-id" value={agentEditor.defaultModel || ''} onChange={(event) => setAgentEditor({ ...agentEditor, defaultModel: event.target.value })} required /></label>
           <label><span>Host policy</span><select value={agentEditor.launchPolicyRef} onChange={(event) => setAgentEditor({ ...agentEditor, launchPolicyRef: event.target.value })}>{agentEditor.preset === 'codex' ? <option value="on-demand@1">Mature Codex on-demand host</option> : <option value="omnigent-on-demand@1">On-demand isolated host</option>}</select></label>
           <label><span>Workspace mutation</span><select value={agentEditor.workspaceMutation} onChange={(event) => setAgentEditor({ ...agentEditor, workspaceMutation: event.target.value as NonNullable<AgentProfileEditor['workspaceMutation']> })}><option value="allowed">Allow repository changes</option><option value="read_only">Read only</option><option value="checkpoint_branch">Checkpoint branch only</option></select></label>
           <details><summary>Skills, tools, capture, continuation, and publication</summary>

@@ -262,16 +262,18 @@ class DockerOpencodeAuthJsonMaterializer:
                 input_bytes=payload,
                 failure="credential writer failed",
             )
-            verify_script = (
-                "set -eu; "
-                'test "$(stat -c %u:%g /credential)" = 1000:1000; '
-                'test "$(stat -c %a /credential)" = 700; '
-                'test "$(stat -c %u:%g /credential/auth.json)" = 1000:1000; '
-                'test "$(stat -c %a /credential/auth.json)" = 600; '
-                'test "$(cat /credential/.moonmind-generation)" = "$1"; '
-                'python3 -c \'import json; d=json.load(open("/credential/auth.json")); '
-                'assert set(d)=={"opencode-go"}; assert d["opencode-go"]["type"]=="api"; '
-                'assert isinstance(d["opencode-go"]["key"],str) and d["opencode-go"]["key"]\''
+            verify_script = "".join(
+                (
+                    "set -eu; ",
+                    'test "$(stat -c %u:%g /credential)" = 1000:1000; ',
+                    'test "$(stat -c %a /credential)" = 700; ',
+                    'test "$(stat -c %u:%g /credential/auth.json)" = 1000:1000; ',
+                    'test "$(stat -c %a /credential/auth.json)" = 600; ',
+                    'test "$(cat /credential/.moonmind-generation)" = "$1"; ',
+                    'python3 -c \'import json; d=json.load(open("/credential/auth.json")); ',
+                    'assert set(d)=={"opencode-go"}; assert d["opencode-go"]["type"]=="api"; ',
+                    'assert isinstance(d["opencode-go"]["key"],str) and d["opencode-go"]["key"]\'',
+                )
             )
             await self._run(
                 [
@@ -298,7 +300,7 @@ class DockerOpencodeAuthJsonMaterializer:
             raise
         finally:
             # Drop Python references immediately after the writer consumes stdin.
-            payload = b""
+            del payload
             context.secrets.clear()
         evidence = {
             "schemaVersion": "moonmind.credential-materialization-attestation.v1",
@@ -485,6 +487,17 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
             "chmod 0600 /credential/.moonmind-generation"
         )
         try:
+            verify_config_script = "".join(
+                (
+                    'set -eu; test "$(stat -c %u:%g /credential)" = 1000:1000; ',
+                    'test "$(stat -c %a /credential)" = 700; ',
+                    'test "$(stat -c %a /credential/config.yaml)" = 600; ',
+                    'test "$(cat /credential/.moonmind-generation)" = "$1"; ',
+                    'python3 -c \'import json; d=json.load(open("/credential/config.yaml")); ',
+                    'assert list(d)==["providers"]; assert list(d["providers"]); ',
+                    'assert d["providers"]["moonmind"]["kind"]=="key"\'',
+                )
+            )
             await self._run(
                 [
                     "docker",
@@ -521,13 +534,7 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
                     "/bin/sh",
                     context.writer_image_ref,
                     "-ceu",
-                    'set -eu; test "$(stat -c %u:%g /credential)" = 1000:1000; '
-                    'test "$(stat -c %a /credential)" = 700; '
-                    'test "$(stat -c %a /credential/config.yaml)" = 600; '
-                    'test "$(cat /credential/.moonmind-generation)" = "$1"; '
-                    'python3 -c \'import json; d=json.load(open("/credential/config.yaml")); '
-                    'assert list(d)==["providers"]; assert list(d["providers"]); '
-                    'assert d["providers"]["moonmind"]["kind"]=="key"\'',
+                    verify_config_script,
                     "--",
                     str(acquired.credential_generation),
                 ],
@@ -537,7 +544,7 @@ class DockerOmnigentProviderConfigMaterializer(DockerOpencodeAuthJsonMaterialize
             await self._backend.run(["docker", "volume", "rm", volume_name])
             raise
         finally:
-            payload = b""
+            del payload
             context.secrets.clear()
         attachment = {
             "kind": "volume",

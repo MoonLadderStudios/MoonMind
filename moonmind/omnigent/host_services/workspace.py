@@ -66,7 +66,17 @@ class OmnigentWorkspaceMaterializer:
             or "agent_workspaces"
         ).strip()
 
-    async def materialize(self, request: AgentExecutionRequest) -> dict[str, Any]:
+    async def materialize(
+        self,
+        request: AgentExecutionRequest,
+        *,
+        mutation: str = "allowed",
+    ) -> dict[str, Any]:
+        if mutation not in {"allowed", "read_only", "checkpoint_branch"}:
+            raise HarnessPlatformError(
+                "workspace mutation policy is unsupported",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
         spec = (
             request.workspace_spec if isinstance(request.workspace_spec, dict) else {}
         )
@@ -116,7 +126,7 @@ class OmnigentWorkspaceMaterializer:
             "kind": "bind",
             "sourceRef": str(daemon_candidate),
             "targetPath": "/workspaces/run",
-            "accessMode": "read-write",
+            "accessMode": "read-only" if mutation == "read_only" else "read-write",
             "cleanupRef": None,
         }
 

@@ -89,6 +89,7 @@ def compile_execution_plan(
     *,
     agent_profile: dict[str, Any] | OmnigentAgentProfileV2,
     harness_catalog: HarnessCatalogSnapshot,
+    freshness_catalog: HarnessCatalogSnapshot | None = None,
     trust_record: HarnessTrustRecord,
     resolved_skills: dict[str, Any] | ResolvedSkillSet,
     credential_binding_set: CredentialBindingSet,
@@ -159,9 +160,20 @@ def compile_execution_plan(
     try:
         from moonmind.omnigent.harness_platform.catalog import (
             assert_catalog_fresh as _assert_fresh,
+            assert_catalog_refresh_attests as _assert_refresh,
         )
 
-        _assert_fresh(harness_catalog)
+        if freshness_catalog is None:
+            _assert_fresh(harness_catalog)
+        else:
+            _assert_refresh(
+                authority=harness_catalog,
+                observation=freshness_catalog,
+                harness_id=profile.harness.id,
+                implementation_ref=profile.harness.implementationRef,
+            )
+    except HarnessPlatformError:
+        raise
     except Exception as exc:
         raise HarnessPlatformError(
             str(exc), code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_STALE
@@ -464,7 +476,11 @@ def compile_execution_plan(
             ),
             "runtimeValidationRequirements": runtime_validation_requirements,
             "workspaceIntentRef": workspace_intent_ref,
+            "workspaceMutation": str(
+                profile.workspace.get("mutation") or "allowed"
+            ),
             "capturePolicyRef": capture_policy_ref,
+            "capturePolicy": dict(profile.capture),
             "policySnapshotRef": policy_snapshot_ref,
             "supportCombinationKey": support_key,
             "supportIdentity": support_payload.model_dump(

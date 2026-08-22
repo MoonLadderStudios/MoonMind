@@ -20,7 +20,7 @@ from moonmind.omnigent.harness_platform.agent_profile import (
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessRecord,
     HarnessTrustRecord,
-    assert_catalog_fresh,
+    assert_catalog_refresh_attests,
 )
 from moonmind.omnigent.harness_platform.catalog_service import (
     OmnigentHarnessCatalogRepository,
@@ -312,7 +312,6 @@ class OmnigentExecutionPlanningService:
                     "selected Agent Profile catalog snapshot is unavailable",
                     code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
                 )
-            assert_catalog_fresh(catalog_result.snapshot)
             harness = next(
                 (
                     item
@@ -326,7 +325,19 @@ class OmnigentExecutionPlanningService:
                     f"harness {profile.harness.id} is absent from the selected catalog",
                     code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN,
                 )
-            trust = self._trust_record(catalog_result.trust_records, harness)
+            latest_catalog = await self._catalogs.latest(profile.endpointRef)
+            if latest_catalog is None:
+                raise HarnessPlatformError(
+                    "fresh harness catalog observation is unavailable",
+                    code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+                )
+            assert_catalog_refresh_attests(
+                authority=catalog_result.snapshot,
+                observation=latest_catalog.snapshot,
+                harness_id=profile.harness.id,
+                implementation_ref=profile.harness.implementationRef,
+            )
+            trust = self._trust_record(latest_catalog.trust_records, harness)
 
             await self._verify_agent_source(
                 session, profile, OmnigentUpstreamAgentProjection
@@ -383,10 +394,12 @@ class OmnigentExecutionPlanningService:
                 "profile": profile.workspace,
                 "request": request.workspace_spec,
             }
+            capture_payload = dict(profile.capture)
             policy_payload = policy.model_dump(by_alias=True, mode="json")
             return compile_execution_plan(
                 agent_profile=profile,
                 harness_catalog=catalog_result.snapshot,
+                freshness_catalog=latest_catalog.snapshot,
                 trust_record=trust,
                 resolved_skills=skills,
                 credential_binding_set=binding_set,
@@ -404,6 +417,7 @@ class OmnigentExecutionPlanningService:
                     "session.start": True,
                 },
                 workspace_intent_ref=_ref("workspace-intent", workspace_payload),
+                capture_policy_ref=_ref("capture-policy", capture_payload),
                 policy_snapshot_ref=_ref("omnigent-policy", policy_payload),
             )
 

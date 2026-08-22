@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from api_service.api.routers.omnigent_agent_profiles import (
     AgentProfileDocument,
+    GuidedProfileCreate,
     _digest,
     _normalized,
     _response,
@@ -29,6 +30,18 @@ def test_normalization_and_digest_are_stable():
     second = dict(reversed(list(first.items())))
     assert _digest(first) == _digest(second)
     assert _digest(first).startswith("sha256:")
+
+
+def test_guided_profile_rejects_unqualified_pi_preset() -> None:
+    with pytest.raises(ValidationError):
+        GuidedProfileCreate.model_validate(
+            {
+                "profileId": "omnigent-pi-default",
+                "displayName": "Pi via Omnigent",
+                "preset": "pi-experimental",
+                "defaultModel": "anthropic/model",
+            }
+        )
 
 
 def test_defaulted_rag_max_tokens_is_not_mistaken_for_runtime_authority():

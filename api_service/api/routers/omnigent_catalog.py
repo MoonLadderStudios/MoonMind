@@ -1492,6 +1492,14 @@ def _catalog_model_ids(value: Any) -> set[str]:
     return models
 
 
+def _can_view_agent_profile(row: Any, current_user: User) -> bool:
+    return bool(
+        getattr(current_user, "is_superuser", False)
+        or getattr(row, "visibility", None) != "private"
+        or getattr(row, "owner_id", None) == current_user.id
+    )
+
+
 @router.get(
     "/execution-readiness",
     response_model=OmnigentExecutionReadiness,
@@ -1508,7 +1516,7 @@ async def get_omnigent_execution_readiness(
     from moonmind.omnigent.harness_platform.agent_profile import validate_agent_profile
     from moonmind.omnigent.harness_platform.catalog import (
         TrustState,
-        assert_catalog_fresh,
+        assert_catalog_refresh_attests,
     )
     from moonmind.omnigent.harness_platform.catalog_service import (
         DbHarnessCatalogRepository,
@@ -1532,6 +1540,11 @@ async def get_omnigent_execution_readiness(
             )
         ).scalars()
     )
+    profiles = [
+        profile
+        for profile in profiles
+        if _can_view_agent_profile(profile, current_user)
+    ]
     provider_profiles = list(
         (await session.execute(select(ManagedAgentProviderProfile))).scalars()
     )
@@ -1571,13 +1584,19 @@ async def get_omnigent_execution_readiness(
         if profile.harness.id == "opencode-native" and not opencode_support_enabled():
             reasons.append(_reason("opencode_support_not_qualified"))
         catalog = await catalogs.load(profile.harness.catalogRef)
+        fresh_catalog = await catalogs.latest(profile.endpointRef)
         harness = None
         trust = None
-        if catalog is None:
+        if catalog is None or fresh_catalog is None:
             reasons.append(_reason("harness_catalog_unavailable"))
         else:
             try:
-                assert_catalog_fresh(catalog.snapshot)
+                assert_catalog_refresh_attests(
+                    authority=catalog.snapshot,
+                    observation=fresh_catalog.snapshot,
+                    harness_id=profile.harness.id,
+                    implementation_ref=profile.harness.implementationRef,
+                )
             except Exception:
                 reasons.append(_reason("harness_catalog_unavailable"))
             harness = next(
@@ -1593,7 +1612,7 @@ async def get_omnigent_execution_readiness(
             trust = next(
                 (
                     item
-                    for item in catalog.trust_records
+                    for item in fresh_catalog.trust_records
                     if item.implementationRef == profile.harness.implementationRef
                 ),
                 None,

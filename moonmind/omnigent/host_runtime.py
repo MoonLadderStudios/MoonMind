@@ -94,7 +94,10 @@ class GenericOmnigentHostRuntime:
         launch_policy: LaunchPolicy,
         authority_sink: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> PreparedHostInputs:
-        workspace = await self._workspace.materialize(request)
+        workspace = await self._workspace.materialize(
+            request,
+            mutation=plan.payload.workspaceMutation,
+        )
         if authority_sink is not None:
             await authority_sink({"kind": "workspace", **workspace})
         # Skill snapshots may be shared, but their mutable run projection and

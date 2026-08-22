@@ -7,7 +7,9 @@ the existing Omnigent session driver owns provider interaction after creation.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import suppress
 from typing import Any, Awaitable, Callable
 
 from moonmind.omnigent.credential_materializers import (
@@ -61,6 +63,8 @@ class GenericOmnigentHostRealizer:
         session_cleanup_service: Any,
         artifact_gateway: Any | None = None,
         turn_command_service: Any | None = None,
+        heartbeat_interval_seconds: float = 60.0,
+        heartbeat_ttl_seconds: int = 900,
     ) -> None:
         dependencies = (
             runtime_binding_store,
@@ -87,6 +91,10 @@ class GenericOmnigentHostRealizer:
         self._session_cleanup = session_cleanup_service
         self._artifacts = artifact_gateway
         self._turn_commands = turn_command_service
+        if heartbeat_interval_seconds <= 0 or heartbeat_ttl_seconds <= 0:
+            raise ValueError("generic host heartbeat interval and TTL must be positive")
+        self._heartbeat_interval = heartbeat_interval_seconds
+        self._heartbeat_ttl = heartbeat_ttl_seconds
 
     async def execute(
         self,
@@ -432,11 +440,14 @@ class GenericOmnigentHostRealizer:
                 binding, state=RuntimeBindingState.session_creating
             )
             sink = RuntimeBindingSessionAuthoritySink(self._runtime_bindings, binding)
-            result = await self._session_driver(
-                self._bind_exact_host(request, plan, host_context, binding),
-                session_authority_sink=sink,
-            )
-            binding = sink.binding
+            try:
+                result = await self._drive_session(
+                    request=self._bind_exact_host(request, plan, host_context, binding),
+                    sink=sink,
+                    host_lease=host_lease,
+                )
+            finally:
+                binding = sink.binding
             result = result.model_copy(
                 update={
                     "metadata": {
@@ -537,10 +548,16 @@ class GenericOmnigentHostRealizer:
                 sink = RuntimeBindingSessionAuthoritySink(
                     self._runtime_bindings, current
                 )
-                result = await self._session_driver(
-                    self._bind_exact_host(request, plan, host_context, current),
-                    session_authority_sink=sink,
-                )
+                try:
+                    result = await self._drive_session(
+                        request=self._bind_exact_host(
+                            request, plan, host_context, current
+                        ),
+                        sink=sink,
+                        host_lease=host_lease,
+                    )
+                finally:
+                    current = sink.binding
                 result = result.model_copy(
                     update={
                         "metadata": {
@@ -678,6 +695,62 @@ class GenericOmnigentHostRealizer:
             updates=updates,
         )
 
+    async def _drive_session(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        sink: RuntimeBindingSessionAuthoritySink,
+        host_lease: Any,
+    ) -> AgentRunResult:
+        """Keep both durable ownership leases fresh while a turn is active."""
+
+        stop = asyncio.Event()
+
+        async def heartbeat_loop() -> None:
+            while True:
+                try:
+                    await asyncio.wait_for(
+                        stop.wait(), timeout=self._heartbeat_interval
+                    )
+                    return
+                except TimeoutError:
+                    await sink.heartbeat()
+                    await self._host_leases.heartbeat(
+                        host_lease.leaseRef,
+                        expected_generation=host_lease.generation,
+                        ttl_seconds=self._heartbeat_ttl,
+                    )
+
+        driver_task = asyncio.create_task(
+            self._session_driver(request, session_authority_sink=sink)
+        )
+        heartbeat_task = asyncio.create_task(heartbeat_loop())
+        try:
+            done, _pending = await asyncio.wait(
+                {driver_task, heartbeat_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if heartbeat_task in done and not driver_task.done():
+                driver_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await driver_task
+                await heartbeat_task
+                raise HarnessPlatformError(
+                    "generic host heartbeat stopped before session completion",
+                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                )
+            result = await driver_task
+            stop.set()
+            await heartbeat_task
+            return result
+        finally:
+            stop.set()
+            for task in (driver_task, heartbeat_task):
+                if not task.done():
+                    task.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await task
+
     def _bind_exact_host(
         self,
         request: AgentExecutionRequest,
@@ -725,6 +798,7 @@ class GenericOmnigentHostRealizer:
             }
         )
         omnigent["session"] = session
+        omnigent["capture"] = dict(plan.payload.capturePolicy)
         primary_lease = binding.providerLeases.get("primary-model")
         if primary_lease is None and binding.providerLeases:
             primary_lease = binding.providerLeases[

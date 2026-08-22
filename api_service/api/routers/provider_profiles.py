@@ -990,6 +990,43 @@ async def setup_provider_api_key(
     )
     secret_ref = f"db://{secret_slug}"
     rotated = mapping.secret_role in (profile.secret_refs or {})
+    candidate_generation = int(profile.credential_generation) + (1 if rotated else 0)
+    runtime_evidence: dict[str, Any] | None = None
+    if is_opencode:
+        try:
+            from api_service.db.base import async_session_maker
+            from moonmind.omnigent.harness_platform.host_classes import (
+                get_opencode_host_image_ref,
+            )
+            from moonmind.omnigent.opencode_runtime_validation import (
+                OpenCodeProviderRuntimeValidationService,
+            )
+            from moonmind.omnigent.production import build_omnigent_secret_resolver
+
+            runtime_evidence = await OpenCodeProviderRuntimeValidationService(
+                session_factory=async_session_maker,
+                resolver=build_omnigent_secret_resolver(),
+                image_ref=get_opencode_host_image_ref(),
+            ).validate(
+                profile=profile,
+                lease=maintenance_guard.lease,
+                candidate_secret=api_key,
+                candidate_generation=candidate_generation,
+            )
+        except Exception as exc:
+            # Rotation is atomic: the previously validated SecretRef,
+            # generation, and launch readiness remain authoritative.
+            if not rotated:
+                await _mark_api_key_validation_failed(
+                    session=session,
+                    profile=profile,
+                    reason="Pinned OpenCode runtime validation failed.",
+                )
+            status = 422 if isinstance(exc, ValueError) else 502
+            raise HTTPException(
+                status_code=status,
+                detail="Pinned OpenCode runtime validation failed.",
+            ) from exc
     await _upsert_managed_secret(
         session=session,
         slug=secret_slug,
@@ -1012,43 +1049,11 @@ async def setup_provider_api_key(
         validated_at=validated_at,
         enabled=body.enable_after_validation,
     )
-    if rotated:
-        profile.credential_generation += 1
+    profile.credential_generation = candidate_generation
 
     if is_opencode:
-        # Commit the protected SecretRef and sticky generation before the
-        # maintenance-lease-owned materializer resolves anything.
-        await session.commit()
-        await session.refresh(profile)
-        try:
-            from api_service.db.base import async_session_maker
-            from moonmind.omnigent.harness_platform.host_classes import (
-                get_opencode_host_image_ref,
-            )
-            from moonmind.omnigent.opencode_runtime_validation import (
-                OpenCodeProviderRuntimeValidationService,
-            )
-            from moonmind.omnigent.production import build_omnigent_secret_resolver
-
-            evidence = await OpenCodeProviderRuntimeValidationService(
-                session_factory=async_session_maker,
-                resolver=build_omnigent_secret_resolver(),
-                image_ref=get_opencode_host_image_ref(),
-            ).validate(
-                profile=profile,
-                lease=maintenance_guard.lease,
-            )
-        except Exception as exc:
-            await _mark_api_key_validation_failed(
-                session=session,
-                profile=profile,
-                reason="Pinned OpenCode runtime validation failed.",
-            )
-            status = 422 if isinstance(exc, ValueError) else 502
-            raise HTTPException(
-                status_code=status,
-                detail="Pinned OpenCode runtime validation failed.",
-            ) from exc
+        assert runtime_evidence is not None
+        evidence = runtime_evidence
         profile.model_catalog_evidence_json = evidence
         models = [
             str(item.get("qualifiedId") or "")
@@ -1505,24 +1510,6 @@ _API_KEY_MAPPINGS: dict[tuple[str, str], _ApiKeyMapping] = {
         ),
         auth_strategy="opencode_auth_json",
         ready_label="OpenCode Go API key ready",
-    ),
-    ("omnigent", "anthropic"): _ApiKeyMapping(
-        runtime_id="omnigent",
-        provider_id="anthropic",
-        secret_role="api_key",
-        env_key="",
-        clear_env_keys=("ANTHROPIC_API_KEY", "OPENAI_API_KEY"),
-        auth_strategy="omnigent_provider_config",
-        ready_label="Anthropic provider config ready",
-    ),
-    ("omnigent", "openai"): _ApiKeyMapping(
-        runtime_id="omnigent",
-        provider_id="openai",
-        secret_role="api_key",
-        env_key="",
-        clear_env_keys=("ANTHROPIC_API_KEY", "OPENAI_API_KEY"),
-        auth_strategy="omnigent_provider_config",
-        ready_label="OpenAI provider config ready",
     ),
 }
 

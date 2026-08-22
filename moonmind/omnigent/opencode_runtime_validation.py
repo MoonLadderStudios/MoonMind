@@ -20,7 +20,10 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.provider_leases import AcquiredProviderLease
-from moonmind.omnigent.secret_resolution import OmnigentSecretResolutionService
+from moonmind.omnigent.secret_resolution import (
+    OmnigentSecretResolutionService,
+    ScopedSecretBundle,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.security.egress import OMNIGENT_EGRESS_NETWORK_REF
 
@@ -69,21 +72,40 @@ class OpenCodeProviderRuntimeValidationService:
         *,
         profile: Any,
         lease: Any,
+        candidate_secret: str | None = None,
+        candidate_generation: int | None = None,
     ) -> dict[str, Any]:
+        if (candidate_secret is None) != (candidate_generation is None):
+            raise ValueError(
+                "candidate secret and generation must be supplied together"
+            )
+        generation = int(
+            candidate_generation
+            if candidate_generation is not None
+            else profile.credential_generation
+        )
         acquired = AcquiredProviderLease(
             slot="primary-model",
             provider_profile_ref=profile.profile_id,
             capacity_scope_ref=profile.capacity_scope_ref,
             provider_lease_ref=f"provider-profile-lease:{lease.lease_id}",
-            credential_generation=int(profile.credential_generation),
+            credential_generation=generation,
             lease=lease,
         )
-        secrets = await OmnigentSecretResolutionService(
-            session_factory=self._session_factory,
-            resolver=self._resolver,
-        ).resolve(
-            acquired=acquired,
-            allowed_secret_roles=("opencode_api_key",),
+        secrets = (
+            ScopedSecretBundle(
+                provider_profile_ref=profile.profile_id,
+                credential_generation=generation,
+                values={"opencode_api_key": str(candidate_secret)},
+            )
+            if candidate_secret is not None
+            else await OmnigentSecretResolutionService(
+                session_factory=self._session_factory,
+                resolver=self._resolver,
+            ).resolve(
+                acquired=acquired,
+                allowed_secret_roles=("opencode_api_key",),
+            )
         )
         request = AgentExecutionRequest.model_validate(
             {
@@ -93,7 +115,7 @@ class OpenCodeProviderRuntimeValidationService:
                 "correlationId": f"opencode-validation-{profile.profile_id}",
                 "idempotencyKey": (
                     f"opencode-validation-{profile.profile_id}-"
-                    f"{profile.credential_generation}"
+                    f"{generation}"
                 ),
             }
         )
@@ -180,7 +202,7 @@ class OpenCodeProviderRuntimeValidationService:
                 "imageRef": self._image_ref,
                 "runtimeVersions": versions,
                 "validatedAt": datetime.now(UTC).isoformat(),
-                "credentialGeneration": profile.credential_generation,
+                "credentialGeneration": generation,
                 "materializerRef": materializer.ref,
                 "credentialAttestationRef": handle.attestationRef,
                 "secretValueRecorded": False,

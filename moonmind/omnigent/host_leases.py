@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, NoReturn, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, update
@@ -28,6 +28,7 @@ class HostLeaseAuthority(BaseModel):
     status: str
     omnigentHostId: str | None = Field(None, alias="omnigentHostId")
     cleanupHandle: dict[str, Any] | None = Field(None, alias="cleanupHandle")
+    heartbeatAt: datetime | None = Field(None, alias="heartbeatAt")
     expiresAt: datetime | None = Field(None, alias="expiresAt")
 
 
@@ -48,10 +49,21 @@ class OmnigentHostLeaseRepository(Protocol):
         self, lease_ref: str, **kwargs: Any
     ) -> HostLeaseAuthority: ...
 
+    async def heartbeat(
+        self, lease_ref: str, **kwargs: Any
+    ) -> HostLeaseAuthority: ...
+
 
 def _identity(prefix: str, *parts: str) -> str:
     digest = hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
     return f"{prefix}:sha256:{digest}"
+
+
+def _conflict(message: str) -> NoReturn:
+    raise HarnessPlatformError(
+        message,
+        code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+    )
 
 
 class InMemoryOmnigentHostLeaseRepository:
@@ -85,7 +97,7 @@ class InMemoryOmnigentHostLeaseRepository:
                 or existing.runtimeBindingId != runtime_binding_id
                 or existing.hostClassRef != host_class_ref
             ):
-                self._conflict("host lease idempotency conflict")
+                _conflict("host lease idempotency conflict")
             return existing
         lease = HostLeaseAuthority.model_validate(
             {
@@ -96,6 +108,7 @@ class InMemoryOmnigentHostLeaseRepository:
                 "generation": 1,
                 "launchGeneration": 1,
                 "status": "allocating",
+                "heartbeatAt": datetime.now(UTC),
                 "expiresAt": datetime.now(UTC) + timedelta(seconds=ttl_seconds),
             }
         )
@@ -170,6 +183,26 @@ class InMemoryOmnigentHostLeaseRepository:
             status="cleaned",
         )
 
+    async def heartbeat(
+        self,
+        lease_ref: str,
+        *,
+        expected_generation: int,
+        ttl_seconds: int = 900,
+    ) -> HostLeaseAuthority:
+        now = datetime.now(UTC)
+        existing = self._leases.get(lease_ref)
+        if existing is None:
+            _conflict("host lease heartbeat authority does not exist")
+        return self._transition(
+            lease_ref,
+            expected_generation=expected_generation,
+            expected_statuses={"allocating", "ready"},
+            status=existing.status,
+            heartbeatAt=now,
+            expiresAt=now + timedelta(seconds=ttl_seconds),
+        )
+
     def _transition(
         self,
         lease_ref: str,
@@ -185,7 +218,7 @@ class InMemoryOmnigentHostLeaseRepository:
             or existing.generation != expected_generation
             or existing.status not in expected_statuses
         ):
-            self._conflict("host lease CAS fence does not match")
+            _conflict("host lease CAS fence does not match")
         data = existing.model_dump(by_alias=True, mode="json")
         data.update(updates)
         data["status"] = status
@@ -193,15 +226,7 @@ class InMemoryOmnigentHostLeaseRepository:
         self._leases[lease_ref] = updated
         return updated
 
-    @staticmethod
-    def _conflict(message: str) -> None:
-        raise HarnessPlatformError(
-            message,
-            code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-        )
-
-
-class DbOmnigentHostLeaseRepository(InMemoryOmnigentHostLeaseRepository):
+class DbOmnigentHostLeaseRepository:
     def __init__(self, session_factory: Any) -> None:
         self._session_factory = session_factory
 
@@ -218,6 +243,7 @@ class DbOmnigentHostLeaseRepository(InMemoryOmnigentHostLeaseRepository):
                 "status": row.status,
                 "omnigentHostId": row.omnigent_host_id,
                 "cleanupHandle": row.cleanup_handle_json,
+                "heartbeatAt": row.heartbeat_at,
                 "expiresAt": row.expires_at,
             }
         )
@@ -243,7 +269,7 @@ class DbOmnigentHostLeaseRepository(InMemoryOmnigentHostLeaseRepository):
         existing = await self.get(lease_ref)
         if existing is not None:
             if existing.runtimeBindingId != runtime_binding_id:
-                self._conflict("host lease idempotency conflict")
+                _conflict("host lease idempotency conflict")
             return existing
         expires_at = datetime.now(UTC) + timedelta(
             seconds=int(kwargs.get("ttl_seconds", 3600))
@@ -331,6 +357,19 @@ class DbOmnigentHostLeaseRepository(InMemoryOmnigentHostLeaseRepository):
             values={"status": "cleaned"},
         )
 
+    async def heartbeat(self, lease_ref: str, **kwargs: Any) -> HostLeaseAuthority:
+        now = datetime.now(UTC)
+        return await self._db_transition(
+            lease_ref,
+            expected_generation=int(kwargs["expected_generation"]),
+            expected_statuses=("allocating", "ready"),
+            values={
+                "heartbeat_at": now,
+                "expires_at": now
+                + timedelta(seconds=int(kwargs.get("ttl_seconds", 900))),
+            },
+        )
+
     async def _db_transition(
         self,
         lease_ref: str,
@@ -354,7 +393,7 @@ class DbOmnigentHostLeaseRepository(InMemoryOmnigentHostLeaseRepository):
             )
             if result.rowcount != 1:
                 await session.rollback()
-                self._conflict("host lease CAS fence does not match")
+                _conflict("host lease CAS fence does not match")
             await session.commit()
         updated = await self.get(lease_ref)
         assert updated is not None

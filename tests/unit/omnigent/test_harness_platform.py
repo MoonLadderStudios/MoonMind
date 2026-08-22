@@ -24,6 +24,7 @@ from moonmind.omnigent.harness_platform.catalog import (
     HarnessImplementationIdentity,
     TrustState,
     assert_catalog_fresh,
+    assert_catalog_refresh_attests,
     classify_harness_trust,
     create_catalog_snapshot,
     is_launchable_trust,
@@ -311,10 +312,10 @@ def make_agent_profile_bundle():
                 }
             ],
             "model": {},
-            "workspace": {},
+            "workspace": {"mutation": "read_only"},
             "skills": [],
             "tools": [],
-            "capture": {},
+            "capture": {"stream": False, "evidence": False},
             "continuations": {},
             "publish": {},
             "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
@@ -469,10 +470,10 @@ def test_plan_selects_provider_without_generation():
                 }
             ],
             "model": {},
-            "workspace": {},
+            "workspace": {"mutation": "read_only"},
             "skills": [],
             "tools": [],
-            "capture": {},
+            "capture": {"stream": False, "evidence": False},
             "continuations": {},
             "publish": {},
             "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
@@ -519,6 +520,8 @@ def test_plan_selects_provider_without_generation():
     assert "credentialGeneration" not in payload_json
     assert "providerLeaseRef" not in payload_json
     assert payload.credentialBindingSetRef.startswith("omnigent-credential-bindings:")
+    assert payload.workspaceMutation == "read_only"
+    assert payload.capturePolicy == {"stream": False, "evidence": False}
 
 
 # AC 9: Runtime bindings record exact acquired generations after lease acquisition
@@ -1475,6 +1478,81 @@ def test_catalog_freshness():
     assert_catalog_fresh(
         stale, now=datetime.now(UTC), max_age_seconds=3600, allow_stale_offline=True
     )
+
+
+def test_fresh_catalog_attests_immutable_profile_authority() -> None:
+    implementation = {
+        "sourceKind": "core",
+        "package": "omnigent",
+        "version": "1.0.0",
+        "digest": "sha256:" + "d" * 64,
+    }
+    stale_authority = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="1.0.0",
+        omnigentBuildDigest="sha256:" + "b" * 64,
+        sourceDigest="sha256:" + "c" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": implementation,
+            }
+        ],
+        observedAt=datetime.now(UTC) - timedelta(hours=2),
+    )
+    fresh_observation = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="1.0.0",
+        omnigentBuildDigest="sha256:" + "b" * 64,
+        sourceDigest="sha256:" + "e" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": implementation,
+            }
+        ],
+        observedAt=datetime.now(UTC),
+    )
+
+    assert_catalog_refresh_attests(
+        authority=stale_authority,
+        observation=fresh_observation,
+        harness_id="opencode-native",
+        implementation_ref=stale_authority.harnesses[
+            0
+        ].implementation.implementation_ref(),
+    )
+
+    changed_build = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="1.0.1",
+        omnigentBuildDigest="sha256:" + "f" * 64,
+        sourceDigest="sha256:" + "1" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": {
+                    **implementation,
+                    "version": "1.0.1",
+                    "digest": "sha256:" + "2" * 64,
+                },
+            }
+        ],
+        observedAt=datetime.now(UTC),
+    )
+    with pytest.raises(HarnessPlatformError) as mismatch:
+        assert_catalog_refresh_attests(
+            authority=stale_authority,
+            observation=changed_build,
+            harness_id="opencode-native",
+            implementation_ref=stale_authority.harnesses[
+                0
+            ].implementation.implementation_ref(),
+        )
+    assert mismatch.value.code == HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH
 
 
 # Model config digest uniqueness per normalized options

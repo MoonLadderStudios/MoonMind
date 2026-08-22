@@ -9082,9 +9082,9 @@ export interface components {
             /**
              * Preset
              * @default opencode
-             * @enum {string}
+             * @constant
              */
-            preset: "opencode" | "pi-experimental";
+            preset: "opencode";
             /** Sourceupstreamid */
             sourceUpstreamId?: string | null;
             /** Providerid */

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -40,7 +41,10 @@ from moonmind.omnigent.harness_platform.stores import (
     InMemoryExecutionPlanUsageStore,
 )
 from moonmind.omnigent.host_leases import InMemoryOmnigentHostLeaseRepository
-from moonmind.omnigent.host_services.attestation import _assert_exact_omnigent_build
+from moonmind.omnigent.host_services.attestation import (
+    _assert_exact_omnigent_build,
+    _attest_workspace_mount,
+)
 from moonmind.omnigent.host_services.mounted_tools import OmnigentMountedToolService
 from moonmind.omnigent.host_services.workspace import OmnigentWorkspaceMaterializer
 from moonmind.omnigent.provider_leases import (
@@ -76,6 +80,37 @@ def test_exact_host_attestation_requires_catalog_build_label() -> None:
             expected,
         )
     assert exc.value.code == HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH
+
+
+def test_exact_host_attestation_enforces_workspace_access_mode() -> None:
+    attachment = {
+        "sourceRef": "/daemon/workspace/run-1",
+        "targetPath": "/workspaces/run",
+        "accessMode": "read-only",
+    }
+    evidence = _attest_workspace_mount(
+        [
+            {
+                "Source": "/daemon/workspace/run-1",
+                "Destination": "/workspaces/run",
+                "RW": False,
+            }
+        ],
+        attachment,
+    )
+    assert evidence["accessMode"] == "read-only"
+
+    with pytest.raises(HarnessPlatformError):
+        _attest_workspace_mount(
+            [
+                {
+                    "Source": "/daemon/workspace/run-1",
+                    "Destination": "/workspaces/run",
+                    "RW": True,
+                }
+            ],
+            attachment,
+        )
 
 
 def test_planning_model_evidence_is_bound_to_generation_and_host_image() -> None:
@@ -253,7 +288,9 @@ def _plan(model: str):
             },
             "runtimeValidationRequirements": ["live-model-option"],
             "workspaceIntentRef": "workspace-intent:sha256:" + "8" * 64,
+            "workspaceMutation": "read_only",
             "capturePolicyRef": None,
+            "capturePolicy": {"stream": False, "evidence": False},
             "policySnapshotRef": "omnigent-policy:sha256:" + "9" * 64,
             "supportCombinationKey": "omnigent-support-combination:sha256:" + "0" * 64,
         }
@@ -674,8 +711,29 @@ async def test_host_cleanup_claim_fences_a_stale_activity() -> None:
 @pytest.mark.asyncio
 async def test_generic_realizer_persists_authority_and_releases_provider_last() -> None:
     events: list[str] = []
-    runtime_store = InMemoryStableRuntimeBindingStore()
-    host_leases = InMemoryOmnigentHostLeaseRepository()
+
+    class CountingRuntimeBindings(InMemoryStableRuntimeBindingStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.heartbeat_count = 0
+
+        async def update(self, binding_id, **kwargs):
+            if kwargs.get("state") is None and kwargs.get("updates") is None:
+                self.heartbeat_count += 1
+            return await super().update(binding_id, **kwargs)
+
+    runtime_store = CountingRuntimeBindings()
+
+    class CountingHostLeases(InMemoryOmnigentHostLeaseRepository):
+        def __init__(self) -> None:
+            super().__init__()
+            self.heartbeat_count = 0
+
+        async def heartbeat(self, lease_ref, **kwargs):
+            self.heartbeat_count += 1
+            return await super().heartbeat(lease_ref, **kwargs)
+
+    host_leases = CountingHostLeases()
     acquired = AcquiredProviderLease(
         slot="primary-model",
         provider_profile_ref="opencode-go-primary",
@@ -813,6 +871,10 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
         await session_authority_sink.session_created("session-1")
         assert session_authority_sink.binding.omnigentSessionId == "session-1"
         assert request.parameters["omnigent"]["session"]["hostId"] == "host-1"
+        assert request.parameters["omnigent"]["capture"] == {
+            "stream": False,
+            "evidence": False,
+        }
         authorization = request.parameters["omnigent"][
             "_moonmindProfileAuthorization"
         ]
@@ -829,6 +891,7 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
         assert authorization["credentialGeneration"] == 4
         assert authorization["hostBindingRef"]
         assert authorization["hostLeaseRef"]
+        await asyncio.sleep(0.03)
         events.append("message-completed")
         return AgentRunResult(summary="done")
 
@@ -857,6 +920,8 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
         session_driver=session_driver,
         session_cleanup_service=SessionCleanup(),
         turn_command_service=TurnCommands(),
+        heartbeat_interval_seconds=0.005,
+        heartbeat_ttl_seconds=60,
     )
     result = await realizer.execute(_request(), _plan("opencode-go/model"))
 
@@ -877,6 +942,8 @@ async def test_generic_realizer_persists_authority_and_releases_provider_last() 
     )
     assert events.index("host-cleaned") < events.index("credentials-cleaned")
     assert events.index("credentials-cleaned") < events.index("provider-released")
+    assert host_leases.heartbeat_count >= 1
+    assert runtime_store.heartbeat_count >= 1
 
     first_execution_events = tuple(events)
     replay = await realizer.execute(_request(), _plan("opencode-go/model"))
@@ -1120,3 +1187,8 @@ async def test_workspace_attachment_translates_to_daemon_visible_volume_path(
 
     assert attachment["sourceRef"] == "/daemon/agent_workspaces/run-1"
     assert attachment["accessMode"] == "read-write"
+
+    read_only_attachment = await service.materialize(request, mutation="read_only")
+
+    assert read_only_attachment["sourceRef"] == "/daemon/agent_workspaces/run-1"
+    assert read_only_attachment["accessMode"] == "read-only"

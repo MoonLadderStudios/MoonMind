@@ -52,6 +52,33 @@ def _assert_exact_omnigent_build(
         )
 
 
+def _attest_workspace_mount(
+    mounts: list[dict[str, Any]], attachment: dict[str, Any]
+) -> dict[str, Any]:
+    matched = next(
+        (
+            mount
+            for mount in mounts
+            if str(mount.get("Name") or mount.get("Source") or "")
+            == str(attachment["sourceRef"])
+            and str(mount.get("Destination") or "")
+            == str(attachment["targetPath"])
+        ),
+        None,
+    )
+    expected_writable = attachment.get("accessMode") == "read-write"
+    if matched is None or bool(matched.get("RW")) != expected_writable:
+        raise HarnessPlatformError(
+            "workspace projection does not match the selected mutation policy",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    return {
+        "sourceRef": attachment["sourceRef"],
+        "targetPath": attachment["targetPath"],
+        "accessMode": attachment["accessMode"],
+    }
+
+
 class DockerOmnigentHostAttestor:
     def __init__(
         self,
@@ -154,6 +181,9 @@ class DockerOmnigentHostAttestor:
                 )
             runtime_versions[name] = observed.strip()[:256]
         mounts = container.get("Mounts") or []
+        workspace_mount_evidence = _attest_workspace_mount(
+            mounts, spec.workspaceAttachment
+        )
         skill_mount = next(
             (
                 mount
@@ -208,6 +238,13 @@ class DockerOmnigentHostAttestor:
                     + str(tool.get("path") or "").lstrip("/")
                 )
                 digests = ",".join(tool.get("executableDigests") or [])
+                verify_tool_script = "".join(
+                    (
+                        'test -x "$1"; actual=$(sha256sum "$1" | awk \'{print $1}\'); ',
+                        'case ",$2," in *,"$actual",*) :;; *) exit 1;; esac; ',
+                        '"$1" --version >/dev/null',
+                    )
+                )
                 _code, observed, _err = await self._backend.run(
                     [
                         "docker",
@@ -215,9 +252,7 @@ class DockerOmnigentHostAttestor:
                         launch_result["containerName"],
                         "/bin/sh",
                         "-ceu",
-                        'test -x "$1"; actual=$(sha256sum "$1" | awk \'{print $1}\'); '
-                        'case ",$2," in *,"$actual",*) :;; *) exit 1;; esac; '
-                        '"$1" --version >/dev/null',
+                        verify_tool_script,
                         "--",
                         executable,
                         digests,
@@ -278,6 +313,20 @@ class DockerOmnigentHostAttestor:
                     )
                 generation = int(handle["credentialGeneration"])
                 target = str(attachment["targetPath"])
+                verify_credential_script = "".join(
+                    (
+                        'test "$(stat -c %u:%g "$1")" = 1000:1000; ',
+                        'test "$(stat -c %a "$1")" = 700; ',
+                        'test "$(stat -c %u:%g "$1/.moonmind-generation")" = 1000:1000; ',
+                        'test "$(stat -c %a "$1/.moonmind-generation")" = 600; ',
+                        'count=0; for file in "$1"/*; do ',
+                        'test -f "$file" || continue; ',
+                        'test "$(stat -c %u:%g "$file")" = 1000:1000; ',
+                        'test "$(stat -c %a "$file")" = 600; ',
+                        'count=$((count + 1)); done; test "$count" -ge 1; ',
+                        'cat "$1/.moonmind-generation"',
+                    )
+                )
                 _code, observed, _err = await self._backend.run(
                     [
                         "docker",
@@ -285,16 +334,7 @@ class DockerOmnigentHostAttestor:
                         launch_result["containerName"],
                         "/bin/sh",
                         "-ceu",
-                        'test "$(stat -c %u:%g "$1")" = 1000:1000; '
-                        'test "$(stat -c %a "$1")" = 700; '
-                        'test "$(stat -c %u:%g "$1/.moonmind-generation")" = 1000:1000; '
-                        'test "$(stat -c %a "$1/.moonmind-generation")" = 600; '
-                        'count=0; for file in "$1"/*; do '
-                        'test -f "$file" || continue; '
-                        'test "$(stat -c %u:%g "$file")" = 1000:1000; '
-                        'test "$(stat -c %a "$file")" = 600; '
-                        'count=$((count + 1)); done; test "$count" -ge 1; '
-                        'cat "$1/.moonmind-generation"',
+                        verify_credential_script,
                         "--",
                         target,
                     ],
@@ -372,6 +412,7 @@ class DockerOmnigentHostAttestor:
                 for item in credential_handles
             },
             "credentialMounts": credential_mount_evidence,
+            "workspaceMount": workspace_mount_evidence,
             "controlCredentialMount": control_mount_evidence,
             "skillDeliveryRef": spec.skillAttachment.get("deliveryRef"),
             "toolDeliveryRefs": [

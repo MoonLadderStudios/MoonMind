@@ -139,6 +139,26 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
             )
         return value
 
+    @staticmethod
+    def _execution_link(
+        request: AgentExecutionRequest,
+        *,
+        name: str,
+        link_type: str,
+    ) -> Any | None:
+        if request.step_execution is None:
+            return None
+        from moonmind.workflows.temporal.artifacts import ExecutionRef
+
+        return ExecutionRef(
+            namespace="default",
+            workflow_id=request.step_execution.workflow_id,
+            run_id=request.step_execution.run_id,
+            link_type=link_type,
+            label=_safe_artifact_name(name),
+            created_by_activity_type="integration.omnigent.execute",
+        )
+
     async def write_json(
         self,
         *,
@@ -190,6 +210,9 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
         )
 
         digest = hashlib.sha256(payload).hexdigest()
+        execution_link = self._execution_link(
+            request, name=name, link_type=link_type
+        )
         async with self._session_factory() as session:
             service = TemporalArtifactService(TemporalArtifactRepository(session))
             artifact, _upload = await service.create(
@@ -197,6 +220,7 @@ class TemporalOmnigentArtifactGateway(OmnigentArtifactGateway):
                 content_type=content_type,
                 size_bytes=len(payload),
                 sha256=digest,
+                link=execution_link,
                 metadata_json={
                     "artifact_type": "omnigent.generic_host_evidence",
                     "name": _safe_artifact_name(name),
@@ -1584,7 +1608,9 @@ async def _build_capture_bundle_impl(
     capture_policy: dict[str, Any] | None = None,
 ) -> OmnigentCaptureBundle:
     refs: dict[str, str] = {}
-    if first_message_request is not None:
+    stream_enabled = _capture_enabled(capture_policy, "stream")
+    evidence_enabled = _capture_enabled(capture_policy, "evidence")
+    if evidence_enabled and first_message_request is not None:
         await _capture_artifact_json(
             artifact_gateway,
             request,
@@ -1594,7 +1620,7 @@ async def _build_capture_bundle_impl(
             payload=first_message_request,
             link_type="input.omnigent.first_message.request",
         )
-    if first_message_response is not None:
+    if evidence_enabled and first_message_response is not None:
         await _capture_artifact_json(
             artifact_gateway,
             request,
@@ -1604,7 +1630,7 @@ async def _build_capture_bundle_impl(
             payload=first_message_response,
             link_type="input.omnigent.first_message.response",
         )
-    if initial_snapshot is not None:
+    if evidence_enabled and initial_snapshot is not None:
         await _capture_artifact_json(
             artifact_gateway,
             request,
@@ -1616,31 +1642,31 @@ async def _build_capture_bundle_impl(
         )
     # §16 rule 5: redact secret-like fields on the raw-event persistence path
     # so the artifact system stays a safe evidence boundary.
-    raw_ref = await artifact_gateway.write_text(
-        request=request,
-        name="runtime.omnigent.sse.raw.jsonl",
-        payload=_jsonl(redact_raw_events(raw_events)),
-        link_type="runtime.omnigent.sse.raw",
-        content_type="application/x-ndjson",
-    )
-    refs["rawSseStreamRef"] = raw_ref
-    normalized_ref = await artifact_gateway.write_text(
-        request=request,
-        name="runtime.omnigent.sse.normalized.jsonl",
-        payload=_jsonl(normalized_events),
-        link_type="runtime.omnigent.sse.normalized",
-        content_type="application/x-ndjson",
-    )
-    refs["normalizedEventStreamRef"] = normalized_ref
-    final_ref = await _capture_artifact_json(
-        artifact_gateway,
-        request,
-        refs,
-        key="finalSnapshotRef",
-        name="output.omnigent.snapshot.final.json",
-        payload=final_snapshot,
-        link_type="output.omnigent.snapshot.final",
-    )
+    if stream_enabled:
+        refs["rawSseStreamRef"] = await artifact_gateway.write_text(
+            request=request,
+            name="runtime.omnigent.sse.raw.jsonl",
+            payload=_jsonl(redact_raw_events(raw_events)),
+            link_type="runtime.omnigent.sse.raw",
+            content_type="application/x-ndjson",
+        )
+        refs["normalizedEventStreamRef"] = await artifact_gateway.write_text(
+            request=request,
+            name="runtime.omnigent.sse.normalized.jsonl",
+            payload=_jsonl(normalized_events),
+            link_type="runtime.omnigent.sse.normalized",
+            content_type="application/x-ndjson",
+        )
+    if evidence_enabled:
+        await _capture_artifact_json(
+            artifact_gateway,
+            request,
+            refs,
+            key="finalSnapshotRef",
+            name="output.omnigent.snapshot.final.json",
+            payload=final_snapshot,
+            link_type="output.omnigent.snapshot.final",
+        )
     manifest: dict[str, Any] = {
         "schemaVersion": _CAPTURE_MANIFEST_SCHEMA_VERSION,
         "sourceIssue": "MoonLadderStudios/MoonMind#3365",
@@ -1673,7 +1699,7 @@ async def _build_capture_bundle_impl(
     }
     child_session_ids = _child_session_ids(raw_events, parent_session_id=session_id)
     manifest["childSessions"] = len(child_session_ids)
-    if child_session_ids:
+    if evidence_enabled and child_session_ids:
         child_ref = await artifact_gateway.write_text(
             request=request,
             name="runtime.omnigent.child_sessions.jsonl",
@@ -1720,7 +1746,7 @@ async def _build_capture_bundle_impl(
                     }
                 )
         manifest["childSessionEvidence"] = child_snapshots
-    if harvest_resources and client is not None and session_id:
+    if evidence_enabled and harvest_resources and client is not None and session_id:
         changed_items: list[dict[str, Any]] = []
         if _capture_enabled(capture_policy, "changedFiles"):
             changed_items = await _harvest_changed_files(
@@ -1958,12 +1984,14 @@ async def _build_capture_bundle_impl(
             "downloadAvailable": True,
         }
     )
-    metadata_refs = {
-        "captureManifestRef": manifest_ref,
-        "rawSseStreamRef": raw_ref,
-        "normalizedEventStreamRef": normalized_ref,
-        "finalSnapshotRef": final_ref,
-    }
+    metadata_refs = {"captureManifestRef": manifest_ref}
+    for key in (
+        "rawSseStreamRef",
+        "normalizedEventStreamRef",
+        "finalSnapshotRef",
+    ):
+        if key in refs:
+            metadata_refs[key] = refs[key]
     if "externalStateRef" in refs:
         metadata_refs["externalStateRef"] = refs["externalStateRef"]
         metadata_refs["checkpointKind"] = "external_state_ref"
@@ -1979,7 +2007,15 @@ async def _build_capture_bundle_impl(
     ):
         if optional_key in refs:
             metadata_refs[optional_key] = refs[optional_key]
-    output_refs = [final_ref, normalized_ref, manifest_ref]
+    output_refs = [
+        ref
+        for ref in (
+            refs.get("finalSnapshotRef"),
+            refs.get("normalizedEventStreamRef"),
+            manifest_ref,
+        )
+        if ref
+    ]
     return OmnigentCaptureBundle(
         output_refs=output_refs,
         diagnostics_ref=diagnostics_ref,

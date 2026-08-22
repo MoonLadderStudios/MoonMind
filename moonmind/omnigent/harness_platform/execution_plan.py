@@ -59,7 +59,9 @@ class OmnigentExecutionPlanPayload(BaseModel):
         alias="runtimeValidationRequirements"
     )
     workspaceIntentRef: str = Field(alias="workspaceIntentRef")
+    workspaceMutation: str = Field("allowed", alias="workspaceMutation")
     capturePolicyRef: str | None = Field(default=None, alias="capturePolicyRef")
+    capturePolicy: dict[str, Any] = Field(default_factory=dict, alias="capturePolicy")
     policySnapshotRef: str = Field(alias="policySnapshotRef")
     supportCombinationKey: str = Field(alias="supportCombinationKey")
     # Added as optional for replay compatibility with execution plans admitted
@@ -108,6 +110,13 @@ class OmnigentExecutionPlanPayload(BaseModel):
             "skillBody",
         }
         payload = self.model_dump(by_alias=True, mode="json")
+
+        if self.workspaceMutation not in {
+            "allowed",
+            "read_only",
+            "checkpoint_branch",
+        }:
+            raise ValueError("workspaceMutation is unsupported")
 
         def check(obj: Any, path: str = "") -> None:
             if isinstance(obj, dict):

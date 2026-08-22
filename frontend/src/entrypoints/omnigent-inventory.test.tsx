@@ -96,6 +96,7 @@ describe('OmnigentInventoryPage', () => {
     await screen.findByText('Team Codex');
     fireEvent.click(screen.getByRole('button', { name: 'Create Omnigent agent' }));
     expect(screen.queryByLabelText('Normalized profile document (JSON)')).toBeNull();
+    expect(screen.queryByRole('option', { name: /Pi via Omnigent/ })).toBeNull();
     fireEvent.change(screen.getByLabelText('Profile id'), { target: { value: 'new-opencode' } });
     fireEvent.change(screen.getByLabelText('Display name'), { target: { value: 'New OpenCode' } });
     fireEvent.change(screen.getByLabelText('Default model'), { target: { value: 'opencode-go/test-model' } });

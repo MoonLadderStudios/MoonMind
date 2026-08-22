@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime
@@ -366,7 +367,7 @@ class InMemoryStableRuntimeBindingStore:
         )
 
 
-class DbRuntimeBindingStore(InMemoryStableRuntimeBindingStore):
+class DbRuntimeBindingStore:
     """DB implementation using stable identity and revision/fence CAS."""
 
     def __init__(self, session_factory: Any) -> None:
@@ -569,22 +570,33 @@ class RuntimeBindingSessionAuthoritySink:
     def __init__(self, store: Any, binding: StableRuntimeBinding) -> None:
         self._store = store
         self.binding = binding
+        self._lock = asyncio.Lock()
 
     async def session_created(self, session_id: str) -> None:
-        if self.binding.omnigentSessionId:
-            if self.binding.omnigentSessionId != session_id:
-                raise HarnessPlatformError(
-                    "runtime binding is already committed to a different session",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                )
-            return
-        self.binding = await self._store.update(
-            self.binding.bindingId,
-            expected_revision=self.binding.revision,
-            expected_fencing_generation=self.binding.fencingGeneration,
-            state=RuntimeBindingState.session_active,
-            updates={"omnigentSessionId": session_id},
-        )
+        async with self._lock:
+            if self.binding.omnigentSessionId:
+                if self.binding.omnigentSessionId != session_id:
+                    raise HarnessPlatformError(
+                        "runtime binding is already committed to a different session",
+                        code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                    )
+                return
+            self.binding = await self._store.update(
+                self.binding.bindingId,
+                expected_revision=self.binding.revision,
+                expected_fencing_generation=self.binding.fencingGeneration,
+                state=RuntimeBindingState.session_active,
+                updates={"omnigentSessionId": session_id},
+            )
+
+    async def heartbeat(self) -> StableRuntimeBinding:
+        async with self._lock:
+            self.binding = await self._store.update(
+                self.binding.bindingId,
+                expected_revision=self.binding.revision,
+                expected_fencing_generation=self.binding.fencingGeneration,
+            )
+            return self.binding
 
 
 __all__ = [

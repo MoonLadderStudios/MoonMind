@@ -306,6 +306,10 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
             assert catalog_ref == snapshot.catalogRef
             return catalog_result
 
+        async def latest(self, endpoint_ref):
+            assert endpoint_ref == "default"
+            return catalog_result
+
     monkeypatch.setattr(catalog_service, "DbHarnessCatalogRepository", Repository)
     monkeypatch.setattr(
         catalog, "_require_provider_profile_permission", lambda *_: None
@@ -338,6 +342,8 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
     profile_row = SimpleNamespace(
         profile_id="omnigent-opencode-default",
         active_version=1,
+        visibility="public",
+        owner_id=None,
     )
     version = SimpleNamespace(
         version=1,
@@ -411,6 +417,20 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
 
 def test_reconciler_readiness_uses_the_actual_static_workflow_registration():
     assert catalog._reconciler_generation_available() is True
+
+
+def test_generic_readiness_hides_other_users_private_agent_profiles() -> None:
+    current_user = SimpleNamespace(id="user-a", is_superuser=False)
+
+    assert catalog._can_view_agent_profile(
+        SimpleNamespace(visibility="private", owner_id="user-a"), current_user
+    )
+    assert not catalog._can_view_agent_profile(
+        SimpleNamespace(visibility="private", owner_id="user-b"), current_user
+    )
+    assert catalog._can_view_agent_profile(
+        SimpleNamespace(visibility="workspace", owner_id="user-b"), current_user
+    )
 
 
 def test_protected_first_run_canary_uses_normal_catalog_without_published_manifest(

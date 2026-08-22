@@ -236,7 +236,7 @@ class GuidedProfileCreate(BaseModel):
     profile_id: str = Field(alias="profileId")
     display_name: str = Field(alias="displayName", min_length=1, max_length=255)
     description: str | None = None
-    preset: Literal["opencode", "pi-experimental"] = "opencode"
+    preset: Literal["opencode"] = "opencode"
     source_upstream_id: str | None = Field(None, alias="sourceUpstreamId")
     provider_id: str | None = Field(None, alias="providerId")
     default_model: str = Field(alias="defaultModel", min_length=1, max_length=255)
@@ -712,13 +712,6 @@ async def create_guided_profile(
             "authModel": "own-auth",
             "materializerRef": "opencode-auth-json@1",
         },
-        "pi-experimental": {
-            "harnessId": "pi-native",
-            "upstreamId": "pi-native-ui",
-            "providerId": "anthropic",
-            "authModel": "omnigent-provider-config",
-            "materializerRef": "omnigent-provider-config@1",
-        },
     }[body.preset]
     if body.preset == "opencode" and not opencode_support_enabled():
         raise HTTPException(409, "opencode_support_not_qualified")
@@ -1055,8 +1048,14 @@ async def validate_profile(
         read_bundle_bytes=_artifact_bundle_reader(artifact_service, current_user),
     )
     target.upstream_snapshot = outcome.upstream_snapshot
+    validation_schema = (
+        "moonmind.omnigent-agent-profile-validation.v2"
+        if target.document.get("schemaVersion")
+        == "moonmind.omnigent-agent-profile.v2"
+        else "moonmind.omnigent-agent-profile-validation.v1"
+    )
     target.validation_result = {
-        "schemaVersion": "moonmind.omnigent-agent-profile-validation.v1",
+        "schemaVersion": validation_schema,
         "ready": outcome.ready,
         "checks": outcome.checks,
     }
