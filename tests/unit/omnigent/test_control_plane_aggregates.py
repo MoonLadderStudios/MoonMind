@@ -919,6 +919,8 @@ async def test_session_binds_plan_and_runtime_authority_without_mutating_plan(
         db_session.add(
             OmnigentRuntimeBindingRecord(
                 runtime_binding_ref=runtime_binding_ref,
+                binding_id=runtime_binding_ref,
+                latest_snapshot_ref=runtime_binding_ref,
                 execution_plan_ref=plan_ref,
                 state="credentials_acquired",
                 provider_leases_json={},
@@ -927,6 +929,8 @@ async def test_session_binds_plan_and_runtime_authority_without_mutating_plan(
         db_session.add(
             OmnigentRuntimeBindingRecord(
                 runtime_binding_ref=alternate_binding_ref,
+                binding_id=alternate_binding_ref,
+                latest_snapshot_ref=alternate_binding_ref,
                 execution_plan_ref=plan_ref,
                 state="credentials_acquired",
                 provider_leases_json={},
@@ -985,56 +989,6 @@ async def test_session_binds_plan_and_runtime_authority_without_mutating_plan(
                 execution_plan_ref="omnigent-execution-plan:sha256:" + "5" * 64,
                 runtime_binding_ref=runtime_binding_ref,
             )
-
-
-@pytest.mark.asyncio
-async def test_db_runtime_binding_store_returns_highest_immutable_stage(
-    session_factory,
-) -> None:
-    from moonmind.omnigent.harness_platform.stores import DbRuntimeBindingStore
-
-    plan_ref = "omnigent-execution-plan:sha256:" + "8" * 64
-    async with session_factory() as session:
-        session.add(
-            OmnigentExecutionPlanRecord(
-                plan_ref=plan_ref,
-                schema_version="moonmind.omnigent-execution-plan.v1",
-                payload_json={},
-                harness_id="opencode-native",
-                harness_implementation_ref="core:omnigent@1",
-                host_class_ref="omnigent-opencode@1",
-                launch_policy_ref="omnigent-on-demand@1",
-                execution_realizer_ref="generic-omnigent-host@1",
-            )
-        )
-        await session.commit()
-    store = DbRuntimeBindingStore(session_factory)
-    credentials = await store.create_initial(
-        execution_plan_ref=plan_ref,
-        provider_leases={
-            "primary-model": {
-                "providerProfileRef": "profile-1",
-                "providerLeaseRef": "provider-lease-1",
-                "credentialGeneration": 2,
-                "credentialRuntimeRef": "credential-runtime-1",
-            }
-        },
-    )
-    host = await store.update_with_host(
-        credentials.runtimeBindingRef,
-        host_binding_ref="host-binding-1",
-        host_lease_ref="host-lease-1",
-        host_lease_generation=3,
-        omnigent_host_id="host-1",
-    )
-    bound = await store.update_with_session(
-        host.runtimeBindingRef,
-        omnigent_session_id="provider-session-1",
-    )
-
-    latest = await store.latest_for_plan(plan_ref)
-
-    assert latest == bound
 
 
 @pytest.mark.asyncio

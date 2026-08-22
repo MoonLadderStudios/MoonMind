@@ -2501,7 +2501,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
         wf._profile_snapshots = {
             "opencode-provider": {
                 "profile_id": "opencode-provider",
-                "runtime_id": "opencode_go",
+                "runtime_id": "opencode",
             }
         }
 
@@ -2516,12 +2516,13 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             "version": 1,
             "digest": "sha256:" + "b" * 64,
             "providerProfileRef": "opencode-provider",
-            "executionProfileRef": "omnigent-opencode@1",
+            "executionProfileRef": "generic-omnigent-host@1",
             "launchPolicyRef": "omnigent-on-demand@1",
             "agentId": "opencode-agent",
             "document": {
+                "schemaVersion": "moonmind.omnigent-agent-profile.v2",
                 "endpointRef": "default",
-                "harness": "opencode-native",
+                "harness": {"id": "opencode-native"},
             },
         }
 
@@ -2541,7 +2542,7 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
                 },
                 workflow_parameters={
                     "omnigent": {
-                        "executionTargetRef": "omnigent-opencode@1",
+                        "executionTargetRef": "generic-omnigent-host@1",
                         "launchPolicyRef": "omnigent-on-demand@1",
                     },
                     "agentProfileSnapshot": snapshot,
@@ -3710,7 +3711,7 @@ class TestFetchProfileSnapshots(unittest.TestCase):
                                 },
                             ]
                         }
-                    elif runtime_id == "claude_code":
+                    elif runtime_id == "opencode":
                         return {"profiles": []}
                 return {}
 
@@ -3731,7 +3732,7 @@ class TestFetchProfileSnapshots(unittest.TestCase):
             self.assertNotIn("codex_openrouter_qwen36_plus", wf._profile_snapshots)
             self.assertEqual(
                 wf._profile_snapshot_runtime_ids,
-                {"claude_code", "opencode_go"},
+                {"claude_code", "opencode"},
             )
             self.assertEqual(
                 wf._validated_execution_profile_ref(

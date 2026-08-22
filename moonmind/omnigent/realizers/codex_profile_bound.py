@@ -83,7 +83,6 @@ class CodexProfileBoundRealizer:
                 request=request,
                 plan=plan,
                 result=result,
-                session_factory=session_factory,
             )
 
         async with httpx.AsyncClient() as http_client:
@@ -113,7 +112,6 @@ class CodexProfileBoundRealizer:
                 request=request,
                 plan=plan,
                 result=result,
-                session_factory=session_factory,
             )
 
     async def _bind_result_authority(
@@ -122,9 +120,8 @@ class CodexProfileBoundRealizer:
         request: AgentExecutionRequest,
         plan: OmnigentExecutionPlanEnvelope,
         result: AgentRunResult,
-        session_factory: Any,
     ) -> AgentRunResult:
-        """Project the proven Codex lane into the common runtime binding."""
+        """Project plan identity without replacing Codex lifecycle authority."""
 
         request_plan_ref = str(
             (request.parameters or {}).get("executionPlanRef") or ""
@@ -145,48 +142,6 @@ class CodexProfileBoundRealizer:
         capture = dict(metadata.get("omnigentCheckpointCapture") or {})
         if capture:
             capture["executionPlanRef"] = plan.planRef
-        required = {
-            "providerProfileId",
-            "providerLeaseRef",
-            "credentialGeneration",
-            "credentialRef",
-            "hostBindingRef",
-            "hostLeaseRef",
-            "hostLeaseGeneration",
-            "omnigentHostId",
-        }
-        if required.issubset(capture) and all(capture.get(key) for key in required):
-            from moonmind.omnigent.harness_platform.stores import (
-                DbRuntimeBindingStore,
-            )
-
-            store = DbRuntimeBindingStore(session_factory)
-            binding = await store.create_initial(
-                execution_plan_ref=plan.planRef,
-                provider_leases={
-                    "primary-model": {
-                        "providerProfileRef": str(capture["providerProfileId"]),
-                        "providerLeaseRef": str(capture["providerLeaseRef"]),
-                        "credentialGeneration": int(capture["credentialGeneration"]),
-                        "credentialRuntimeRef": str(capture["credentialRef"]),
-                    }
-                },
-            )
-            binding = await store.update_with_host(
-                binding.runtimeBindingRef,
-                host_binding_ref=str(capture["hostBindingRef"]),
-                host_lease_ref=str(capture["hostLeaseRef"]),
-                host_lease_generation=int(capture["hostLeaseGeneration"]),
-                omnigent_host_id=str(capture["omnigentHostId"]),
-            )
-            provider_session_id = str(capture.get("omnigentSessionId") or "").strip()
-            if provider_session_id:
-                binding = await store.update_with_session(
-                    binding.runtimeBindingRef,
-                    omnigent_session_id=provider_session_id,
-                )
-            metadata["runtimeBindingRef"] = binding.runtimeBindingRef
-            capture["runtimeBindingRef"] = binding.runtimeBindingRef
         if capture:
             metadata["omnigentCheckpointCapture"] = capture
         return result.model_copy(update={"metadata": metadata})

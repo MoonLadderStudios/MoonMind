@@ -11,6 +11,9 @@ hermetic while production uses SQLAlchemy. The stores enforce:
 
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from moonmind.omnigent.harness_platform.execution_plan import (
@@ -38,6 +41,44 @@ class OmnigentExecutionPlanStore(Protocol):
     ) -> OmnigentExecutionPlanEnvelope: pass  # noqa
 
     async def persist(self, envelope: OmnigentExecutionPlanEnvelope) -> OmnigentExecutionPlanEnvelope: pass  # noqa
+
+
+@dataclass(frozen=True)
+class ExecutionPlanUsageIdentity:
+    workflow_id: str
+    step_execution_id: str
+    idempotency_key: str
+
+    def usage_id(self) -> str:
+        canonical = "\0".join(
+            (self.workflow_id, self.step_execution_id, self.idempotency_key)
+        )
+        return (
+            "omnigent-plan-usage:sha256:"
+            + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        )
+
+
+def execution_request_digest(request_payload: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        request_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
+class OmnigentExecutionPlanUsageStore(Protocol):
+    async def load_or_bind(
+        self,
+        *,
+        identity: ExecutionPlanUsageIdentity,
+        request_payload: dict[str, Any],
+        compile_fn: Any,
+    ) -> OmnigentExecutionPlanEnvelope:
+        raise NotImplementedError
 
 
 class OmnigentRuntimeBindingStore(Protocol):
@@ -114,6 +155,42 @@ class InMemoryExecutionPlanStore:
         if existing is not None:
             return existing
         return await self.persist(envelope)
+
+
+class InMemoryExecutionPlanUsageStore:
+    """Retry-stable identity binding used only by hermetic tests."""
+
+    def __init__(self, plan_store: OmnigentExecutionPlanStore) -> None:
+        self._plan_store = plan_store
+        self._usages: dict[str, tuple[str, str]] = {}
+
+    async def load_or_bind(
+        self,
+        *,
+        identity: ExecutionPlanUsageIdentity,
+        request_payload: dict[str, Any],
+        compile_fn: Any,
+    ) -> OmnigentExecutionPlanEnvelope:
+        request_digest = execution_request_digest(request_payload)
+        existing = self._usages.get(identity.idempotency_key)
+        if existing is not None:
+            previous_digest, plan_ref = existing
+            if previous_digest != request_digest:
+                raise HarnessPlatformError(
+                    "idempotency key is already bound to a different Omnigent request",
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                )
+            plan = await self._plan_store.load(plan_ref)
+            if plan is None:
+                raise HarnessPlatformError(
+                    "execution-plan usage references a missing immutable plan",
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                )
+            return plan
+        envelope = await compile_fn()
+        envelope = await self._plan_store.persist(envelope)
+        self._usages[identity.idempotency_key] = (request_digest, envelope.planRef)
+        return envelope
 
 
 class InMemoryRuntimeBindingStore:
@@ -375,281 +452,120 @@ class DbExecutionPlanStore:
         return await self.persist(envelope)
 
 
-class DbRuntimeBindingStore:
-    """DB-backed immutable-stage runtime binding journal."""
+class DbExecutionPlanUsageStore:
+    """Atomically persist and bind the first plan selected for an execution."""
 
     def __init__(self, session_factory: Any) -> None:
         self._session_factory = session_factory
 
-    @staticmethod
-    def _from_record(record: Any) -> OmnigentRuntimeBinding:
-        attestations = dict(record.attestation_refs_json or {})
-        return OmnigentRuntimeBinding.model_validate(
-            {
-                "schemaVersion": "moonmind.omnigent-runtime-binding.v1",
-                "runtimeBindingRef": record.runtime_binding_ref,
-                "executionPlanRef": record.execution_plan_ref,
-                "providerLeases": record.provider_leases_json or {},
-                "hostBindingRef": record.host_binding_ref,
-                "hostLeaseRef": record.host_lease_ref,
-                "hostLeaseGeneration": record.host_lease_generation,
-                "omnigentHostId": record.omnigent_host_id,
-                "hostHarnessAttestationRef": attestations.get(
-                    "hostHarnessAttestationRef"
-                ),
-                "exactHostCapabilityDecisionRef": attestations.get(
-                    "exactHostCapabilityDecisionRef"
-                ),
-                "workspaceResolutionRef": attestations.get(
-                    "workspaceResolutionRef"
-                ),
-                "modelOptionAttestationRef": attestations.get(
-                    "modelOptionAttestationRef"
-                ),
-                "skillDeliveryAttestationRef": attestations.get(
-                    "skillDeliveryAttestationRef"
-                ),
-                "omnigentSessionId": record.session_id,
-                "cleanupAuthorityRefs": record.cleanup_authority_refs_json or [],
-            }
-        )
-
-    async def get(self, runtime_binding_ref: str) -> OmnigentRuntimeBinding | None:
-        from api_service.db.models import OmnigentRuntimeBindingRecord
-
-        async with self._session_factory() as session:
-            record = await session.get(
-                OmnigentRuntimeBindingRecord, runtime_binding_ref
-            )
-            return self._from_record(record) if record is not None else None
-
-    async def latest_for_plan(
-        self, execution_plan_ref: str
-    ) -> OmnigentRuntimeBinding | None:
-        from api_service.db.models import OmnigentRuntimeBindingRecord
-        from sqlalchemy import case, select
-
-        async with self._session_factory() as session:
-            record = (
-                await session.execute(
-                    select(OmnigentRuntimeBindingRecord)
-                    .where(
-                        OmnigentRuntimeBindingRecord.execution_plan_ref
-                        == execution_plan_ref
-                    )
-                    .order_by(
-                        case(
-                            (
-                                OmnigentRuntimeBindingRecord.state
-                                == "session_bound",
-                                3,
-                            ),
-                            (
-                                OmnigentRuntimeBindingRecord.state
-                                == "host_acquired",
-                                2,
-                            ),
-                            else_=1,
-                        ).desc(),
-                        OmnigentRuntimeBindingRecord.created_at.desc(),
-                        OmnigentRuntimeBindingRecord.revision.desc(),
-                        OmnigentRuntimeBindingRecord.runtime_binding_ref.desc(),
-                    )
-                    .limit(1)
-                )
-            ).scalars().first()
-            return self._from_record(record) if record is not None else None
-
-    async def _persist(
+    async def load_or_bind(
         self,
-        binding: OmnigentRuntimeBinding,
         *,
-        state: str,
-        credential_handles: dict[str, Any] | None = None,
-    ) -> OmnigentRuntimeBinding:
-        from api_service.db.models import OmnigentRuntimeBindingRecord
+        identity: ExecutionPlanUsageIdentity,
+        request_payload: dict[str, Any],
+        compile_fn: Any,
+    ) -> OmnigentExecutionPlanEnvelope:
+        from sqlalchemy import select
         from sqlalchemy.exc import IntegrityError
 
-        provider_leases = {
-            slot: lease.model_dump(by_alias=True, mode="json")
-            for slot, lease in binding.providerLeases.items()
-        }
-        attestation_refs = {
-            key: value
-            for key, value in {
-                "hostHarnessAttestationRef": binding.hostHarnessAttestationRef,
-                "exactHostCapabilityDecisionRef": binding.exactHostCapabilityDecisionRef,
-                "workspaceResolutionRef": binding.workspaceResolutionRef,
-                "modelOptionAttestationRef": binding.modelOptionAttestationRef,
-                "skillDeliveryAttestationRef": binding.skillDeliveryAttestationRef,
-            }.items()
-            if value is not None
-        }
-        async with self._session_factory() as session:
-            existing = await session.get(
-                OmnigentRuntimeBindingRecord, binding.runtimeBindingRef
-            )
-            if existing is not None:
-                loaded = self._from_record(existing)
-                if loaded != binding:
-                    raise HarnessPlatformError(
-                        f"runtime binding conflict for {binding.runtimeBindingRef}",
-                        code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+        from api_service.db.models import (
+            OmnigentExecutionPlanRecord,
+            OmnigentExecutionPlanUsageRecord,
+        )
+
+        request_digest = execution_request_digest(request_payload)
+
+        async def load_existing() -> OmnigentExecutionPlanEnvelope | None:
+            async with self._session_factory() as read_session:
+                usage = (
+                    await read_session.execute(
+                        select(OmnigentExecutionPlanUsageRecord).where(
+                            OmnigentExecutionPlanUsageRecord.idempotency_key
+                            == identity.idempotency_key
+                        )
                     )
-                return loaded
+                ).scalar_one_or_none()
+                if usage is None:
+                    return None
+                if usage.request_digest != request_digest:
+                    raise HarnessPlatformError(
+                        "idempotency key is already bound to a different Omnigent request",
+                        code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                    )
+                plan = await read_session.get(
+                    OmnigentExecutionPlanRecord, usage.plan_ref
+                )
+                if plan is None:
+                    raise HarnessPlatformError(
+                        "execution-plan usage references a missing immutable plan",
+                        code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                    )
+                return OmnigentExecutionPlanEnvelope.model_validate(
+                    {
+                        "schemaVersion": plan.schema_version,
+                        "planRef": plan.plan_ref,
+                        "payload": plan.payload_json,
+                    }
+                )
+
+        found = await load_existing()
+        if found is not None:
+            return found
+
+        envelope: OmnigentExecutionPlanEnvelope = await compile_fn()
+        verify_execution_plan_envelope(envelope)
+        async with self._session_factory() as session:
+            plan = await session.get(OmnigentExecutionPlanRecord, envelope.planRef)
+            if plan is None:
+                payload = envelope.payload
+                session.add(
+                    OmnigentExecutionPlanRecord(
+                        plan_ref=envelope.planRef,
+                        schema_version=envelope.schemaVersion,
+                        payload_json=payload.model_dump(by_alias=True, mode="json"),
+                        agent_profile_snapshot_ref=payload.agentProfileSnapshotRef,
+                        credential_binding_set_ref=payload.credentialBindingSetRef,
+                        harness_id=payload.harnessId,
+                        harness_implementation_ref=payload.harnessImplementationRef,
+                        host_class_ref=payload.hostClassRef,
+                        launch_policy_ref=payload.launchPolicyRef,
+                        execution_realizer_ref=payload.executionRealizerRef,
+                        support_combination_key=payload.supportCombinationKey,
+                    )
+                )
             session.add(
-                OmnigentRuntimeBindingRecord(
-                    runtime_binding_ref=binding.runtimeBindingRef,
-                    execution_plan_ref=binding.executionPlanRef,
-                    state=state,
-                    provider_leases_json=provider_leases,
-                    host_binding_ref=binding.hostBindingRef,
-                    host_lease_ref=binding.hostLeaseRef,
-                    host_lease_generation=binding.hostLeaseGeneration,
-                    omnigent_host_id=binding.omnigentHostId,
-                    session_id=binding.omnigentSessionId,
-                    credential_runtime_handles_json=dict(credential_handles or {}),
-                    attestation_refs_json=attestation_refs,
-                    cleanup_authority_refs_json=list(binding.cleanupAuthorityRefs),
+                OmnigentExecutionPlanUsageRecord(
+                    usage_id=identity.usage_id(),
+                    workflow_id=identity.workflow_id,
+                    step_execution_id=identity.step_execution_id,
+                    idempotency_key=identity.idempotency_key,
+                    plan_ref=envelope.planRef,
+                    request_digest=request_digest,
                 )
             )
             try:
                 await session.commit()
+                return envelope
             except IntegrityError as exc:
                 await session.rollback()
-                loaded = await self.get(binding.runtimeBindingRef)
-                if loaded is not None:
-                    return loaded
+                raced = await load_existing()
+                if raced is not None:
+                    return raced
                 raise HarnessPlatformError(
-                    f"failed to persist runtime binding: {exc}",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
+                    "failed to bind immutable execution plan usage",
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
                 ) from exc
-        return binding
-
-    async def create_initial(
-        self,
-        *,
-        execution_plan_ref: str,
-        provider_leases: dict[str, dict[str, Any]],
-        credential_handles: dict[str, dict[str, Any]] | None = None,
-    ) -> OmnigentRuntimeBinding:
-        existing = await self.latest_for_plan(execution_plan_ref)
-        if existing is not None:
-            expected = {
-                slot: lease.model_dump(by_alias=True, mode="json")
-                for slot, lease in existing.providerLeases.items()
-            }
-            if expected != provider_leases:
-                raise HarnessPlatformError(
-                    "runtime binding provider lease authority changed on retry",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                )
-            expected_cleanup_refs = tuple(
-                sorted(
-                    str(handle.get("cleanupRef"))
-                    for handle in (credential_handles or {}).values()
-                    if handle.get("cleanupRef")
-                )
-            )
-            if existing.cleanupAuthorityRefs != expected_cleanup_refs:
-                raise HarnessPlatformError(
-                    "runtime binding cleanup authority changed on retry",
-                    code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-                )
-            return existing
-        binding = create_runtime_binding(
-            executionPlanRef=execution_plan_ref,
-            providerLeases=provider_leases,
-            cleanupAuthorityRefs=sorted(
-                str(handle.get("cleanupRef"))
-                for handle in (credential_handles or {}).values()
-                if handle.get("cleanupRef")
-            ),
-        )
-        return await self._persist(
-            binding,
-            state="credentials_acquired",
-            credential_handles=credential_handles,
-        )
-
-    async def update_with_host(
-        self,
-        runtime_binding_ref: str,
-        *,
-        host_binding_ref: str,
-        host_lease_ref: str,
-        host_lease_generation: int,
-        omnigent_host_id: str,
-        host_harness_attestation_ref: str | None = None,
-        exact_host_capability_decision_ref: str | None = None,
-        workspace_resolution_ref: str | None = None,
-        model_option_attestation_ref: str | None = None,
-        skill_delivery_attestation_ref: str | None = None,
-    ) -> OmnigentRuntimeBinding:
-        existing = await self.get(runtime_binding_ref)
-        if existing is None:
-            raise HarnessPlatformError(
-                f"runtime binding {runtime_binding_ref} not found",
-                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-            )
-        binding = create_runtime_binding(
-            executionPlanRef=existing.executionPlanRef,
-            providerLeases={
-                slot: lease.model_dump(by_alias=True, mode="json")
-                for slot, lease in existing.providerLeases.items()
-            },
-            hostBindingRef=host_binding_ref,
-            hostLeaseRef=host_lease_ref,
-            hostLeaseGeneration=host_lease_generation,
-            omnigentHostId=omnigent_host_id,
-            hostHarnessAttestationRef=host_harness_attestation_ref,
-            exactHostCapabilityDecisionRef=exact_host_capability_decision_ref,
-            workspaceResolutionRef=workspace_resolution_ref,
-            modelOptionAttestationRef=model_option_attestation_ref,
-            skillDeliveryAttestationRef=skill_delivery_attestation_ref,
-            omnigentSessionId=existing.omnigentSessionId,
-            cleanupAuthorityRefs=list(existing.cleanupAuthorityRefs),
-        )
-        return await self._persist(binding, state="host_acquired")
-
-    async def update_with_session(
-        self,
-        runtime_binding_ref: str,
-        *,
-        omnigent_session_id: str,
-    ) -> OmnigentRuntimeBinding:
-        existing = await self.get(runtime_binding_ref)
-        if existing is None:
-            raise HarnessPlatformError(
-                f"runtime binding {runtime_binding_ref} not found",
-                code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
-            )
-        binding = create_runtime_binding(
-            executionPlanRef=existing.executionPlanRef,
-            providerLeases={
-                slot: lease.model_dump(by_alias=True, mode="json")
-                for slot, lease in existing.providerLeases.items()
-            },
-            hostBindingRef=existing.hostBindingRef,
-            hostLeaseRef=existing.hostLeaseRef,
-            hostLeaseGeneration=existing.hostLeaseGeneration,
-            omnigentHostId=existing.omnigentHostId,
-            hostHarnessAttestationRef=existing.hostHarnessAttestationRef,
-            exactHostCapabilityDecisionRef=existing.exactHostCapabilityDecisionRef,
-            workspaceResolutionRef=existing.workspaceResolutionRef,
-            modelOptionAttestationRef=existing.modelOptionAttestationRef,
-            skillDeliveryAttestationRef=existing.skillDeliveryAttestationRef,
-            omnigentSessionId=omnigent_session_id,
-            cleanupAuthorityRefs=list(existing.cleanupAuthorityRefs),
-        )
-        return await self._persist(binding, state="session_bound")
 
 
 __all__ = [
     "DbExecutionPlanStore",
-    "DbRuntimeBindingStore",
+    "DbExecutionPlanUsageStore",
+    "ExecutionPlanUsageIdentity",
     "InMemoryExecutionPlanStore",
+    "InMemoryExecutionPlanUsageStore",
     "InMemoryRuntimeBindingStore",
     "OmnigentExecutionPlanStore",
+    "OmnigentExecutionPlanUsageStore",
     "OmnigentRuntimeBindingStore",
+    "execution_request_digest",
 ]

@@ -54,14 +54,13 @@ async def test_postgres_scope_uniqueness_fails_closed(pg_store) -> None:
 
 
 @pytest.mark.asyncio
-async def test_postgres_session_advances_immutable_runtime_binding_stages(
+async def test_postgres_session_keeps_one_stable_runtime_binding_identity(
     pg_store,
 ) -> None:
     """MoonLadderStudios/MoonMind#3701 authority handoff is DB-enforced."""
 
     plan_ref = "omnigent-execution-plan:sha256:" + "3" * 64
-    credential_ref = "omnigent-runtime-binding:sha256:" + "4" * 64
-    host_ref = "omnigent-runtime-binding:sha256:" + "5" * 64
+    binding_ref = "omnigent-runtime-binding:sha256:" + "4" * 64
     alternate_host_ref = "omnigent-runtime-binding:sha256:" + "6" * 64
     async with pg_store._session_factory() as session:
         session.add(
@@ -76,16 +75,14 @@ async def test_postgres_session_advances_immutable_runtime_binding_stages(
                 execution_realizer_ref="generic-omnigent-host@1",
             )
         )
-        for ref, state in (
-            (credential_ref, "credentials_acquired"),
-            (host_ref, "host_acquired"),
-            (alternate_host_ref, "host_acquired"),
-        ):
+        for ref in (binding_ref, alternate_host_ref):
             session.add(
                 OmnigentRuntimeBindingRecord(
                     runtime_binding_ref=ref,
+                    binding_id=ref,
+                    latest_snapshot_ref=ref,
                     execution_plan_ref=plan_ref,
-                    state=state,
+                    state="credentials_acquired",
                     provider_leases_json={},
                 )
             )
@@ -103,17 +100,17 @@ async def test_postgres_session_advances_immutable_runtime_binding_stages(
             expected_revision=created.revision,
             expected_fencing_generation=created.fencing_generation,
             execution_plan_ref=plan_ref,
-            runtime_binding_ref=credential_ref,
+            runtime_binding_ref=binding_ref,
         )
         host = await repos.sessions.bind_runtime_authority(
             "s-authority",
             expected_revision=credentials.revision,
             expected_fencing_generation=credentials.fencing_generation,
             execution_plan_ref=plan_ref,
-            runtime_binding_ref=host_ref,
+            runtime_binding_ref=binding_ref,
         )
 
-    assert host.runtime_binding_ref == host_ref
+    assert host.runtime_binding_ref == binding_ref
     with pytest.raises(ConflictingSessionAuthorityError):
         async with pg_store.transaction() as repos:
             await repos.sessions.bind_runtime_authority(

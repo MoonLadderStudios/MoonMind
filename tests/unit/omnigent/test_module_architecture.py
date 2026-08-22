@@ -50,8 +50,6 @@ RESPONSIBILITY_MODULES: dict[str, tuple[str, ...]] = {
         "moonmind/omnigent/execute.py",
         "moonmind/omnigent/host_runtime.py",
         "moonmind/omnigent/oauth_host_runtime.py",
-        "moonmind/omnigent/realizers/runtime_authority.py",
-        "moonmind/omnigent/generic_opencode_runtime.py",
     ),
     "workspace_credential": (
         "moonmind/omnigent/repository_sources.py",
@@ -59,14 +57,12 @@ RESPONSIBILITY_MODULES: dict[str, tuple[str, ...]] = {
         "moonmind/omnigent/harness_platform/materializers.py",
     ),
     "composition": (
-        "moonmind/omnigent/realizers/composition.py",
-        "moonmind/omnigent/realizers/deployment_adapters.py",
+        "api_service/api/routers/omnigent_catalog.py",
         "moonmind/workflows/temporal/activities/omnigent_activities.py",
         "moonmind/workflows/temporal/activities/omnigent_session_activities.py",
     ),
     "ui": (
         "moonmind/omnigent/workflow_chat_facade.py",
-        "api_service/api/routers/omnigent_catalog.py",
         "api_service/api/routers/omnigent_session_timeline.py",
     ),
     "evidence_publication": (
@@ -126,15 +122,10 @@ FORBIDDEN_UI_AUTHORITY_IMPORTS = (
     "moonmind.omnigent.harness_platform.stores",
     "moonmind.omnigent.host_runtime",
     "moonmind.omnigent.oauth_host_runtime",
-    "moonmind.omnigent.realizers.composition",
-    "moonmind.omnigent.realizers.runtime_authority",
 )
 
 FORBIDDEN_EVIDENCE_AUTHORITY_IMPORTS = (
-    "moonmind.omnigent.harness_platform.admission",
     "moonmind.omnigent.harness_platform.planner",
-    "moonmind.omnigent.realizers.composition",
-    "moonmind.omnigent.realizers.runtime_authority",
 )
 
 
@@ -302,7 +293,7 @@ def test_canonical_identity_vocabulary_is_not_reimplemented() -> None:
                 )
 
 
-def test_composition_is_the_only_generic_realizer_api_persistence_import() -> None:
+def test_generic_realizer_does_not_import_api_persistence() -> None:
     realizer_files = (REPO_ROOT / "moonmind/omnigent/realizers").glob("*.py")
     importing_api = {
         path.name
@@ -312,15 +303,9 @@ def test_composition_is_the_only_generic_realizer_api_persistence_import() -> No
             for name in _imports(str(path.relative_to(REPO_ROOT)))
         )
     }
-    # Codex remains an explicit legacy realizer. Its eventual retirement is
-    # governed by the existing cutover gate; generic infrastructure belongs
-    # only in outer adapter modules and composition.py.
-    assert importing_api == {
-        "codex_profile_bound.py",
-        "composition.py",
-        "deployment_adapters.py",
-        "runtime_authority.py",
-    }
+    # Codex remains an explicit legacy realizer. Generic infrastructure is
+    # assembled only by the outer production composition module.
+    assert importing_api == {"codex_profile_bound.py", "registry.py"}
 
 
 @pytest.mark.parametrize(

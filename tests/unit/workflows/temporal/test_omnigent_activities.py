@@ -19,8 +19,78 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
     _checkpoint_recovery_decision,
     _checkpoint_recovery_from_request,
     _resolve_live_recovery_authority,
+    _try_generic_realizer_dispatch,
     omnigent_execute_activity,
 )
+
+
+@pytest.mark.asyncio
+async def test_generic_dispatch_loads_persisted_plan_and_invokes_selected_realizer() -> None:
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            assert plan_ref == plan.planRef
+            return plan
+
+        async def persist(self, _plan):
+            raise AssertionError("unchanged admitted authority must not be re-persisted")
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            assert admitted == plan
+            assert request.parameters["executionPlanRef"] == plan.planRef
+            return AgentRunResult(summary="generic done")
+
+    class Registry:
+        def require(self, ref):
+            assert ref == "generic-omnigent-host@1"
+            return Realizer()
+
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-generic",
+            idempotencyKey="step-generic",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+
+    assert result == AgentRunResult(summary="generic done")
+
+
+@pytest.mark.asyncio
+async def test_generic_profile_selection_fails_typed_when_host_plane_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "false")
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="workflow-disabled",
+        idempotencyKey="step-disabled",
+        parameters={
+            "omnigent": {
+                "agentProfileRef": {
+                    "profileId": "omnigent-opencode-default",
+                    "version": 1,
+                    "digest": "sha256:" + "1" * 64,
+                }
+            }
+        },
+    )
+
+    result = await _try_generic_realizer_dispatch(request)
+
+    assert result is not None
+    assert result.failure_class == "configuration_error"
+    assert result.provider_error_code == "OMNIGENT_GENERIC_REALIZER_NOT_READY"
 
 
 @pytest.mark.parametrize(

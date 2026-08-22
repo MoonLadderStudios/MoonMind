@@ -85,10 +85,6 @@ from api_service.services.omnigent_agent_profile_selection import (
     resolve_agent_profile_snapshot,
     resolve_default_agent_profile_snapshot,
 )
-from moonmind.omnigent.harness_platform.admission import (
-    compile_and_persist_execution_authority,
-)
-from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from api_service.services.control_stop_continuation import (
     SqlControlStopContinuationRepository,
     TemporalControlStopContinuationStarter,
@@ -11217,25 +11213,9 @@ async def _create_execution_from_workflow_request(
             initial_parameters,
             snapshot=profile_snapshot,
         )
-        try:
-            execution_plan = await compile_and_persist_execution_authority(
-                session,
-                agent_profile_snapshot=profile_snapshot,
-                workflow_parameters=initial_parameters,
-                workflow_id=reserved_workflow_id,
-            )
-        except HarnessPlatformError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "code": str(exc.code),
-                    "message": str(exc),
-                },
-            ) from exc
-        # Only the digest-addressed ref crosses into workflow history. The plan
-        # row and execution record are committed together by create_execution
-        # before Temporal is started.
-        initial_parameters["executionPlanRef"] = execution_plan.planRef
+        # Generic v2 planning is bound to the Activity idempotency identity.
+        # Existing Codex v1 selections continue through their mature realizer
+        # and do not synthesize generic catalog or Host Class authority here.
 
     try:
         start_contract = resolve_user_workflow_start_contract(settings.temporal)
@@ -17740,22 +17720,6 @@ async def rerun_execution(
         consumer_id=reserved_workflow_id,
         user=user,
     )
-    rerun_snapshot = initial_params.get("agentProfileSnapshot")
-    if isinstance(rerun_snapshot, Mapping):
-        try:
-            rerun_plan = await compile_and_persist_execution_authority(
-                session,
-                agent_profile_snapshot=rerun_snapshot,
-                workflow_parameters=initial_params,
-                workflow_id=reserved_workflow_id,
-            )
-        except HarnessPlatformError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={"code": str(exc.code), "message": str(exc)},
-            ) from exc
-        initial_params["executionPlanRef"] = rerun_plan.planRef
-
     # Generate a new idempotency key based on the original workflow ID
     new_idempotency_key = f"rerun:{workflow_id}:{_uuid4()}"
 

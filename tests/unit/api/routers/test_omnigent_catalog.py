@@ -7,15 +7,14 @@ from types import SimpleNamespace
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from moonmind.security.egress import (
-    OMNIGENT_EGRESS_NETWORK_REF,
-    OMNIGENT_EGRESS_PROFILE,
-)
 
 from api_service.api.routers import omnigent_catalog as catalog
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
-
+from moonmind.security.egress import (
+    OMNIGENT_EGRESS_NETWORK_REF,
+    OMNIGENT_EGRESS_PROFILE,
+)
 
 _DEFAULT = object()
 
@@ -53,6 +52,9 @@ class _Scalars:
 
     def all(self):
         return self._rows
+
+    def __iter__(self):
+        return iter(self._rows)
 
 
 class _Result:
@@ -95,12 +97,18 @@ class _Session:
             event_observed_at = latest_observation_at
         if bridge_sessions is _DEFAULT:
             bridge_sessions = (_attested_bridge_session(),)
-        self._results = iter((
-            _Result(profiles), _Result(slots), _Result(bindings),
-            _Result(host_leases), _Result(policies), _Result(bridge_sessions),
-            _Result(schema_versions),
-            _Result((snapshot_observed_at, event_observed_at)),
-        ))
+        self._results = iter(
+            (
+                _Result(profiles),
+                _Result(slots),
+                _Result(bindings),
+                _Result(host_leases),
+                _Result(policies),
+                _Result(bridge_sessions),
+                _Result(schema_versions),
+                _Result((snapshot_observed_at, event_observed_at)),
+            )
+        )
 
     async def execute(self, _statement):
         return next(self._results)
@@ -153,9 +161,7 @@ def _bootstrap_header(
             "serverImageRefObserved": (
                 "registry.test/server@sha256:" + server_digest * 64
             ),
-            "hostImageRefObserved": (
-                "registry.test/host@sha256:" + host_digest * 64
-            ),
+            "hostImageRefObserved": ("registry.test/host@sha256:" + host_digest * 64),
             "uiBuildRefObserved": "abc123",
         }
     )
@@ -177,7 +183,11 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setattr(catalog, "get_bridge_config", lambda: _config(enabled=enabled))
     monkeypatch.setattr(catalog, "_reconciler_generation_available", lambda: True)
     monkeypatch.setattr(catalog, "_websocket_runtime_available", lambda: True)
-    monkeypatch.setattr(catalog, "_secret_ref_results_for_rows", lambda rows: {r.profile_id: {} for r in rows})
+    monkeypatch.setattr(
+        catalog,
+        "_secret_ref_results_for_rows",
+        lambda rows: {r.profile_id: {} for r in rows},
+    )
 
     async def statuses(*_args, **_kwargs):
         return {}
@@ -193,6 +203,7 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
         "resolve_container_backend_settings",
         lambda: SimpleNamespace(enabled=True),
     )
+
     async def live_readiness():
         return catalog.LiveDeploymentReadiness(
             endpoint_ready=True,
@@ -200,16 +211,20 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
             enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
             enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
             workflow_types=frozenset({"MoonMind.AgentSession"}),
-            activity_types=frozenset({
-                "agent_runtime.reconcile_managed_sessions",
-                "integration.omnigent.oauth_host_janitor",
-            }),
+            activity_types=frozenset(
+                {
+                    "agent_runtime.reconcile_managed_sessions",
+                    "integration.omnigent.oauth_host_janitor",
+                }
+            ),
             immutable_worker_build=True,
         )
 
     monkeypatch.setattr(catalog, "_live_deployment_readiness", live_readiness)
     monkeypatch.setenv("OMNIGENT_IMAGE_REF", "registry.test/server@sha256:" + "1" * 64)
-    monkeypatch.setenv("OMNIGENT_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64)
+    monkeypatch.setenv(
+        "OMNIGENT_HOST_IMAGE_REF", "registry.test/host@sha256:" + "2" * 64
+    )
     monkeypatch.setenv("OMNIGENT_ENABLED", "true")
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://omnigent:8000")
     monkeypatch.setenv("MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST", "/evidence/matrix.json")
@@ -218,16 +233,20 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     monkeypatch.setattr(
         catalog.Path,
         "read_text",
-        lambda *_args, **_kwargs: catalog.json.dumps({
-            "generatedAt": acceptance_generated_at,
-            "sourceCommit": "abc123",
-            "images": {
-                "serverDigest": "sha256:" + "1" * 64,
-                "hostDigest": "sha256:" + "2" * 64,
-            },
-        }),
+        lambda *_args, **_kwargs: catalog.json.dumps(
+            {
+                "generatedAt": acceptance_generated_at,
+                "sourceCommit": "abc123",
+                "images": {
+                    "serverDigest": "sha256:" + "1" * 64,
+                    "hostDigest": "sha256:" + "2" * 64,
+                },
+            }
+        ),
     )
-    monkeypatch.setattr(catalog, "validate_acceptance_manifest", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        catalog, "validate_acceptance_manifest", lambda *_args, **_kwargs: None
+    )
     app = FastAPI()
     app.include_router(catalog.router)
     app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
@@ -237,10 +256,156 @@ def _app(monkeypatch, *, session, enabled=True, readiness=None, superuser=True):
     return app
 
 
+@pytest.mark.asyncio
+async def test_generic_readiness_requires_both_feature_gates_and_real_launch_data(
+    monkeypatch,
+):
+    from moonmind.omnigent.harness_platform import catalog_service
+    from moonmind.omnigent.harness_platform.catalog import (
+        TrustState,
+        classify_harness_trust,
+        create_catalog_snapshot,
+    )
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        HarnessCatalogSyncResult,
+    )
+
+    implementation = {
+        "sourceKind": "core",
+        "package": "omnigent",
+        "version": "0.11.0",
+        "digest": "sha256:" + "3" * 64,
+    }
+    snapshot = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="0.11.0",
+        omnigentBuildDigest="sha256:" + "4" * 64,
+        sourceDigest="sha256:" + "5" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": implementation,
+                "capabilities": {"integrationMode": "native-server"},
+            }
+        ],
+    )
+    harness = snapshot.harnesses[0]
+    trust = classify_harness_trust(
+        harnessId=harness.id,
+        implementation=harness.implementation,
+        trustState=TrustState.core_trusted,
+    )
+    catalog_result = HarnessCatalogSyncResult(snapshot, (trust,), {})
+
+    class Repository:
+        def __init__(self, _session_factory):
+            pass
+
+        async def load(self, catalog_ref):
+            assert catalog_ref == snapshot.catalogRef
+            return catalog_result
+
+        async def latest(self, endpoint_ref):
+            assert endpoint_ref == "default"
+            return catalog_result
+
+    monkeypatch.setattr(catalog_service, "DbHarnessCatalogRepository", Repository)
+    monkeypatch.setattr(
+        catalog, "_require_provider_profile_permission", lambda *_: None
+    )
+    monkeypatch.setattr(catalog, "_can_view_profile", lambda *_: True)
+    monkeypatch.setenv(
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "registry.test/opencode@sha256:" + "6" * 64,
+    )
+
+    document = {
+        "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        "endpointRef": "default",
+        "source": {
+            "kind": "upstream",
+            "upstreamId": "opencode-native-ui",
+            "upstreamVersion": "1",
+            "upstreamSnapshotDigest": "sha256:" + "7" * 64,
+        },
+        "harness": {
+            "id": harness.id,
+            "catalogRef": snapshot.catalogRef,
+            "implementationRef": harness.implementation.implementation_ref(),
+        },
+        "credentialSlots": [
+            {"id": "primary-model", "acceptedProviderIds": ["opencode-go"]}
+        ],
+        "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+    }
+    profile_row = SimpleNamespace(
+        profile_id="omnigent-opencode-default",
+        active_version=1,
+        visibility="public",
+        owner_id=None,
+    )
+    version = SimpleNamespace(
+        version=1,
+        digest="sha256:" + "8" * 64,
+        document=document,
+        validation_result={"ready": True},
+    )
+    provider = SimpleNamespace(
+        profile_id="opencode-go-primary",
+        account_label="OpenCode Go",
+        provider_id="opencode-go",
+        runtime_id="opencode",
+        enabled=True,
+        auth_state=SimpleNamespace(value="connected"),
+        credential_generation=4,
+        model_catalog_evidence_json={
+            "credentialGeneration": 4,
+            "imageRef": "registry.test/opencode@sha256:" + "6" * 64,
+            "models": ["opencode-go/test-model"],
+        },
+    )
+
+    class Session:
+        def __init__(self):
+            self._results = iter((_Result([profile_row]), _Result([provider])))
+
+        async def execute(self, _statement):
+            return next(self._results)
+
+        async def scalar(self, _statement):
+            return version
+
+    current_user = SimpleNamespace(id=None, is_superuser=True)
+    monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", raising=False)
+    monkeypatch.delenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", raising=False)
+    disabled = await catalog.get_omnigent_execution_readiness(
+        session=Session(), current_user=current_user
+    )
+    disabled_target = disabled.execution_targets[0]
+    assert disabled_target.available is False
+    assert {reason.code for reason in disabled_target.gate_reasons} >= {
+        "generic_realizer_not_ready",
+        "opencode_support_not_qualified",
+    }
+
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
+    enabled = await catalog.get_omnigent_execution_readiness(
+        session=Session(), current_user=current_user
+    )
+    enabled_target = enabled.execution_targets[0]
+    assert enabled_target.available is True
+    assert enabled_target.compatible_host_classes == ["omnigent-opencode@1"]
+    assert enabled_target.models == ["opencode-go/test-model"]
+
+
 def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch):
     profiles = [
         _profile(),
-        _profile(profile_id="api-key", credential_source=SimpleNamespace(value="secret_ref")),
+        _profile(
+            profile_id="api-key", credential_source=SimpleNamespace(value="secret_ref")
+        ),
     ]
     client = TestClient(_app(monkeypatch, session=_Session(profiles)))
 
@@ -252,6 +417,20 @@ def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch)
 
 def test_reconciler_readiness_uses_the_actual_static_workflow_registration():
     assert catalog._reconciler_generation_available() is True
+
+
+def test_generic_readiness_hides_other_users_private_agent_profiles() -> None:
+    current_user = SimpleNamespace(id="user-a", is_superuser=False)
+
+    assert catalog._can_view_agent_profile(
+        SimpleNamespace(visibility="private", owner_id="user-a"), current_user
+    )
+    assert not catalog._can_view_agent_profile(
+        SimpleNamespace(visibility="private", owner_id="user-b"), current_user
+    )
+    assert catalog._can_view_agent_profile(
+        SimpleNamespace(visibility="workspace", owner_id="user-b"), current_user
+    )
 
 
 def test_protected_first_run_canary_uses_normal_catalog_without_published_manifest(
@@ -362,14 +541,16 @@ def test_first_run_canary_rejects_an_untrusted_header(monkeypatch):
     assert "autonomous_rollout_gate_closed" in remediation["blockers"]
     assert "remediation_release_evidence_missing" in remediation["blockers"]
     assert body["hostModes"] == ["on_demand_docker"]
-    assert body["eligibleProviderProfiles"] == [{
-        "profileId": "codex-oauth",
-        "label": "OpenAI subscription",
-        "providerId": "openai",
-        "runtimeId": "codex_cli",
-        "busy": False,
-        "queueWhenBusy": True,
-    }]
+    assert body["eligibleProviderProfiles"] == [
+        {
+            "profileId": "codex-oauth",
+            "label": "OpenAI subscription",
+            "providerId": "openai",
+            "runtimeId": "codex_cli",
+            "busy": False,
+            "queueWhenBusy": True,
+        }
+    ]
     assert body["ineligibleProviderProfiles"] == []
     diagnostics = body["compatibilityDiagnostics"]
     assert diagnostics["bridgeMode"] == "upstream_omnigent_server_proxy"
@@ -392,9 +573,9 @@ def test_catalog_summarizes_persisted_stock_host_harnesses(monkeypatch):
         provider_profile_id="codex-oauth",
         host_capabilities_json={"harnesses": ["codex-native"]},
     )
-    client = TestClient(_app(
-        monkeypatch, session=_Session([_profile()], host_leases=[lease])
-    ))
+    client = TestClient(
+        _app(monkeypatch, session=_Session([_profile()], host_leases=[lease]))
+    )
 
     response = client.get("/api/omnigent/codex-catalog-readiness")
 
@@ -416,9 +597,11 @@ def test_catalog_projects_runtime_identity_for_mixed_provider_profiles(monkeypat
         ),
     ]
 
-    body = TestClient(_app(monkeypatch, session=_Session(profiles))).get(
-        "/api/omnigent/codex-catalog-readiness"
-    ).json()
+    body = (
+        TestClient(_app(monkeypatch, session=_Session(profiles)))
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
 
     assert {
         item["profileId"]: item["runtimeId"]
@@ -432,20 +615,26 @@ def test_catalog_projects_runtime_identity_for_mixed_provider_profiles(monkeypat
 def test_catalog_returns_actionable_bounded_redacted_gates(monkeypatch):
     secret = "github_pat_SHOULD_NOT_ESCAPE"
     profile = _profile(account_label=secret)
-    client = TestClient(_app(
-        monkeypatch, session=_Session([profile]), enabled=False
-    ))
+    client = TestClient(_app(monkeypatch, session=_Session([profile]), enabled=False))
 
     response = client.get("/api/omnigent/codex-catalog-readiness")
 
     body = response.json()
     assert body["available"] is False
-    assert {reason["code"] for reason in body["gateReasons"]} >= {
-        "bridge_disabled"
-    }
-    assert all(reason["message"] and reason["remediationHref"] for reason in body["gateReasons"])
+    assert {reason["code"] for reason in body["gateReasons"]} >= {"bridge_disabled"}
+    assert all(
+        reason["message"] and reason["remediationHref"]
+        for reason in body["gateReasons"]
+    )
     assert secret not in response.text
-    for forbidden in ("volume", "hostId", "docker.sock", "token=", "header", "environment"):
+    for forbidden in (
+        "volume",
+        "hostId",
+        "docker.sock",
+        "token=",
+        "header",
+        "environment",
+    ):
         assert forbidden not in response.text
 
 
@@ -501,9 +690,11 @@ def test_busy_profile_is_eligible_when_queueing_is_permitted(monkeypatch):
     slot = SimpleNamespace(
         profile_id="busy", expires_at=datetime.now(UTC) + timedelta(minutes=5)
     )
-    body = TestClient(_app(
-        monkeypatch, session=_Session([profile], slots=[slot])
-    )).get("/api/omnigent/codex-catalog-readiness").json()
+    body = (
+        TestClient(_app(monkeypatch, session=_Session([profile], slots=[slot])))
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
 
     assert body["eligibleProviderProfiles"][0]["busy"] is True
     assert body["eligibleProviderProfiles"][0]["queueWhenBusy"] is True
@@ -515,7 +706,10 @@ def test_busy_profile_is_eligible_when_queueing_is_permitted(monkeypatch):
         ({"OMNIGENT_ENABLED": "false"}, "rollout_gate_disabled"),
         ({"OMNIGENT_SERVER_URL": ""}, "bridge_endpoint_unavailable"),
         ({"OMNIGENT_SERVER_URL": "omnigent:8000"}, "bridge_endpoint_unavailable"),
-        ({"MOONMIND_WORKSPACE_RESOLVER_ENABLED": "false"}, "workspace_resolver_unavailable"),
+        (
+            {"MOONMIND_WORKSPACE_RESOLVER_ENABLED": "false"},
+            "workspace_resolver_unavailable",
+        ),
         ({"OMNIGENT_IMAGE_REF": "mutable:latest"}, "immutable_image_unavailable"),
     ],
 )
@@ -589,9 +783,7 @@ def test_catalog_fails_closed_on_missing_loaded_runtime_capability(
 
 def test_catalog_rejects_placeholder_image_digests(monkeypatch):
     app = _app(monkeypatch, session=_Session([_profile()]))
-    monkeypatch.setenv(
-        "OMNIGENT_IMAGE_REF", "registry.test/server@sha256:" + "0" * 64
-    )
+    monkeypatch.setenv("OMNIGENT_IMAGE_REF", "registry.test/server@sha256:" + "0" * 64)
 
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
@@ -687,13 +879,19 @@ def test_catalog_retains_all_ready_active_policy_versions(monkeypatch):
             },
         )
 
-    body = TestClient(_app(
-        monkeypatch,
-        session=_Session(
-            [_profile()],
-            policies=[(identity, version(1)), (identity, version(2))],
-        ),
-    )).get("/api/omnigent/codex-catalog-readiness").json()
+    body = (
+        TestClient(
+            _app(
+                monkeypatch,
+                session=_Session(
+                    [_profile()],
+                    policies=[(identity, version(1)), (identity, version(2))],
+                ),
+            )
+        )
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
 
     codex_profile = next(
         profile
@@ -760,7 +958,9 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
     app.dependency_overrides[get_current_user()] = lambda: SimpleNamespace(
         id="current-user", is_superuser=False
     )
-    monkeypatch.setattr(catalog, "_require_provider_profile_permission", lambda *_: None)
+    monkeypatch.setattr(
+        catalog, "_require_provider_profile_permission", lambda *_: None
+    )
 
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
 
@@ -776,9 +976,7 @@ def test_catalog_filters_profiles_not_visible_to_caller(monkeypatch):
             catalog.LiveDeploymentReadiness(
                 backend_ready=True,
                 enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
-                enforced_egress_profile_refs=frozenset(
-                    {OMNIGENT_EGRESS_PROFILE.ref}
-                ),
+                enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
             ),
             "bridge_endpoint_not_ready",
         ),
@@ -808,9 +1006,11 @@ def test_catalog_blocks_new_admission_on_stale_persisted_observation(monkeypatch
         [_profile()],
         latest_observation_at=datetime.now(UTC) - timedelta(minutes=11),
     )
-    body = TestClient(_app(monkeypatch, session=session)).get(
-        "/api/omnigent/codex-catalog-readiness"
-    ).json()
+    body = (
+        TestClient(_app(monkeypatch, session=session))
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
     assert "observation_freshness" in body["admissionReadiness"]["blocking"]
     assert body["admissionReadiness"]["allowHistoricalReads"] is True
     assert body["admissionReadiness"]["allowCleanup"] is True
@@ -844,14 +1044,16 @@ def test_catalog_blocks_new_admission_on_stale_build_manifest(monkeypatch):
     monkeypatch.setattr(
         catalog.Path,
         "read_text",
-        lambda *_args, **_kwargs: catalog.json.dumps({
-            "generatedAt": (datetime.now(UTC) - timedelta(days=2)).isoformat(),
-            "sourceCommit": "abc123",
-            "images": {
-                "serverDigest": "sha256:" + "9" * 64,
-                "hostDigest": "sha256:" + "8" * 64,
-            },
-        }),
+        lambda *_args, **_kwargs: catalog.json.dumps(
+            {
+                "generatedAt": (datetime.now(UTC) - timedelta(days=2)).isoformat(),
+                "sourceCommit": "abc123",
+                "images": {
+                    "serverDigest": "sha256:" + "9" * 64,
+                    "hostDigest": "sha256:" + "8" * 64,
+                },
+            }
+        ),
     )
     body = TestClient(app).get("/api/omnigent/codex-catalog-readiness").json()
     assert "exact_image" in body["admissionReadiness"]["blocking"]
@@ -860,12 +1062,16 @@ def test_catalog_blocks_new_admission_on_stale_build_manifest(monkeypatch):
 
 
 def test_healthy_generic_endpoint_does_not_infer_provider_capabilities(monkeypatch):
-    body = TestClient(
-        _app(
-            monkeypatch,
-            session=_Session([_profile()], latest_observation_at=None),
+    body = (
+        TestClient(
+            _app(
+                monkeypatch,
+                session=_Session([_profile()], latest_observation_at=None),
+            )
         )
-    ).get("/api/omnigent/codex-catalog-readiness").json()
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
 
     assert body["available"] is False
     assert set(body["admissionReadiness"]["blocking"]) >= {
@@ -878,17 +1084,21 @@ def test_healthy_generic_endpoint_does_not_infer_provider_capabilities(monkeypat
 
 
 def test_configured_images_do_not_replace_observed_deployment_manifest(monkeypatch):
-    body = TestClient(
-        _app(
-            monkeypatch,
-            session=_Session(
-                [_profile()],
-                bridge_sessions=[
-                    _attested_bridge_session(server_digest="9", host_digest="8")
-                ],
-            ),
+    body = (
+        TestClient(
+            _app(
+                monkeypatch,
+                session=_Session(
+                    [_profile()],
+                    bridge_sessions=[
+                        _attested_bridge_session(server_digest="9", host_digest="8")
+                    ],
+                ),
+            )
         )
-    ).get("/api/omnigent/codex-catalog-readiness").json()
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
 
     assert body["available"] is False
     assert set(body["admissionReadiness"]["blocking"]) >= {
@@ -938,34 +1148,40 @@ def test_stale_authenticated_bootstrap_evidence_fails_closed(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_live_readiness_requires_worker_route_backend_and_network(monkeypatch):
-    responses = iter([
-        _HealthResponse(),
-        _HealthResponse({
-            "ready": True,
-            "buildId": "build-1",
-            "registryFingerprint": "sha256:registry",
-            "immutableReleaseIdentity": True,
-            "taskQueues": ["mm.activity.agent_runtime"],
-            "activityTypes": [
-                "agent_runtime.reconcile_managed_sessions",
-                "integration.omnigent.oauth_host_janitor",
-            ],
-            "containerBackend": {
-                "ready": True,
-                "enforcedNetworkRefs": [OMNIGENT_EGRESS_NETWORK_REF],
-                "enforcedEgressProfileRefs": [OMNIGENT_EGRESS_PROFILE.ref],
-            },
-        }),
-        _HealthResponse({
-            "ready": True,
-            "buildId": "build-1",
-            "registryFingerprint": "sha256:workflow-registry",
-            "immutableReleaseIdentity": True,
-            "taskQueues": ["mm.workflow"],
-            "workflowTypes": ["MoonMind.AgentSession"],
-            "activityTypes": [],
-        }),
-    ])
+    responses = iter(
+        [
+            _HealthResponse(),
+            _HealthResponse(
+                {
+                    "ready": True,
+                    "buildId": "build-1",
+                    "registryFingerprint": "sha256:registry",
+                    "immutableReleaseIdentity": True,
+                    "taskQueues": ["mm.activity.agent_runtime"],
+                    "activityTypes": [
+                        "agent_runtime.reconcile_managed_sessions",
+                        "integration.omnigent.oauth_host_janitor",
+                    ],
+                    "containerBackend": {
+                        "ready": True,
+                        "enforcedNetworkRefs": [OMNIGENT_EGRESS_NETWORK_REF],
+                        "enforcedEgressProfileRefs": [OMNIGENT_EGRESS_PROFILE.ref],
+                    },
+                }
+            ),
+            _HealthResponse(
+                {
+                    "ready": True,
+                    "buildId": "build-1",
+                    "registryFingerprint": "sha256:workflow-registry",
+                    "immutableReleaseIdentity": True,
+                    "taskQueues": ["mm.workflow"],
+                    "workflowTypes": ["MoonMind.AgentSession"],
+                    "activityTypes": [],
+                }
+            ),
+        ]
+    )
 
     class _Client:
         def __init__(self, **_kwargs):
@@ -983,22 +1199,29 @@ async def test_live_readiness_requires_worker_route_backend_and_network(monkeypa
     monkeypatch.setattr(catalog.httpx, "AsyncClient", _Client)
     monkeypatch.setattr(catalog, "resolved_server_url", lambda: "http://omnigent")
 
-    assert await catalog._live_deployment_readiness() == catalog.LiveDeploymentReadiness(
-        endpoint_ready=True,
-        backend_ready=True,
-        enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
-        enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
-        workflow_types=frozenset({"MoonMind.AgentSession"}),
-        activity_types=frozenset({
-            "agent_runtime.reconcile_managed_sessions",
-            "integration.omnigent.oauth_host_janitor",
-        }),
-        immutable_worker_build=True,
+    assert (
+        await catalog._live_deployment_readiness()
+        == catalog.LiveDeploymentReadiness(
+            endpoint_ready=True,
+            backend_ready=True,
+            enforced_network_refs=frozenset({OMNIGENT_EGRESS_NETWORK_REF}),
+            enforced_egress_profile_refs=frozenset({OMNIGENT_EGRESS_PROFILE.ref}),
+            workflow_types=frozenset({"MoonMind.AgentSession"}),
+            activity_types=frozenset(
+                {
+                    "agent_runtime.reconcile_managed_sessions",
+                    "integration.omnigent.oauth_host_janitor",
+                }
+            ),
+            immutable_worker_build=True,
+        )
     )
 
 
 def test_static_policy_requires_live_connected_host_lease(monkeypatch):
-    binding = SimpleNamespace(provider_profile_id="codex-oauth", static_host_id="opaque")
+    binding = SimpleNamespace(
+        provider_profile_id="codex-oauth", static_host_id="opaque"
+    )
     stale_lease = SimpleNamespace(
         provider_profile_id="codex-oauth",
         status="ready",
@@ -1006,10 +1229,18 @@ def test_static_policy_requires_live_connected_host_lease(monkeypatch):
         expires_at=datetime.now(UTC) - timedelta(seconds=1),
         disconnected_at=None,
     )
-    body = TestClient(_app(
-        monkeypatch,
-        session=_Session([_profile()], bindings=[binding], host_leases=[stale_lease]),
-    )).get("/api/omnigent/codex-catalog-readiness").json()
+    body = (
+        TestClient(
+            _app(
+                monkeypatch,
+                session=_Session(
+                    [_profile()], bindings=[binding], host_leases=[stale_lease]
+                ),
+            )
+        )
+        .get("/api/omnigent/codex-catalog-readiness")
+        .json()
+    )
 
     profile = body["executionProfiles"][0]
     assert "static_host_not_ready" not in {
@@ -1019,9 +1250,9 @@ def test_static_policy_requires_live_connected_host_lease(monkeypatch):
 
 
 def test_catalog_denies_caller_without_provider_profile_permission(monkeypatch):
-    response = TestClient(_app(
-        monkeypatch, session=_Session([]), superuser=False
-    )).get("/api/omnigent/codex-catalog-readiness")
+    response = TestClient(_app(monkeypatch, session=_Session([]), superuser=False)).get(
+        "/api/omnigent/codex-catalog-readiness"
+    )
     assert response.status_code == 403
 
 
@@ -1043,7 +1274,9 @@ def _write_exact_artifact_evidence(tmp_path, *, commit=_EXACT_COMMIT, verdict="p
                 "schemaVersion": EXACT_ARTIFACT_CONFORMANCE_VERSION,
                 "sourceCommit": commit,
                 "verdict": verdict,
-                "failures": [] if verdict == "passed" else [{"code": "x", "detail": "y"}],
+                "failures": (
+                    [] if verdict == "passed" else [{"code": "x", "detail": "y"}]
+                ),
                 "images": {
                     "server": "img@sha256:" + "a" * 64,
                     "worker": "img@sha256:" + "b" * 64,

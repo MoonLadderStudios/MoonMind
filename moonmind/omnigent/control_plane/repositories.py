@@ -581,9 +581,14 @@ class SessionRepository(_RepositoryBase):
                 f"Unknown canonical session {session_id!r}"
             )
         if runtime_binding_ref is not _UNSET and runtime_binding_ref is not None:
-            binding = await self._session.get(
-                OmnigentRuntimeBindingRecord, runtime_binding_ref
-            )
+            binding = (
+                await self._session.execute(
+                    select(OmnigentRuntimeBindingRecord).where(
+                        OmnigentRuntimeBindingRecord.binding_id
+                        == runtime_binding_ref
+                    )
+                )
+            ).scalar_one_or_none()
             if binding is None:
                 raise ConflictingSessionAuthorityError(
                     f"Session {session_id!r} cannot bind unknown runtime authority"
@@ -602,25 +607,9 @@ class SessionRepository(_RepositoryBase):
                     "its immutable execution plan"
                 )
             if row.runtime_binding_ref not in {None, runtime_binding_ref}:
-                current_binding = await self._session.get(
-                    OmnigentRuntimeBindingRecord, row.runtime_binding_ref
+                raise ConflictingSessionAuthorityError(
+                    f"Session {session_id!r} cannot replace its stable runtime binding"
                 )
-                if current_binding is None:
-                    raise ConflictingSessionAuthorityError(
-                        f"Session {session_id!r} lost its runtime binding authority"
-                    )
-                stage_rank = {
-                    "credentials_acquired": 1,
-                    "host_acquired": 2,
-                    "session_bound": 3,
-                }
-                if stage_rank.get(binding.state, 0) <= stage_rank.get(
-                    current_binding.state, 0
-                ):
-                    raise ConflictingSessionAuthorityError(
-                        f"Session {session_id!r} cannot replace or regress its "
-                        "runtime binding stage"
-                    )
         provided = {
             name: value
             for name, value in (

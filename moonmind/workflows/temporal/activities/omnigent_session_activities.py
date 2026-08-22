@@ -282,8 +282,8 @@ async def _session_execution_authority_metadata(session: Any) -> dict[str, Any]:
     )
     from moonmind.omnigent.harness_platform.stores import (
         DbExecutionPlanStore,
-        DbRuntimeBindingStore,
     )
+    from moonmind.omnigent.runtime_bindings import DbRuntimeBindingStore
 
     plan = await DbExecutionPlanStore(async_session_maker).load(plan_ref)
     if plan is None:
@@ -299,7 +299,7 @@ async def _session_execution_authority_metadata(session: Any) -> dict[str, Any]:
             raise ValueError(
                 "canonical session runtime binding conflicts with its execution plan"
             )
-        metadata["runtimeBindingRef"] = binding.runtimeBindingRef
+        metadata["runtimeBindingRef"] = binding.bindingId
     return metadata
 
 
@@ -1138,29 +1138,7 @@ async def omnigent_ensure_provider_profile_lease_activity(
     except Exception:
         await lease_client.release_lease(lease)
         raise
-    runtime_binding = None
     execution_plan_ref = getattr(session_authority, "execution_plan_ref", None)
-    if execution_plan_ref:
-        from moonmind.omnigent.harness_platform.stores import (
-            DbRuntimeBindingStore,
-        )
-
-        runtime_binding = await DbRuntimeBindingStore(
-            async_session_maker
-        ).create_initial(
-            execution_plan_ref=execution_plan_ref,
-            provider_leases={
-                "primary-model": {
-                    "providerProfileRef": profile_id,
-                    "providerLeaseRef": lease.lease_id,
-                    "credentialGeneration": acquired_generation,
-                    "credentialRuntimeRef": (
-                        "credential-runtime:provider-profile:"
-                        f"{profile_id}:generation:{acquired_generation}"
-                    ),
-                }
-            },
-        )
     async with store.transaction() as repos:
         updated = await repos.sessions.bind_runtime_authority(
             request.session_id,
@@ -1172,11 +1150,6 @@ async def omnigent_ensure_provider_profile_lease_activity(
             ),
             credential_generation=acquired_generation,
             execution_plan_ref=execution_plan_ref,
-            runtime_binding_ref=(
-                runtime_binding.runtimeBindingRef
-                if runtime_binding is not None
-                else None
-            ),
             metadata_patch={
                 "providerLeaseRef": lease.lease_id,
                 "providerLeaseOwnerId": lease.owner_id,
@@ -1478,25 +1451,6 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
             new_status="assigned",
             fields={"bridge_session_id": bridge.bridge_session_id},
         )
-    runtime_binding = None
-    if session.execution_plan_ref:
-        from moonmind.omnigent.harness_platform.stores import (
-            DbRuntimeBindingStore,
-        )
-
-        if not session.runtime_binding_ref:
-            raise ValueError(
-                "admitted execution plan is missing acquired runtime binding"
-            )
-        runtime_binding = await DbRuntimeBindingStore(
-            async_session_maker
-        ).update_with_host(
-            session.runtime_binding_ref,
-            host_binding_ref=binding.binding_ref,
-            host_lease_ref=lease.lease_id,
-            host_lease_generation=int(session.host_lease_generation or 0),
-            omnigent_host_id=host_id,
-        )
     async with store.transaction() as repos:
         updated = await repos.sessions.bind_runtime_authority(
             request.session_id,
@@ -1507,11 +1461,6 @@ async def omnigent_ensure_host_activity(payload: Mapping[str, Any]) -> dict[str,
             host_lease_generation=session.host_lease_generation,
             credential_generation=lease.credential_generation,
             execution_plan_ref=session.execution_plan_ref,
-            runtime_binding_ref=(
-                runtime_binding.runtimeBindingRef
-                if runtime_binding is not None
-                else None
-            ),
             metadata_patch={
                 "omnigentHostRef": host_id,
                 "hostHarness": str(effective_launch["harness"]),
@@ -1564,29 +1513,8 @@ async def omnigent_ensure_provider_session_activity(
             raise ValueError(
                 "provider session exists without matching bridge authority"
             )
-        runtime_binding = None
-        if session.execution_plan_ref:
-            from moonmind.omnigent.harness_platform.stores import (
-                DbRuntimeBindingStore,
-            )
-
-            if not session.runtime_binding_ref:
-                raise ValueError(
-                    "admitted execution plan is missing host runtime binding"
-                )
-            runtime_binding = await DbRuntimeBindingStore(
-                async_session_maker
-            ).update_with_session(
-                session.runtime_binding_ref,
-                omnigent_session_id=session.provider_session_ref,
-            )
         if (
             session.metadata.get("bridgeSessionRef") != bridge.bridge_session_id
-            or (
-                runtime_binding is not None
-                and session.runtime_binding_ref
-                != runtime_binding.runtimeBindingRef
-            )
         ):
             async with store.transaction() as repos:
                 session = await repos.sessions.bind_runtime_authority(
@@ -1594,11 +1522,6 @@ async def omnigent_ensure_provider_session_activity(
                     expected_revision=session.revision,
                     expected_fencing_generation=request.fencing_generation,
                     execution_plan_ref=session.execution_plan_ref,
-                    runtime_binding_ref=(
-                        runtime_binding.runtimeBindingRef
-                        if runtime_binding is not None
-                        else None
-                    ),
                     metadata_patch={"bridgeSessionRef": bridge.bridge_session_id},
                 )
         settled = await _settle_command(request)
@@ -1668,22 +1591,6 @@ async def omnigent_ensure_provider_session_activity(
         await http_client.aclose()
 
     await bridge_store.attach_session(agent_request.idempotency_key, provider_session_id)
-    runtime_binding = None
-    if session.execution_plan_ref:
-        from moonmind.omnigent.harness_platform.stores import (
-            DbRuntimeBindingStore,
-        )
-
-        if not session.runtime_binding_ref:
-            raise ValueError(
-                "admitted execution plan is missing host runtime binding"
-            )
-        runtime_binding = await DbRuntimeBindingStore(
-            async_session_maker
-        ).update_with_session(
-            session.runtime_binding_ref,
-            omnigent_session_id=provider_session_id,
-        )
     async with store.transaction() as repos:
         attached = await repos.sessions.attach_provider_session(
             request.session_id,
@@ -1696,11 +1603,6 @@ async def omnigent_ensure_provider_session_activity(
             expected_revision=attached.revision,
             expected_fencing_generation=attached.fencing_generation,
             execution_plan_ref=attached.execution_plan_ref,
-            runtime_binding_ref=(
-                runtime_binding.runtimeBindingRef
-                if runtime_binding is not None
-                else None
-            ),
             metadata_patch={"bridgeSessionRef": bridge.bridge_session_id},
         )
     settled = await _settle_command(request)

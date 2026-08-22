@@ -10,9 +10,9 @@ def test_session_execution_authority_migration_upgrade_and_downgrade(
     monkeypatch,
 ) -> None:
     migration = importlib.import_module(
-        "api_service.migrations.versions.359_omnigent_session_execution_authority"
+        "api_service.migrations.versions.360_omnigent_session_execution_authority"
     )
-    assert migration.down_revision == "358_generic_host"
+    assert migration.down_revision == "359_generic_host"
     operations = MagicMock()
     monkeypatch.setattr(migration, "op", operations)
 
@@ -37,6 +37,14 @@ def test_session_execution_authority_migration_upgrade_and_downgrade(
         ]
     )
     assert operations.create_foreign_key.call_count == 2
+    operations.create_foreign_key.assert_any_call(
+        "fk_omnigent_sessions_runtime_binding",
+        "omnigent_sessions",
+        "omnigent_runtime_bindings",
+        ["runtime_binding_ref"],
+        ["binding_id"],
+        ondelete="RESTRICT",
+    )
 
     operations.reset_mock()
     migration.downgrade()

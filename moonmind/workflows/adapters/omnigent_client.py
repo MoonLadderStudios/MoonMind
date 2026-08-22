@@ -155,7 +155,9 @@ class OmnigentHttpClient:
         if isinstance(data, list):
             return [dict(item) for item in data if isinstance(item, Mapping)]
         if isinstance(data, Mapping) and isinstance(data.get("harnesses"), list):
-            return [dict(item) for item in data["harnesses"] if isinstance(item, Mapping)]
+            return [
+                dict(item) for item in data["harnesses"] if isinstance(item, Mapping)
+            ]
         if isinstance(data, Mapping) and isinstance(data.get("data"), list):
             return [dict(item) for item in data["data"] if isinstance(item, Mapping)]
         raise OmnigentClientError(
@@ -164,20 +166,53 @@ class OmnigentHttpClient:
             failure_class="integration_error",
         )
 
+    async def get_version(self) -> str:
+        """Return the authenticated endpoint's installed package version."""
+
+        data = await self._request("GET", "/api/version")
+        version = str(data.get("version") or "").strip()
+        if not version:
+            raise OmnigentClientError(
+                "Omnigent version endpoint did not return a version",
+                response_body=data,
+                failure_class="integration_error",
+            )
+        return version
+
     async def get_host(self, host_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/v1/hosts/{quote(host_id, safe='')}")
 
-    async def get_host_model_options(self, host_id: str) -> dict[str, Any]:
-        return await self._request("GET", f"/v1/hosts/{quote(host_id, safe='')}/model-options")
+    async def get_host_model_options(
+        self, host_id: str, harness_id: str
+    ) -> dict[str, Any]:
+        return await self._request(
+            "GET",
+            f"/v1/hosts/{quote(host_id, safe='')}/harnesses/"
+            f"{quote(harness_id, safe='')}/model-options",
+        )
 
     async def detect_host_credentials(self, host_id: str) -> dict[str, Any]:
-        return await self._request("GET", f"/v1/hosts/{quote(host_id, safe='')}/credentials/detect")
+        return await self._request(
+            "GET", f"/v1/hosts/{quote(host_id, safe='')}/credentials/detect"
+        )
 
-    async def store_host_credential(self, host_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        return await self._request("POST", f"/v1/hosts/{quote(host_id, safe='')}/credentials", json=dict(payload))
+    async def store_host_credential(
+        self, host_id: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            f"/v1/hosts/{quote(host_id, safe='')}/credentials",
+            json=dict(payload),
+        )
 
-    async def install_host_harness(self, host_id: str, payload: Mapping[str, Any]) -> dict[str, Any]:
-        return await self._request("POST", f"/v1/hosts/{quote(host_id, safe='')}/harnesses/install", json=dict(payload))
+    async def install_host_harness(
+        self, host_id: str, payload: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            f"/v1/hosts/{quote(host_id, safe='')}/harnesses/install",
+            json=dict(payload),
+        )
 
     async def list_hosts(self) -> list[dict[str, Any]]:
         data = await self._request("GET", "/v1/hosts")
@@ -484,8 +519,7 @@ def _scrub_payload_with_redactor(payload: Any, *, redactor: SecretRedactor) -> A
         }
     if isinstance(payload, list):
         return [
-            _scrub_payload_with_redactor(item, redactor=redactor)
-            for item in payload
+            _scrub_payload_with_redactor(item, redactor=redactor) for item in payload
         ]
     return payload
 

@@ -112,6 +112,18 @@ jobs:
         id: setup-buildx
         uses: docker/setup-buildx-action@v4
 
+      - name: Resolve Omnigent build identity
+        id: omnigent_build
+        env:
+          BUILD_DIGEST: ${{ vars.OMNIGENT_BUILD_DIGEST }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BUILD_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::OMNIGENT_BUILD_DIGEST must identify the exact Omnigent build shared by the server and host images"
+            exit 1
+          fi
+          echo "digest=$BUILD_DIGEST" >> "$GITHUB_OUTPUT"
+
       - name: Prepare build metadata
         id: meta
         run: |
@@ -128,6 +140,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             OMNIGENT_HOST_BASE_IMAGE=${{ steps.base.outputs.base_image }}
+            OMNIGENT_BUILD_DIGEST=${{ steps.omnigent_build.outputs.digest }}
             OPENCODE_VERSION=${{ needs.metadata.outputs.opencode_version }}
             OPENCODE_MIN_VERSION=1.17.7
             OPENCODE_MAX_VERSION=1.19.0

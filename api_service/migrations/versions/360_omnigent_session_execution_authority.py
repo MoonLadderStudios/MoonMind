@@ -1,8 +1,8 @@
 """Bind canonical Omnigent sessions to plan/runtime authority.
 
 Source: MoonLadderStudios/MoonMind#3701.
-Revision ID: 359_omnigent_authority
-Revises: 358_generic_host
+Revision ID: 360_omnigent_authority
+Revises: 359_generic_host
 Create Date: 2026-08-21
 """
 
@@ -13,8 +13,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "359_omnigent_authority"
-down_revision: Union[str, None] = "358_generic_host"
+revision: str = "360_omnigent_authority"
+down_revision: Union[str, None] = "359_generic_host"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -51,7 +51,7 @@ def upgrade() -> None:
         "omnigent_sessions",
         "omnigent_runtime_bindings",
         ["runtime_binding_ref"],
-        ["runtime_binding_ref"],
+        ["binding_id"],
         ondelete="RESTRICT",
     )
 

@@ -1,24 +1,197 @@
 [
-  {"id": 3832490788, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
-  {"id": 3832490807, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
-  {"id": 3832490813, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
-  {"id": 3832490827, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
-  {"id": 3832490844, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
-  {"id": 3832490857, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
-  {"id": 3832490870, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
-  {"id": 3832490886, "disposition": "addressed", "rationale": "Replaced the no-op Protocol method body with an explicit NotImplementedError."},
-  {"id": 3832528263, "disposition": "addressed", "rationale": "The Activity now derives and persists a digest-addressed plan containing the actual resolved Skill snapshot before realizer dispatch."},
-  {"id": 3832528270, "disposition": "addressed", "rationale": "Retries reacquire and validate the deterministic Provider Profile lease, resume persisted host authority, reach the driver, then clean up and release."},
-  {"id": 3832528277, "disposition": "addressed", "rationale": "Explicit and default Provider Profile queries now enforce global-or-requesting-owner visibility."},
-  {"id": 3832528285, "disposition": "addressed", "rationale": "Exact existing Agent Profile usage is reused on idempotent retries instead of inserting a duplicate unique row."},
-  {"id": 3832528293, "disposition": "addressed", "rationale": "Removed Pi from normal-product admission until a production credential materializer exists."},
-  {"id": 3832528297, "disposition": "addressed", "rationale": "Step model and effort overrides are bound into a derived plan and support identity before runtime side effects."},
-  {"id": 3832528304, "disposition": "addressed", "rationale": "Canonical command and bootstrap-turn idempotency identities are now scoped by workflow."},
-  {"id": 4996059049, "disposition": "not-applicable", "rationale": "Informational automated review summary contains no actionable feedback."},
-  {"id": 3832528311, "disposition": "addressed", "rationale": "Docker launch now pins --platform to the architecture recorded in the admitted support identity."},
-  {"id": 3832528320, "disposition": "addressed", "rationale": "Full reruns compile and persist new execution authority against the reserved rerun workflow identity."},
-  {"id": 3832528326, "disposition": "addressed", "rationale": "Admission now rejects profiles without an effective model before lease or host acquisition."},
-  {"id": 3832528332, "disposition": "addressed", "rationale": "Run accepts normal-product registered harnesses and synchronizes their registered Provider runtime identities, including OpenCode."},
-  {"id": 3832528337, "disposition": "addressed", "rationale": "Generic realizer authorization now propagates provider lease, host, endpoint, plan, binding, policy, and realizer identity into the durable bridge row."},
-  {"id": 3832528341, "disposition": "addressed", "rationale": "Generic checkpoint capture omits effectiveLaunchRef because no valid omnigent-launch snapshot exists."}
+  {
+    "id": 3833763098,
+    "disposition": "addressed",
+    "rationale": "DbOmnigentHostLeaseRepository no longer inherits the in-memory implementation, so it has no uninitialized superclass state."
+  },
+  {
+    "id": 3833763118,
+    "disposition": "addressed",
+    "rationale": "DbRuntimeBindingStore no longer inherits the in-memory implementation, removing the invalid superclass initialization contract."
+  },
+  {
+    "id": 3833763123,
+    "disposition": "addressed",
+    "rationale": "The tool attestation shell probe is now assembled with an explicit join."
+  },
+  {
+    "id": 3833763133,
+    "disposition": "addressed",
+    "rationale": "The credential mount attestation shell probe is now assembled with an explicit join."
+  },
+  {
+    "id": 3833763140,
+    "disposition": "addressed",
+    "rationale": "The provider-config volume attestation shell probe is now assembled with an explicit join."
+  },
+  {
+    "id": 3833763153,
+    "disposition": "addressed",
+    "rationale": "The consumed OpenCode payload reference is explicitly deleted instead of assigning an unused empty value."
+  },
+  {
+    "id": 3833763164,
+    "disposition": "addressed",
+    "rationale": "The consumed provider-config payload reference is explicitly deleted instead of assigning an unused empty value."
+  },
+  {
+    "id": 3833763178,
+    "disposition": "not-applicable",
+    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+  },
+  {
+    "id": 3833763190,
+    "disposition": "not-applicable",
+    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+  },
+  {
+    "id": 3833763202,
+    "disposition": "not-applicable",
+    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+  },
+  {
+    "id": 3833815223,
+    "disposition": "addressed",
+    "rationale": "The generic realizer now heartbeats both the CAS-fenced runtime binding and exact host lease throughout session execution, with regression coverage."
+  },
+  {
+    "id": 3833815227,
+    "disposition": "addressed",
+    "rationale": "Durable generic artifacts now attach an ExecutionRef built from the owning Step Execution."
+  },
+  {
+    "id": 3833815230,
+    "disposition": "addressed",
+    "rationale": "Unqualified Pi/provider-config enrollment is no longer exposed through the guided preset or API-key setup surface until pinned runtime evidence exists."
+  },
+  {
+    "id": 3833815237,
+    "disposition": "addressed",
+    "rationale": "Generic readiness now applies Agent Profile visibility and ownership filtering before compiling targets."
+  },
+  {
+    "id": 3833815241,
+    "disposition": "addressed",
+    "rationale": "integration.omnigent.execute now binds to the Docker- and workspace-capable agent-runtime fleet and handler implementation."
+  },
+  {
+    "id": 3833815244,
+    "disposition": "not-applicable",
+    "rationale": "The current branch already applies the shared Provider Profile visibility filter before explicit v2 profile selection, following the merge from main."
+  },
+  {
+    "id": 3833815247,
+    "disposition": "addressed",
+    "rationale": "The immutable plan now carries workspace mutation authority, the launcher mounts read-only workspaces read-only, and exact-host attestation verifies the mode."
+  },
+  {
+    "id": 3833815251,
+    "disposition": "addressed",
+    "rationale": "Planning retains the immutable catalog selection while requiring a fresh endpoint observation to attest the same endpoint, build, and exact implementation."
+  },
+  {
+    "id": 3833815255,
+    "disposition": "addressed",
+    "rationale": "OpenCode rotation validates candidate secret material and generation before updating the managed secret or durable profile authority."
+  },
+  {
+    "id": 3833815257,
+    "disposition": "addressed",
+    "rationale": "Validate and smoke dispatch v2 documents to a catalog-, source-, Host Class-, provider-, and model-aware v2 readiness implementation."
+  },
+  {
+    "id": 3833815262,
+    "disposition": "addressed",
+    "rationale": "Planning persists the capture policy, exact-host binding passes it to the session driver, and capture generation honors stream and evidence opt-outs."
+  },
+  {
+    "id": 4997551919,
+    "disposition": "not-applicable",
+    "rationale": "This is the automated review summary and contains no independent actionable finding."
+  },
+  {
+    "id": 3834451476,
+    "disposition": "not-applicable",
+    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+  },
+  {
+    "id": 3834654018,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654023,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654030,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654035,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654040,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654046,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675516,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675523,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675531,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675538,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675542,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675545,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675548,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675553,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675556,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675558,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  }
 ]

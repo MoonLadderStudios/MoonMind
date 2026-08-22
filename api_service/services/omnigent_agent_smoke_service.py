@@ -16,6 +16,8 @@ lease cleanup) is specific to smoke validation.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
@@ -104,6 +106,14 @@ async def run_profile_readiness_checks(
     reads an artifact-backed bundle through the artifact authorization boundary
     (raising on unauthorized/unavailable content).
     """
+
+    if document.get("schemaVersion") == "moonmind.omnigent-agent-profile.v2":
+        return await _run_v2_profile_readiness_checks(
+            session,
+            document=document,
+            refresh_upstream=refresh_upstream,
+            read_bundle_bytes=read_bundle_bytes,
+        )
 
     checks: list[dict[str, Any]] = []
     upstream_snapshot: dict[str, Any] | None = None
@@ -219,6 +229,275 @@ async def run_profile_readiness_checks(
             "reason": None
             if compatible_provider
             else "no enabled compatible Provider Profile",
+        }
+    )
+    return ReadinessOutcome(checks=checks, upstream_snapshot=upstream_snapshot)
+
+
+def _profile_snapshot_digest(value: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), default=str
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _profile_model_ids(value: Any) -> set[str]:
+    if isinstance(value, str):
+        return {value} if "/" in value else set()
+    if isinstance(value, Mapping):
+        return {
+            model
+            for item in value.values()
+            for model in _profile_model_ids(item)
+        }
+    if isinstance(value, list):
+        return {model for item in value for model in _profile_model_ids(item)}
+    return set()
+
+
+async def _run_v2_profile_readiness_checks(
+    session: AsyncSession,
+    *,
+    document: Mapping[str, Any],
+    refresh_upstream: Callable[[], Awaitable[None]],
+    read_bundle_bytes: Callable[[str], Awaitable[bytes]],
+) -> ReadinessOutcome:
+    """Evaluate v2 authority without projecting it through the v1 schema."""
+
+    from api_service.db.models import (
+        OmnigentHarnessCatalogSnapshotRecord,
+        OmnigentHarnessTrustRecord,
+    )
+    from moonmind.omnigent.harness_platform.agent_profile import (
+        BundleSource,
+        validate_agent_profile,
+    )
+    from moonmind.omnigent.harness_platform.catalog import (
+        HarnessCatalogSnapshot,
+        TrustState,
+        assert_catalog_refresh_attests,
+    )
+    from moonmind.omnigent.harness_platform.host_classes import (
+        OmnigentHostClassSelector,
+        get_launch_policy,
+    )
+    from moonmind.omnigent.harness_platform.materializers import (
+        materializer_ref_for_provider,
+    )
+
+    checks: list[dict[str, Any]] = []
+    upstream_snapshot: dict[str, Any] | None = None
+    try:
+        profile = validate_agent_profile(dict(document))
+    except Exception as exc:
+        return ReadinessOutcome(
+            checks=[
+                {
+                    "name": "profile_schema",
+                    "ready": False,
+                    "reason": f"invalid v2 Agent Profile: {exc}",
+                }
+            ]
+        )
+
+    if not isinstance(profile.source, BundleSource):
+        await refresh_upstream()
+        projection = await session.get(
+            OmnigentUpstreamAgentProjection,
+            projection_identity(
+                profile.endpointRef,
+                profile.source.upstreamId,
+                profile.source.upstreamVersion,
+            ),
+        )
+        source_ready = bool(
+            projection
+            and projection.available
+            and projection.compatible
+            and _profile_snapshot_digest(dict(projection.metadata_snapshot or {}))
+            == profile.source.upstreamSnapshotDigest
+        )
+        checks.append(
+            {
+                "name": "upstream_identity",
+                "ready": source_ready,
+                "reason": None
+                if source_ready
+                else "the exact upstream projection is unavailable or changed",
+            }
+        )
+        upstream_snapshot = (
+            dict(projection.metadata_snapshot or {})
+            if projection is not None
+            else None
+        )
+    else:
+        artifact_id = profile.source.bundleArtifactRef.removeprefix("artifact:")
+        artifact = await session.get(TemporalArtifact, artifact_id)
+        provenance_ready = bool(
+            artifact
+            and artifact.sha256 == profile.source.bundleDigest.removeprefix("sha256:")
+            and artifact.content_type in _SAFE_BUNDLE_TYPES
+            and artifact.size_bytes is not None
+            and 0 < artifact.size_bytes <= _MAX_BUNDLE_ARTIFACT_BYTES
+            and artifact.created_by_principal
+        )
+        checks.append(
+            {
+                "name": "bundle_provenance",
+                "ready": provenance_ready,
+                "reason": None
+                if provenance_ready
+                else "the immutable bundle artifact is unavailable or invalid",
+            }
+        )
+        if provenance_ready:
+            try:
+                bundle_metadata = validate_agent_bundle(
+                    await read_bundle_bytes(artifact_id), artifact.content_type or ""
+                )
+                content_ready = (
+                    bundle_metadata["harness"] == profile.harness.id
+                )
+                checks.append(
+                    {
+                        "name": "bundle_contents",
+                        "ready": content_ready,
+                        "reason": None
+                        if content_ready
+                        else "bundle harness differs from profile authority",
+                    }
+                )
+            except Exception:
+                checks.append(
+                    {
+                        "name": "bundle_contents",
+                        "ready": False,
+                        "reason": "bundle content could not be validated",
+                    }
+                )
+
+    authority_row = await session.get(
+        OmnigentHarnessCatalogSnapshotRecord, profile.harness.catalogRef
+    )
+    latest_row = (
+        await session.execute(
+            select(OmnigentHarnessCatalogSnapshotRecord)
+            .where(
+                OmnigentHarnessCatalogSnapshotRecord.endpoint_ref
+                == profile.endpointRef
+            )
+            .order_by(OmnigentHarnessCatalogSnapshotRecord.observed_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    authority = (
+        HarnessCatalogSnapshot.model_validate(authority_row.snapshot_json)
+        if authority_row is not None
+        else None
+    )
+    observation = (
+        HarnessCatalogSnapshot.model_validate(latest_row.snapshot_json)
+        if latest_row is not None
+        else None
+    )
+    catalog_ready = False
+    harness = None
+    if authority is not None and observation is not None:
+        try:
+            assert_catalog_refresh_attests(
+                authority=authority,
+                observation=observation,
+                harness_id=profile.harness.id,
+                implementation_ref=profile.harness.implementationRef,
+            )
+            harness = next(
+                item
+                for item in authority.harnesses
+                if item.id == profile.harness.id
+            )
+            trust = await session.get(
+                OmnigentHarnessTrustRecord, profile.harness.implementationRef
+            )
+            catalog_ready = bool(
+                trust
+                and trust.trust_state
+                in {TrustState.core_trusted.value, TrustState.plugin_approved.value}
+            )
+        except Exception:
+            catalog_ready = False
+    checks.append(
+        {
+            "name": "harness_catalog",
+            "ready": catalog_ready,
+            "reason": None
+            if catalog_ready
+            else "fresh trusted catalog evidence does not attest immutable authority",
+        }
+    )
+
+    providers = list(
+        (
+            await session.execute(
+                select(ManagedAgentProviderProfile).where(
+                    ManagedAgentProviderProfile.enabled.is_(True)
+                )
+            )
+        ).scalars()
+    )
+    accepted_ids = {
+        provider_id
+        for slot in profile.credentialSlots
+        for provider_id in slot.acceptedProviderIds
+    }
+    compatible_provider = False
+    for provider in providers:
+        if (
+            not provider_profile_launch_ready(provider)
+            or accepted_ids
+            and provider.provider_id not in accepted_ids
+            or harness is None
+            or authority is None
+        ):
+            continue
+        try:
+            materializer_ref = materializer_ref_for_provider(
+                provider.runtime_id, provider.provider_id
+            )
+            selected_classes = [
+                OmnigentHostClassSelector().select(
+                    harness=harness,
+                    omnigent_version=authority.omnigentVersion,
+                    omnigent_build_digest=authority.omnigentBuildDigest,
+                    integration_mode=harness.capabilities.integrationMode
+                    or "native-server",
+                    materializer_refs=[materializer_ref],
+                    requested_host_mode=get_launch_policy(policy_ref).hostMode,
+                )
+                for policy_ref in profile.allowedLaunchPolicyRefs
+            ]
+            evidence = dict(provider.model_catalog_evidence_json or {})
+            model = str(profile.model.get("qualifiedId") or "").strip()
+            if (
+                int(evidence.get("credentialGeneration") or 0)
+                != int(provider.credential_generation)
+                or str(evidence.get("imageRef") or "")
+                not in {item.imageRef for item in selected_classes}
+                or not model
+                or model not in _profile_model_ids(evidence.get("models", []))
+            ):
+                continue
+            compatible_provider = True
+            break
+        except Exception:
+            continue
+    checks.append(
+        {
+            "name": "provider_profile",
+            "ready": compatible_provider,
+            "reason": None
+            if compatible_provider
+            else "no enabled compatible Provider Profile and Host Class",
         }
     )
     return ReadinessOutcome(checks=checks, upstream_snapshot=upstream_snapshot)

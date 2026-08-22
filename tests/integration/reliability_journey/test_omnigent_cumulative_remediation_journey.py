@@ -163,13 +163,6 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     with patch(
         "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
         AsyncMock(return_value=profile_snapshot),
-    ), patch(
-        "api_service.api.routers.executions.compile_and_persist_execution_authority",
-        AsyncMock(
-            return_value=SimpleNamespace(
-                planRef="omnigent-execution-plan:sha256:" + "b" * 64
-            )
-        ),
     ), TestClient(app) as client:
         response = client.post("/api/executions", json={
             "type": "workflow",
@@ -194,6 +187,9 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     assert authored["targetRuntime"] == "omnigent"
     assert authored["omnigent"]["executionTargetRef"] == "omnigent-host-codex"
     assert authored["workflow"]["runtime"]["executionProfileRef"] == "omnigent-codex"
+    assert authored["agentProfileSnapshot"]["profileId"] == (
+        "omnigent-bootstrap-default"
+    )
 
     # Cross the real deterministic workflow compiler boundary.  This is the
     # request shape consumed by the Temporal agent activity; an API-shaped
@@ -229,9 +225,7 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     assert compiled.agent_kind == "external"
     assert compiled.agent_id == "omnigent"
     assert compiled.execution_profile_ref == "omnigent-codex"
-    assert compiled.parameters["executionPlanRef"].startswith(
-        "omnigent-execution-plan:sha256:"
-    )
+    assert "executionPlanRef" not in compiled.parameters
     assert compiled.parameters["omnigent"]["executionTargetRef"] == (
         "omnigent-host-codex"
     )

@@ -16,6 +16,9 @@ OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR = "/opt/moonmind-skills"
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _FALSE_VALUES = {"0", "false", "no", "off"}
 
+OMNIGENT_GENERIC_HOST_ENABLED_ENV = "MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED"
+OMNIGENT_OPENCODE_ENABLED_ENV = "MOONMIND_OMNIGENT_OPENCODE_ENABLED"
+
 # An Omnigent server image is immutable launch authority only when it names a
 # sha256 digest. Mirrors the launch-policy rule in
 # ``moonmind/omnigent/execution_profiles.py`` so the native-UI gate and the
@@ -81,6 +84,25 @@ def is_omnigent_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
     return build_omnigent_gate(env=env).enabled
 
 
+def generic_host_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
+    """Return whether the complete generic host plane is enabled.
+
+    This gate means the production planner, lease, credential, host, and
+    cleanup services are wired.  It is intentionally separate from support
+    qualification for any individual harness.
+    """
+
+    source = env if env is not None else os.environ
+    return _clean(source.get(OMNIGENT_GENERIC_HOST_ENABLED_ENV)).lower() in _TRUE_VALUES
+
+
+def opencode_support_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
+    """Return whether the qualified OpenCode combination may be advertised."""
+
+    source = env if env is not None else os.environ
+    return _clean(source.get(OMNIGENT_OPENCODE_ENABLED_ENV)).lower() in _TRUE_VALUES
+
+
 def resolved_server_url(*, env: Mapping[str, Any] | None = None) -> str:
     """Return configured Omnigent server URL."""
 
@@ -138,9 +160,7 @@ def resolved_native_ui_version(*, env: Mapping[str, Any] | None = None) -> str:
     return ""
 
 
-def resolved_native_ui_serving_enabled(
-    *, env: Mapping[str, Any] | None = None
-) -> bool:
+def resolved_native_ui_serving_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
     """Return whether MoonMind serves the native Omnigent UI through its origin.
 
     Defaults to enabled so the canonical deployment routes native Workflow Chat
@@ -177,9 +197,7 @@ def resolved_proxy_forward_headers(
     raw = _clean(source.get("OMNIGENT_PROXY_FORWARD_HEADERS"))
     if not raw:
         return frozenset()
-    return frozenset(
-        part.strip().lower() for part in raw.split(",") if part.strip()
-    )
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
 
 
 __all__ = [
@@ -188,6 +206,10 @@ __all__ = [
     "OmnigentRuntimeGate",
     "build_omnigent_gate",
     "is_omnigent_enabled",
+    "generic_host_enabled",
+    "opencode_support_enabled",
+    "OMNIGENT_GENERIC_HOST_ENABLED_ENV",
+    "OMNIGENT_OPENCODE_ENABLED_ENV",
     "resolved_api_token",
     "resolved_default_agent_name",
     "resolved_host_runner_token",

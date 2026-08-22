@@ -28,14 +28,18 @@ class ModelConfig(BaseModel):
     qualifiedId: str | None = Field(default=None, alias="qualifiedId")
     effort: str | None = None
     routeRef: str | None = Field(default=None, alias="routeRef")
-    normalizedOptions: dict[str, Any] = Field(default_factory=dict, alias="normalizedOptions")
+    normalizedOptions: dict[str, Any] = Field(
+        default_factory=dict, alias="normalizedOptions"
+    )
     modelConfigDigest: str = Field(alias="modelConfigDigest")
 
 
 class OmnigentExecutionPlanPayload(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schemaVersion: str = Field("moonmind.omnigent-execution-plan-payload.v1", alias="schemaVersion")
+    schemaVersion: str = Field(
+        "moonmind.omnigent-execution-plan-payload.v1", alias="schemaVersion"
+    )
     endpointRef: str = Field(alias="endpointRef")
     agentProfileSnapshotRef: str = Field(alias="agentProfileSnapshotRef")
     harnessCatalogRef: str = Field(alias="harnessCatalogRef")
@@ -49,10 +53,15 @@ class OmnigentExecutionPlanPayload(BaseModel):
     executionRealizerRef: str = Field(alias="executionRealizerRef")
     modelConfig: ModelConfig = Field(alias="model")
     resolvedSkills: dict[str, Any] = Field(alias="resolvedSkills")
+    resolvedTools: dict[str, Any] = Field(default_factory=dict, alias="resolvedTools")
     classAdmissionDecision: dict[str, Any] = Field(alias="classAdmissionDecision")
-    runtimeValidationRequirements: tuple[str, ...] = Field(alias="runtimeValidationRequirements")
+    runtimeValidationRequirements: tuple[str, ...] = Field(
+        alias="runtimeValidationRequirements"
+    )
     workspaceIntentRef: str = Field(alias="workspaceIntentRef")
+    workspaceMutation: str = Field("allowed", alias="workspaceMutation")
     capturePolicyRef: str | None = Field(default=None, alias="capturePolicyRef")
+    capturePolicy: dict[str, Any] = Field(default_factory=dict, alias="capturePolicy")
     policySnapshotRef: str = Field(alias="policySnapshotRef")
     supportCombinationKey: str = Field(alias="supportCombinationKey")
     # Added as optional for replay compatibility with execution plans admitted
@@ -85,11 +94,30 @@ class OmnigentExecutionPlanPayload(BaseModel):
                     "supportIdentity differs from admitted execution authority"
                 )
         forbidden_keys = {
-            "credentialGeneration", "providerLeaseRef", "hostId", "hostLeaseRef",
-            "volumeName", "hostBindingRef", "planRef", "credentials", "secretBody",
-            "dockerSocket", "bindSource", "workerPath", "callerHostId", "skillBody"
+            "credentialGeneration",
+            "providerLeaseRef",
+            "hostId",
+            "hostLeaseRef",
+            "volumeName",
+            "hostBindingRef",
+            "planRef",
+            "credentials",
+            "secretBody",
+            "dockerSocket",
+            "bindSource",
+            "workerPath",
+            "callerHostId",
+            "skillBody",
         }
         payload = self.model_dump(by_alias=True, mode="json")
+
+        if self.workspaceMutation not in {
+            "allowed",
+            "read_only",
+            "checkpoint_branch",
+        }:
+            raise ValueError("workspaceMutation is unsupported")
+
         def check(obj: Any, path: str = "") -> None:
             if isinstance(obj, dict):
                 for k, v in obj.items():
@@ -98,16 +126,21 @@ class OmnigentExecutionPlanPayload(BaseModel):
                     # also check lowercased without underscore?
                     lowered = k.lower().replace("_", "")
                     if lowered in {"credentialgeneration", "providerleaseref"}:
-                        raise ValueError(f"plan payload must not contain generation at {path}.{k}")
+                        raise ValueError(
+                            f"plan payload must not contain generation at {path}.{k}"
+                        )
                     check(v, f"{path}.{k}")
             elif isinstance(obj, list):
                 for i, item in enumerate(obj):
                     check(item, f"{path}[{i}]")
+
         check(payload)
         return self
 
 
-def canonical_payload_bytes(payload: OmnigentExecutionPlanPayload | dict[str, Any]) -> bytes:
+def canonical_payload_bytes(
+    payload: OmnigentExecutionPlanPayload | dict[str, Any]
+) -> bytes:
     if isinstance(payload, OmnigentExecutionPlanPayload):
         data = payload.model_dump(by_alias=True, mode="json")
     else:
@@ -115,7 +148,9 @@ def canonical_payload_bytes(payload: OmnigentExecutionPlanPayload | dict[str, An
     # Ensure no envelope fields inside payload
     data.pop("planRef", None)
     # Normalize: sorted keys, no whitespace, utf-8, normalized enums/null
-    return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+    return json.dumps(
+        data, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+    ).encode("utf-8")
 
 
 def compute_plan_ref(payload: OmnigentExecutionPlanPayload | dict[str, Any]) -> str:
@@ -143,7 +178,9 @@ def compute_model_config_digest(
 class OmnigentExecutionPlanEnvelope(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schemaVersion: str = Field("moonmind.omnigent-execution-plan-envelope.v1", alias="schemaVersion")
+    schemaVersion: str = Field(
+        "moonmind.omnigent-execution-plan-envelope.v1", alias="schemaVersion"
+    )
     planRef: str = Field(alias="planRef")
     payload: OmnigentExecutionPlanPayload
 
@@ -155,7 +192,9 @@ class OmnigentExecutionPlanEnvelope(BaseModel):
         return self
 
 
-def create_execution_plan_envelope(payload: OmnigentExecutionPlanPayload | dict[str, Any]) -> OmnigentExecutionPlanEnvelope:
+def create_execution_plan_envelope(
+    payload: OmnigentExecutionPlanPayload | dict[str, Any]
+) -> OmnigentExecutionPlanEnvelope:
     if isinstance(payload, dict):
         # Validate payload first
         parsed = OmnigentExecutionPlanPayload.model_validate(payload)
@@ -268,7 +307,9 @@ def bind_runtime_request_authority(
     return create_execution_plan_envelope(payload) if changed else envelope
 
 
-def verify_execution_plan_envelope(envelope: dict[str, Any] | OmnigentExecutionPlanEnvelope) -> OmnigentExecutionPlanEnvelope:
+def verify_execution_plan_envelope(
+    envelope: dict[str, Any] | OmnigentExecutionPlanEnvelope,
+) -> OmnigentExecutionPlanEnvelope:
     if isinstance(envelope, OmnigentExecutionPlanEnvelope):
         return envelope
     # Verify without mutation: canonicalize only payload and compare
@@ -299,8 +340,13 @@ def execution_support_identity(
 
 def forbidden_plan_check(payload: dict[str, Any]) -> None:
     forbidden_substrings = [
-        "credential", "secretBody", "docker.sock", "volumeName", "hostLeaseRef",
-        "credentialGeneration", "providerLeaseRef",
+        "credential",
+        "secretBody",
+        "docker.sock",
+        "volumeName",
+        "hostLeaseRef",
+        "credentialGeneration",
+        "providerLeaseRef",
     ]
     text = json.dumps(payload, default=str).lower()
     for f in forbidden_substrings:
