@@ -223,6 +223,13 @@ class OmnigentSessionAdmissionRequest(_OmnigentSessionModel):
         alias="omnigentExecutionPlan",
         exclude_if=lambda value: value is None,
     )
+    execution_plan_ref: str | None = Field(
+        None,
+        alias="executionPlanRef",
+        min_length=1,
+        max_length=255,
+        exclude_if=lambda value: value is None,
+    )
 
     @field_validator(
         "workflow_id", "step_execution_id", "agent_run_id", "execution_profile_ref"
@@ -243,6 +250,7 @@ class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
         "canary_owner_not_allowlisted",
         "execution_profile_not_allowlisted",
         "feature_generation_mismatch",
+        "realizer_managed_lifecycle",
     ] = Field(alias="reasonCode")
     admission_mode: Literal["disabled", "canary", "enabled"] = Field(
         alias="admissionMode"

@@ -11,6 +11,8 @@ hermetic while production uses SQLAlchemy. The stores enforce:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -39,6 +41,44 @@ class OmnigentExecutionPlanStore(Protocol):
     ) -> OmnigentExecutionPlanEnvelope: pass  # noqa
 
     async def persist(self, envelope: OmnigentExecutionPlanEnvelope) -> OmnigentExecutionPlanEnvelope: pass  # noqa
+
+
+@dataclass(frozen=True)
+class ExecutionPlanUsageIdentity:
+    workflow_id: str
+    step_execution_id: str
+    idempotency_key: str
+
+    def usage_id(self) -> str:
+        canonical = "\0".join(
+            (self.workflow_id, self.step_execution_id, self.idempotency_key)
+        )
+        return (
+            "omnigent-plan-usage:sha256:"
+            + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        )
+
+
+def execution_request_digest(request_payload: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        request_payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
+class OmnigentExecutionPlanUsageStore(Protocol):
+    async def load_or_bind(
+        self,
+        *,
+        identity: ExecutionPlanUsageIdentity,
+        request_payload: dict[str, Any],
+        compile_fn: Any,
+    ) -> OmnigentExecutionPlanEnvelope:
+        raise NotImplementedError
 
 
 class OmnigentRuntimeBindingStore(Protocol):
@@ -147,6 +187,42 @@ class InMemoryExecutionPlanStore:
         if existing is not None:
             return existing
         return await self.persist(envelope)
+
+
+class InMemoryExecutionPlanUsageStore:
+    """Retry-stable identity binding used only by hermetic tests."""
+
+    def __init__(self, plan_store: OmnigentExecutionPlanStore) -> None:
+        self._plan_store = plan_store
+        self._usages: dict[str, tuple[str, str]] = {}
+
+    async def load_or_bind(
+        self,
+        *,
+        identity: ExecutionPlanUsageIdentity,
+        request_payload: dict[str, Any],
+        compile_fn: Any,
+    ) -> OmnigentExecutionPlanEnvelope:
+        request_digest = execution_request_digest(request_payload)
+        existing = self._usages.get(identity.idempotency_key)
+        if existing is not None:
+            previous_digest, plan_ref = existing
+            if previous_digest != request_digest:
+                raise HarnessPlatformError(
+                    "idempotency key is already bound to a different Omnigent request",
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                )
+            plan = await self._plan_store.load(plan_ref)
+            if plan is None:
+                raise HarnessPlatformError(
+                    "execution-plan usage references a missing immutable plan",
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                )
+            return plan
+        envelope = await compile_fn()
+        envelope = await self._plan_store.persist(envelope)
+        self._usages[identity.idempotency_key] = (request_digest, envelope.planRef)
+        return envelope
 
 
 @dataclass(frozen=True)
@@ -877,6 +953,8 @@ class DbRuntimeBindingStore:
                 return current
             record = OmnigentRuntimeBindingRecord(
                 runtime_binding_ref=binding.runtimeBindingRef,
+                binding_id=binding.runtimeBindingRef,
+                latest_snapshot_ref=binding.runtimeBindingRef,
                 execution_plan_ref=execution_plan_ref,
                 execution_scope_ref=execution_scope_ref,
                 revision=1,
@@ -935,6 +1013,7 @@ class DbRuntimeBindingStore:
             current = self._binding_from_record(record)
             updated = update(current)
             record.runtime_binding_ref = updated.runtimeBindingRef
+            record.latest_snapshot_ref = updated.runtimeBindingRef
             record.revision = int(record.revision) + 1
             if advance_fencing_generation:
                 record.fencing_generation = int(record.fencing_generation) + 1
@@ -1149,3 +1228,123 @@ class DbRuntimeBindingStore:
             update=update,
             state="session_bound",
         )
+class DbExecutionPlanUsageStore:
+    """Atomically persist and bind the first plan selected for an execution."""
+
+    def __init__(self, session_factory: Any) -> None:
+        self._session_factory = session_factory
+
+    async def load_or_bind(
+        self,
+        *,
+        identity: ExecutionPlanUsageIdentity,
+        request_payload: dict[str, Any],
+        compile_fn: Any,
+    ) -> OmnigentExecutionPlanEnvelope:
+        from sqlalchemy import select
+        from sqlalchemy.exc import IntegrityError
+
+        from api_service.db.models import (
+            OmnigentExecutionPlanRecord,
+            OmnigentExecutionPlanUsageRecord,
+        )
+
+        request_digest = execution_request_digest(request_payload)
+
+        async def load_existing() -> OmnigentExecutionPlanEnvelope | None:
+            async with self._session_factory() as read_session:
+                usage = (
+                    await read_session.execute(
+                        select(OmnigentExecutionPlanUsageRecord).where(
+                            OmnigentExecutionPlanUsageRecord.idempotency_key
+                            == identity.idempotency_key
+                        )
+                    )
+                ).scalar_one_or_none()
+                if usage is None:
+                    return None
+                if usage.request_digest != request_digest:
+                    raise HarnessPlatformError(
+                        "idempotency key is already bound to a different Omnigent request",
+                        code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                    )
+                plan = await read_session.get(
+                    OmnigentExecutionPlanRecord, usage.plan_ref
+                )
+                if plan is None:
+                    raise HarnessPlatformError(
+                        "execution-plan usage references a missing immutable plan",
+                        code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                    )
+                return OmnigentExecutionPlanEnvelope.model_validate(
+                    {
+                        "schemaVersion": plan.schema_version,
+                        "planRef": plan.plan_ref,
+                        "payload": plan.payload_json,
+                    }
+                )
+
+        found = await load_existing()
+        if found is not None:
+            return found
+
+        envelope: OmnigentExecutionPlanEnvelope = await compile_fn()
+        verify_execution_plan_envelope(envelope)
+        async with self._session_factory() as session:
+            plan = await session.get(OmnigentExecutionPlanRecord, envelope.planRef)
+            if plan is None:
+                payload = envelope.payload
+                session.add(
+                    OmnigentExecutionPlanRecord(
+                        plan_ref=envelope.planRef,
+                        schema_version=envelope.schemaVersion,
+                        payload_json=payload.model_dump(by_alias=True, mode="json"),
+                        agent_profile_snapshot_ref=payload.agentProfileSnapshotRef,
+                        credential_binding_set_ref=payload.credentialBindingSetRef,
+                        harness_id=payload.harnessId,
+                        harness_implementation_ref=payload.harnessImplementationRef,
+                        host_class_ref=payload.hostClassRef,
+                        launch_policy_ref=payload.launchPolicyRef,
+                        execution_realizer_ref=payload.executionRealizerRef,
+                        support_combination_key=payload.supportCombinationKey,
+                    )
+                )
+            session.add(
+                OmnigentExecutionPlanUsageRecord(
+                    usage_id=identity.usage_id(),
+                    workflow_id=identity.workflow_id,
+                    step_execution_id=identity.step_execution_id,
+                    idempotency_key=identity.idempotency_key,
+                    plan_ref=envelope.planRef,
+                    request_digest=request_digest,
+                )
+            )
+            try:
+                await session.commit()
+                return envelope
+            except IntegrityError as exc:
+                await session.rollback()
+                raced = await load_existing()
+                if raced is not None:
+                    return raced
+                raise HarnessPlatformError(
+                    "failed to bind immutable execution plan usage",
+                    code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+                ) from exc
+
+
+__all__ = [
+    "DbExecutionPlanStore",
+    "DbExecutionPlanUsageStore",
+    "DbRuntimeBindingStore",
+    "ExecutionPlanUsageIdentity",
+    "InMemoryExecutionPlanStore",
+    "InMemoryExecutionPlanUsageStore",
+    "InMemoryRuntimeBindingStore",
+    "OmnigentExecutionPlanStore",
+    "OmnigentExecutionPlanUsageStore",
+    "OmnigentRuntimeBindingStore",
+    "RuntimeBindingStoreState",
+    "SessionExecutionPlanStore",
+    "execution_request_digest",
+]

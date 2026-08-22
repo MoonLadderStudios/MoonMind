@@ -217,6 +217,42 @@ async def test_readiness_upstream_missing_and_no_provider(session):
     assert by_name["provider_profile"]["ready"] is False
 
 
+async def test_v2_readiness_returns_typed_checks_instead_of_using_v1_fields(session):
+    document = {
+        "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+        "endpointRef": "default",
+        "source": {
+            "kind": "upstream",
+            "upstreamId": "opencode-native-ui",
+            "upstreamVersion": "1",
+            "upstreamSnapshotDigest": "sha256:" + "1" * 64,
+        },
+        "harness": {
+            "id": "opencode-native",
+            "catalogRef": "omnigent-harness-catalog:sha256:" + "2" * 64,
+            "implementationRef": (
+                "omnigent-harness-implementation:sha256:" + "3" * 64
+            ),
+        },
+        "credentialSlots": [
+            {"id": "primary-model", "acceptedProviderIds": ["opencode-go"]}
+        ],
+        "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+    }
+
+    outcome = await run_profile_readiness_checks(
+        session,
+        document=document,
+        refresh_upstream=_noop_refresh,
+        read_bundle_bytes=_unused_bundle_reader,
+    )
+
+    by_name = {check["name"]: check for check in outcome.checks}
+    assert by_name["upstream_identity"]["ready"] is False
+    assert by_name["harness_catalog"]["ready"] is False
+    assert by_name["provider_profile"]["ready"] is False
+
+
 async def test_readiness_ready_when_projection_fresh_and_provider_compatible(session):
     now = datetime.now(timezone.utc)
     session.add(

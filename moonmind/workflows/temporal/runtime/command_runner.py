@@ -12,6 +12,7 @@ async def run_runtime_command(
     argv: Sequence[str],
     *,
     env: Mapping[str, str] | None = None,
+    input_bytes: bytes | None = None,
     timeout_seconds: float | None = None,
     output_limit_bytes: int | None = None,
 ) -> tuple[int, bytes, bytes]:
@@ -24,12 +25,13 @@ async def run_runtime_command(
 
     process = await asyncio.create_subprocess_exec(
         *argv,
+        stdin=(asyncio.subprocess.PIPE if input_bytes is not None else None),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         env=dict(env) if env is not None else None,
     )
     try:
-        communication = process.communicate()
+        communication = process.communicate(input=input_bytes)
         if timeout_seconds is None:
             stdout, stderr = await communication
         else:

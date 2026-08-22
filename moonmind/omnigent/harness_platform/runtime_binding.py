@@ -38,9 +38,13 @@ class OmnigentRuntimeBinding(BaseModel):
     executionPlanRef: str = Field(alias="executionPlanRef")
     executionScopeRef: str | None = Field(default=None, alias="executionScopeRef")
     providerLeases: dict[str, RuntimeBindingProviderLease] = Field(alias="providerLeases")
+    # Host authority is intentionally absent in the first immutable stage. It
+    # is added only after the host lease has been acquired and attested.
     hostBindingRef: str | None = Field(default=None, alias="hostBindingRef")
     hostLeaseRef: str | None = Field(default=None, alias="hostLeaseRef")
-    hostLeaseGeneration: int | None = Field(default=None, alias="hostLeaseGeneration")
+    hostLeaseGeneration: int | None = Field(
+        default=None, alias="hostLeaseGeneration"
+    )
     omnigentHostId: str | None = Field(default=None, alias="omnigentHostId")
     hostHarnessAttestationRef: str | None = Field(default=None, alias="hostHarnessAttestationRef")
     exactHostCapabilityDecisionRef: str | None = Field(default=None, alias="exactHostCapabilityDecisionRef")
@@ -69,7 +73,8 @@ class OmnigentRuntimeBinding(BaseModel):
         if any(value is not None for value in host_values) and not all(
             value is not None for value in host_values
         ):
-            raise ValueError("host runtime authority must be bound atomically")
+            raise ValueError("runtime binding host authority must be added atomically")
+        # hostLeaseGeneration must be positive after host acquisition.
         if self.hostLeaseGeneration is not None and self.hostLeaseGeneration < 1:
             raise ValueError("hostLeaseGeneration must be >=1")
         # Historical v1 bindings could record a session before chat authority

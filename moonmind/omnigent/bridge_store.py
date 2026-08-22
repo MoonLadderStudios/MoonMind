@@ -31,6 +31,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.db.models import OmnigentBridgeSession, OmnigentBridgeSessionEvent
 from moonmind.omnigent.bridge_events import bounded_deduplication_key
 from moonmind.omnigent.bridge_security import BridgeSessionBinding, redact_raw_events
+from moonmind.omnigent.control_plane.identities import (
+    EGRESS_CLEANUP_AUTHORITY_KEY,
+    EGRESS_CLEANUP_AUTHORITY_VERSION,
+)
+from moonmind.omnigent.control_plane.repositories import OmnigentControlPlaneStore
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.utils.logging import redact_sensitive_payload
 
@@ -56,9 +61,6 @@ PROVIDER_SESSION_DELETED_KEY = "provider_session_deleted_at"
 EMBEDDED_LAUNCH_KEY = "embedded_runner_launch"
 EMBEDDED_LIFECYCLE_KEY = "embedded_runner_lifecycle"
 EMBEDDED_LIFECYCLE_VERSION = 1
-EGRESS_CLEANUP_AUTHORITY_KEY = "egress_cleanup_authority"
-EGRESS_CLEANUP_AUTHORITY_VERSION = 1
-
 EMBEDDED_RUNNER_STATES = frozenset(
     {
         "launch_reserved",
@@ -431,6 +433,67 @@ class OmnigentBridgeSessionStore:
 
     def __init__(self, session_factory: Callable[[], Any]) -> None:
         self._session_factory = session_factory
+        self._control_plane_store = OmnigentControlPlaneStore(session_factory)
+
+    async def claim_canonical_turn_command(
+        self,
+        *,
+        row: Any,
+        command_type: str,
+        idempotency_key: str,
+        payload_digest: str,
+    ) -> Any:
+        """Claim the shared #3701 session/turn/command authority.
+
+        The bridge store supplies only persistence composition.  Turn semantics
+        remain in the transport-neutral control-plane application service.
+        """
+
+        from moonmind.omnigent.control_plane.turn_commands import (
+            CanonicalSessionBootstrap,
+            CanonicalTurnCommandService,
+        )
+
+        launch = dict(row.effective_launch_snapshot_json or {})
+
+        return await CanonicalTurnCommandService(self._control_plane_store).claim(
+            workflow_id=str(row.moonmind_workflow_id),
+            provider_session_ref=str(row.omnigent_session_id or ""),
+            chat_binding_id=str(row.chat_binding_id or "") or None,
+            command_type=command_type,
+            idempotency_key=idempotency_key,
+            payload_digest=payload_digest,
+            step_execution_id=str(row.step_execution_id or "") or None,
+            bootstrap=CanonicalSessionBootstrap(
+                provider=str(row.provider),
+                step_execution_id=str(row.step_execution_id or row.bridge_session_id),
+                agent_run_id=str(row.moonmind_agent_run_id),
+                source_idempotency_key=str(row.idempotency_key),
+                execution_plan_ref=str(launch.get("executionPlanRef") or "")
+                or None,
+            ),
+        )
+
+    async def settle_canonical_turn_command(
+        self,
+        *,
+        workflow_id: str,
+        idempotency_key: str,
+        outcome: Any,
+        provider_receipt_id: str | None = None,
+        result_ref: str | None = None,
+    ) -> Any:
+        from moonmind.omnigent.control_plane.turn_commands import (
+            CanonicalTurnCommandService,
+        )
+
+        return await CanonicalTurnCommandService(self._control_plane_store).settle(
+            workflow_id=workflow_id,
+            idempotency_key=idempotency_key,
+            outcome=outcome,
+            provider_receipt_id=provider_receipt_id,
+            result_ref=result_ref,
+        )
 
     async def list_embedded_host_readiness(self) -> list[dict[str, Any]]:
         """Return bounded, non-secret readiness for active embedded host leases."""
@@ -984,33 +1047,49 @@ class OmnigentBridgeSessionStore:
         """Persist lease-authorized routing before provider session creation."""
 
         if effective_launch_snapshot is not None:
-            authority = effective_launch_snapshot.get("policyAuthority")
-            if not isinstance(authority, dict):
-                raise OmnigentIdempotencyError(
-                    "bridge authorization requires policy authority evidence"
+            execution_plan_ref = str(
+                effective_launch_snapshot.get("executionPlanRef") or ""
+            ).strip()
+            if execution_plan_ref:
+                runtime_binding_ref = str(
+                    effective_launch_snapshot.get("runtimeBindingRef") or ""
+                ).strip()
+                if not execution_plan_ref.startswith(
+                    "omnigent-execution-plan:sha256:"
+                ) or not runtime_binding_ref.startswith(
+                    "omnigent-runtime-binding:sha256:"
+                ):
+                    raise OmnigentIdempotencyError(
+                        "bridge generic execution authority is incomplete"
+                    )
+            else:
+                authority = effective_launch_snapshot.get("policyAuthority")
+                if not isinstance(authority, dict):
+                    raise OmnigentIdempotencyError(
+                        "bridge authorization requires policy authority evidence"
+                    )
+                required_authority = {
+                    "policyId",
+                    "policyVersion",
+                    "policyRef",
+                    "policyDigest",
+                    "snapshotRef",
+                    "validation",
+                }
+                missing_authority = sorted(
+                    key for key in required_authority if not authority.get(key)
                 )
-            required_authority = {
-                "policyId",
-                "policyVersion",
-                "policyRef",
-                "policyDigest",
-                "snapshotRef",
-                "validation",
-            }
-            missing_authority = sorted(
-                key for key in required_authority if not authority.get(key)
-            )
-            if missing_authority:
-                raise OmnigentIdempotencyError(
-                    "bridge authorization policy authority is incomplete: "
-                    + ", ".join(missing_authority)
-                )
-            if effective_launch_snapshot.get("launchPolicyRef") != authority.get(
-                "policyRef"
-            ):
-                raise OmnigentIdempotencyError(
-                    "bridge launch policy does not match persisted policy authority"
-                )
+                if missing_authority:
+                    raise OmnigentIdempotencyError(
+                        "bridge authorization policy authority is incomplete: "
+                        + ", ".join(missing_authority)
+                    )
+                if effective_launch_snapshot.get("launchPolicyRef") != authority.get(
+                    "policyRef"
+                ):
+                    raise OmnigentIdempotencyError(
+                        "bridge launch policy does not match persisted policy authority"
+                    )
 
         await self.get_or_create(
             request=request,

@@ -20,7 +20,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from moonmind.omnigent.harness_platform.execution_plan import OmnigentExecutionPlanEnvelope
+from moonmind.omnigent.harness_platform.execution_plan import (
+    OmnigentExecutionPlanEnvelope,
+    execution_support_identity,
+)
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 
 
@@ -85,7 +88,12 @@ class CodexProfileBoundRealizer:
                 artifact_gateway=artifact_gateway,
                 execution_plan=plan,
             )
-            return await coordinator.execute(request)
+            result = await coordinator.execute(request)
+            return await self._bind_result_authority(
+                request=request,
+                plan=plan,
+                result=result,
+            )
 
         async with httpx.AsyncClient() as http_client:
             omnigent_client = OmnigentHttpClient(
@@ -113,12 +121,51 @@ class CodexProfileBoundRealizer:
                 artifact_gateway=artifact_gateway,
                 execution_plan=plan,
             )
-            return await coordinator.execute(request)
+            result = await coordinator.execute(request)
+            return await self._bind_result_authority(
+                request=request,
+                plan=plan,
+                result=result,
+            )
+
+    async def _bind_result_authority(
+        self,
+        *,
+        request: AgentExecutionRequest,
+        plan: OmnigentExecutionPlanEnvelope,
+        result: AgentRunResult,
+    ) -> AgentRunResult:
+        """Project plan identity without replacing Codex lifecycle authority."""
+
+        request_plan_ref = str(
+            (request.parameters or {}).get("executionPlanRef") or ""
+        ).strip()
+        if request_plan_ref != plan.planRef:
+            from moonmind.omnigent.harness_platform.failures import (
+                HarnessPlatformError,
+                HarnessPlatformFailure,
+            )
+
+            raise HarnessPlatformError(
+                "Codex request does not name the admitted execution plan",
+                code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
+            )
+        metadata = dict(result.metadata or {})
+        metadata["executionPlanRef"] = plan.planRef
+        metadata["supportCombinationIdentity"] = execution_support_identity(plan)
+        capture = dict(metadata.get("omnigentCheckpointCapture") or {})
+        if capture:
+            capture["executionPlanRef"] = plan.planRef
+        if capture:
+            metadata["omnigentCheckpointCapture"] = capture
+        return result.model_copy(update={"metadata": metadata})
 
     async def reconcile(
         self,
         plan_ref: str,
         runtime_binding_ref: str | None,
+        *,
+        command_authority: dict[str, object],
     ) -> None:
         # Janitor delegates to existing cleanup; no-op for now
         return None

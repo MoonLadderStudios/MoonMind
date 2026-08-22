@@ -83,9 +83,7 @@ from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
-)
-from api_service.services.omnigent_agent_bootstrap_service import (
-    BOOTSTRAP_PROFILE_ID,
+    resolve_default_agent_profile_snapshot,
 )
 from api_service.services.control_stop_continuation import (
     SqlControlStopContinuationRepository,
@@ -11189,42 +11187,29 @@ async def _create_execution_from_workflow_request(
     selected_provider_profile = None
     if agent_profile_selection is None and isinstance(runtime_payload, Mapping):
         agent_profile_selection = runtime_payload.get("agentProfile")
-    authored_omnigent = payload.get("omnigent")
     if (
-        agent_profile_selection is None
-        and canonical_target_runtime == "omnigent"
-        and isinstance(authored_omnigent, Mapping)
-        and str(authored_omnigent.get("executionTargetRef") or "").strip()
-        == "omnigent-codex@1"
+        agent_profile_selection is not None
+        and canonical_target_runtime != "omnigent"
     ):
-        default_codex_profile = await _load_default_provider_profile_for_runtime(
-            session=session,
-            runtime_id="codex_cli",
+        raise _invalid_workflow_request(
+            "agentProfile is supported only for targetRuntime='omnigent'."
         )
-        if default_codex_profile is None:
-            raise _invalid_workflow_request(
-                "The managed Codex Omnigent path requires an enabled default "
-                "codex_cli Provider Profile."
-            )
-        agent_profile_selection = {
-            "profileId": BOOTSTRAP_PROFILE_ID,
-            "providerProfileRef": default_codex_profile.profile_id,
-        }
-    if agent_profile_selection is not None:
-        if canonical_target_runtime != "omnigent":
-            raise _invalid_workflow_request(
-                "agentProfile is supported only for targetRuntime='omnigent'."
-            )
-        if not isinstance(agent_profile_selection, Mapping):
+    if canonical_target_runtime == "omnigent":
+        if agent_profile_selection is not None and not isinstance(
+            agent_profile_selection, Mapping
+        ):
             raise _invalid_workflow_request("agentProfile must be an object.")
-        agent_profile_selection = dict(agent_profile_selection)
+        explicit_agent_profile = agent_profile_selection is not None
+        if explicit_agent_profile:
+            agent_profile_selection = dict(agent_profile_selection)
+        authored_omnigent = payload.get("omnigent")
         authored_launch_policy_ref = (
             str(authored_omnigent.get("launchPolicyRef") or "").strip()
             if isinstance(authored_omnigent, Mapping)
             else ""
         )
         selected_launch_policy_ref = str(
-            agent_profile_selection.get("launchPolicyRef") or ""
+            (agent_profile_selection or {}).get("launchPolicyRef") or ""
         ).strip()
         if (
             authored_launch_policy_ref
@@ -11234,17 +11219,32 @@ async def _create_execution_from_workflow_request(
             raise _invalid_workflow_request(
                 "agentProfile.launchPolicyRef must match omnigent.launchPolicyRef."
             )
-        if authored_launch_policy_ref:
+        if authored_launch_policy_ref and explicit_agent_profile:
             agent_profile_selection["launchPolicyRef"] = (
                 authored_launch_policy_ref
             )
-        profile_snapshot = await resolve_agent_profile_snapshot(
-            session,
-            selection=agent_profile_selection,
-            consumer_type=("remediation" if task_payload.get("remediation") else "workflow"),
-            consumer_id=reserved_workflow_id,
-            user=user,
+        consumer_type = (
+            "remediation" if task_payload.get("remediation") else "workflow"
         )
+        if explicit_agent_profile:
+            profile_snapshot = await resolve_agent_profile_snapshot(
+                session,
+                selection=agent_profile_selection,
+                consumer_type=consumer_type,
+                consumer_id=reserved_workflow_id,
+                user=user,
+            )
+        else:
+            profile_snapshot = await resolve_default_agent_profile_snapshot(
+                session,
+                provider_profile_ref=(
+                    raw_profile_id if _provider_profile is not None else None
+                ),
+                launch_policy_ref=authored_launch_policy_ref or None,
+                consumer_type=consumer_type,
+                consumer_id=reserved_workflow_id,
+                user=user,
+            )
         authored_execution_target_ref = (
             str(authored_omnigent.get("executionTargetRef") or "").strip()
             if isinstance(authored_omnigent, Mapping)
@@ -17965,7 +17965,6 @@ async def rerun_execution(
             consumer_id=reserved_workflow_id,
             user=user,
         )
-
     # Generate a new idempotency key based on the original workflow ID
     new_idempotency_key = f"rerun:{workflow_id}:{_uuid4()}"
 

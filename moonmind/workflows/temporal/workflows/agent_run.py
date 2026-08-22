@@ -234,6 +234,9 @@ OMNIGENT_SESSION_ADMISSION_PATCH_ID = (
 OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID = (
     "agent-run-omnigent-compact-resolve-intent-v1"
 )
+OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
+    "agent-run-omnigent-execution-plan-admission-v1"
+)
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID = (
     "agent-run-managed-status-rollout-tolerance-v1"
@@ -4349,6 +4352,9 @@ class MoonMindAgentRun:
         use_compact_omnigent_resolve_intent = workflow.patched(
             OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID
         )
+        use_omnigent_execution_plan_admission = workflow.patched(
+            OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID
+        )
         requested_execution_profile_ref = request.execution_profile_ref
         resiliency_policy: Mapping[str, Any] = {}
         if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
@@ -5146,6 +5152,17 @@ class MoonMindAgentRun:
                                     ),
                                     omnigentExecutionPlan=(
                                         request.omnigent_execution_plan
+                                    ),
+                                    executionPlanRef=(
+                                        str(
+                                            (request.parameters or {}).get(
+                                                "executionPlanRef"
+                                            )
+                                            or ""
+                                        ).strip()
+                                        or None
+                                        if use_omnigent_execution_plan_admission
+                                        else None
                                     ),
                                 ).model_dump(mode="json", by_alias=True),
                                 cancellation_type=(

@@ -975,9 +975,9 @@ def build_default_activity_catalog(
         TemporalActivityDefinition(
             activity_type="integration.omnigent.execute",
             family="integration",
-            capability_class="integration:omnigent",
-            task_queue=cfg.activity_integrations_task_queue,
-            fleet=INTEGRATIONS_FLEET,
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(
                 3600, 3700, heartbeat_timeout_seconds=120
             ),

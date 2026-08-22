@@ -8,7 +8,7 @@ import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from pydantic import ValidationError
@@ -305,7 +305,7 @@ def test_admission_contract_is_frozen_compact_and_fail_closed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_bound_admission_rejects_current_host_image_drift(
+async def test_plan_bound_admission_uses_persisted_host_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     binding = OmnigentExecutionPlanBinding(
@@ -341,9 +341,15 @@ async def test_plan_bound_admission_rejects_current_host_image_drift(
         "_load_verified_execution_plan",
         AsyncMock(return_value=plan),
     )
+    validate_support = Mock()
+    monkeypatch.setattr(
+        omnigent_session_activities,
+        "_validate_plan_support_authority",
+        validate_support,
+    )
 
-    with pytest.raises(ValueError, match="Host Class image"):
-        await omnigent_session_activities.omnigent_evaluate_session_admission_activity(
+    decision = await (
+        omnigent_session_activities.omnigent_evaluate_session_admission_activity(
             OmnigentSessionAdmissionRequest(
                 workflowId="workflow-1",
                 stepExecutionId="step-1",
@@ -352,6 +358,10 @@ async def test_plan_bound_admission_rejects_current_host_image_drift(
                 omnigentExecutionPlan=binding,
             ).model_dump(mode="json", by_alias=True)
         )
+    )
+
+    assert decision["admitted"] is True
+    validate_support.assert_called_once_with(plan)
 
 
 @pytest.mark.asyncio
@@ -637,9 +647,10 @@ def _exact_host_evidence_fixture() -> tuple[SimpleNamespace, dict[str, object]]:
     from moonmind.omnigent.harness_platform.catalog import (
         HarnessImplementationIdentity,
     )
-    from moonmind.omnigent.harness_platform.host_classes import get_host_class
 
-    host_class = get_host_class("omnigent-codex-current@1")
+    host_class_ref = "omnigent-codex-current@1"
+    host_image_ref = "ghcr.io/example/omnigent-host@sha256:" + "a" * 64
+    host_build_digest = "sha256:" + "b" * 64
     implementation = HarnessImplementationIdentity.model_validate(
         {
             "sourceKind": "core",
@@ -650,12 +661,13 @@ def _exact_host_evidence_fixture() -> tuple[SimpleNamespace, dict[str, object]]:
     )
     plan = SimpleNamespace(
         payload=SimpleNamespace(
-            hostClassRef=host_class.ref,
-            hostImageRef=None,
-            omnigentHostBuildDigest=None,
-            hostArchitecture=None,
+            hostClassRef=host_class_ref,
+            hostImageRef=host_image_ref,
+            omnigentHostBuildDigest=host_build_digest,
+            hostArchitecture="linux/amd64",
             harnessId="codex-native",
             harnessImplementationRef=implementation.implementation_ref(),
+            supportIdentity=SimpleNamespace(vendorRuntimeRefs=()),
             classAdmissionDecision={
                 "requiredSatisfied": [],
                 "preferredSatisfied": [],
@@ -684,9 +696,9 @@ def _exact_host_evidence_fixture() -> tuple[SimpleNamespace, dict[str, object]]:
         "workspaceResolution": {"workspaceId": "workspace-1"},
         "hostRegistrationEvidence": {
             "hostId": "host-1",
-            "imageRef": host_class.imageRef,
-            "omnigentVersion": host_class.omnigentVersion,
-            "omnigentBuildDigest": host_class.omnigentBuildDigest,
+            "imageRef": host_image_ref,
+            "omnigentVersion": "1.0.0",
+            "omnigentBuildDigest": host_build_digest,
             "harnessImplementation": implementation.model_dump(
                 mode="json", by_alias=True
             ),
@@ -1718,6 +1730,7 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
             return session
 
         async def bind_runtime_authority(self, _session_id: str, **_kwargs: object):
+            captured["boundRuntimeAuthority"] = dict(_kwargs)
             return session
 
     class FakeStore:
@@ -1736,12 +1749,17 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
             )
 
     class FakeDbSession:
+        reads = 0
+
         async def get(self, _model: object, _profile_id: str) -> object:
+            type(self).reads += 1
             return SimpleNamespace(
                 enabled=True,
                 auth_state="connected",
                 runtime_id="codex_cli",
-                credential_generation=4,
+                credential_generation=(
+                    3 if type(self).reads == 1 else 4
+                ),
             )
 
         async def __aenter__(self):
@@ -1806,3 +1824,4 @@ async def test_profile_lease_request_carries_owning_workflow_authority(
     )
     assert safe["workflowId"] == omnigent_session_workflow_id("oms_123")
     assert "canonicalSessionId" not in safe
+    assert captured["boundRuntimeAuthority"]["credential_generation"] == 4  # type: ignore[index]

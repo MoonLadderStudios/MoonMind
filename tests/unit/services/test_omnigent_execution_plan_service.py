@@ -184,8 +184,7 @@ async def test_product_boundary_persists_secret_free_plan_and_exact_realizer(
     if harness == "opencode-native":
         monkeypatch.setenv(
             "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
-            "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:"
-            + "7" * 64,
+            "ghcr.io/example/omnigent-host@sha256:" + "7" * 64,
         )
     artifacts = _ArtifactService()
     provider_id = f"provider-{harness}"

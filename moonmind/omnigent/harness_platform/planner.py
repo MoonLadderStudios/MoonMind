@@ -47,6 +47,7 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformFailure,
 )
 from moonmind.omnigent.harness_platform.host_classes import (
+    HostClass,
     get_host_class,
     get_launch_policy,
     validate_policy_for_host_class,
@@ -60,9 +61,9 @@ from moonmind.omnigent.harness_platform.skills import (
     validate_skill_refs_for_plan,
 )
 from moonmind.omnigent.harness_platform.support import (
+    SupportKeyPayload,
     compute_required_capabilities_digest,
     compute_support_combination_key,
-    SupportKeyPayload,
 )
 
 
@@ -70,7 +71,6 @@ from moonmind.omnigent.harness_platform.support import (
 def select_execution_realizer(
     *,
     harness_id: str,
-    agent_profile: OmnigentAgentProfileV2,
     is_codex: bool = False,
 ) -> str:
     """Select versioned execution realizer (section 6: executionRealizerRef is trusted planner only)."""
@@ -89,10 +89,12 @@ def compile_execution_plan(
     *,
     agent_profile: dict[str, Any] | OmnigentAgentProfileV2,
     harness_catalog: HarnessCatalogSnapshot,
+    freshness_catalog: HarnessCatalogSnapshot | None = None,
     trust_record: HarnessTrustRecord,
     resolved_skills: dict[str, Any] | ResolvedSkillSet,
     credential_binding_set: CredentialBindingSet,
     host_class_ref: str,
+    host_class: HostClass | None = None,
     launch_policy_ref: str,
     model_qualified_id: str | None,
     model_effort: str | None,
@@ -100,8 +102,8 @@ def compile_execution_plan(
     model_normalized_options: dict[str, Any],
     workflow_requirements: list[str] | None = None,
     bridge_capabilities: dict[str, bool] | None = None,
-    workspace_intent_ref: str = "workspace-intent:sha256:" + "a" * 64,
-    policy_snapshot_ref: str = "omnigent-policy:sha256:" + "b" * 64,
+    workspace_intent_ref: str | None = None,
+    policy_snapshot_ref: str | None = None,
     policy_snapshot_digest: str | None = None,
     effective_launch_snapshot_ref: str | None = None,
     effective_launch_snapshot_digest: str | None = None,
@@ -129,7 +131,9 @@ def compile_execution_plan(
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
         )
     # Verify catalog row's implementation digest matches trust (via implementationRef)
-    catalog_harness = next((h for h in harness_catalog.harnesses if h.id == profile.harness.id), None)
+    catalog_harness = next(
+        (h for h in harness_catalog.harnesses if h.id == profile.harness.id), None
+    )
     if catalog_harness is not None:
         expected_impl_ref = catalog_harness.implementation.implementation_ref()
         if expected_impl_ref != profile.harness.implementationRef:
@@ -162,10 +166,26 @@ def compile_execution_plan(
         )
     # Enforce catalog freshness at shared pre-lease planning boundary
     try:
-        from moonmind.omnigent.harness_platform.catalog import assert_catalog_fresh as _assert_fresh
-        _assert_fresh(harness_catalog)
+        from moonmind.omnigent.harness_platform.catalog import (
+            assert_catalog_fresh as _assert_fresh,
+            assert_catalog_refresh_attests as _assert_refresh,
+        )
+
+        if freshness_catalog is None:
+            _assert_fresh(harness_catalog)
+        else:
+            _assert_refresh(
+                authority=harness_catalog,
+                observation=freshness_catalog,
+                harness_id=profile.harness.id,
+                implementation_ref=profile.harness.implementationRef,
+            )
+    except HarnessPlatformError:
+        raise
     except Exception as exc:
-        raise HarnessPlatformError(str(exc), code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_STALE) from exc
+        raise HarnessPlatformError(
+            str(exc), code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_STALE
+        ) from exc
 
     # 4. Agent source already validated via profile parsing (discriminated)
 
@@ -175,34 +195,52 @@ def compile_execution_plan(
     # 6-7. Credential binding set
     required_slots = [s.id for s in profile.credentialSlots if not s.optional]
     declared_slots = [s.id for s in profile.credentialSlots]
-    validate_binding_set_for_plan(binding_set=credential_binding_set, required_slots=required_slots, declared_slots=declared_slots)
+    validate_binding_set_for_plan(
+        binding_set=credential_binding_set,
+        required_slots=required_slots,
+        declared_slots=declared_slots,
+    )
     # Validate each binding's materializer exists and is compatible with host class later
 
     # 8. Materializers + 9. Host Class + launch policy class-level admission
-    host_class = get_host_class(host_class_ref)
+    selected_host_class = host_class or get_host_class(host_class_ref)
+    if selected_host_class.ref != host_class_ref:
+        raise HarnessPlatformError(
+            f"selected Host Class {selected_host_class.ref} does not match {host_class_ref}",
+            code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+        )
     launch_policy = get_launch_policy(launch_policy_ref)
     # Reject launch policies outside the profile allowlist
-    if profile.allowedLaunchPolicyRefs and launch_policy_ref not in profile.allowedLaunchPolicyRefs:
+    if (
+        profile.allowedLaunchPolicyRefs
+        and launch_policy_ref not in profile.allowedLaunchPolicyRefs
+    ):
         raise HarnessPlatformError(
             f"launch policy {launch_policy_ref} not in profile allowlist {profile.allowedLaunchPolicyRefs}",
             code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
         )
 
     # Host class must declare the harness implementation
-    if not host_class.declares_harness(profile.harness.id, profile.harness.implementationRef):
+    if not selected_host_class.declares_harness(
+        profile.harness.id, profile.harness.implementationRef
+    ):
         raise HarnessPlatformError(
-            f"host class {host_class.ref} does not declare harness {profile.harness.id}",
+            f"host class {selected_host_class.ref} does not declare harness {profile.harness.id}",
             code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
         )
 
     # Policy must allow host class and integration mode
     # Derive integration mode from catalog capabilities
-    harness_record = next(h for h in harness_catalog.harnesses if h.id == profile.harness.id)
+    harness_record = next(
+        h for h in harness_catalog.harnesses if h.id == profile.harness.id
+    )
     integration_mode = harness_record.capabilities.integrationMode or "native-server"
-    materializer_refs = [b.materializerRef for b in credential_binding_set.bindings.values()]
+    materializer_refs = [
+        b.materializerRef for b in credential_binding_set.bindings.values()
+    ]
     validate_policy_for_host_class(
         policy=launch_policy,
-        host_class=host_class,
+        host_class=selected_host_class,
         harness_integration_mode=integration_mode,
         materializer_refs=materializer_refs,
     )
@@ -220,7 +258,9 @@ def compile_execution_plan(
         if slot_decl is not None:
             mat = get_materializer(binding.materializerRef)
             # Check acceptedAuthModels
-            if slot_decl.acceptedAuthModels and not any(am in mat.acceptedAuthModels for am in slot_decl.acceptedAuthModels):
+            if slot_decl.acceptedAuthModels and not any(
+                am in mat.acceptedAuthModels for am in slot_decl.acceptedAuthModels
+            ):
                 raise HarnessPlatformError(
                     f"materializer {binding.materializerRef} auth model {mat.acceptedAuthModels} not in slot {slot} accepted {slot_decl.acceptedAuthModels}",
                     code=HarnessPlatformFailure.OMNIGENT_PROVIDER_PROFILE_INCOMPATIBLE,
@@ -230,13 +270,16 @@ def compile_execution_plan(
         validate_binding_materializer(
             materializer_ref=binding.materializerRef,
             harness_implementation_ref=profile.harness.implementationRef,
+            harness_id=profile.harness.id,
             host_mode=host_mode_for_materializer,
         )
 
     # 10. Class-level capability admission
     wf_reqs = workflow_requirements or []
     prof_reqs = {
-        "required": list(profile.requirements.harness.required) + list(profile.requirements.moonmind.required) + list(profile.requirements.host.required),
+        "required": list(profile.requirements.harness.required)
+        + list(profile.requirements.moonmind.required)
+        + list(profile.requirements.host.required),
         "preferred": list(profile.requirements.harness.preferred),
     }
     catalog_caps: dict[str, Any] = {}
@@ -245,7 +288,9 @@ def compile_execution_plan(
             caps = h.capabilities.model_dump(by_alias=True, mode="json")
             catalog_caps = {k: v for k, v in caps.items() if v is not None}
             break
-    host_caps: dict[str, bool] = {k: bool(v) for k, v in host_class.features.items()}
+    host_caps: dict[str, bool] = {
+        k: bool(v) for k, v in selected_host_class.features.items()
+    }
     materializer_caps: dict[str, bool] = {}
     for ref in materializer_refs:
         try:
@@ -283,12 +328,17 @@ def compile_execution_plan(
     # Otherwise select via trusted policy
     trusted_realizer = select_execution_realizer(
         harness_id=profile.harness.id,
-        agent_profile=profile,
         is_codex=(profile.harness.id == "codex-native"),
     )
-    if execution_realizer_ref is not None and execution_realizer_ref != trusted_realizer:
+    if (
+        execution_realizer_ref is not None
+        and execution_realizer_ref != trusted_realizer
+    ):
         # Only allow codex-profile-bound@1 for codex harness explicitly via trusted path
-        if not (profile.harness.id == "codex-native" and execution_realizer_ref == "codex-profile-bound@1"):
+        if not (
+            profile.harness.id == "codex-native"
+            and execution_realizer_ref == "codex-profile-bound@1"
+        ):
             raise HarnessPlatformError(
                 f"execution realizer {execution_realizer_ref} not selectable for harness {profile.harness.id}",
                 code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
@@ -298,7 +348,10 @@ def compile_execution_plan(
         realizer = trusted_realizer
     # Validate realizer exists
     try:
-        from moonmind.omnigent.harness_platform.support import validate_realizer as _validate_realizer
+        from moonmind.omnigent.harness_platform.support import (
+            validate_realizer as _validate_realizer,
+        )
+
         _validate_realizer(realizer)
     except Exception as exc:
         raise HarnessPlatformError(
@@ -306,35 +359,51 @@ def compile_execution_plan(
             code=HarnessPlatformFailure.OMNIGENT_EXECUTION_REALIZER_UNAVAILABLE,
         ) from exc
 
-    required_caps_digest = compute_required_capabilities_digest(list(class_decision.requiredSatisfied))
+    required_caps_digest = compute_required_capabilities_digest(
+        list(class_decision.requiredSatisfied)
+    )
 
     # Include exact vendor runtime refs from Host Class entry for support key differentiation
     vendor_refs = []
-    for entry in host_class.declaredHarnessImplementations:
-        if entry.harnessId == profile.harness.id and entry.implementationRef == profile.harness.implementationRef:
+    for entry in selected_host_class.declaredHarnessImplementations:
+        if (
+            entry.harnessId == profile.harness.id
+            and entry.implementationRef == profile.harness.implementationRef
+        ):
             for dep in entry.runtimeDependencies:
                 # dep is dict with name, version, digest
-                vendor_refs.append(f"{dep.get('name')}@{dep.get('version')}#{dep.get('digest')}")
+                vendor_refs.append(
+                    f"{dep.get('name')}@{dep.get('version')}#{dep.get('digest')}"
+                )
             break
     # Full agent source identity (not just ID) to differentiate bundles with same ID but different version/content
     agent_source_full = profile.source.model_dump(by_alias=True, mode="json")
     # Use full source digest for support key to differentiate bundles
     import hashlib as _hashlib
     import json as _json
-    agent_source_ref = _json.dumps(agent_source_full, sort_keys=True, separators=(",", ":"))
-    agent_source_ref = "agent-source:sha256:" + _hashlib.sha256(agent_source_ref.encode()).hexdigest()
+
+    agent_source_ref = _json.dumps(
+        agent_source_full, sort_keys=True, separators=(",", ":")
+    )
+    agent_source_ref = (
+        "agent-source:sha256:" + _hashlib.sha256(agent_source_ref.encode()).hexdigest()
+    )
 
     support_payload = SupportKeyPayload.model_validate(
         {
             "omnigentServerBuildRef": harness_catalog.omnigentBuildDigest,
-            "omnigentHostBuildRef": host_class.omnigentBuildDigest,
+            "omnigentHostBuildRef": selected_host_class.omnigentBuildDigest,
             "harnessImplementationRef": profile.harness.implementationRef,
             "vendorRuntimeRefs": sorted(vendor_refs),
             "agentSourceRef": agent_source_ref,
             "materializerRefs": sorted(materializer_refs),
             "providerCompatibilityClass": credential_binding_set.bindingSetId,
-            "hostClassRef": host_class.ref,
-            "architecture": host_class.architectures[0] if host_class.architectures else "linux/amd64",
+            "hostClassRef": selected_host_class.ref,
+            "architecture": (
+                selected_host_class.architectures[0]
+                if selected_host_class.architectures
+                else "linux/amd64"
+            ),
             "launchPolicyRef": launch_policy.ref,
             "modelConfigDigest": model_digest,
             "executionRealizerRef": realizer,
@@ -354,6 +423,22 @@ def compile_execution_plan(
 
     # Agent source already normalized via profile.source
     agent_source_dict = profile.source.model_dump(by_alias=True, mode="json")
+    if workspace_intent_ref is None:
+        workspace_payload = _json.dumps(
+            profile.workspace, sort_keys=True, separators=(",", ":")
+        ).encode()
+        workspace_intent_ref = (
+            "workspace-intent:sha256:" + _hashlib.sha256(workspace_payload).hexdigest()
+        )
+    if policy_snapshot_ref is None:
+        policy_payload = _json.dumps(
+            launch_policy.model_dump(by_alias=True, mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        policy_snapshot_ref = (
+            "omnigent-policy:sha256:" + _hashlib.sha256(policy_payload).hexdigest()
+        )
 
     plan_payload = OmnigentExecutionPlanPayload.model_validate(
         {
@@ -368,8 +453,11 @@ def compile_execution_plan(
             "harnessImplementationRef": profile.harness.implementationRef,
             "agentSource": agent_source_dict,
             "credentialBindingSetRef": credential_binding_set.ref,
-            "credentialBindings": {slot: b.model_dump(by_alias=True, mode="json") for slot, b in credential_binding_set.bindings.items()},
-            "hostClassRef": host_class.ref,
+            "credentialBindings": {
+                slot: binding.model_dump(by_alias=True, mode="json")
+                for slot, binding in credential_binding_set.bindings.items()
+            },
+            "hostClassRef": selected_host_class.ref,
             "hostImageRef": host_image_ref,
             "omnigentHostBuildDigest": omnigent_host_build_digest,
             "hostArchitecture": host_architecture,
@@ -383,18 +471,38 @@ def compile_execution_plan(
                 "modelConfigDigest": model_digest,
             },
             "resolvedSkills": skills.model_dump(by_alias=True, mode="json"),
-            "classAdmissionDecision": class_decision.model_dump(by_alias=True, mode="json"),
+            "resolvedTools": {
+                "toolDeliveryRef": "tool-delivery:sha256:"
+                + _hashlib.sha256(
+                    _json.dumps(
+                        {
+                            "agentProfileSnapshotRef": profile.snapshot_ref(),
+                            "tools": sorted(profile.tools),
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode("utf-8")
+                ).hexdigest(),
+                "tools": sorted(profile.tools),
+            },
+            "classAdmissionDecision": class_decision.model_dump(
+                by_alias=True, mode="json"
+            ),
             "runtimeValidationRequirements": runtime_validation_requirements,
             "workspaceIntentRef": workspace_intent_ref,
+            "workspaceMutation": str(
+                profile.workspace.get("mutation") or "allowed"
+            ),
             "capturePolicyRef": capture_policy_ref,
+            "capturePolicy": dict(profile.capture),
             "policySnapshotRef": policy_snapshot_ref,
             "policySnapshotDigest": policy_snapshot_digest,
             "effectiveLaunchSnapshotRef": effective_launch_snapshot_ref,
             "effectiveLaunchSnapshotDigest": effective_launch_snapshot_digest,
+            "supportCombinationKey": support_key,
             "supportIdentity": support_payload.model_dump(
                 by_alias=True, mode="json"
             ),
-            "supportCombinationKey": support_key,
         }
     )
 

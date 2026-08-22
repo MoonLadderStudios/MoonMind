@@ -2944,8 +2944,15 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
 
 @pytest.mark.asyncio
 async def test_create_execution_removes_empty_normalized_depends_on_from_parameters(
-    tmp_path, mock_client_adapter
+    tmp_path,
+    mock_client_adapter,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    monkeypatch.setattr(
+        settings.workflow,
+        "moonspec_environment_blocked_publish_action",
+        "fail",
+    )
     async with temporal_db(tmp_path) as session:
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)

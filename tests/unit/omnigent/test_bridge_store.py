@@ -125,6 +125,39 @@ def _effective_launch() -> dict:
 
 
 @pytest.mark.asyncio
+async def test_generic_profile_authorization_persists_plan_and_binding(store) -> None:
+    request = _request("generic-authority", with_step=True)
+    launch = {
+        "executionPlanRef": "omnigent-execution-plan:sha256:" + "4" * 64,
+        "runtimeBindingRef": "omnigent-runtime-binding:sha256:" + "5" * 64,
+        "hostClassRef": "omnigent-opencode@1",
+        "launchPolicyRef": "omnigent-on-demand@1",
+        "executionRealizerRef": "generic-omnigent-host@1",
+    }
+
+    row = await store.bind_profile_authorization(
+        request=request,
+        endpoint_ref="default",
+        provider_profile_id="opencode-profile",
+        provider_lease_id="provider-lease-generic",
+        credential_generation=3,
+        host_binding_ref="host-binding-generic",
+        host_lease_ref="host-lease-generic",
+        omnigent_host_id="host-generic",
+        effective_launch_snapshot=launch,
+    )
+
+    assert row.effective_launch_snapshot_json == launch
+    claim = await store.claim_canonical_turn_command(
+        row=row,
+        command_type="message",
+        idempotency_key="generic-follow-up",
+        payload_digest="sha256:" + "6" * 64,
+    )
+    assert claim.owns_delivery is True
+
+
+@pytest.mark.asyncio
 async def test_stopped_lease_retry_retires_and_rebinds_cleanup_authority(
     store,
 ) -> None:

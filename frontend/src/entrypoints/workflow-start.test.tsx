@@ -972,6 +972,123 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
     expect(JSON.stringify(request)).not.toMatch(/hostId|volume|credential|registrationToken|image|network|mount/i);
   });
 
+  it("submits the exact generic v2 profile digest selected from readiness", async () => {
+    vi.mocked(navigateTo).mockClear();
+    const digest = `sha256:${"d".repeat(64)}`;
+    const genericProfiles = [{
+      profileId: "omnigent-opencode-default",
+      displayName: "OpenCode via Omnigent",
+      state: "active",
+      activeVersion: 1,
+      defaultForRuntime: true,
+      versions: [{
+        version: 1,
+        digest,
+        document: {
+          schemaVersion: "moonmind.omnigent-agent-profile.v2",
+          execution: {
+            defaultExecutionProfileRef: "omnigent-opencode-default@1",
+          },
+        },
+        validationResult: { ready: true },
+      }],
+    }];
+    const genericReadiness = {
+      schemaVersion: "moonmind.omnigent-execution-readiness.v3",
+      runtimeId: "omnigent",
+      displayName: "Omnigent",
+      executionTargets: [{
+        ref: "omnigent-opencode-default@1",
+        harnessId: "opencode-native",
+        agentProfileRef: {
+          profileId: "omnigent-opencode-default",
+          version: 1,
+          digest,
+        },
+        available: true,
+        supportTier: "experimental",
+        compatibleProviderProfiles: [{
+          profileId: "opencode-1",
+          label: "OpenCode Go",
+          providerId: "opencode-go",
+          runtimeId: "opencode",
+        }],
+        compatibleHostClasses: ["omnigent-opencode@1"],
+        policies: ["omnigent-on-demand@1"],
+        models: ["opencode-go/test-model"],
+        gateReasons: [],
+      }],
+    };
+
+    fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/omnigent/codex-catalog-readiness") {
+        return Promise.resolve({ ok: true, json: async () => readyOmnigentCatalog } as Response);
+      }
+      if (url === "/api/omnigent/execution-readiness") {
+        return Promise.resolve({ ok: true, json: async () => genericReadiness } as Response);
+      }
+      if (url === "/api/omnigent/agent-profiles") {
+        return Promise.resolve({ ok: true, json: async () => genericProfiles } as Response);
+      }
+      if (url.startsWith("/api/v1/provider-profiles")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => [{
+            profile_id: "opencode-1",
+            account_label: "OpenCode Go",
+            provider_id: "opencode-go",
+          }],
+        } as Response);
+      }
+      if (url === "/api/executions" && init?.method === "POST") {
+        return Promise.resolve({ ok: true, json: async () => ({ workflowId: "mm:opencode-created" }) } as Response);
+      }
+      if (url.startsWith("/api/github/branches")) {
+        return Promise.resolve(defaultBranchOptionsResponse());
+      }
+      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) } as Response);
+    });
+
+    renderWorkflowStartPage(omnigentPayload());
+    fireEvent.change(await screen.findByLabelText("Runtime"), {
+      target: { value: "omnigent" },
+    });
+    fireEvent.change(await screen.findByLabelText("Provider profile"), {
+      target: { value: "opencode-1" },
+    });
+    fireEvent.change(screen.getByLabelText("Instructions"), {
+      target: { value: "Read the repository through OpenCode." },
+    });
+    await waitFor(() => expect(
+      (screen.getByLabelText("Execution target") as HTMLSelectElement).value,
+    ).toBe("omnigent-opencode-default@1"));
+    const startButton = screen.getByRole("button", { name: "Start Workflow" });
+    await waitFor(() => expect((startButton as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(startButton);
+
+    await waitFor(() => expect(navigateTo).toHaveBeenCalledWith(
+      "/workflows/mm%3Aopencode-created?source=temporal",
+    ));
+    const createCall = fetchSpy.mock.calls.find(([url, options]) =>
+      String(url) === "/api/executions" &&
+      (options as RequestInit | undefined)?.method === "POST",
+    );
+    const request = JSON.parse(String((createCall?.[1] as RequestInit | undefined)?.body));
+    expect(request.payload.agentProfile).toEqual({
+      profileId: "omnigent-opencode-default",
+      version: 1,
+      digest,
+      providerProfileRef: "opencode-1",
+      launchPolicyRef: "omnigent-on-demand@1",
+    });
+    expect(request.payload.task.runtime.agentProfile).toEqual(request.payload.agentProfile);
+    expect(request.payload.omnigent).toEqual({
+      executionTargetRef: "omnigent-opencode-default@1",
+      launchPolicyRef: "omnigent-on-demand@1",
+    });
+  });
+
   it("synchronizes the execution target when the Agent Profile changes", async () => {
     const payload = omnigentPayload();
     const initialData = payload.initialData as {
@@ -1542,7 +1659,7 @@ describe("MoonLadderStudios/MoonMind#3451 Omnigent readiness", () => {
 
   it.each([
     ["deferred", "deferred_minutes", "Minutes from now", "5", { mode: "once" }],
-    ["once", "once", "Scheduled For", "2099-01-01T12:00", { mode: "once", scheduledFor: "2099-01-01T12:00:00.000Z" }],
+    ["once", "once", "Scheduled For", "2099-01-01T12:00", { mode: "once", scheduledFor: new Date("2099-01-01T12:00").toISOString() }],
     ["recurring", "recurring", "Cron Expression", "0 4 * * *", { mode: "recurring", cron: "0 4 * * *", timezone: "UTC" }],
   ])("preserves canonical Omnigent refs in %s schedule submissions", async (_label, mode, fieldLabel, fieldValue, expectedSchedule) => {
     fetchSpy.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {

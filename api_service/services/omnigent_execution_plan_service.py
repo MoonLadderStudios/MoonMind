@@ -18,6 +18,7 @@ from api_service.db.models import TemporalArtifactRetentionClass
 from pr_resolver_core import IMPLEMENTATION_CONTRACT
 from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
 from moonmind.omnigent.harness_platform.catalog import (
+    HarnessRecord,
     HarnessImplementationIdentity,
     TrustState,
     classify_harness_trust,
@@ -32,7 +33,10 @@ from moonmind.omnigent.harness_platform.execution_plan import (
 from moonmind.omnigent.execution_support_evidence import (
     load_protected_execution_support_evidence,
 )
-from moonmind.omnigent.harness_platform.host_classes import get_host_class
+from moonmind.omnigent.harness_platform.host_classes import (
+    HostClass,
+    OmnigentHostClassSelector,
+)
 from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
@@ -90,6 +94,14 @@ def _digest_ref(prefix: str, value: Any) -> str:
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
     ).encode("utf-8")
     return f"{prefix}:sha256:{hashlib.sha256(body).hexdigest()}"
+
+
+def _image_digest(image_ref: object, *, field_name: str) -> str:
+    value = str(image_ref or "").strip()
+    _prefix, separator, digest = value.rpartition("@sha256:")
+    if not separator or len(digest) != 64:
+        raise ValueError(f"{field_name} must be digest-pinned")
+    return "sha256:" + digest
 
 
 def _normalize_harness_id(value: Any) -> str:
@@ -476,7 +488,6 @@ async def compile_and_persist_execution_plan(
     config = _HARNESS_PRODUCT_CONFIG.get(harness_id)
     if config is None:
         raise ValueError(f"unsupported trusted Omnigent harness: {harness_id!r}")
-    host_class = get_host_class(config["hostClassRef"])
     provider_profile_ref = str(
         getattr(provider_profile, "profile_id", None)
         or agent_profile_snapshot.get("providerProfileRef")
@@ -546,14 +557,6 @@ async def compile_and_persist_execution_plan(
         artifact_class="omnigent.effective_launch_snapshot",
         payload=effective_launch,
     )
-    raw_architectures = effective_launch.get("architectures") or []
-    host_architecture = str(raw_architectures[0] if raw_architectures else "").strip()
-    if host_architecture and "/" not in host_architecture:
-        host_architecture = f"linux/{host_architecture}"
-    if not host_architecture or host_architecture not in host_class.architectures:
-        raise ValueError(
-            "launch policy architecture conflicts with the selected Host Class"
-        )
     implementation = HarnessImplementationIdentity.model_validate(
         {
             "sourceKind": "core",
@@ -563,6 +566,95 @@ async def compile_and_persist_execution_plan(
             "pluginEntryPoint": None,
         }
     )
+    omnigent_build_digest = _image_digest(
+        effective_launch.get("serverImageRef"),
+        field_name="effective launch serverImageRef",
+    )
+    harness_record = HarnessRecord.model_validate(
+        {
+            "id": harness_id,
+            "aliases": [],
+            "label": harness_id,
+            "implementation": implementation.model_dump(
+                mode="json", by_alias=True
+            ),
+            "runtimeRequirements": {},
+            "capabilities": {
+                "integrationMode": config["integrationMode"],
+                "authModel": config["authModel"],
+                "interrupt": True,
+                "streaming": True,
+            },
+            "setupSteps": [],
+        }
+    )
+    if harness_id == "codex-native":
+        architectures = [
+            value if "/" in value else f"linux/{value}"
+            for value in (
+                str(item).strip()
+                for item in (effective_launch.get("architectures") or [])
+            )
+            if value
+        ]
+        host_class = HostClass.model_validate(
+            {
+                "hostClassId": config["hostClassRef"].rpartition("@")[0],
+                "version": int(config["hostClassRef"].rpartition("@")[2]),
+                "imageRef": effective_launch.get("hostImageRef"),
+                "omnigentVersion": "1.0.0",
+                "omnigentBuildDigest": omnigent_build_digest,
+                "architectures": architectures,
+                "declaredHarnessImplementations": [
+                    {
+                        "harnessId": harness_id,
+                        "implementationRef": implementation.implementation_ref(),
+                        "runtimeDependencies": [],
+                    }
+                ],
+                "integrationModes": [config["integrationMode"]],
+                "materializerRefs": [config["materializerRef"]],
+                "features": {
+                    "git": True,
+                    "tmux": True,
+                    "bubblewrap": True,
+                    "workspaceBind": True,
+                    "readOnlyRoot": bool(effective_launch.get("readOnlyRoot")),
+                    "restrictedEgress": bool(
+                        effective_launch.get("enforcedEgress")
+                    ),
+                    "mountedSkills": True,
+                    "mountedTools": True,
+                },
+                "runtime": {
+                    "uid": int(effective_launch.get("runtimeUid") or 1000),
+                    "gid": int(effective_launch.get("runtimeGid") or 1000),
+                    "home": "/home/app",
+                },
+            }
+        )
+    else:
+        host_class = OmnigentHostClassSelector().select(
+            harness=harness_record,
+            omnigent_version="1.0.0",
+            omnigent_build_digest=omnigent_build_digest,
+            integration_mode=config["integrationMode"],
+            materializer_refs=[config["materializerRef"]],
+            requested_host_mode=str(effective_launch.get("hostMode") or ""),
+            requested_host_class_ref=config["hostClassRef"],
+        )
+    if host_class.imageRef != str(effective_launch.get("hostImageRef") or ""):
+        raise ValueError(
+            "effective launch host image conflicts with the selected Host Class"
+        )
+    raw_architectures = effective_launch.get("architectures") or []
+    host_architecture = str(raw_architectures[0] if raw_architectures else "").strip()
+    if host_architecture and "/" not in host_architecture:
+        host_architecture = f"linux/{host_architecture}"
+    if not host_architecture or host_architecture not in host_class.architectures:
+        raise ValueError(
+            "launch policy architecture conflicts with the selected Host Class"
+        )
     matching_entry = next(
         (
             entry
@@ -705,13 +797,22 @@ async def compile_and_persist_execution_plan(
         resolved_skills=resolved_skills,
         credential_binding_set=binding_set,
         host_class_ref=host_class.ref,
+        host_class=host_class,
         launch_policy_ref=launch_policy_ref,
         model_qualified_id=(
-            str(initial_parameters.get("model") or model_mapping.get("model") or "").strip()
+            str(
+                initial_parameters.get("model")
+                or model_mapping.get("model")
+                or ""
+            ).strip()
             or None
         ),
         model_effort=(
-            str(initial_parameters.get("effort") or model_mapping.get("effort") or "").strip()
+            str(
+                initial_parameters.get("effort")
+                or model_mapping.get("effort")
+                or ""
+            ).strip()
             or None
         ),
         model_route_ref=str(getattr(provider_profile, "provider_id", "") or "")

@@ -96,6 +96,7 @@ AgentRunState = Literal[
     "timed_out",
 ]
 FailureClass = Literal[
+    "configuration_error",
     "user_error",
     "integration_error",
     "execution_error",

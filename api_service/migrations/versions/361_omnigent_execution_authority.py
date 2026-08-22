@@ -1,8 +1,8 @@
 """Scope fenced runtime binding authority to one execution of a plan.
 
 Source: MoonLadderStudios/MoonMind#3706
-Revision ID: 359_omnigent_execution_authority
-Revises: 358_generic_host
+Revision ID: 361_omnigent_execution_authority
+Revises: 360_omnigent_authority
 Create Date: 2026-08-21
 """
 
@@ -14,8 +14,8 @@ import sqlalchemy as sa
 from alembic import op
 
 
-revision: str = "359_omnigent_execution_authority"
-down_revision: Union[str, None] = "358_generic_host"
+revision: str = "361_omnigent_execution_authority"
+down_revision: Union[str, None] = "360_omnigent_authority"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

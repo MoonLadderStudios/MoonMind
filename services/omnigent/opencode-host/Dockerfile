@@ -9,7 +9,10 @@
 #
 # See docs/Omnigent/OpenCodeHost.md for compatibility policy.
 
-ARG OMNIGENT_HOST_BASE_IMAGE=ghcr.io/omnigent-ai/omnigent-host:latest
+# Required: callers must resolve the upstream image to a repo digest before
+# building. An omitted argument intentionally makes FROM invalid/fail closed.
+ARG OMNIGENT_HOST_BASE_IMAGE
+ARG OMNIGENT_BUILD_DIGEST
 ARG OPENCODE_VERSION=1.18.11
 # Pinned compatibility range enforced at build time (inclusive lower, exclusive upper)
 # MoonMind supports opencode-ai >=1.17.7,<1.19.0 for the current Omnigent revision.
@@ -20,12 +23,16 @@ FROM ${OMNIGENT_HOST_BASE_IMAGE} AS base
 
 # Re-declare args after FROM
 ARG OPENCODE_VERSION
+ARG OMNIGENT_BUILD_DIGEST
 ARG OPENCODE_MIN_VERSION
 ARG OPENCODE_MAX_VERSION
 
 SHELL ["/bin/bash", "-e", "-u", "-o", "pipefail", "-c"]
 
 USER root
+
+RUN [[ "${OMNIGENT_BUILD_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || { echo "OMNIGENT_BUILD_DIGEST must be an exact sha256 build identity" >&2; exit 1; }
 
 # Install OpenCode CLI at image build time only.
 # The workflow launcher must never run npm install.
@@ -42,7 +49,7 @@ RUN npm config set fund false \
         || { echo "opencode version ${INSTALLED_VERSION} outside supported range ${OPENCODE_MIN_VERSION}..${OPENCODE_MAX_VERSION} (exclusive upper)" >&2; exit 1; } \
     && echo "opencode ${INSTALLED_VERSION} within supported range ${OPENCODE_MIN_VERSION} < ${OPENCODE_MAX_VERSION}" \
     && opencode --version \
-    && npm cache clean --force || true \
+    && (npm cache clean --force || true) \
     && echo "opencode host image ready"
 
 # Verify unrelated harness CLIs are not bundled solely for this path.
@@ -67,4 +74,5 @@ LABEL org.opencontainers.image.title="omnigent-host-opencode" \
       org.opencontainers.image.description="Dedicated Omnigent host with OpenCode CLI pinned to ${OPENCODE_VERSION}" \
       org.opencontainers.image.source="https://github.com/MoonLadderStudios/MoonMind" \
       moonmind.harness="opencode-native" \
+      moonmind.omnigent.build_digest="${OMNIGENT_BUILD_DIGEST}" \
       moonmind.opencode.version="${OPENCODE_VERSION}"

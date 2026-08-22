@@ -1,57 +1,197 @@
 [
   {
-    "id": 3828381449,
+    "id": 3833763098,
     "disposition": "addressed",
-    "rationale": "Added a distinct digest-pinned --opencode-host-image input, exported OMNIGENT_OPENCODE_HOST_IMAGE_REF for the run, gave each combination a code-owned host_image_key, and required every claimed combination to publish hostImageRef equal to that pinned images entry."
+    "rationale": "DbOmnigentHostLeaseRepository no longer inherits the in-memory implementation, so it has no uninitialized superclass state."
   },
   {
-    "id": 3828381452,
+    "id": 3833763118,
     "disposition": "addressed",
-    "rationale": "Cleanup expectations are now derived from the launch policy cleanup mode: remove requires live_host_stopped with liveResourcesRemoved true, drain requires live_host_drained with liveResourcesRemoved false, at both the cleanupReceipt and manifest cleanupOutcome gates."
+    "rationale": "DbRuntimeBindingStore no longer inherits the in-memory implementation, removing the invalid superclass initialization contract."
   },
   {
-    "id": 3828381455,
+    "id": 3833763123,
     "disposition": "addressed",
-    "rationale": "The cleanup receipt now compares the ordered step list directly against the combination's required step tuple instead of comparing sets with a release-last check."
+    "rationale": "The tool attestation shell probe is now assembled with an explicit join."
   },
   {
-    "id": 3828381462,
+    "id": 3833763133,
     "disposition": "addressed",
-    "rationale": "Report cases must now equal the code-owned workflow_chat_case_id set for the combination's four rows and reference exactly that row's evidence refs; passed must equal the row count and skipped must be zero."
+    "rationale": "The credential mount attestation shell probe is now assembled with an explicit join."
   },
   {
-    "id": 3828381466,
+    "id": 3833763140,
     "disposition": "addressed",
-    "rationale": "action() takes a log_id and the workflow_chat controller passes the combination id, so each combination retains its own workflow_chat-<row>-<combination>.log."
+    "rationale": "The provider-config volume attestation shell probe is now assembled with an explicit join."
   },
   {
-    "id": 3828381471,
+    "id": 3833763153,
     "disposition": "addressed",
-    "rationale": "providerProfileClass is now pinned by the claimed combination inventory (with the credential materializer ref required in bindingIdentity.materializerRefs), so evidence collected under one credential/provider authority class cannot qualify another."
+    "rationale": "The consumed OpenCode payload reference is explicitly deleted instead of assigning an unused empty value."
   },
   {
-    "id": 3828381477,
+    "id": 3833763164,
     "disposition": "addressed",
-    "rationale": "executionCreation is cross-checked against the matching browser trace event's method and normalized path before created_through_public_executions_api is derived."
+    "rationale": "The consumed provider-config payload reference is explicitly deleted instead of assigning an unused empty value."
   },
   {
-    "id": 3828381485,
-    "disposition": "addressed",
-    "rationale": "Denied capability enforcement observations are propagated into expected_denial_statuses, and the unit fixture now uses an independent enforcement request id instead of reusing one from denialAudit."
-  },
-  {
-    "id": 4990980963,
+    "id": 3833763178,
     "disposition": "not-applicable",
-    "rationale": "Informational Codex review summary body; no action requested."
+    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
   },
   {
-    "id": 3828381491,
-    "disposition": "addressed",
-    "rationale": "_write_workflow_chat_report takes an auth_mode; each per-combination report publishes the combination's code-owned auth mode (validated against the manifest) and the aggregate report names every mode it exercised."
+    "id": 3833763190,
+    "disposition": "not-applicable",
+    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
   },
   {
-    "id": 3828381495,
+    "id": 3833763202,
+    "disposition": "not-applicable",
+    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+  },
+  {
+    "id": 3833815223,
     "disposition": "addressed",
-    "rationale": "cross_user and cross_workflow denials must record authorized/attempted user and workflow identities, bind the authorized workflow to the session under test, and vary exactly the scope they claim to isolate."
+    "rationale": "The generic realizer now heartbeats both the CAS-fenced runtime binding and exact host lease throughout session execution, with regression coverage."
+  },
+  {
+    "id": 3833815227,
+    "disposition": "addressed",
+    "rationale": "Durable generic artifacts now attach an ExecutionRef built from the owning Step Execution."
+  },
+  {
+    "id": 3833815230,
+    "disposition": "addressed",
+    "rationale": "Unqualified Pi/provider-config enrollment is no longer exposed through the guided preset or API-key setup surface until pinned runtime evidence exists."
+  },
+  {
+    "id": 3833815237,
+    "disposition": "addressed",
+    "rationale": "Generic readiness now applies Agent Profile visibility and ownership filtering before compiling targets."
+  },
+  {
+    "id": 3833815241,
+    "disposition": "addressed",
+    "rationale": "integration.omnigent.execute now binds to the Docker- and workspace-capable agent-runtime fleet and handler implementation."
+  },
+  {
+    "id": 3833815244,
+    "disposition": "not-applicable",
+    "rationale": "The current branch already applies the shared Provider Profile visibility filter before explicit v2 profile selection, following the merge from main."
+  },
+  {
+    "id": 3833815247,
+    "disposition": "addressed",
+    "rationale": "The immutable plan now carries workspace mutation authority, the launcher mounts read-only workspaces read-only, and exact-host attestation verifies the mode."
+  },
+  {
+    "id": 3833815251,
+    "disposition": "addressed",
+    "rationale": "Planning retains the immutable catalog selection while requiring a fresh endpoint observation to attest the same endpoint, build, and exact implementation."
+  },
+  {
+    "id": 3833815255,
+    "disposition": "addressed",
+    "rationale": "OpenCode rotation validates candidate secret material and generation before updating the managed secret or durable profile authority."
+  },
+  {
+    "id": 3833815257,
+    "disposition": "addressed",
+    "rationale": "Validate and smoke dispatch v2 documents to a catalog-, source-, Host Class-, provider-, and model-aware v2 readiness implementation."
+  },
+  {
+    "id": 3833815262,
+    "disposition": "addressed",
+    "rationale": "Planning persists the capture policy, exact-host binding passes it to the session driver, and capture generation honors stream and evidence opt-outs."
+  },
+  {
+    "id": 4997551919,
+    "disposition": "not-applicable",
+    "rationale": "This is the automated review summary and contains no independent actionable finding."
+  },
+  {
+    "id": 3834451476,
+    "disposition": "not-applicable",
+    "rationale": "The ellipsis is the intentional abstract body of an async Protocol method and has no runtime implementation semantics."
+  },
+  {
+    "id": 3834654018,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654023,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654030,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654035,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654040,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834654046,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675516,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675523,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675531,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675538,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675542,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675545,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675548,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675553,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675556,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
+  },
+  {
+    "id": 3834675558,
+    "disposition": "addressed",
+    "rationale": "Replaced the Protocol ellipsis body with an explicit NotImplementedError contract."
   }
 ]

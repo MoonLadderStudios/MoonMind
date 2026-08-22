@@ -11,8 +11,6 @@ correctness backstop for lost terminal edges.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from datetime import datetime, timedelta
 from typing import Any, Mapping
 
@@ -21,6 +19,11 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import CancelledError
 
 with workflow.unsafe.imports_passed_through():
+    from moonmind.omnigent.control_plane.identities import (
+        canonical_omnigent_session_id,
+        canonical_omnigent_turn_attempt_id,
+        omnigent_session_workflow_id,
+    )
     from moonmind.omnigent.reconciler import (
         DecisionKind,
         DurableSessionState,
@@ -163,27 +166,6 @@ def _is_cancellation_failure(error: BaseException) -> bool:
         )
         current = cause if isinstance(cause, BaseException) else None
     return False
-
-
-def canonical_omnigent_session_id(
-    *, workflow_id: str, step_execution_id: str, agent_run_id: str
-) -> str:
-    """Return the canonical identity derived only from durable owner scope."""
-
-    authority = json.dumps(
-        ["omnigent-session/v1", workflow_id, step_execution_id, agent_run_id],
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return "oms_" + hashlib.sha256(authority).hexdigest()[:40]
-
-
-def canonical_omnigent_turn_attempt_id(session_id: str, ordinal: int = 1) -> str:
-    authority = f"omnigent-turn/v1:{session_id}:{ordinal}".encode("utf-8")
-    return "ota_" + hashlib.sha256(authority).hexdigest()[:40]
-
-
-def omnigent_session_workflow_id(session_id: str) -> str:
-    return f"omnigent-session:{session_id}"
 
 
 @workflow.defn(name=WORKFLOW_TYPE)

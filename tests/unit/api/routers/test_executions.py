@@ -4622,35 +4622,51 @@ def test_create_task_shaped_execution_rejects_unsupported_runtime_with_attachmen
     service.create_execution.assert_not_awaited()
 
 
-def test_create_task_shaped_execution_rejects_omnigent_without_agent_profile(
+def test_create_task_shaped_execution_rejects_missing_default_provider_profile(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:
     test_client, service, _user = client
     service.create_execution.return_value = _build_execution_record()
+    db_session = SimpleNamespace(get=AsyncMock(return_value=None))
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "profileId": "default",
+        "version": 1,
+        "digest": "sha256:" + "1" * 64,
+        "providerProfileRef": "codex-oauth-profile",
+        "executionProfileRef": "on-demand-docker",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "codex-native-ui",
+        "document": {"model": {}, "rag": {}, "capture": {}, "workspace": {}},
+    }
 
-    response = test_client.post(
-        "/api/executions",
-        json={
-            "type": "workflow",
-            "payload": {
-                "targetRuntime": "omnigent",
-                "omnigent": {
-                    "executionTargetRef": "on-demand-docker",
-                    "launchPolicyRef": "codex-on-demand@1",
-                },
-                "workflow": {
-                    "instructions": "Run through Omnigent.",
-                    "runtime": {
-                        "mode": "omnigent",
-                        "executionProfileRef": "codex-oauth-profile",
+    with patch(
+        "api_service.api.routers.executions.resolve_default_agent_profile_snapshot",
+        new=AsyncMock(return_value=snapshot),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "omnigent": {
+                        "executionTargetRef": "on-demand-docker",
+                        "launchPolicyRef": "codex-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run through Omnigent.",
+                        "runtime": {
+                            "mode": "omnigent",
+                            "executionProfileRef": "codex-oauth-profile",
+                        },
                     },
                 },
             },
-        },
-    )
+        )
 
     assert response.status_code == 422, response.text
-    assert "launch-ready agentProfile" in response.json()["detail"]["message"]
+    assert "Selected Provider Profile" in response.json()["detail"]["message"]
     service.create_execution.assert_not_awaited()
 
 
@@ -6654,11 +6670,7 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
     with (
         patch(
             "api_service.api.routers.executions."
-            "_load_default_provider_profile_for_runtime",
-            new=AsyncMock(return_value=provider_profile),
-        ),
-        patch(
-            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            "resolve_default_agent_profile_snapshot",
             new=profile_resolver,
         ),
         patch(
@@ -6714,11 +6726,9 @@ def test_create_workflow_omnigent_browser_payload_persists_canonical_intent(
     assert initial_parameters["omnigentExecutionPlan"]["planRef"] == (
         plan_binding.plan_ref
     )
-    assert profile_resolver.await_args.kwargs["selection"] == {
-        "profileId": "omnigent-bootstrap-default",
-        "providerProfileRef": "codex-openai-oauth",
-        "launchPolicyRef": "codex-on-demand@1",
-    }
+    assert profile_resolver.await_args.kwargs["launch_policy_ref"] == (
+        "codex-on-demand@1"
+    )
     assert initial_parameters["instructions"] == (
         "Make the bounded deterministic change."
     )

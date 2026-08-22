@@ -16,11 +16,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, uuid5
 
 from moonmind.config.settings import settings
 from moonmind.omnigent.execution_profiles import validate_effective_launch_snapshot
+from moonmind.omnigent.harness_platform.failures import HarnessPlatformError
 from moonmind.omnigent.mounted_tool_preflight import (
     MountedToolPreflightError,
     preflight_mounted_tools,
@@ -32,6 +32,10 @@ from moonmind.omnigent.oauth_hosts import (
     validate_preflight_result,
 )
 from moonmind.omnigent.settings import OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR
+from moonmind.omnigent.repository_sources import (
+    RepositorySourceError,
+    normalize_repository_source,
+)
 from moonmind.publish.service import PublishService
 from moonmind.repositories.lore_adapter import (
     LORE_UNSUPPORTED_RUNTIME_LANE,
@@ -57,15 +61,9 @@ from moonmind.security.container_job_capabilities import (
     mint_container_job_session_capability,
 )
 from moonmind.security.docker_networks import resolve_control_plane_network
-from moonmind.security.execution_fanout_capabilities import (
-    EXECUTION_FANOUT_REQUIRED_CAPABILITY,
-    ExecutionFanoutCapabilityError,
-    mint_execution_fanout_capability,
-    require_execution_fanout_authorization,
-)
 from moonmind.security.egress import (
-    EgressAttestation,
     OMNIGENT_EGRESS_PROFILE,
+    EgressAttestation,
     attest_docker_egress,
     attest_docker_workload_egress,
     omnigent_proxy_env,
@@ -73,6 +71,12 @@ from moonmind.security.egress import (
 from moonmind.security.egress_conformance_evidence import (
     parse_and_verify_conformance_evidence,
     serialize_conformance_evidence,
+)
+from moonmind.security.execution_fanout_capabilities import (
+    EXECUTION_FANOUT_REQUIRED_CAPABILITY,
+    ExecutionFanoutCapabilityError,
+    mint_execution_fanout_capability,
+    require_execution_fanout_authorization,
 )
 from moonmind.utils.logging import redact_sensitive_text
 from moonmind.workflows.adapters.github_service import GitHubService
@@ -162,6 +166,7 @@ class OmnigentEgressEvidenceRequestIdentity:
             "remediation": self.remediation_workspace is not None,
         }
 
+
 _TOOLS_PATH = "/opt/moonmind-tools/bin"
 _DEFAULT_HOST_PATH = (
     "/opt/venv/bin:/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin"
@@ -217,7 +222,6 @@ _PLACEHOLDER_DIGEST = "0" * 64
 _SAFE_NETWORK = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$")
 _SAFE_VOLUME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,254}$")
 _SAFE_STEP_EXECUTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,510}[A-Za-z0-9]$")
-_GITHUB_SLUG = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 # Bound restore-input materialization so a hostile or oversized artifact ref
 # cannot exhaust the authorized workspace before the host launches. The limit is
 # enforced both per ref and cumulatively across every accepted ref so the
@@ -382,9 +386,10 @@ class OmnigentOAuthHostRuntime:
                 compose_path = local_root / configured
         else:
             compose_path = local_root / "docker-compose.yaml"
-        project_name = os.getenv(
-            "MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind"
-        ).strip() or "moonmind"
+        project_name = (
+            os.getenv("MOONMIND_DEPLOYMENT_PROJECT_NAME", "moonmind").strip()
+            or "moonmind"
+        )
         if not _SAFE_NETWORK.fullmatch(project_name):
             raise OmnigentOAuthHostError(
                 "deployment Compose project identity is unsafe",
@@ -492,9 +497,7 @@ class OmnigentOAuthHostRuntime:
             args.extend(["-u", key])
         args.extend([host_image_ref, *adapter["login_command"]])
         try:
-            result = await asyncio.wait_for(
-                self._run(*args, check=False), timeout=60
-            )
+            result = await asyncio.wait_for(self._run(*args, check=False), timeout=60)
         except TimeoutError as exc:
             raise OmnigentOAuthHostError(
                 "OAuth credential validation timed out",
@@ -568,9 +571,7 @@ class OmnigentOAuthHostRuntime:
                 execution_fanout_authorization,
             )
         except ExecutionFanoutCapabilityError as exc:
-            raise OmnigentOAuthHostError(
-                str(exc), code="authorization_denied"
-            ) from exc
+            raise OmnigentOAuthHostError(str(exc), code="authorization_denied") from exc
         if (
             EXECUTION_FANOUT_REQUIRED_CAPABILITY in normalized_capabilities
             and not binding.host_launch_profile_ref
@@ -745,9 +746,10 @@ class OmnigentOAuthHostRuntime:
                             "durable egress cleanup authority does not match the launch",
                             code="OMNIGENT_EGRESS_CLEANUP_AUTHORITY_INVALID",
                         )
-                    launch_ref = str(
-                        existing_authority.get("launchEvidenceRef") or ""
-                    ).strip() or None
+                    launch_ref = (
+                        str(existing_authority.get("launchEvidenceRef") or "").strip()
+                        or None
+                    )
                 else:
                     provisional_launch = self._host_egress_evidence_payload(
                         binding=binding,
@@ -870,9 +872,7 @@ class OmnigentOAuthHostRuntime:
             validated = validate_preflight_result(
                 result=result,
                 binding=binding,
-                host_lease=host_lease.model_copy(
-                    update={"omnigent_host_id": host_id}
-                ),
+                host_lease=host_lease.model_copy(update={"omnigent_host_id": host_id}),
             )
             validated["workspacePath"] = result["workspacePath"]
             validated["activeSkillsPath"] = str(skill_projection)
@@ -1223,9 +1223,7 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_LAUNCH_EGRESS_UNATTESTED",
             ) from exc
 
-    async def _attest_server_image(
-        self, launch: Mapping[str, Any]
-    ) -> dict[str, str]:
+    async def _attest_server_image(self, launch: Mapping[str, Any]) -> dict[str, str]:
         """Bind the live Omnigent server container to its immutable image."""
 
         service = await self._run(
@@ -1235,7 +1233,9 @@ class OmnigentOAuthHostRuntime:
             "omnigent",
             check=False,
         )
-        container_ids = [item.strip() for item in service[1].splitlines() if item.strip()]
+        container_ids = [
+            item.strip() for item in service[1].splitlines() if item.strip()
+        ]
         if service[0] != 0 or len(container_ids) != 1:
             raise OmnigentOAuthHostError(
                 "live Omnigent server identity is unavailable",
@@ -1431,9 +1431,7 @@ class OmnigentOAuthHostRuntime:
     ) -> dict[str, Any]:
         host_mode = str(launch.get("hostMode") or "")
         remediation = evidence_request.remediation_workspace is not None
-        conformance_row = (
-            f"remediation_{host_mode}" if remediation else host_mode
-        )
+        conformance_row = f"remediation_{host_mode}" if remediation else host_mode
         policy_authority = launch.get("policyAuthority")
         payload = {
             "schemaVersion": 1,
@@ -1600,9 +1598,11 @@ class OmnigentOAuthHostRuntime:
                 str(adapter["compose_service"]),
                 check=False,
             )
-            identity = next(
-                (line.strip() for line in out.splitlines() if line.strip()), ""
-            ) if code == 0 else ""
+            identity = (
+                next((line.strip() for line in out.splitlines() if line.strip()), "")
+                if code == 0
+                else ""
+            )
             if not identity:
                 raise OmnigentOAuthHostError(
                     "static Omnigent host container could not be resolved for "
@@ -1650,14 +1650,16 @@ class OmnigentOAuthHostRuntime:
                 "effective launch snapshot reference is invalid",
                 code="OMNIGENT_EFFECTIVE_LAUNCH_INVALID",
             )
-        if (not _DIGEST_IMAGE.fullmatch(str(launch.get("hostImageRef") or ""))
-                or str(launch.get("hostImageRef")).endswith(_PLACEHOLDER_DIGEST)):
+        if not _DIGEST_IMAGE.fullmatch(str(launch.get("hostImageRef") or "")) or str(
+            launch.get("hostImageRef")
+        ).endswith(_PLACEHOLDER_DIGEST):
             raise OmnigentOAuthHostError(
                 "host image must be an immutable sha256 reference",
                 code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
             )
-        if (not _DIGEST_IMAGE.fullmatch(str(launch.get("serverImageRef") or ""))
-                or str(launch.get("serverImageRef")).endswith(_PLACEHOLDER_DIGEST)):
+        if not _DIGEST_IMAGE.fullmatch(str(launch.get("serverImageRef") or "")) or str(
+            launch.get("serverImageRef")
+        ).endswith(_PLACEHOLDER_DIGEST):
             raise OmnigentOAuthHostError(
                 "server image must be an immutable sha256 reference",
                 code="OMNIGENT_LAUNCH_IMAGE_UNREALIZABLE",
@@ -1670,12 +1672,19 @@ class OmnigentOAuthHostRuntime:
             )
         limits = launch.get("limits")
         required_limits = {
-            "cpuMillis", "memoryMiB", "processes", "timeoutSeconds",
+            "cpuMillis",
+            "memoryMiB",
+            "processes",
+            "timeoutSeconds",
             "temporaryStorageMiB",
         }
-        if not isinstance(limits, Mapping) or set(limits) != required_limits or any(
-            not isinstance(limits[key], int) or limits[key] <= 0
-            for key in required_limits
+        if (
+            not isinstance(limits, Mapping)
+            or set(limits) != required_limits
+            or any(
+                not isinstance(limits[key], int) or limits[key] <= 0
+                for key in required_limits
+            )
         ):
             raise OmnigentOAuthHostError(
                 "launch resource limits are incomplete or invalid",
@@ -1762,17 +1771,18 @@ class OmnigentOAuthHostRuntime:
         if hasattr(artifact_gateway, "read"):
             artifact_service = artifact_gateway
         else:
+
             class _GatewayArtifactService:
                 async def read(self, *, artifact_id: str, **_kwargs: Any):
                     payload = await artifact_gateway.read_bytes(artifact_id)
                     return {}, payload
 
             artifact_service = _GatewayArtifactService()
-        resolved_skillset = await load_resolved_skillset(
-            artifact_service, skillset_ref
-        )
+        resolved_skillset = await load_resolved_skillset(artifact_service, skillset_ref)
         digest = hashlib.sha256(workspace_key.encode("utf-8")).hexdigest()[:24]
-        projection_root = (self._workspace_root / ".skill-projections" / digest).resolve()
+        projection_root = (
+            self._workspace_root / ".skill-projections" / digest
+        ).resolve()
         active_snapshot = (
             projection_root
             / "runtime"
@@ -1930,9 +1940,7 @@ class OmnigentOAuthHostRuntime:
                         os.close(descriptor)
                         temporary = Path(temporary_name)
                         try:
-                            temporary.write_text(
-                                secret_value + "\n", encoding="utf-8"
-                            )
+                            temporary.write_text(secret_value + "\n", encoding="utf-8")
                             temporary.chmod(0o444)
                             os.replace(temporary, capability_dir / filename)
                         finally:
@@ -1976,9 +1984,10 @@ class OmnigentOAuthHostRuntime:
             if staging.is_dir():
                 shutil.rmtree(staging)
 
-        if any(not (target / name).is_file() for name in required_scripts) or not (
-            target / "moonmind-execution.sh"
-        ).is_file():
+        if (
+            any(not (target / name).is_file() for name in required_scripts)
+            or not (target / "moonmind-execution.sh").is_file()
+        ):
             raise OmnigentOAuthHostError(
                 "Omnigent runtime script snapshot is incomplete",
                 code="OMNIGENT_RUNTIME_SCRIPTS_UNAVAILABLE",
@@ -2031,11 +2040,12 @@ class OmnigentOAuthHostRuntime:
             for key, value in supplied.items()
             if key not in _SECRET_RUNTIME_ENV_NAMES
         }
-        for secret_name, (file_env_name, filename) in _RUNTIME_CAPABILITY_FILE_ENV.items():
+        for secret_name, (
+            file_env_name,
+            filename,
+        ) in _RUNTIME_CAPABILITY_FILE_ENV.items():
             if str(supplied.get(secret_name) or "").strip():
-                visible[file_env_name] = (
-                    f"{_RUNTIME_CAPABILITY_MOUNT_ROOT}/{filename}"
-                )
+                visible[file_env_name] = f"{_RUNTIME_CAPABILITY_MOUNT_ROOT}/{filename}"
         return visible
 
     def _prepare_daemon_runtime_scripts(
@@ -2057,36 +2067,22 @@ class OmnigentOAuthHostRuntime:
 
     async def _resolve_daemon_workspace_root(self) -> Path | None:
         """Resolve the named workspace volume in the selected Docker daemon."""
-
-        mode = os.getenv("WORKFLOW_DOCKER_DAEMON_MODE", "").strip().lower()
-        if mode in {"", "local"}:
-            return None
-        if mode != "remote":
-            raise OmnigentOAuthHostError(
-                "Docker daemon mode is unsupported for Omnigent host launch",
-                code="OMNIGENT_DAEMON_WORKSPACE_UNAVAILABLE",
-            )
-        if not _SAFE_VOLUME.fullmatch(self._workspace_volume):
-            raise OmnigentOAuthHostError(
-                "agent workspace volume identity is missing or unsafe",
-                code="OMNIGENT_DAEMON_WORKSPACE_UNAVAILABLE",
-            )
-        result = await self._run(
-            "docker",
-            "volume",
-            "inspect",
-            "--format",
-            "{{.Mountpoint}}",
-            self._workspace_volume,
-            check=False,
+        from moonmind.omnigent.host_services.workspace import (
+            resolve_daemon_workspace_root,
         )
-        mountpoint = result[1].strip() if result[0] == 0 else ""
-        if not mountpoint or not Path(mountpoint).is_absolute():
-            raise OmnigentOAuthHostError(
-                "agent workspace volume mountpoint is unavailable from the selected Docker daemon",
-                code="OMNIGENT_DAEMON_WORKSPACE_UNAVAILABLE",
+
+        async def runner(argv: list[str]) -> tuple[int, str, str]:
+            return await self._run(*argv, check=False)
+
+        try:
+            return await resolve_daemon_workspace_root(
+                runner=runner,
+                workspace_volume=self._workspace_volume,
             )
-        return Path(mountpoint).resolve()
+        except HarnessPlatformError as exc:
+            raise OmnigentOAuthHostError(
+                str(exc), code="OMNIGENT_DAEMON_WORKSPACE_UNAVAILABLE"
+            ) from exc
 
     async def stop_host(
         self,
@@ -2097,9 +2093,7 @@ class OmnigentOAuthHostRuntime:
         egress_evidence: Mapping[str, Any] | None = None,
         launch_evidence_ref: str | None = None,
         evidence_request: (
-            AgentExecutionRequest
-            | OmnigentEgressEvidenceRequestIdentity
-            | None
+            AgentExecutionRequest | OmnigentEgressEvidenceRequestIdentity | None
         ) = None,
         artifact_gateway: Any | None = None,
     ) -> dict[str, Any]:
@@ -2143,12 +2137,8 @@ class OmnigentOAuthHostRuntime:
         if not binding.host_launch_profile_ref:
             container_name = host_lease.container_name
             if container_name and await self._container_present(container_name):
-                await self._assert_container_owned(
-                    container_name, host_lease.lease_id
-                )
-                await self._run(
-                    "docker", "rm", "-f", container_name, check=False
-                )
+                await self._assert_container_owned(container_name, host_lease.lease_id)
+                await self._run("docker", "rm", "-f", container_name, check=False)
             await self.stop_static_host(binding=binding)
             cleanup_result = "drained_owned_static_host"
             container_present = bool(
@@ -2229,9 +2219,7 @@ class OmnigentOAuthHostRuntime:
         result: dict[str, Any] = {
             "cleanupResult": cleanup_result if cleanup_ok else "failed",
             "reconciliationResult": "succeeded" if cleanup_ok else "required",
-            "cleanupValidatedAt": datetime.now(UTC).isoformat().replace(
-                "+00:00", "Z"
-            ),
+            "cleanupValidatedAt": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "attachmentIdentity": attachment_identity,
             "launchEvidenceRef": launch_evidence_ref,
             "resourceCleanup": resource_cleanup,
@@ -2351,18 +2339,19 @@ class OmnigentOAuthHostRuntime:
             return []
         return [line.strip() for line in result[1].splitlines() if line.strip()]
 
-    async def managed_container_host_lease_ref(
-        self, container_name: str
-    ) -> str | None:
+    async def managed_container_host_lease_ref(self, container_name: str) -> str | None:
         """Return the durable lease identity carried by a managed container."""
 
         result = await self._run(
-            "docker", "inspect", "--format",
+            "docker",
+            "inspect",
+            "--format",
             (
                 '{{index .Config.Labels "moonmind.kind"}}|'
                 '{{index .Config.Labels "moonmind.host_lease_id"}}'
             ),
-            container_name, check=False,
+            container_name,
+            check=False,
         )
         if result[0] != 0:
             return None
@@ -2377,8 +2366,12 @@ class OmnigentOAuthHostRuntime:
     async def remove_container(self, container_name: str) -> None:
         # Janitor discovery is label-scoped; never accept an arbitrary name.
         result = await self._run(
-            "docker", "inspect", "--format",
-            "{{index .Config.Labels \"moonmind.kind\"}}", container_name, check=False,
+            "docker",
+            "inspect",
+            "--format",
+            '{{index .Config.Labels "moonmind.kind"}}',
+            container_name,
+            check=False,
         )
         if result[0] != 0:
             return
@@ -2445,7 +2438,7 @@ class OmnigentOAuthHostRuntime:
             "docker",
             "inspect",
             "--format",
-            "{{index .Config.Labels \"moonmind.host_lease_id\"}}",
+            '{{index .Config.Labels "moonmind.host_lease_id"}}',
             container_name,
             check=False,
         )
@@ -2503,11 +2496,19 @@ class OmnigentOAuthHostRuntime:
             "moonmind.credential_generation": str(host_lease.credential_generation),
             "moonmind.expires_at": host_lease.expires_at.isoformat(),
             "moonmind.effective_launch_ref": str(effective_launch["snapshotRef"]),
-            "moonmind.capture_required": str(effective_launch["capture"]["required"]).lower(),
-            "moonmind.capture_retention_days": str(effective_launch["capture"]["retentionDays"]),
+            "moonmind.capture_required": str(
+                effective_launch["capture"]["required"]
+            ).lower(),
+            "moonmind.capture_retention_days": str(
+                effective_launch["capture"]["retentionDays"]
+            ),
             "moonmind.cleanup_mode": str(effective_launch["cleanup"]["mode"]),
-            "moonmind.control_capabilities": ",".join(effective_launch["controlCapabilities"]),
-            "moonmind.timeout_seconds": str(effective_launch["limits"]["timeoutSeconds"]),
+            "moonmind.control_capabilities": ",".join(
+                effective_launch["controlCapabilities"]
+            ),
+            "moonmind.timeout_seconds": str(
+                effective_launch["limits"]["timeoutSeconds"]
+            ),
             "moonmind.egress.profile": egress_attestation.profile_ref,
             "moonmind.egress.profile_digest": egress_attestation.profile_digest,
             "moonmind.egress.applied_rule_digest": (
@@ -2575,8 +2576,7 @@ class OmnigentOAuthHostRuntime:
             "--env",
             f"OMNIGENT_SERVER_URL={self._server_url}",
             "--env",
-            "MOONMIND_ACTIVE_SKILLS_DIR="
-            f"{OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR}",
+            "MOONMIND_ACTIVE_SKILLS_DIR=" f"{OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR}",
             "--env",
             f"MOONMIND_STEP_EXECUTION_ID={current_step_execution_id}",
             "--env",
@@ -2675,9 +2675,7 @@ class OmnigentOAuthHostRuntime:
                 "Omnigent container jobs require an agent run identity",
                 code="OMNIGENT_CONTAINER_JOB_AUTHORITY_UNAVAILABLE",
             )
-        moonmind_url = str(
-            os.environ.get("MOONMIND_URL") or "http://api:8000"
-        ).strip()
+        moonmind_url = str(os.environ.get("MOONMIND_URL") or "http://api:8000").strip()
         if not moonmind_url:
             raise OmnigentOAuthHostError(
                 "MoonMind API URL is unavailable for Omnigent container jobs",
@@ -2694,9 +2692,7 @@ class OmnigentOAuthHostRuntime:
                 execution_fanout_authorization,
             )
         except ExecutionFanoutCapabilityError as exc:
-            raise OmnigentOAuthHostError(
-                str(exc), code="authorization_denied"
-            ) from exc
+            raise OmnigentOAuthHostError(str(exc), code="authorization_denied") from exc
         environment = {
             "MOONMIND_URL": moonmind_url,
             "MOONMIND_AGENT_RUN_ID": agent_run_id,
@@ -2755,9 +2751,12 @@ class OmnigentOAuthHostRuntime:
 
     async def _assert_container_owned(self, container_name: str, lease_id: str) -> None:
         result = await self._run(
-            "docker", "inspect", "--format",
-            "{{index .Config.Labels \"moonmind.host_lease_id\"}}",
-            container_name, check=False,
+            "docker",
+            "inspect",
+            "--format",
+            '{{index .Config.Labels "moonmind.host_lease_id"}}',
+            container_name,
+            check=False,
         )
         if result[0] != 0 or result[1].strip() != lease_id:
             raise OmnigentOAuthHostError(
@@ -3200,8 +3199,14 @@ class OmnigentOAuthHostRuntime:
         checked_out = start or None
         if commit:
             code, _out, err = await self._run(
-                "git", "-C", str(workspace), "checkout", "--detach", commit,
-                env=git_env, check=False,
+                "git",
+                "-C",
+                str(workspace),
+                "checkout",
+                "--detach",
+                commit,
+                env=git_env,
+                check=False,
             )
             if code != 0:
                 raise OmnigentOAuthHostError(
@@ -3211,13 +3216,25 @@ class OmnigentOAuthHostRuntime:
             checked_out = commit
         elif start and source_kind == "local":
             code, _out, _err = await self._run(
-                "git", "-C", str(workspace), "checkout", start,
-                env=git_env, check=False,
+                "git",
+                "-C",
+                str(workspace),
+                "checkout",
+                start,
+                env=git_env,
+                check=False,
             )
             if code != 0:
                 await self._run(
-                    "git", "-C", str(workspace), "checkout", "-B", start,
-                    f"origin/{start}", env=git_env, check=False,
+                    "git",
+                    "-C",
+                    str(workspace),
+                    "checkout",
+                    "-B",
+                    start,
+                    f"origin/{start}",
+                    env=git_env,
+                    check=False,
                 )
 
         output_branch = None
@@ -3225,8 +3242,14 @@ class OmnigentOAuthHostRuntime:
             # Honor the authored output branch without discarding the checked-out
             # working tree, matching normal MoonMind repository semantics.
             code, _out, err = await self._run(
-                "git", "-C", str(workspace), "checkout", "-B", target,
-                env=git_env, check=False,
+                "git",
+                "-C",
+                str(workspace),
+                "checkout",
+                "-B",
+                target,
+                env=git_env,
+                check=False,
             )
             if code != 0:
                 raise OmnigentOAuthHostError(
@@ -3241,8 +3264,13 @@ class OmnigentOAuthHostRuntime:
         # state executed and cannot drift after the branch advances.
         resolved_commit: str | None = None
         code, out, _err = await self._run(
-            "git", "-C", str(workspace), "rev-parse", "HEAD",
-            env=git_env, check=False,
+            "git",
+            "-C",
+            str(workspace),
+            "rev-parse",
+            "HEAD",
+            env=git_env,
+            check=False,
         )
         if code == 0:
             resolved_commit = str(out or "").strip() or None
@@ -3302,7 +3330,7 @@ class OmnigentOAuthHostRuntime:
                 "workspace checkpoint restore requires an artifact service",
                 code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
             )
-        artifact_id = artifact_ref[len("artifact://"):]
+        artifact_id = artifact_ref[len("artifact://") :]
         _metadata, payload = await service.read(
             artifact_id=artifact_id,
             principal=_RESTORE_ARTIFACT_PRINCIPAL,
@@ -3314,7 +3342,9 @@ class OmnigentOAuthHostRuntime:
                 code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
             )
         try:
-            with tarfile.open(fileobj=__import__("io").BytesIO(payload), mode="r:gz") as archive:
+            with tarfile.open(
+                fileobj=__import__("io").BytesIO(payload), mode="r:gz"
+            ) as archive:
                 for member in archive.getmembers():
                     target = (workspace / member.name).resolve()
                     if not target.is_relative_to(workspace.resolve()) or member.isdev():
@@ -3432,7 +3462,7 @@ class OmnigentOAuthHostRuntime:
                 )
             # The durable artifact contract addresses artifacts by id; the
             # canonical ``artifact://`` scheme must be stripped before lookup.
-            artifact_id = ref[len("artifact://"):]
+            artifact_id = ref[len("artifact://") :]
             # Enforce the per-ref bound and the single cumulative budget together,
             # so many individually-legal refs cannot aggregate past the advertised
             # hostile-input bound.
@@ -3505,15 +3535,12 @@ class OmnigentOAuthHostRuntime:
         artifact = metadata[0] if isinstance(metadata, tuple) else metadata
         if required_workflow_id is not None:
             links = (
-                metadata[1]
-                if isinstance(metadata, tuple) and len(metadata) > 1
-                else ()
+                metadata[1] if isinstance(metadata, tuple) and len(metadata) > 1 else ()
             )
             workflow_family_prefix = f"{required_workflow_id}:"
             if not any(
                 (
-                    str(getattr(link, "workflow_id", ""))
-                    == required_workflow_id
+                    str(getattr(link, "workflow_id", "")) == required_workflow_id
                     or str(getattr(link, "workflow_id", "")).startswith(
                         workflow_family_prefix
                     )
@@ -3598,7 +3625,9 @@ class OmnigentOAuthHostRuntime:
             return None
         # A durable artifact service exposes the by-id ``read``/``read_chunks``
         # contract directly; only a bare byte gateway needs the ref adapter.
-        if hasattr(artifact_gateway, "read") or hasattr(artifact_gateway, "read_chunks"):
+        if hasattr(artifact_gateway, "read") or hasattr(
+            artifact_gateway, "read_chunks"
+        ):
             return artifact_gateway
 
         class _GatewayArtifactService:
@@ -3620,36 +3649,12 @@ class OmnigentOAuthHostRuntime:
     def _normalize_repository_source(repository_source: str) -> tuple[str, str]:
         """Resolve an authored repository identity to a clone source and kind."""
 
-        value = str(repository_source or "").strip()
-        if not value:
+        try:
+            return normalize_repository_source(repository_source)
+        except RepositorySourceError as exc:
             raise OmnigentOAuthHostError(
-                "repository source is required to materialize the workspace",
-                code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
-            )
-        # A ``file://`` URL is still a local on-disk read and must be authorized
-        # like any other local path, not treated as a trusted remote.
-        if value.startswith("file://"):
-            return value, "local"
-        if value.startswith(("http://", "https://", "git@", "ssh://")):
-            kind = "remote"
-            if value.startswith(("http://", "https://")):
-                # Only inject GitHub credentials when the URL host is exactly
-                # github.com. A substring check would misclassify hosts such as
-                # ``evil.com/github.com`` or ``github.com.evil.com`` as GitHub and
-                # leak the token to an attacker-controlled origin.
-                host = (urlsplit(value).hostname or "").lower()
-                if host == "github.com":
-                    kind = "github_https"
-            return value, kind
-        if value.startswith(("/", "./", "../")) or Path(value).is_absolute():
-            return value, "local"
-        if _GITHUB_SLUG.fullmatch(value):
-            suffix = "" if value.endswith(".git") else ".git"
-            return f"https://github.com/{value}{suffix}", "github_https"
-        raise OmnigentOAuthHostError(
-            "unsupported repository source; expected owner/repo, URL, or path",
-            code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED",
-        )
+                str(exc), code="OMNIGENT_WORKSPACE_MATERIALIZATION_FAILED"
+            ) from exc
 
     def _authorize_local_repository_source(self, source: str) -> None:
         """Reject a local repository source outside the authorized source root.
@@ -3659,7 +3664,7 @@ class OmnigentOAuthHostRuntime:
         repository the trusted worker can read, including another run under the
         workspace authority, crossing workspace isolation boundaries.
         """
-        raw_path = source[len("file://"):] if source.startswith("file://") else source
+        raw_path = source[len("file://") :] if source.startswith("file://") else source
         resolved = Path(raw_path).resolve()
         root = self._repository_source_root
         if root is None or not resolved.is_relative_to(root):
@@ -3676,7 +3681,7 @@ class OmnigentOAuthHostRuntime:
             prior = normalized
             for prefix in ("refs/remotes/origin/", "refs/heads/", "origin/"):
                 if normalized.startswith(prefix):
-                    normalized = normalized[len(prefix):]
+                    normalized = normalized[len(prefix) :]
             if prior == normalized:
                 break
         return normalized or None
@@ -3792,7 +3797,9 @@ class OmnigentOAuthHostRuntime:
                 {
                     "OMNIGENT_HOST_IMAGE_REF": str(effective_launch["hostImageRef"]),
                     "OMNIGENT_IMAGE_REF": str(effective_launch["serverImageRef"]),
-                    "OMNIGENT_EFFECTIVE_LAUNCH_REF": str(effective_launch["snapshotRef"]),
+                    "OMNIGENT_EFFECTIVE_LAUNCH_REF": str(
+                        effective_launch["snapshotRef"]
+                    ),
                     "OMNIGENT_HOST_CPU_LIMIT": str(
                         int(effective_launch["limits"]["cpuMillis"]) / 1000
                     ),
@@ -3919,9 +3926,7 @@ class OmnigentOAuthHostRuntime:
                 matches = [
                     host
                     for host in hosts
-                    if str(
-                        host.get("id") or host.get("hostId") or host.get("host_id")
-                    )
+                    if str(host.get("id") or host.get("hostId") or host.get("host_id"))
                     == expected_id
                 ]
             else:
@@ -3961,8 +3966,7 @@ class OmnigentOAuthHostRuntime:
         return {
             str(name)
             for name, readiness in capabilities.items()
-            if readiness is True
-            or str(readiness).strip().lower() in ready_values
+            if readiness is True or str(readiness).strip().lower() in ready_values
         }
 
     @staticmethod

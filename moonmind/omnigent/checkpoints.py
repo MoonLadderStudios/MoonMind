@@ -136,6 +136,8 @@ class OmnigentCheckpointIdentity(BaseModel):
     effective_launch_ref: str | None = Field(None, alias="effectiveLaunchRef", min_length=1)
     execution_profile_ref: str = Field(..., alias="executionProfileRef", min_length=1)
     launch_policy_ref: str = Field(..., alias="launchPolicyRef", min_length=1)
+    execution_plan_ref: str | None = Field(None, alias="executionPlanRef", min_length=1)
+    runtime_binding_ref: str | None = Field(None, alias="runtimeBindingRef", min_length=1)
     policy_id: str | None = Field(None, alias="policyId", min_length=1)
     policy_version: int | None = Field(None, alias="policyVersion", ge=1)
     policy_ref: str | None = Field(None, alias="policyRef", min_length=1)
