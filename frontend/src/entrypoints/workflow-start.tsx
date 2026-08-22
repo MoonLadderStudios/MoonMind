@@ -5789,7 +5789,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
   const defaultRuntime = String(
     dashboardConfig.system?.defaultRuntime ||
       dashboardConfig.system?.defaultAgentRuntime ||
-      "codex_cli",
+      "omnigent",
   );
   const defaultRepository = String(
     dashboardConfig.system?.defaultRepository || "",
