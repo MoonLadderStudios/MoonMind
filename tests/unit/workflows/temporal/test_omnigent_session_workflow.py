@@ -421,6 +421,12 @@ async def test_plan_bound_admission_uses_persisted_host_authority(
         "_validate_plan_support_authority",
         validate_support,
     )
+    # The generic omnigent host registry now requires host env config; legacy
+    # hermetic tests should not fail closed for missing deployment env.
+    monkeypatch.setattr(
+        "moonmind.omnigent.realizers.registry.get_default_registry",
+        lambda: SimpleNamespace(require=lambda _ref: None),
+    )
 
     decision = await (
         omnigent_session_activities.omnigent_evaluate_session_admission_activity(
@@ -598,6 +604,10 @@ async def test_plan_admission_rejects_active_rollback_gate(
         omnigent_session_activities,
         "_validate_plan_support_authority",
         lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.realizers.registry.get_default_registry",
+        lambda: SimpleNamespace(require=lambda _ref: None),
     )
     from moonmind.omnigent import session_supervisor_rollback
 

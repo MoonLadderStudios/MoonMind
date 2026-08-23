@@ -1892,6 +1892,20 @@ def _override_temporal_client(app: FastAPI) -> AsyncMock:
     app.dependency_overrides[get_temporal_client] = lambda: client
     return client
 
+@pytest.fixture(autouse=True)
+def _reset_default_runtime_for_legacy_tests(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep legacy hermetic unit tests on codex_cli while the product default is omnigent.
+
+    The feat/omnigent branch changes the product default to ``omnigent``, which
+    requires a real DB for plan compilation.  Legacy tests that do not set an
+    explicit targetRuntime should remain on the previous hermetic default so
+    they do not require DB mocking.
+    """
+
+    monkeypatch.setattr(settings.workflow, "default_runtime", "codex_cli")
+    yield
+
+
 @pytest.fixture
 def client() -> Iterator[tuple[TestClient, AsyncMock, SimpleNamespace]]:
     app = FastAPI()
@@ -5081,27 +5095,6 @@ def test_create_task_shaped_execution_fetches_unique_attachments_in_one_query(
     test_client, service, _user = client
     monkeypatch.setattr(settings.workflow, "agent_job_attachment_enabled", True)
     service.create_execution.return_value = _build_execution_record()
-    execute = AsyncMock(
-        return_value=_ExecuteResult(
-            [
-                SimpleNamespace(
-                    artifact_id="art_01OBJECTIVEINPUT00000000",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/png",
-                    size_bytes=10,
-                ),
-                SimpleNamespace(
-                    artifact_id="art_01STEPINPUT000000000000",
-                    status=TemporalArtifactStatus.COMPLETE,
-                    content_type="image/png",
-                    size_bytes=20,
-                ),
-            ]
-        )
-    )
-    test_client.app.dependency_overrides[get_async_session] = lambda: SimpleNamespace(
-        execute=execute
-    )
     execute = AsyncMock(
         return_value=_ExecuteResult(
             [

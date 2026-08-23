@@ -208,6 +208,38 @@ class DockerOpencodeAuthJsonMaterializer:
             )
         return stdout
 
+    async def _resolve_writer_ref(self, ref: str) -> str:
+        # Local dev fallback: if digest-pinned image is not present locally (not pushed to GHCR), try tag
+        code, _, _ = await self._backend.run(
+            ["docker", "image", "inspect", ref, "--format", "{{.Id}}"]
+        )
+        if code == 0:
+            return ref
+        if "@sha256:" in ref:
+            candidates = [
+                ref.split("@")[0] + ":1.18.11",
+                "ghcr.io/moonladderstudios/omnigent-host-opencode:1.18.11",
+            ]
+            import os
+
+            env_image = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE", "").strip()
+            if env_image:
+                env_tag = (
+                    f"{env_image}:1.18.11"
+                    if ":" not in env_image.split("/")[-1]
+                    else env_image
+                )
+                candidates.insert(0, env_tag)
+            for cand in candidates:
+                if not cand:
+                    continue
+                c, _, _ = await self._backend.run(
+                    ["docker", "image", "inspect", cand, "--format", "{{.Id}}"]
+                )
+                if c == 0:
+                    return cand
+        return ref
+
     async def materialize(
         self, context: CredentialMaterializationContext
     ) -> CredentialRuntimeHandle:
@@ -243,6 +275,7 @@ class DockerOpencodeAuthJsonMaterializer:
             "chown 1000:1000 /credential/.moonmind-generation; "
             "chmod 0600 /credential/.moonmind-generation"
         )
+        writer_ref = await self._resolve_writer_ref(context.writer_image_ref)
         try:
             await self._run(
                 [
@@ -257,7 +290,7 @@ class DockerOpencodeAuthJsonMaterializer:
                     f"type=volume,src={volume_name},dst=/credential",
                     "--entrypoint",
                     "/bin/sh",
-                    context.writer_image_ref,
+                    writer_ref,
                     "-ceu",
                     writer_script,
                     "--",
@@ -291,7 +324,7 @@ class DockerOpencodeAuthJsonMaterializer:
                     f"type=volume,src={volume_name},dst=/credential,readonly",
                     "--entrypoint",
                     "/bin/sh",
-                    context.writer_image_ref,
+                    writer_ref,
                     "-ceu",
                     verify_script,
                     "--",

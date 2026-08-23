@@ -700,7 +700,7 @@ class WorkflowSettings(BaseSettings):
         description="Override container image for Codex login status checks.",
     )
     default_runtime: str = Field(
-        "codex",
+        "omnigent",
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_RUNTIME",
             "MOONMIND_DEFAULT_RUNTIME",
@@ -719,6 +719,7 @@ class WorkflowSettings(BaseSettings):
                 "apply_mode": "next_workflow",
                 "title": "Default Runtime",
                 "options": [
+                    ("omnigent", "Omnigent (OpenCode)"),
                     ("codex", "Codex"),
                     ("codex_cli", "Codex CLI"),
                     ("claude_code", "Claude Code"),
@@ -1285,11 +1286,11 @@ class WorkflowSettings(BaseSettings):
         (codex, claude) and normalizes them to canonical form so internal state
         is consistent with the runtime_defaults canonical-first direction.
         """
-        normalized = str(value or "").strip().lower() or "codex_cli"
+        normalized = str(value or "").strip().lower() or "omnigent"
         # Map legacy aliases to canonical before validation.
         _aliases = {"codex": "codex_cli", "claude": "claude_code"}
         normalized = _aliases.get(normalized, normalized)
-        allowed = {"codex_cli", "claude_code", "jules"}
+        allowed = {"omnigent", "codex_cli", "claude_code", "jules"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_runtime must be one of: {supported}")

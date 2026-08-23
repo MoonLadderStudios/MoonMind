@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping
 
-DEFAULT_WORKFLOW_RUNTIME = "codex_cli"
+DEFAULT_WORKFLOW_RUNTIME = "omnigent"
 DEFAULT_REPOSITORY = "MoonLadderStudios/MoonMind"
 
 # Canonical runtime ids as primary keys.

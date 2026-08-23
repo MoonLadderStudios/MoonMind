@@ -220,7 +220,7 @@ def test_mm945_document_only_workflow_without_repository_does_not_derive_git() -
 
     assert result["repository"] is None
     assert "git" not in result["requiredCapabilities"]
-    assert result["requiredCapabilities"] == ["codex"]
+    assert result["requiredCapabilities"] == ["omnigent"]
 
 
 def test_mm945_jira_only_step_without_repository_does_not_derive_git() -> None:
@@ -246,7 +246,7 @@ def test_mm945_jira_only_step_without_repository_does_not_derive_git() -> None:
     )
 
     assert result["repository"] is None
-    assert result["requiredCapabilities"] == ["codex", "jira"]
+    assert result["requiredCapabilities"] == ["omnigent", "jira"]
 
 
 def test_mm945_pr_publish_without_repository_derives_gh_not_git() -> None:
@@ -257,7 +257,7 @@ def test_mm945_pr_publish_without_repository_derives_gh_not_git() -> None:
 
     assert result["repository"] is None
     assert "git" not in result["requiredCapabilities"]
-    assert result["requiredCapabilities"] == ["codex", "gh"]
+    assert result["requiredCapabilities"] == ["omnigent", "gh"]
 
 
 def test_mm945_explicit_git_capability_remains_authoritative_without_repository() -> None:
@@ -270,7 +270,7 @@ def test_mm945_explicit_git_capability_remains_authoritative_without_repository(
     )
 
     assert result["repository"] is None
-    assert result["requiredCapabilities"] == ["git", "codex"]
+    assert result["requiredCapabilities"] == ["git", "omnigent"]
 
 
 def test_mm945_malformed_workflow_node_raises_contract_error_not_attribute_error() -> None:

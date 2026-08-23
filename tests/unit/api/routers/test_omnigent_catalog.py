@@ -377,8 +377,8 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
             return version
 
     current_user = SimpleNamespace(id=None, is_superuser=True)
-    monkeypatch.delenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", raising=False)
-    monkeypatch.delenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", raising=False)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "false")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "false")
     disabled = await catalog.get_omnigent_execution_readiness(
         session=Session(), current_user=current_user
     )

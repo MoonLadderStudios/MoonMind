@@ -5786,10 +5786,13 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     };
   }, [dashboardConfig.system?.attachmentPolicy]);
 
+  // Server-owned default: `dashboardConfig.system.defaultRuntime` from `build_runtime_config`
+  // is authoritative (now defaults to omnigent via `settings.workflow.default_runtime` and
+  // `DEFAULT_WORKFLOW_RUNTIME`). The hardcoded fallback is only for offline/legacy payloads.
   const defaultRuntime = String(
     dashboardConfig.system?.defaultRuntime ||
       dashboardConfig.system?.defaultAgentRuntime ||
-      "codex_cli",
+      "omnigent",
   );
   const defaultRepository = String(
     dashboardConfig.system?.defaultRepository || "",
@@ -5824,7 +5827,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     {};
   const supportedAgentRuntimes = dashboardConfig.system
     ?.supportedAgentRuntimes ||
-    dashboardConfig.system?.supportedRuntimes || ["codex_cli", "claude_code"];
+    dashboardConfig.system?.supportedRuntimes || ["omnigent", "codex_cli", "claude_code"];
   const runtimeOptions = Array.from(new Set(supportedAgentRuntimes));
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);

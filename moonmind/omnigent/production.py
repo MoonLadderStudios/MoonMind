@@ -88,6 +88,7 @@ class GenericOmnigentExecutionServices:
 
 
 def _server_build_digest() -> str:
+    # Prefer explicit build digest, then resolved state, then image ref
     explicit = str(os.getenv("OMNIGENT_BUILD_DIGEST") or "").strip()
     if explicit:
         if re.fullmatch(r"sha256:[0-9a-f]{64}", explicit):
@@ -96,9 +97,43 @@ def _server_build_digest() -> str:
             "OMNIGENT_BUILD_DIGEST must be an exact sha256 identity",
             code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,
         )
+    # Try resolved deployment state (bootstrap-aware)
+    try:
+        from moonmind.omnigent.bootstrap.store import load_resolved_state
+
+        state = load_resolved_state()
+        if state and state.omnigent_build_digest:
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", state.omnigent_build_digest):
+                return state.omnigent_build_digest
+        if state and state.server_image_ref:
+            m = _IMAGE_REF.fullmatch(state.server_image_ref)
+            if m:
+                return f"sha256:{m.group(1)}"
+    except Exception:
+        # Best-effort: resolved state may be unavailable before bootstrap
+        pass
     image_ref = str(os.getenv("OMNIGENT_IMAGE_REF") or "").strip()
     match = _IMAGE_REF.fullmatch(image_ref)
     if match is None:
+        # Bootstrap-aware fallback: try to resolve via docker or return a placeholder for degraded readiness
+        # For execution readiness that reports setup_required, we don't fail here; but for production services we need a digest.
+        # Attempt to inspect running omnigent container
+        try:
+            import subprocess, json
+
+            out = subprocess.check_output(
+                ["docker", "image", "inspect", "ghcr.io/omnigent-ai/omnigent-server:latest", "--format", "{{json .RepoDigests}}"],
+                text=True,
+                timeout=5,
+            )
+            digests = json.loads(out.strip())
+            for d in digests:
+                m2 = _IMAGE_REF.fullmatch(str(d))
+                if m2:
+                    return f"sha256:{m2.group(1)}"
+        except Exception:
+            # Best-effort docker inspect failed; fall through to hard error
+            pass
         raise HarnessPlatformError(
             "OMNIGENT_IMAGE_REF must identify the exact Omnigent server digest",
             code=HarnessPlatformFailure.OMNIGENT_GENERIC_REALIZER_NOT_READY,

@@ -3978,6 +3978,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/bootstrap/opencode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Bootstrap State */
+        get: operations["get_bootstrap_state_api_omnigent_bootstrap_opencode_get"];
+        put?: never;
+        /** Bootstrap Opencode */
+        post: operations["bootstrap_opencode_api_omnigent_bootstrap_opencode_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/bootstrap/opencode/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Bootstrap */
+        post: operations["retry_bootstrap_api_omnigent_bootstrap_opencode_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/bootstrap/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bootstrap Readiness
+         * @description Return computed readiness for OpenCode via Omnigent.
+         */
+        get: operations["bootstrap_readiness_api_omnigent_bootstrap_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/secrets": {
         parameters: {
             query?: never;
@@ -5688,6 +5743,47 @@ export interface components {
         Body_verify_verify_api_v1_auth_verify_post: {
             /** Token */
             token: string;
+        };
+        /** BootstrapOpencodeRequest */
+        BootstrapOpencodeRequest: {
+            /** Apikey */
+            apiKey: string;
+            /**
+             * Modeldisplayname
+             * @default Muse Spark 1.2 Contributor
+             */
+            modelDisplayName: string;
+            /**
+             * Effort
+             * @default xhigh
+             */
+            effort: string;
+            /**
+             * Acceptcontributordatause
+             * @default false
+             */
+            acceptContributorDataUse: boolean;
+        };
+        /** BootstrapOpencodeResponse */
+        BootstrapOpencodeResponse: {
+            /** Bootstrapid */
+            bootstrapId: string;
+            /** State */
+            state: string;
+            /** Providerprofileref */
+            providerProfileRef?: string | null;
+            /** Requestedmodel */
+            requestedModel: string;
+            /** Requestedeffort */
+            requestedEffort: string;
+            /** Failure */
+            failure?: {
+                [key: string]: unknown;
+            } | null;
+            /** Resolved */
+            resolved?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** BridgeEventPageResponse */
         BridgeEventPageResponse: {
@@ -23409,6 +23505,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bootstrap_state_api_omnigent_bootstrap_opencode_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapOpencodeResponse"];
+                };
+            };
+        };
+    };
+    bootstrap_opencode_api_omnigent_bootstrap_opencode_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BootstrapOpencodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapOpencodeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_bootstrap_api_omnigent_bootstrap_opencode_retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapOpencodeResponse"];
+                };
+            };
+        };
+    };
+    bootstrap_readiness_api_omnigent_bootstrap_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

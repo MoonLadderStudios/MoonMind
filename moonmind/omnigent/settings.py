@@ -18,6 +18,8 @@ _FALSE_VALUES = {"0", "false", "no", "off"}
 
 OMNIGENT_GENERIC_HOST_ENABLED_ENV = "MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED"
 OMNIGENT_OPENCODE_ENABLED_ENV = "MOONMIND_OMNIGENT_OPENCODE_ENABLED"
+MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV = "MOONMIND_OMNIGENT_EVIDENCE_POLICY"
+_DEPLOYMENT_EVIDENCE_POLICY_VALUES = {"deployment", "protected", "either"}
 
 # An Omnigent server image is immutable launch authority only when it names a
 # sha256 digest. Mirrors the launch-policy rule in
@@ -84,23 +86,71 @@ def is_omnigent_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
     return build_omnigent_gate(env=env).enabled
 
 
+def _parse_bool_with_default(
+    value: object | None, *, default: bool
+) -> bool:
+    cleaned = _clean(value)
+    if not cleaned:
+        return default
+    lowered = cleaned.lower()
+    if lowered in _TRUE_VALUES:
+        return True
+    if lowered in _FALSE_VALUES:
+        return False
+    raise ValueError(
+        f"invalid boolean value {cleaned!r}: expected one of {sorted(_TRUE_VALUES | _FALSE_VALUES)}"
+    )
+
+
 def generic_host_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
     """Return whether the complete generic host plane is enabled.
 
     This gate means the production planner, lease, credential, host, and
     cleanup services are wired.  It is intentionally separate from support
     qualification for any individual harness.
+
+    Default is enabled (true) so the capability is available for configuration.
+    Readiness remains computed state (setup_required, preparing, etc.).
+    Explicit false remains an emergency kill switch.
     """
 
     source = env if env is not None else os.environ
-    return _clean(source.get(OMNIGENT_GENERIC_HOST_ENABLED_ENV)).lower() in _TRUE_VALUES
+    return _parse_bool_with_default(
+        source.get(OMNIGENT_GENERIC_HOST_ENABLED_ENV), default=True
+    )
 
 
 def opencode_support_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
-    """Return whether the qualified OpenCode combination may be advertised."""
+    """Return whether the qualified OpenCode combination may be advertised.
+
+    Default is enabled. Explicit false disables the OpenCode harness.
+    """
 
     source = env if env is not None else os.environ
-    return _clean(source.get(OMNIGENT_OPENCODE_ENABLED_ENV)).lower() in _TRUE_VALUES
+    return _parse_bool_with_default(
+        source.get(OMNIGENT_OPENCODE_ENABLED_ENV), default=True
+    )
+
+
+def omnigent_evidence_policy(
+    *, env: Mapping[str, Any] | None = None
+) -> str:
+    """Return the execution evidence admission policy.
+
+    Values: deployment, protected, either (default).
+    Deployment accepts locally-generated deployment qualification evidence.
+    Protected requires protected CI evidence for official support tier.
+    """
+
+    source = env if env is not None else os.environ
+    raw = _clean(source.get(MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV)).lower()
+    if not raw:
+        return "either"
+    if raw in _DEPLOYMENT_EVIDENCE_POLICY_VALUES:
+        return raw
+    raise ValueError(
+        f"invalid evidence policy {raw!r}: expected one of {sorted(_DEPLOYMENT_EVIDENCE_POLICY_VALUES)}"
+    )
 
 
 def resolved_server_url(*, env: Mapping[str, Any] | None = None) -> str:
@@ -208,8 +258,10 @@ __all__ = [
     "is_omnigent_enabled",
     "generic_host_enabled",
     "opencode_support_enabled",
+    "omnigent_evidence_policy",
     "OMNIGENT_GENERIC_HOST_ENABLED_ENV",
     "OMNIGENT_OPENCODE_ENABLED_ENV",
+    "MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV",
     "resolved_api_token",
     "resolved_default_agent_name",
     "resolved_host_runner_token",

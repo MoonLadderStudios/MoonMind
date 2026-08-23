@@ -139,7 +139,7 @@ def test_build_runtime_config_contains_expected_keys(monkeypatch) -> None:
         "on_demand_docker",
     }
     assert "buildId" in config["system"]
-    assert config["system"]["defaultRuntime"] in ("codex_cli", "claude_code")
+    assert config["system"]["defaultRuntime"] == "omnigent"
     assert "defaultModel" in config["system"]
     assert "defaultEffort" in config["system"]
     assert "defaultModelByRuntime" in config["system"]
