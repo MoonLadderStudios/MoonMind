@@ -417,6 +417,7 @@ class DbHarnessCatalogRepository:
 
         from api_service.db.models import (
             OmnigentAgentProfileVersion,
+            OmnigentExecutionPlanRecord,
             OmnigentHarnessTrustRecord as DbTrustRecord,
         )
 
@@ -436,6 +437,18 @@ class DbHarnessCatalogRepository:
             )
             for candidate in candidates:
                 if isinstance(candidate, str) and candidate:
+                    pinned.add(candidate)
+        # Persisted execution plans pin their compiled harness-catalog
+        # snapshot: launch-time host resolution loads it by ref.
+        payloads = (
+            await session.execute(
+                select(OmnigentExecutionPlanRecord.payload_json)
+            )
+        ).scalars()
+        for payload in payloads:
+            if isinstance(payload, dict):
+                candidate = str(payload.get("harnessCatalogRef") or "")
+                if candidate:
                     pinned.add(candidate)
         return pinned
 

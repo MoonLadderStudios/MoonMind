@@ -113,6 +113,9 @@ class OmnigentProviderLeaseCoordinator:
                         metadata={
                             "capacityScopeRef": capacity_scope_ref,
                             "executionPlanRef": plan.planRef,
+                            # Activity-owned grants are liveness-checked
+                            # against this owning workflow by the manager.
+                            "workflowId": workflow_id,
                         },
                     )
                     inspection = await self._leases.inspect_lease(lease)

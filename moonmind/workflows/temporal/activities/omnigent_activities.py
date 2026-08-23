@@ -408,9 +408,21 @@ async def _try_generic_realizer_dispatch(
                 persisted.payload.executionRealizerRef
             )
             return await realizer.execute(request, persisted)
-        except Exception:
+        except Exception as exc:
+            # The dispatch failure projection must carry the underlying cause;
+            # a bare integration_error string makes operator triage impossible.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Omnigent execution-plan dispatch failed: %s",
+                exc,
+                exc_info=True,
+            )
             return AgentRunResult(
-                summary="Admitted Omnigent execution-plan dispatch failed.",
+                summary=(
+                    "Admitted Omnigent execution-plan dispatch failed: "
+                    f"{str(exc)[:400]}"
+                ),
                 failureClass="integration_error",
                 providerErrorCode=(
                     HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value
@@ -418,6 +430,7 @@ async def _try_generic_realizer_dispatch(
                 retryRecommendation=remediation_for(
                     HarnessPlatformFailure.OMNIGENT_GENERIC_DISPATCH_FAILED.value
                 ),
+                metadata={"dispatchError": str(exc)[:1000]},
             )
 
     params = request.parameters if isinstance(request.parameters, dict) else {}

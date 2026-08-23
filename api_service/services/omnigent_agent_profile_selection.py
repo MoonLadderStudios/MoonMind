@@ -415,6 +415,19 @@ async def resolve_agent_profile_snapshot(
         )
     launch_policy_ref = requested_launch_policy or allowed_launch_policies[0]
 
+    # Generic (v2) profiles do not carry an execution-profile declaration of
+    # their own; the launch policy owns that identity. Derive the canonical
+    # per-harness ref so the compiled plan can verify profile/policy agreement.
+    v2_execution_profile_ref = ""
+    if is_v2:
+        harness_id = str(
+            ((document.get("harness") or {}).get("id") or "")
+        ).strip()
+        if harness_id:
+            v2_execution_profile_ref = (
+                f"omnigent-{harness_id.removesuffix('-native')}@1"
+            )
+
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
         "profileId": profile_id,
@@ -423,7 +436,7 @@ async def resolve_agent_profile_snapshot(
         "document": document,
         "providerProfileRef": compatible_provider.profile_id,
         "executionProfileRef": (
-            "generic-omnigent-host@1"
+            v2_execution_profile_ref
             if is_v2
             else document["execution"]["defaultExecutionProfileRef"]
         ),

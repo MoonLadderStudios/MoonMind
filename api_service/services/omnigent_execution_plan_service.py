@@ -245,24 +245,17 @@ async def _resolve_runtime_policy_snapshot(
                 import copy
 
                 synthetic = copy.deepcopy(base)
-                synthetic["policyRef"] = policy_ref
-                # Ensure boundaries exist
                 boundaries = synthetic.get("boundaries", {})
                 execution = boundaries.get("execution", {})
                 execution["harness"] = "opencode-native"
                 execution["profileRef"] = "omnigent-opencode@1"
                 execution["agentIdentities"] = ["opencode"]
-                execution["compatibleProviders"] = ["opencode-go"]
+                boundaries["execution"] = execution
                 # Replace every remaining Codex provider identity.
                 if "providerProfile" in boundaries and isinstance(boundaries["providerProfile"], dict):
                     boundaries["providerProfile"]["compatibleProviders"] = ["opencode-go"]
                 else:
                     boundaries["providerProfile"] = {"compatibleProviders": ["opencode-go"]}
-                if "providerProfile" in execution and isinstance(execution["providerProfile"], dict):
-                    execution["providerProfile"]["compatibleProviders"] = ["opencode-go"]
-                # Also ensure no stale Codex execution.compatibleProviders remains
-                # (overwrites any previous value; synthesis now always uses opencode-go).
-                boundaries["execution"] = execution
                 # Deep sweep: replace any lingering Codex strings that survived the shallow copy
                 def _deep_replace_codex(obj: Any) -> Any:
                     if isinstance(obj, dict):
@@ -283,14 +276,17 @@ async def _resolve_runtime_policy_snapshot(
                         return obj
                     return obj
 
-                synthetic["boundaries"] = _deep_replace_codex(boundaries)
-                # Re-assert critical Opencode identities after deep sweep
-                synthetic["boundaries"]["execution"]["harness"] = "opencode-native"
-                synthetic["boundaries"]["execution"]["profileRef"] = "omnigent-opencode@1"
-                synthetic["boundaries"]["execution"]["agentIdentities"] = ["opencode"]
-                synthetic["boundaries"]["execution"]["compatibleProviders"] = ["opencode-go"]
-                synthetic["boundaries"]["providerProfile"]["compatibleProviders"] = ["opencode-go"]
-                host = synthetic["boundaries"].get("host", {})
+                boundaries = _deep_replace_codex(boundaries)
+                # Re-assert critical Opencode identities after deep sweep.
+                # Note: ExecutionPolicy forbids compatibleProviders on the
+                # execution section; provider compatibility belongs to the
+                # providerProfile boundary only.
+                boundaries["execution"]["harness"] = "opencode-native"
+                boundaries["execution"]["profileRef"] = "omnigent-opencode@1"
+                boundaries["execution"]["agentIdentities"] = ["opencode"]
+                boundaries.get("execution", {}).pop("compatibleProviders", None)
+                boundaries["providerProfile"]["compatibleProviders"] = ["opencode-go"]
+                host = boundaries.get("host", {})
                 # Use resolved opencode image if available
                 opencode_ref = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
                 if opencode_ref and "@sha256:" in opencode_ref:
@@ -300,12 +296,19 @@ async def _resolve_runtime_policy_snapshot(
                 if server_ref and "@sha256:" in server_ref:
                     host["serverImageRef"] = server_ref
                 boundaries["host"] = host
-                synthetic["boundaries"] = boundaries
-                # Update digest (hashlib/json already imported at module top)
-                synthetic["policyDigest"] = "sha256:" + hashlib.sha256(
-                    json.dumps(synthetic, sort_keys=True, separators=(",", ":")).encode()
-                ).hexdigest()
-                return synthetic
+                # Compile through the canonical policy snapshot boundary so the
+                # durable authority fields (policyRef/policyDigest/snapshotRef)
+                # match what workers re-verify at launch time.
+                from moonmind.omnigent.policies import compile_policy_snapshot
+
+                policy_id, _, version_text = policy_ref.rpartition("@")
+                return compile_policy_snapshot(
+                    policy_id=policy_id or "opencode-on-demand",
+                    version=int(version_text or "1"),
+                    document=boundaries,
+                    validation=synthetic.get("validation")
+                    or {"valid": True},
+                )
             except Exception:
                 raise PolicyNotFound(f"{policy_ref} (synthetic fallback failed)")
         raise
@@ -919,6 +922,28 @@ async def compile_and_persist_execution_plan(
         implementation=implementation,
         trustState=TrustState.core_trusted,
     )
+    # The plan pins this exact catalog snapshot; persist it as durable
+    # observation authority so launch-time host resolution can load it.
+    # Hermetic callers may pass a non-callable session factory placeholder;
+    # production always provides the canonical async session maker.
+    if callable(session_factory):
+        from moonmind.omnigent.harness_platform.catalog_service import (
+            DbHarnessCatalogRepository,
+            HarnessCatalogSyncResult as _CatalogSyncResult,
+        )
+
+        await DbHarnessCatalogRepository(session_factory).persist(
+            _CatalogSyncResult(
+                snapshot=catalog,
+                trust_records=(trust,),
+                diagnostics={
+                    "harnessCount": 1,
+                    "agentCount": 0,
+                    "hostCount": 0,
+                    "source": "execution-plan-compilation",
+                },
+            )
+        )
     repository = initial_parameters.get("repository")
     workspace = initial_parameters.get("workspace")
     repository_intent_ref = _digest_ref(
@@ -1055,6 +1080,13 @@ async def compile_and_persist_execution_plan(
                 "admissionAuthority": AdmissionAuthority(
                     supportEvidenceRef=f"artifact:{support_evidence_ref}",
                     supportEvidenceDigest=support_evidence_digest,
+                    # The evidence resolver returns the tier that admission
+                    # actually used; workers must re-validate the same schema.
+                    supportTier=(
+                        "supported"
+                        if support_tier == "supported"
+                        else "deployment_qualified"
+                    ),
                     featureGeneration=OMNIGENT_SESSION_FEATURE_GENERATION,
                     replayCompatibilityVersion=(
                         OMNIGENT_SESSION_COMPATIBILITY_VERSION

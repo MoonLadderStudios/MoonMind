@@ -19,6 +19,7 @@ from api_service.db.models import (
     Base,
     OmnigentAgentProfile,
     OmnigentAgentProfileVersion,
+    OmnigentExecutionPlanRecord,
     OmnigentHarnessCatalogSnapshotRecord,
     OmnigentHarnessTrustRecord,
 )
@@ -69,6 +70,7 @@ async def _create_db(tmp_path):
                 OmnigentHarnessTrustRecord.__table__,
                 OmnigentAgentProfile.__table__,
                 OmnigentAgentProfileVersion.__table__,
+                OmnigentExecutionPlanRecord.__table__,
             ],
         )
     return engine, async_sessionmaker(engine, expire_on_commit=False)

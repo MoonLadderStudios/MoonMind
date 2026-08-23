@@ -811,23 +811,23 @@ class OmnigentCredentialProvisioningService:
                         f"Provider Profile lease for credential slot {slot} is missing",
                         code=HarnessPlatformFailure.OMNIGENT_PROVIDER_LEASE_UNAVAILABLE,
                     )
-                cache_key = (acquired.provider_lease_ref, binding["materializerRef"])
+                cache_key = (acquired.provider_lease_ref, binding.materializerRef)
                 handle = materialized.get(cache_key)
                 if handle is None:
                     anticipated = anticipated_credential_handle(
-                        acquired, binding["materializerRef"]
+                        acquired, binding.materializerRef
                     )
                     await self._persist_handle(
                         anticipated, cleanup_state="materializing"
                     )
                     handle_index = len(handles)
                     handles.append(anticipated)
-                    descriptor = get_materializer(binding["materializerRef"])
+                    descriptor = get_materializer(binding.materializerRef)
                     secrets = await self._secrets.resolve(
                         acquired=acquired,
                         allowed_secret_roles=descriptor.requiredSecretRoles,
                     )
-                    implementation = self._registry.require(binding["materializerRef"])
+                    implementation = self._registry.require(binding.materializerRef)
                     try:
                         handle = await implementation.materialize(
                             CredentialMaterializationContext(
@@ -961,3 +961,4 @@ __all__ = [
     "build_default_credential_materializer_registry",
     "credential_runtime_identity",
 ]
+

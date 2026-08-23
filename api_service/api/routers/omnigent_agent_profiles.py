@@ -388,7 +388,10 @@ async def ensure_builtin_opencode_agent_profile(
             "capture": {"stream": True, "evidence": True},
             "continuations": {"checkpoint": True, "branch": True},
             "publish": {"mode": "none"},
-            "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+            "allowedLaunchPolicyRefs": [
+                "omnigent-on-demand@1",
+                "opencode-on-demand@1",
+            ],
         }
     ).model_dump(by_alias=True, mode="json")
     profile_id = "omnigent-opencode-default"
@@ -430,7 +433,15 @@ async def ensure_builtin_opencode_agent_profile(
                     bound_row is not None
                     and bound_row.source_digest == catalog.snapshot.sourceDigest
                 ):
-                    document = dict(active.document)
+                    # Pin only the volatile catalog binding to the active
+                    # version's authority. Everything else keeps the freshly
+                    # compiled content, so code-driven document changes can
+                    # still advance the immutable version while identical
+                    # inventory re-observations reuse it verbatim.
+                    document = dict(document)
+                    harness_block = dict(document.get("harness") or {})
+                    harness_block["catalogRef"] = bound_ref
+                    document["harness"] = harness_block
     digest = _digest(document)
     version = next((item for item in existing_versions if item.digest == digest), None)
     if profile is None:
