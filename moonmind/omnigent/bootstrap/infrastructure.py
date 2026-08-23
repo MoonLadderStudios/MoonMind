@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
 from moonmind.omnigent.bootstrap.image_resolution import resolve_omnigent_images
 from moonmind.omnigent.bootstrap.store import save_resolved_state

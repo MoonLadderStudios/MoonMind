@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from api_service.db.models import User
-from api_service.services.settings_catalog import has_settings_permission
 
 router = APIRouter(prefix="/api/omnigent/bootstrap", tags=["Omnigent Bootstrap"])
 
@@ -58,8 +57,8 @@ async def get_bootstrap_state(
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
     _require_bootstrap_permission(current_user)
-    from moonmind.omnigent.bootstrap.controller import BootstrapController
     from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bootstrap.controller import BootstrapController
 
     controller = BootstrapController(session_factory=async_session_maker)
     record = await controller.get_state()
@@ -81,8 +80,8 @@ async def bootstrap_opencode(
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
     _require_bootstrap_permission(current_user)
-    from moonmind.omnigent.bootstrap.controller import BootstrapController
     from api_service.db.base import async_session_maker
+    from moonmind.omnigent.bootstrap.controller import BootstrapController
 
     controller = BootstrapController(session_factory=async_session_maker)
     try:
@@ -121,9 +120,7 @@ async def retry_bootstrap(
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
     _require_bootstrap_permission(current_user)
-    from moonmind.omnigent.bootstrap.controller import BootstrapController
     from moonmind.omnigent.bootstrap.store import load_bootstrap_record
-    from api_service.db.base import async_session_maker
 
     record = load_bootstrap_record()
     if record is None:
@@ -142,11 +139,21 @@ async def bootstrap_readiness(
     current_user: User = Depends(get_current_user()),
 ) -> dict[str, Any]:
     """Return computed readiness for OpenCode via Omnigent."""
-    from moonmind.omnigent.settings import generic_host_enabled, opencode_support_enabled
-    from moonmind.omnigent.bootstrap.store import load_bootstrap_record, load_resolved_state
-    from moonmind.omnigent.deployment_evidence import validate_deployment_evidence, assert_deployment_evidence_matches_plan
+    import json
+    import os
     from pathlib import Path
-    import json, os
+
+    from moonmind.omnigent.bootstrap.store import (
+        load_bootstrap_record,
+        load_resolved_state,
+    )
+    from moonmind.omnigent.deployment_evidence import (
+        validate_deployment_evidence,
+    )
+    from moonmind.omnigent.settings import (
+        generic_host_enabled,
+        opencode_support_enabled,
+    )
 
     record = load_bootstrap_record()
     resolved = load_resolved_state()
@@ -160,7 +167,7 @@ async def bootstrap_readiness(
     if actual_path is not None and actual_path.exists():
         try:
             raw = json.loads(actual_path.read_text(encoding="utf-8"))
-            from typing import Mapping
+            from collections.abc import Mapping
 
             if not isinstance(raw, Mapping):
                 raise ValueError("deployment evidence must be an object")

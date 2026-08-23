@@ -2,12 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 import subprocess
 import tempfile
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -162,8 +158,6 @@ async def run_qualification(
                 anticipated_credential_handle,
             )
             from moonmind.omnigent.provider_leases import AcquiredProviderLease
-            from moonmind.omnigent.secret_resolution import ScopedSecretBundle
-            from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 
             # Create a dummy lease and handle to test fence logic (does not require docker)
             # We test that cleanup with mismatched generation raises fence error
