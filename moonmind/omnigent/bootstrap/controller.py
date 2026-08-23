@@ -23,7 +23,9 @@ from moonmind.omnigent.bootstrap.store import (
     save_bootstrap_record,
     save_resolved_state,
 )
-from moonmind.omnigent.harness_platform.support import SupportKeyPayload, compute_support_combination_key
+from moonmind.omnigent.harness_platform.support import (
+    compute_support_combination_key,
+)
 
 
 class BootstrapController:
@@ -91,7 +93,6 @@ class BootstrapController:
             # Ensure image refs are available; if not, try fallback to existing env host image or build
             if not resolved.opencode_host_image_ref:
                 # Try to build locally if missing
-                from moonmind.omnigent.bootstrap.image_resolution import _resolve_via_docker_inspect
 
                 # fallback: use host base image if opencode image not available, but mark as fallback
                 candidate = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
@@ -196,7 +197,9 @@ class BootstrapController:
 
     async def _sync_catalog(self, resolved: Any) -> None:
         from api_service.db.base import async_session_maker
-        from moonmind.omnigent.production import build_generic_omnigent_execution_services
+        from moonmind.omnigent.production import (
+            build_generic_omnigent_execution_services,
+        )
 
         # Use production services to sync
         try:
@@ -205,10 +208,10 @@ class BootstrapController:
             )
             result = await services.catalog_service.synchronize()
             # Ensure built-in profile
-            from api_service.db.base import async_session_maker as asm
             from api_service.api.routers.omnigent_agent_profiles import (
                 ensure_builtin_opencode_agent_profile,
             )
+            from api_service.db.base import async_session_maker as asm
 
             async with asm() as session:
                 await ensure_builtin_opencode_agent_profile(session=session, catalog=result)
@@ -217,12 +220,12 @@ class BootstrapController:
             err_text = str(exc).lower()
             if "duplicate" in err_text and "uq_omnigent_catalog" in err_text:
                 # Load existing catalog
+                from api_service.api.routers.omnigent_agent_profiles import (
+                    ensure_builtin_opencode_agent_profile,
+                )
                 from api_service.db.base import async_session_maker as asm2
                 from moonmind.omnigent.harness_platform.catalog_service import (
                     DbHarnessCatalogRepository,
-                )
-                from api_service.api.routers.omnigent_agent_profiles import (
-                    ensure_builtin_opencode_agent_profile,
                 )
 
                 try:
@@ -243,9 +246,10 @@ class BootstrapController:
     ) -> str:
         from api_service.db.base import async_session_maker
         from api_service.db.models import ManagedAgentProviderProfile
-        from moonmind.auth.secret_refs import SecretBackend
-        from moonmind.provider_profiles.maintenance import acquire_credential_maintenance_guard
         from moonmind.provider_profiles.lease_client import CredentialLeasePurpose
+        from moonmind.provider_profiles.maintenance import (
+            acquire_credential_maintenance_guard,
+        )
 
         profile_id = "opencode-go-default"
         async with async_session_maker() as session:
@@ -294,16 +298,16 @@ class BootstrapController:
         # Use the existing setup_provider_api_key flow but via direct service to avoid HTTP
         # We need a maintenance lease
         # For simplicity, call the validation service directly
+        from uuid import uuid4
+
         from api_service.db.base import async_session_maker as asm
-        from moonmind.omnigent.harness_platform.host_classes import get_opencode_host_image_ref
+        from moonmind.omnigent.harness_platform.host_classes import (
+            get_opencode_host_image_ref,
+        )
         from moonmind.omnigent.opencode_runtime_validation import (
             OpenCodeProviderRuntimeValidationService,
         )
         from moonmind.omnigent.production import build_omnigent_secret_resolver
-        from moonmind.provider_profiles.maintenance import (
-            acquire_credential_maintenance_guard,
-        )
-        from uuid import uuid4
 
         operation_id = uuid4().hex
         guard = None
@@ -386,13 +390,14 @@ class BootstrapController:
                     raise ValueError("API key validation failed: invalid format")
 
             # Persist secret and update profile
+            from datetime import UTC, datetime
+
             from api_service.api.routers.provider_profiles import (
+                _api_key_mapping_for_profile,
+                _apply_api_key_setup_to_profile,
                 _provider_api_key_secret_slug,
                 _upsert_managed_secret,
-                _apply_api_key_setup_to_profile,
-                _api_key_mapping_for_profile,
             )
-            from datetime import UTC, datetime
 
             async with asm() as session:
                 prof = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -445,15 +450,20 @@ class BootstrapController:
 
 
     async def _ensure_agent_profile(self, *, qualified_model: str, effort: str) -> str:
-        from api_service.db.base import async_session_maker
-        from api_service.db.models import OmnigentAgentProfile, OmnigentAgentProfileVersion
-        from moonmind.omnigent.harness_platform.catalog_service import (
-            DbHarnessCatalogRepository,
-        )
+        import hashlib
+        import json
+
         from api_service.api.routers.omnigent_agent_profiles import (
             ensure_builtin_opencode_agent_profile,
         )
-        import hashlib, json
+        from api_service.db.base import async_session_maker
+        from api_service.db.models import (
+            OmnigentAgentProfile,
+            OmnigentAgentProfileVersion,
+        )
+        from moonmind.omnigent.harness_platform.catalog_service import (
+            DbHarnessCatalogRepository,
+        )
 
         async with async_session_maker() as session:
             repo = DbHarnessCatalogRepository(async_session_maker)
@@ -468,12 +478,14 @@ class BootstrapController:
                 # Fallback: catalog may not contain opencode-native harness (e.g., upstream server without plugin)
                 # Create a synthetic profile with the expected harness identity so bootstrap can still qualify locally.
                 # This mirrors the synthetic fallback in execution plan service for hermetic tests.
-                import hashlib, json as _json
+                import hashlib
+                import json as _json
+                from datetime import UTC, datetime
+
                 from moonmind.omnigent.harness_platform.catalog import (
                     HarnessImplementationIdentity,
                     create_catalog_snapshot,
                 )
-                from datetime import UTC, datetime
 
                 # Synthesize implementation identity matching the hard-coded fallback
                 synth_impl = HarnessImplementationIdentity.model_validate(
@@ -508,9 +520,15 @@ class BootstrapController:
                 synth_impl_ref = synth_impl.implementation_ref()
                 # Persist synthetic catalog so execution readiness can discover it
                 try:
-                    from moonmind.omnigent.harness_platform.catalog import TrustState, classify_harness_trust
-                    from moonmind.omnigent.harness_platform.catalog_service import HarnessCatalogSyncResult, DbHarnessCatalogRepository
                     from api_service.db.base import async_session_maker as _asm_synth
+                    from moonmind.omnigent.harness_platform.catalog import (
+                        TrustState,
+                        classify_harness_trust,
+                    )
+                    from moonmind.omnigent.harness_platform.catalog_service import (
+                        DbHarnessCatalogRepository,
+                        HarnessCatalogSyncResult,
+                    )
 
                     _trust = classify_harness_trust(
                         harnessId="opencode-native",
@@ -533,14 +551,19 @@ class BootstrapController:
                 upstream_version = "1"
                 # Try to get existing projection if any
                 from api_service.db.models import OmnigentUpstreamAgentProjection
-                from api_service.services.omnigent_agent_profile_service import projection_identity
+                from api_service.services.omnigent_agent_profile_service import (
+                    projection_identity,
+                )
 
                 # Create a minimal projection if missing
                 proj_id = projection_identity("default", upstream_id, upstream_version)
                 proj = await session.get(OmnigentUpstreamAgentProjection, proj_id)
                 if proj is None:
-                    from api_service.db.models import OmnigentUpstreamAgentProjection as Proj
                     from datetime import UTC, datetime
+
+                    from api_service.db.models import (
+                        OmnigentUpstreamAgentProjection as Proj,
+                    )
 
                     now = datetime.now(UTC)
                     proj = Proj(
@@ -672,25 +695,21 @@ class BootstrapController:
         resolved: Any,
         record: BootstrapRecord,
     ) -> dict[str, Any]:
-        from moonmind.omnigent.bootstrap.qualification import run_qualification
+        import hashlib
+        from datetime import UTC, datetime
+
+        from api_service.db.base import async_session_maker
         from moonmind.omnigent.bootstrap.evidence import (
             build_deployment_evidence,
             write_deployment_evidence,
         )
-        from moonmind.omnigent.harness_platform.support import SupportKeyPayload
-        from api_service.db.base import async_session_maker
+        from moonmind.omnigent.bootstrap.qualification import run_qualification
         from moonmind.omnigent.harness_platform.catalog_service import (
             DbHarnessCatalogRepository,
         )
         from moonmind.omnigent.harness_platform.host_classes import (
             OmnigentHostClassSelector,
         )
-        from moonmind.omnigent.harness_platform.planning_service import (
-            ArtifactPlanningSkillResolver,
-            OmnigentExecutionPlanningService,
-        )
-        import hashlib, json
-        from datetime import UTC, datetime
 
         # Need to compute support identity - we need catalog, host class, etc.
         # For now, construct a minimal support identity using resolved state and catalog
@@ -704,7 +723,10 @@ class BootstrapController:
         harness = next((h for h in catalog.snapshot.harnesses if h.id == "opencode-native"), None)
         if harness is None:
             # Fallback synthetic harness for local qualification when upstream lacks implementation
-            from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity, create_catalog_snapshot
+            from moonmind.omnigent.harness_platform.catalog import (
+                HarnessImplementationIdentity,
+                create_catalog_snapshot,
+            )
 
             synth_impl = HarnessImplementationIdentity.model_validate(
                 {
@@ -741,7 +763,9 @@ class BootstrapController:
         # resolved state is empty, try the persisted resolved state before failing.
         if not resolved or not getattr(resolved, "opencode_host_image_ref", None):
             try:
-                from moonmind.omnigent.bootstrap.store import load_resolved_state as _load_resolved
+                from moonmind.omnigent.bootstrap.store import (
+                    load_resolved_state as _load_resolved,
+                )
 
                 _persisted = _load_resolved()
                 if _persisted and getattr(_persisted, "opencode_host_image_ref", None):
@@ -785,17 +809,29 @@ class BootstrapController:
             raise RuntimeError(f"host class selection failed: {exc}") from exc
 
         # Build support payload using the same planner logic as real workflows to ensure evidence matches
+        from api_service.services.omnigent_execution_plan_service import (
+            _build_v2_profile,
+        )
+        from moonmind.omnigent.harness_platform.catalog import (
+            TrustState,
+            classify_harness_trust,
+        )
+        from moonmind.omnigent.harness_platform.credential_bindings import (
+            create_binding_set,
+        )
         from moonmind.omnigent.harness_platform.planner import compile_execution_plan
-        from moonmind.omnigent.harness_platform.agent_profile import validate_agent_profile
-        from moonmind.omnigent.harness_platform.credential_bindings import create_binding_set
-        from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet as PlannerSkillSet
-        from moonmind.omnigent.harness_platform.catalog import TrustState, classify_harness_trust
-        from api_service.services.omnigent_execution_plan_service import _build_v2_profile
+        from moonmind.omnigent.harness_platform.skills import (
+            ResolvedSkillSet as PlannerSkillSet,
+        )
 
         # Load the V2 profile snapshot
         async with async_session_maker() as session:
-            from api_service.db.models import OmnigentAgentProfile, OmnigentAgentProfileVersion
             from sqlalchemy import select
+
+            from api_service.db.models import (
+                OmnigentAgentProfile,
+                OmnigentAgentProfileVersion,
+            )
 
             profile_row = await session.get(OmnigentAgentProfile, "omnigent-opencode-default")
             if profile_row is None:

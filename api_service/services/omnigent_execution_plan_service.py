@@ -9,17 +9,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from api_service.db.models import TemporalArtifactRetentionClass
-from pr_resolver_core import IMPLEMENTATION_CONTRACT
+from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
 from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
 from moonmind.omnigent.harness_platform.catalog import (
-    HarnessRecord,
     HarnessImplementationIdentity,
+    HarnessRecord,
     TrustState,
     classify_harness_trust,
     create_catalog_snapshot,
@@ -30,10 +31,6 @@ from moonmind.omnigent.harness_platform.execution_plan import (
     OmnigentExecutionPlanEnvelope,
     create_execution_plan_envelope,
 )
-from moonmind.omnigent.execution_support_evidence import (
-    load_protected_execution_support_evidence,
-)
-from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
 from moonmind.omnigent.harness_platform.host_classes import (
     HostClass,
     OmnigentHostClassSelector,
@@ -44,16 +41,18 @@ from moonmind.omnigent.harness_platform.stores import DbExecutionPlanStore
 from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.schemas.agent_skill_models import (
     AgentSkillFormat,
-    ResolvedSkillSet as AgentResolvedSkillSet,
     RuntimeMaterializationMode,
     SkillSelector,
     SkillSelectorEntry,
+)
+from moonmind.schemas.agent_skill_models import (
+    ResolvedSkillSet as AgentResolvedSkillSet,
 )
 from moonmind.services.skill_resolution import (
     AgentSkillResolver,
     SkillResolutionContext,
 )
-
+from pr_resolver_core import IMPLEMENTATION_CONTRACT
 
 _HARNESS_PRODUCT_CONFIG: dict[str, dict[str, str]] = {
     "codex-native": {
@@ -205,8 +204,12 @@ async def _resolve_runtime_policy_snapshot(
 ) -> dict[str, Any]:
     """Read one active, validated policy before plan persistence."""
 
-    from api_service.services.omnigent_policies import OmnigentPolicyService, PolicyNotFound
     import os
+
+    from api_service.services.omnigent_policies import (
+        OmnigentPolicyService,
+        PolicyNotFound,
+    )
 
     try:
         if db_session is not None:
@@ -269,7 +272,8 @@ async def _resolve_runtime_policy_snapshot(
                 boundaries["host"] = host
                 synthetic["boundaries"] = boundaries
                 # Update digest
-                import hashlib, json
+                import hashlib
+                import json
 
                 synthetic["policyDigest"] = "sha256:" + hashlib.sha256(
                     json.dumps(synthetic, sort_keys=True, separators=(",", ":")).encode()
@@ -437,7 +441,7 @@ async def _resolve_and_persist_skills(
     """Resolve once at admission and persist exact content plus its manifest."""
 
     snapshot_seed = hashlib.sha256(
-        f"{workflow_id}:{task_input_snapshot_digest}".encode("utf-8")
+        f"{workflow_id}:{task_input_snapshot_digest}".encode()
     ).hexdigest()[:32]
     selector = _skill_selector(initial_parameters)
     resolved = await AgentSkillResolver().resolve(

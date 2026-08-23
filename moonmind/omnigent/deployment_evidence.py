@@ -11,10 +11,10 @@ import hashlib
 import hmac
 import json
 import os
-import secrets
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Mapping
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -43,7 +43,7 @@ class DeploymentEvidenceSignature(BaseModel):
     value: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
-    def _check_key(self) -> "DeploymentEvidenceSignature":
+    def _check_key(self) -> DeploymentEvidenceSignature:
         if self.key_id != DEPLOYMENT_EVIDENCE_KEY_ID:
             raise ValueError("invalid deployment evidence keyId")
         return self
@@ -89,7 +89,7 @@ class DeploymentExecutionEvidence(BaseModel):
     signature: DeploymentEvidenceSignature
 
     @model_validator(mode="after")
-    def validate_exact_authority(self) -> "DeploymentExecutionEvidence":
+    def validate_exact_authority(self) -> DeploymentExecutionEvidence:
         if self.generated_at.tzinfo is None or self.expires_at.tzinfo is None:
             raise ValueError("deployment evidence timestamps require timezones")
         if self.expires_at <= self.generated_at:
@@ -307,15 +307,15 @@ def load_deployment_evidence(
 
 
 __all__ = [
-    "DEPLOYMENT_EVIDENCE_VERSION",
+    "DEPLOYMENT_EVIDENCE_DEFAULT_TTL",
     "DEPLOYMENT_EVIDENCE_ISSUER",
     "DEPLOYMENT_EVIDENCE_KEY_ID",
-    "DEPLOYMENT_EVIDENCE_DEFAULT_TTL",
-    "DeploymentExecutionEvidence",
+    "DEPLOYMENT_EVIDENCE_VERSION",
     "DeploymentEvidenceSignature",
+    "DeploymentExecutionEvidence",
     "assert_deployment_evidence_matches_plan",
+    "get_or_create_signing_key",
     "load_deployment_evidence",
     "sign_deployment_evidence",
     "validate_deployment_evidence",
-    "get_or_create_signing_key",
 ]
