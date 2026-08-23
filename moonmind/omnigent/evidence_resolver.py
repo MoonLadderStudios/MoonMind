@@ -34,7 +34,6 @@ def resolve_execution_evidence(
             if selected_policy == "protected":
                 raise
             # fall through to deployment for either
-            pass
     if selected_policy in {"deployment", "either"}:
         try:
             from moonmind.omnigent.deployment_evidence import load_deployment_evidence

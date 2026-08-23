@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from datetime import UTC, datetime, timedelta
@@ -46,9 +45,6 @@ def build_deployment_evidence(
 
     now = datetime.now(UTC)
     expires = now + DEPLOYMENT_EVIDENCE_DEFAULT_TTL
-    model_digest = hashlib.sha256(
-        json.dumps({"model": qualified_model_id, "effort": effort}, sort_keys=True).encode()
-    ).hexdigest()
     payload = {
         "schemaVersion": DEPLOYMENT_EVIDENCE_VERSION,
         "evidenceIssuer": DEPLOYMENT_EVIDENCE_ISSUER,

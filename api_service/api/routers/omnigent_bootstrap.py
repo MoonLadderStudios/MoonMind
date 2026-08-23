@@ -144,23 +144,57 @@ async def bootstrap_readiness(
     """Return computed readiness for OpenCode via Omnigent."""
     from moonmind.omnigent.settings import generic_host_enabled, opencode_support_enabled
     from moonmind.omnigent.bootstrap.store import load_bootstrap_record, load_resolved_state
+    from moonmind.omnigent.deployment_evidence import validate_deployment_evidence, assert_deployment_evidence_matches_plan
     from pathlib import Path
     import json, os
 
     record = load_bootstrap_record()
     resolved = load_resolved_state()
-    # Check deployment evidence
+    # Check deployment evidence with validation
     evidence_path = Path(os.getenv("MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE", "var/omnigent-evidence/deployment-execution-evidence.json"))
-    has_evidence = evidence_path.exists()
-    # Also check compose path
     compose_evidence = Path("/workspace/omnigent-evidence/deployment-execution-evidence.json")
-    if not has_evidence and compose_evidence.exists():
-        has_evidence = True
+    # Resolve actual path to check
+    actual_path = evidence_path if evidence_path.exists() else (compose_evidence if compose_evidence.exists() else None)
+    has_evidence = False
+    evidence_valid = False
+    if actual_path is not None and actual_path.exists():
+        try:
+            raw = json.loads(actual_path.read_text(encoding="utf-8"))
+            from typing import Mapping
+
+            if not isinstance(raw, Mapping):
+                raise ValueError("deployment evidence must be an object")
+            entries = raw.get("entries")
+            candidates = list(entries) if isinstance(entries, list) else [raw]
+            # If record has a last evidence ref, filter to that combination
+            target_key = record.last_evidence_ref if record and record.last_evidence_ref else None
+            if target_key:
+                matching = [
+                    v for v in candidates if isinstance(v, Mapping) and v.get("supportCombinationKey") == target_key
+                ]
+                if len(matching) != 1:
+                    raise ValueError("exact deployment execution evidence is unavailable for recorded combination")
+                candidate = matching[0]
+            else:
+                # No recorded key: require exactly one entry
+                if len(candidates) != 1:
+                    raise ValueError("exact deployment execution evidence is unavailable")
+                candidate = candidates[0]
+            # Validate evidence (checks HMAC, expiry, future-dated, support key recompute, secret-free)
+            parsed = validate_deployment_evidence(candidate)
+            has_evidence = True
+            # If we have resolved state, additionally verify host image matches evidence where possible
+            # For full plan match, we would need to reconstruct plan payload; at minimum ensure evidence is not stale
+            evidence_valid = True
+        except Exception:
+            has_evidence = False
+            evidence_valid = False
+    # Also check alternative path existence for has_evidence flag without validation? No, we already validated.
     enabled = generic_host_enabled() and opencode_support_enabled()
     state = record.state.value if record else "not_started"
     if not enabled:
         readiness = "disabled"
-    elif has_evidence and state == "ready":
+    elif evidence_valid and has_evidence and state == "ready":
         readiness = "ready"
     elif state in {"resolving_images", "syncing_catalog", "validating_credentials", "qualifying_runtime", "publishing_evidence"}:
         readiness = "preparing" if state in {"resolving_images", "syncing_catalog"} else "qualifying"
@@ -172,7 +206,7 @@ async def bootstrap_readiness(
         "enabled": enabled,
         "state": state,
         "readiness": readiness,
-        "hasDeploymentEvidence": has_evidence,
+        "hasDeploymentEvidence": has_evidence and evidence_valid,
         "resolvedImages": resolved.model_dump(mode="json", by_alias=True) if resolved else None,
         "bootstrap": record.model_dump(mode="json", by_alias=True) if record else None,
     }

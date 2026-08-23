@@ -151,6 +151,7 @@ class BootstrapController:
                 qualified_model=qualified,
                 effort=eff,
                 resolved=resolved,
+                principal=principal,
             )
             record = record.model_copy(update={"provider_profile_ref": provider_ref})
             save_bootstrap_record(record)
@@ -246,7 +247,7 @@ class BootstrapController:
             raise RuntimeError(f"catalog synchronization failed: {exc}") from exc
 
     async def _ensure_provider_profile(
-        self, *, api_key: str, qualified_model: str, effort: str, resolved: Any
+        self, *, api_key: str, qualified_model: str, effort: str, resolved: Any, principal: Any | None = None
     ) -> str:
         from api_service.db.base import async_session_maker
         from api_service.db.models import ManagedAgentProviderProfile
@@ -267,6 +268,16 @@ class BootstrapController:
                     RuntimeMaterializationMode,
                 )
 
+                # Scope to requesting user unless principal is superuser
+                owner_id = None
+                if principal is not None:
+                    principal_id = getattr(principal, "id", None)
+                    is_super = bool(getattr(principal, "is_superuser", False))
+                    if not is_super and principal_id is not None:
+                        owner_id = principal_id
+                    elif is_super:
+                        owner_id = None
+
                 profile = ManagedAgentProviderProfile(
                     profile_id=profile_id,
                     runtime_id="opencode",
@@ -282,7 +293,7 @@ class BootstrapController:
                     default_model=qualified_model,
                     default_effort=effort,
                     is_default=True,
-                    owner_user_id=None,
+                    owner_user_id=owner_id,
                 )
                 session.add(profile)
                 await session.commit()
@@ -320,13 +331,32 @@ class BootstrapController:
             )
             guard = None
         try:
-            # Validate via pinned runtime if image available and guard available, otherwise fallback to simple check
+            # Validate via pinned runtime if image available and guard available, otherwise treat as substrate unavailable
             validation_passed = False
             image_ref = None
             try:
                 image_ref = get_opencode_host_image_ref()
             except Exception:
                 image_ref = None
+
+            def _is_substrate_unavailable(exc: Exception) -> bool:
+                msg = str(exc).lower()
+                tokens = (
+                    "digest-pinned",
+                    "not available",
+                    "unable to find image",
+                    "no such image",
+                    "no such object",
+                    "docker",
+                    "network",
+                    "connection",
+                    "timeout",
+                    "temporal",
+                    "lease",
+                    "maintenance guard",
+                )
+                return any(tok in msg for tok in tokens)
+
             if guard is not None and image_ref:
                 try:
                     async with asm() as session:
@@ -345,28 +375,23 @@ class BootstrapController:
                     )
                     validation_passed = True
                 except Exception as exc:
-                    # If validation fails, fallback to simple check if possible
-                    if "digest-pinned" in str(exc).lower() or "not available" in str(exc).lower():
+                    if _is_substrate_unavailable(exc):
+                        # Substrate unavailable: degrade to format check but report setup failure, not success
                         if api_key.startswith("sk-") and len(api_key) > 20:
-                            validation_passed = True
+                            raise RuntimeError(
+                                f"validation substrate unavailable: {exc}"
+                            ) from exc
                         else:
                             raise ValueError("API key validation failed: invalid format") from exc
                     else:
-                        # For now, treat any validation failure as fallback for bootstrap to allow progress
-                        # In production, we would want strict validation, but for local dev we allow format check
-                        if api_key.startswith("sk-") and len(api_key) > 20:
-                            import logging
-
-                            logging.getLogger(__name__).warning(
-                                f"bootstrap: pinned validation failed, falling back to format check: {exc}"
-                            )
-                            validation_passed = True
-                        else:
-                            raise
+                        # Credential rejection or provider error: fail closed, propagate
+                        raise
             else:
-                # Fallback validation: just check key format (starts with sk-)
+                # No guard or no pinned image: substrate unavailable
                 if api_key.startswith("sk-") and len(api_key) > 20:
-                    validation_passed = True
+                    raise RuntimeError(
+                        "validation substrate unavailable: pinned runtime or maintenance guard not available"
+                    )
                 else:
                     raise ValueError("API key validation failed: invalid format")
 
@@ -448,7 +473,7 @@ class BootstrapController:
             catalog = await repo.latest("default")
             if catalog is None:
                 raise RuntimeError("harness catalog not synchronized")
-            result = await ensure_builtin_opencode_agent_profile(session=session, catalog=catalog)
+            await ensure_builtin_opencode_agent_profile(session=session, catalog=catalog)
             # Ensure the profile's default model is set to qualified model
             profile_id = "omnigent-opencode-default"
             profile = await session.get(OmnigentAgentProfile, profile_id)
@@ -724,7 +749,23 @@ class BootstrapController:
             harness = synth_catalog.harnesses[0]
             # Override catalog for support identity build digest to use synthetic
             catalog = type("obj", (), {"snapshot": synth_catalog})()
-        selector = OmnigentHostClassSelector()
+        # Feed resolved host image into selection via explicit environment dict
+        resolved_image = getattr(resolved, "opencode_host_image_ref", None) or getattr(resolved, "opencodeHostImageRef", None) or ""
+        if isinstance(resolved_image, str):
+            resolved_image = resolved_image.strip()
+        else:
+            resolved_image = str(resolved_image or "").strip()
+        selector_env = {
+            "OMNIGENT_OPENCODE_HOST_IMAGE_REF": resolved_image,
+            # Also propagate to os.environ fallback for any downstream code that reads directly
+            "OMNIGENT_IMAGE_REF": getattr(resolved, "server_image_ref", "") or getattr(resolved, "serverImageRef", "") or "",
+        }
+        # Merge with current env so other required vars remain available
+        import os as _os
+
+        merged_env = dict(_os.environ)
+        merged_env.update({k: v for k, v in selector_env.items() if v})
+        selector = OmnigentHostClassSelector(environment=merged_env)
         # This will fail if image not pinned, but we already resolved
         # Use manual HostClass construction if selector fails
         try:
@@ -775,33 +816,13 @@ class BootstrapController:
             harness_id="opencode-native",
             auth_model="own-auth",
         )
-        # Use planner's helpers to compute the same digests
-        from moonmind.omnigent.harness_platform.execution_plan import compute_model_config_digest
-        from moonmind.omnigent.harness_platform.support import compute_required_capabilities_digest
-
-        model_digest = compute_model_config_digest(
-            qualifiedId=qualified_model,
-            effort=effort,
-            routeRef="opencode-go",
-            normalizedOptions={},
-        )
         # Build a minimal planner run to get the exact supportIdentity
-        # We need a trust record and host class and binding set
         impl_ref = harness.implementation.implementation_ref()
         trust = classify_harness_trust(
             harnessId="opencode-native",
             implementation=harness.implementation,
             trustState=TrustState.core_trusted,
         )
-        # Use the same vendor refs as planner would
-        vendor_refs: list[str] = []
-        for entry in host_class.declaredHarnessImplementations:
-            if entry.harnessId == harness.id and entry.implementationRef == impl_ref:
-                for dep in entry.runtimeDependencies:
-                    vendor_refs.append(f"{dep.get('name')}@{dep.get('version')}#{dep.get('digest')}")
-                break
-        if not vendor_refs:
-            vendor_refs = [f"opencode@1.18.11#None"]
         # Create a dummy skill set and binding set as planner does
         dummy_skills = PlannerSkillSet.model_validate(
             {
@@ -856,12 +877,8 @@ class BootstrapController:
             agent_profile_snapshot_ref="artifact:snap",
         )
         support_identity = dummy_plan.payload.supportIdentity
-        support_key = dummy_plan.payload.supportCombinationKey
-        # For the evidence's other digests, use the dummy plan's values where applicable
-        # But we will override the evidence's supportIdentity to be the planner's exact one
-        # and use the planner's support key
         support_key = compute_support_combination_key(support_identity)
-        # Run qualification ( lightweight )
+        # Run qualification via generic realizer
         qualification = await run_qualification(
             session_factory=async_session_maker,
             provider_profile_ref=provider_profile_ref,
@@ -870,21 +887,9 @@ class BootstrapController:
             host_image_ref=host_class.imageRef,
             server_build_digest=catalog.snapshot.omnigentBuildDigest,
         )
-        # Need policy snapshots digests - we can compute dummy for now or use real launch profile digests
-        # For deployment evidence we need real policy digests that match plan; we can generate them as hash of launch policy json
+        # For deployment evidence we need policy digests; use deterministic dummy hashes
         policy_digest = "sha256:" + hashlib.sha256(b"policy").hexdigest()
         effective_digest = "sha256:" + hashlib.sha256(b"effective").hexdigest()
-        # Try to get real digests from planner if available
-        try:
-            from api_service.db.base import async_session_maker as asm
-            from moonmind.omnigent.production import build_generic_omnigent_execution_services
-
-            svc = build_generic_omnigent_execution_services(session_factory=asm)
-            # Not persisting plan here; just use dummy digests for now
-            # In full implementation, we'd compile a plan and use its digests
-            pass
-        except Exception:
-            pass
 
         # Use qualification results
         results = qualification["results"]

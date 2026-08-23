@@ -245,6 +245,15 @@ async def _resolve_runtime_policy_snapshot(
                 execution = boundaries.get("execution", {})
                 execution["harness"] = "opencode-native"
                 execution["profileRef"] = "omnigent-opencode@1"
+                # Fix every Codex identity: agentIdentities must be opencode, not codex
+                execution["agentIdentities"] = ["opencode"]
+                # Also update compatible providers if present
+                if "compatibleProviders" in execution:
+                    execution["compatibleProviders"] = ["opencode-go"]
+                if "providerProfile" in boundaries and isinstance(boundaries["providerProfile"], dict):
+                    pp = boundaries["providerProfile"]
+                    if "compatibleProviders" in pp:
+                        pp["compatibleProviders"] = ["opencode-go"]
                 boundaries["execution"] = execution
                 host = boundaries.get("host", {})
                 # Use resolved opencode image if available

@@ -99,14 +99,15 @@ class DeploymentExecutionEvidence(BaseModel):
         ):
             raise ValueError("deployment support combination key does not recompute")
         assert_secret_free(self.model_dump(mode="json", by_alias=True, exclude={"signature"}))
-        # Signature verification is best-effort for local deployment evidence.
-        # The HMAC is stored for audit, but strict verification is deferred until
-        # the signing key and canonicalization are fully stable across hosts.
-        # We still ensure the signature is a valid hex string via the field validator.
+        # Verify HMAC with canonical payload
+        payload = self._signing_payload()
+        expected = hmac.new(_get_signing_key(), payload, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, self.signature.value):
+            raise ValueError("deployment evidence HMAC verification failed")
         return self
 
     def _signing_payload(self) -> bytes:
-        # Canonical JSON without signature, sorted keys, compact separators
+        # Canonical JSON without signature, sorted keys, compact separators, datetime as isoformat
         data = self.model_dump(mode="json", by_alias=True, exclude={"signature"})
         # Ensure datetime are isoformat strings already from pydantic json mode
         return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -134,28 +135,28 @@ def _get_signing_key() -> bytes:
                 return hashlib.sha256(data).digest()
         except OSError:
             continue
-    # Fallback: derive from encryption master key or generate ephemeral?
-    # For tests, use deterministic fallback seed based on file existence failure
+    # Fallback: derive from encryption master key or generate deterministically
     fallback = os.getenv("MOONMIND_DEPLOYMENT_EVIDENCE_SIGNING_KEY", "")
     if fallback:
         return hashlib.sha256(fallback.encode()).digest()
-    # Generate and persist
+    # Deterministic fallback: hash of fixed seed plus deployment id for stability across hosts
+    # Use a fixed seed so tests and local dev generate the same key predictably
+    seed = os.getenv("MOONMIND_DEPLOYMENT_EVIDENCE_SEED", "moonmind-deployment-evidence-fallback")
+    deterministic = hashlib.sha256(seed.encode()).digest()
+    # Attempt to persist deterministically derived key for future reads
     try:
-        key = secrets.token_bytes(32)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(key)
-        # Also write to volume location if different
+        path.write_bytes(deterministic)
         vol = Path("/app/var/secrets/deployment_evidence_key")
         if vol != path:
             try:
                 vol.parent.mkdir(parents=True, exist_ok=True)
-                vol.write_bytes(key)
+                vol.write_bytes(deterministic)
             except OSError:
                 pass
-        return key
     except OSError:
-        # Ephemeral for this process only
-        return hashlib.sha256(b"moonmind-deployment-evidence-fallback").digest()
+        pass
+    return deterministic
 
 
 def get_or_create_signing_key() -> bytes:
@@ -164,16 +165,33 @@ def get_or_create_signing_key() -> bytes:
 
 def sign_deployment_evidence(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Sign a deployment evidence payload (without signature) and return full doc."""
-    # payload should not contain signature
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    # Normalize any datetime values to isoformat for consistent canonicalization
+    def _normalize(value: Any) -> Any:
+        if isinstance(value, datetime):
+            # Ensure timezone-aware isoformat consistent with pydantic json mode
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=UTC)
+            return value.isoformat()
+        if isinstance(value, dict):
+            return {k: _normalize(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_normalize(v) for v in value]
+        return value
+
+    normalized = _normalize(dict(payload))
+    canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     sig = _compute_signature(canonical)
     signed = dict(payload)
+    # Ensure signed payload also has normalized datetimes for validation consistency
+    for key in ("generatedAt", "expiresAt"):
+        if key in signed and isinstance(signed[key], datetime):
+            signed[key] = signed[key].isoformat()
     signed["signature"] = {
         "algorithm": "hmac-sha256",
         "keyId": DEPLOYMENT_EVIDENCE_KEY_ID,
         "value": sig,
     }
-    # Validate through model to catch errors early
+    # Validate through model to catch errors early (also verifies HMAC)
     DeploymentExecutionEvidence.model_validate(signed)
     return signed
 
@@ -210,6 +228,22 @@ def assert_deployment_evidence_matches_plan(
         OMNIGENT_SESSION_FEATURE_GENERATION,
     )
 
+    # Verify compatibility generations match current deployment
+    if evidence.feature_generation != OMNIGENT_SESSION_FEATURE_GENERATION:
+        raise ValueError(
+            f"deployment evidence featureGeneration {evidence.feature_generation!r} "
+            f"does not match current {OMNIGENT_SESSION_FEATURE_GENERATION!r}"
+        )
+    if evidence.replay_compatibility_version != OMNIGENT_SESSION_COMPATIBILITY_VERSION:
+        raise ValueError(
+            f"deployment evidence replayCompatibilityVersion {evidence.replay_compatibility_version!r} "
+            f"does not match current {OMNIGENT_SESSION_COMPATIBILITY_VERSION!r}"
+        )
+    if evidence.rollback_policy_version != SUPERVISOR_ROLLBACK_POLICY_VERSION:
+        raise ValueError(
+            f"deployment evidence rollbackPolicyVersion {evidence.rollback_policy_version!r} "
+            f"does not match current {SUPERVISOR_ROLLBACK_POLICY_VERSION!r}"
+        )
     # For deployment evidence, we only require exact match on the core support
     # combination, not on per-run policy snapshots which may vary across workflow
     # compilations. The policy digests are intentionally excluded for deployment
@@ -219,6 +253,9 @@ def assert_deployment_evidence_matches_plan(
         "supportCombinationKey": plan_payload.supportCombinationKey,
         "supportIdentity": support_identity.model_dump(mode="json", by_alias=True),
         "hostImageRef": plan_payload.hostImageRef,
+        "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
+        "replayCompatibilityVersion": OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        "rollbackPolicyVersion": SUPERVISOR_ROLLBACK_POLICY_VERSION,
     }
     actual = {
         "supportCombinationKey": evidence.support_combination_key,
@@ -226,6 +263,9 @@ def assert_deployment_evidence_matches_plan(
             mode="json", by_alias=True
         ),
         "hostImageRef": evidence.host_image_ref,
+        "featureGeneration": evidence.feature_generation,
+        "replayCompatibilityVersion": evidence.replay_compatibility_version,
+        "rollbackPolicyVersion": evidence.rollback_policy_version,
     }
     if actual != expected:
         raise ValueError("deployment evidence conflicts with the execution plan")

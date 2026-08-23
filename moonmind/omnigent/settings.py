@@ -97,7 +97,9 @@ def _parse_bool_with_default(
         return True
     if lowered in _FALSE_VALUES:
         return False
-    return default
+    raise ValueError(
+        f"invalid boolean value {cleaned!r}: expected one of {sorted(_TRUE_VALUES | _FALSE_VALUES)}"
+    )
 
 
 def generic_host_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
@@ -135,7 +137,7 @@ def omnigent_evidence_policy(
 ) -> str:
     """Return the execution evidence admission policy.
 
-    Values: deployment (default), protected, either.
+    Values: deployment, protected, either (default).
     Deployment accepts locally-generated deployment qualification evidence.
     Protected requires protected CI evidence for official support tier.
     """
@@ -143,10 +145,12 @@ def omnigent_evidence_policy(
     source = env if env is not None else os.environ
     raw = _clean(source.get(MOONMIND_OMNIGENT_EVIDENCE_POLICY_ENV)).lower()
     if not raw:
-        return "deployment"
+        return "either"
     if raw in _DEPLOYMENT_EVIDENCE_POLICY_VALUES:
         return raw
-    return "deployment"
+    raise ValueError(
+        f"invalid evidence policy {raw!r}: expected one of {sorted(_DEPLOYMENT_EVIDENCE_POLICY_VALUES)}"
+    )
 
 
 def resolved_server_url(*, env: Mapping[str, Any] | None = None) -> str:
