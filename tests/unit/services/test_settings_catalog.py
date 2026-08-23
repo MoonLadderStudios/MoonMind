@@ -353,7 +353,7 @@ async def test_mm656_references_policy_boundaries_and_atomicity(settings_session
             env={},
             session=settings_session,
             workspace_policy=SettingsWorkspacePolicy(
-                allowed_runtimes=("codex", "codex_cli"),
+                allowed_runtimes=("codex", "codex_cli", "omnigent"),
                 skills_canary_enabled=False,
                 allowed_publication_modes=("none", "pr"),
                 allowed_secret_ref_backends=("db",),
