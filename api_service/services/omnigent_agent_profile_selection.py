@@ -24,6 +24,9 @@ from api_service.services.omnigent_agent_profile_service import (
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
 )
+from api_service.services.provider_profile_service import (
+    _managed_secret_statuses_for_profiles,
+)
 
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
 
@@ -376,7 +379,12 @@ async def resolve_agent_profile_snapshot(
             status.HTTP_409_CONFLICT,
             "selected Provider Profile is not enabled or compatible",
         )
-    if not provider_profile_launch_ready(compatible_provider):
+    secret_statuses = await _managed_secret_statuses_for_profiles(
+        session=session, rows=[compatible_provider]
+    )
+    if not provider_profile_launch_ready(
+        compatible_provider, managed_secret_statuses=secret_statuses
+    ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "selected Provider Profile is not launch ready or has no capacity",
@@ -541,8 +549,17 @@ async def resolve_default_agent_profile_snapshot(
                 )
             )
         candidates = list((await session.scalars(query)).all())
+        candidate_statuses = await _managed_secret_statuses_for_profiles(
+            session=session, rows=candidates
+        )
         selected = next(
-            (item for item in candidates if provider_profile_launch_ready(item)),
+            (
+                item
+                for item in candidates
+                if provider_profile_launch_ready(
+                    item, managed_secret_statuses=candidate_statuses
+                )
+            ),
             None,
         )
         if selected is None:
