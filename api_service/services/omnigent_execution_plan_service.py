@@ -1102,4 +1102,5 @@ __all__ = [
     "PersistedOmnigentExecutionPlan",
     "compile_and_persist_execution_plan",
     "persist_json_artifact",
+    "load_protected_execution_support_evidence",
 ]
