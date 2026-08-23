@@ -103,5 +103,80 @@
     "id": "3834939693",
     "disposition": "not-applicable",
     "rationale": "depends_on is required Alembic discovery metadata."
+  },
+  {
+    "id": 3836685124,
+    "disposition": "addressed",
+    "rationale": "Server-owned defaultRuntime now omnigent via settings.workflow.default_runtime, DEFAULT_WORKFLOW_RUNTIME, and build_runtime_config; client fallback documented as authoritative server value."
+  },
+  {
+    "id": 3836685133,
+    "disposition": "addressed",
+    "rationale": "Pinned OpenCode image validation now fails closed on Unable to find image without substituting mutable tag; preserves digest authority."
+  },
+  {
+    "id": 3836685141,
+    "disposition": "addressed",
+    "rationale": "Resolved opencode host image now propagated to process env and HostClassSelector via merged_env and os.environ; _ensure_provider_profile falls back to resolved state."
+  },
+  {
+    "id": 3836685142,
+    "disposition": "addressed",
+    "rationale": "Synthetic opencode policy now deep-replaces every Codex identity (harness, profileRef, agentIdentities, compatibleProviders) and re-asserts after deep sweep."
+  },
+  {
+    "id": 3836685150,
+    "disposition": "addressed",
+    "rationale": "Deployment evidence generation and validation now enforce featureGeneration/replayCompatibilityVersion/rollbackPolicyVersion at both validate_deployment_evidence and assert_deployment_evidence_matches_plan."
+  },
+  {
+    "id": 3837672052,
+    "disposition": "addressed",
+    "rationale": "Removed redundant json/hashlib imports in synthetic fallback; reuses top-level imports."
+  },
+  {
+    "id": 3837672053,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except at controller.py:249 (best-effort catalog fallback)."
+  },
+  {
+    "id": 3837672055,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except at controller.py:798 (best-effort resolved state load)."
+  },
+  {
+    "id": 3837672057,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except at deployment_evidence.py:155 (volume write best-effort)."
+  },
+  {
+    "id": 3837672059,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except at deployment_evidence.py:157 (key persistence best-effort)."
+  },
+  {
+    "id": 3837672064,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except at evidence.py:93 (compose volume best-effort)."
+  },
+  {
+    "id": 3837672070,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except at image_resolution.py:58 (docker inspect JSON decode)."
+  },
+  {
+    "id": 3837672073,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except at production.py:112 (resolved state best-effort)."
+  },
+  {
+    "id": 3837672077,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except at production.py:133 (docker inspect best-effort)."
+  },
+  {
+    "id": 3837672079,
+    "disposition": "addressed",
+    "rationale": "Added explanatory comment to empty except at store.py:54 (alternate mount best-effort)."
   }
 ]
