@@ -303,10 +303,7 @@ async def _resolve_runtime_policy_snapshot(
                     host["serverImageRef"] = server_ref
                 boundaries["host"] = host
                 synthetic["boundaries"] = boundaries
-                # Update digest
-                import hashlib
-                import json
-
+                # Update digest (hashlib/json already imported at module top)
                 synthetic["policyDigest"] = "sha256:" + hashlib.sha256(
                     json.dumps(synthetic, sort_keys=True, separators=(",", ":")).encode()
                 ).hexdigest()

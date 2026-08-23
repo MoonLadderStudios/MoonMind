@@ -247,6 +247,7 @@ class BootstrapController:
                             )
                             return
                 except Exception:
+                    # Best-effort fallback already attempted; propagate original catalog sync error
                     pass
             raise RuntimeError(f"catalog synchronization failed: {exc}") from exc
 
@@ -796,6 +797,7 @@ class BootstrapController:
                 if _persisted and getattr(_persisted, "opencode_host_image_ref", None):
                     resolved = _persisted
             except Exception:
+                # Best-effort: if persisted state cannot be loaded, fall back to passed resolved
                 pass
         resolved_image = getattr(resolved, "opencode_host_image_ref", None) or getattr(resolved, "opencodeHostImageRef", None) or ""
         if isinstance(resolved_image, str):

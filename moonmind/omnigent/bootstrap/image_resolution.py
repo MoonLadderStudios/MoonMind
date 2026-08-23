@@ -56,6 +56,7 @@ async def _resolve_via_docker_inspect(image: str) -> str | None:
             # If none pinned, construct from Id?
             return str(digests[0])
     except json.JSONDecodeError:
+        # Best-effort: docker inspect output was not JSON; treat as unresolved
         pass
     return None
 

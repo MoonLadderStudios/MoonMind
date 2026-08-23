@@ -52,6 +52,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
             alt.parent.mkdir(parents=True, exist_ok=True)
             alt.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         except OSError:
+            # Best-effort: alternate mount may be unavailable in hermetic tests
             pass
 
 

@@ -91,6 +91,7 @@ def write_deployment_evidence(evidence: dict[str, Any], path: Path | None = None
         compose_dest.parent.mkdir(parents=True, exist_ok=True)
         compose_dest.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except OSError:
+        # Best-effort: compose volume may be unavailable in hermetic tests
         pass
     # If evidence is single entry, also support entries array form for loader compatibility
     # The loader handles both raw and entries list, so single object is fine

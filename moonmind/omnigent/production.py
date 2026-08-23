@@ -110,6 +110,7 @@ def _server_build_digest() -> str:
             if m:
                 return f"sha256:{m.group(1)}"
     except Exception:
+        # Best-effort: resolved state may be unavailable before bootstrap
         pass
     image_ref = str(os.getenv("OMNIGENT_IMAGE_REF") or "").strip()
     match = _IMAGE_REF.fullmatch(image_ref)
@@ -131,6 +132,7 @@ def _server_build_digest() -> str:
                 if m2:
                     return f"sha256:{m2.group(1)}"
         except Exception:
+            # Best-effort docker inspect failed; fall through to hard error
             pass
         raise HarnessPlatformError(
             "OMNIGENT_IMAGE_REF must identify the exact Omnigent server digest",

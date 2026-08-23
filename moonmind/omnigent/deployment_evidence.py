@@ -153,8 +153,10 @@ def _get_signing_key() -> bytes:
                 vol.parent.mkdir(parents=True, exist_ok=True)
                 vol.write_bytes(deterministic)
             except OSError:
+                # Best-effort: volume may be read-only in some test environments
                 pass
     except OSError:
+        # Best-effort persistence failed; return deterministic key anyway
         pass
     return deterministic
 
