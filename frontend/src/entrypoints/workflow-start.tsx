@@ -5786,6 +5786,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     };
   }, [dashboardConfig.system?.attachmentPolicy]);
 
+  // Server-owned default: `dashboardConfig.system.defaultRuntime` from `build_runtime_config`
+  // is authoritative (now defaults to omnigent via `settings.workflow.default_runtime` and
+  // `DEFAULT_WORKFLOW_RUNTIME`). The hardcoded fallback is only for offline/legacy payloads.
   const defaultRuntime = String(
     dashboardConfig.system?.defaultRuntime ||
       dashboardConfig.system?.defaultAgentRuntime ||

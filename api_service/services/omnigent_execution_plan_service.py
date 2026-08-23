@@ -17,6 +17,9 @@ from typing import Any
 
 from api_service.db.models import TemporalArtifactRetentionClass
 from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
+from moonmind.omnigent.execution_support_evidence import (
+    load_protected_execution_support_evidence,  # re-export for hermetic test patching
+)
 from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
 from moonmind.omnigent.harness_platform.catalog import (
     HarnessImplementationIdentity,
@@ -238,7 +241,7 @@ async def _resolve_runtime_policy_snapshot(
                         base = await OmnigentPolicyService(session2).resolve_runtime_snapshot(
                             "codex-on-demand@1"
                         )
-                # Clone and adapt for opencode
+                # Clone and adapt for opencode – replace every Codex identity
                 import copy
 
                 synthetic = copy.deepcopy(base)
@@ -260,6 +263,35 @@ async def _resolve_runtime_policy_snapshot(
                 # Also ensure no stale Codex execution.compatibleProviders remains
                 # (overwrites any previous value; synthesis now always uses opencode-go).
                 boundaries["execution"] = execution
+                # Deep sweep: replace any lingering Codex strings that survived the shallow copy
+                def _deep_replace_codex(obj: Any) -> Any:
+                    if isinstance(obj, dict):
+                        return {k: _deep_replace_codex(v) for k, v in obj.items()}
+                    if isinstance(obj, list):
+                        return [_deep_replace_codex(v) for v in obj]
+                    if isinstance(obj, str):
+                        if obj == "codex":
+                            return "opencode-go"
+                        if obj == "codex-native":
+                            return "opencode-native"
+                        if obj == "codex-on-demand@1":
+                            return "opencode-on-demand@1"
+                        if obj == "omnigent-codex@1":
+                            return "omnigent-opencode@1"
+                        if "codex" in obj.lower():
+                            return obj.replace("codex", "opencode").replace("Codex", "Opencode")
+                        return obj
+                    return obj
+
+                synthetic["boundaries"] = _deep_replace_codex(boundaries)
+                # Re-assert critical Opencode identities after deep sweep
+                synthetic["boundaries"]["execution"]["harness"] = "opencode-native"
+                synthetic["boundaries"]["execution"]["profileRef"] = "omnigent-opencode@1"
+                synthetic["boundaries"]["execution"]["agentIdentities"] = ["opencode"]
+                synthetic["boundaries"]["execution"]["compatibleProviders"] = ["opencode-go"]
+                synthetic["boundaries"]["providerProfile"]["compatibleProviders"] = ["opencode-go"]
+                boundaries = synthetic["boundaries"]
+                execution = boundaries.get("execution", {})
                 host = boundaries.get("host", {})
                 # Use resolved opencode image if available
                 opencode_ref = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()

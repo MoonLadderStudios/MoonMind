@@ -90,6 +90,15 @@ class BootstrapController:
             save_bootstrap_record(record)
             resolved = await resolve_omnigent_images()
             save_resolved_state(resolved)
+            # Propagate resolved digests into process environment so downstream selectors
+            # and `get_opencode_host_image_ref()` see the authoritative pinned refs even
+            # when the operator did not export them (default Compose path).
+            if resolved.opencode_host_image_ref:
+                os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = resolved.opencode_host_image_ref
+            if resolved.server_image_ref:
+                os.environ["OMNIGENT_IMAGE_REF"] = resolved.server_image_ref
+            if resolved.omnigent_build_digest:
+                os.environ["OMNIGENT_BUILD_DIGEST"] = resolved.omnigent_build_digest
             # Ensure image refs are available; if not, try fallback to existing env host image or build
             if not resolved.opencode_host_image_ref:
                 # Try to build locally if missing
@@ -328,11 +337,27 @@ class BootstrapController:
             guard = None
         try:
             # Validate via pinned runtime if image available and guard available, otherwise treat as substrate unavailable
+            # Prefer the just-resolved state when the process env has not yet been updated (default Compose).
             image_ref = None
             try:
                 image_ref = get_opencode_host_image_ref()
             except Exception:
                 image_ref = None
+            if not image_ref and resolved is not None and getattr(resolved, "opencode_host_image_ref", None):
+                candidate = str(resolved.opencode_host_image_ref).strip()
+                if "@sha256:" in candidate:
+                    image_ref = candidate
+            if not image_ref:
+                try:
+                    from moonmind.omnigent.bootstrap.store import load_resolved_state as _load_rs
+
+                    _persisted = _load_rs()
+                    if _persisted and getattr(_persisted, "opencode_host_image_ref", None):
+                        cand = str(_persisted.opencode_host_image_ref).strip()
+                        if "@sha256:" in cand:
+                            image_ref = cand
+                except Exception:
+                    pass
 
             def _is_substrate_unavailable(exc: Exception) -> bool:
                 msg = str(exc).lower()
@@ -793,6 +818,10 @@ class BootstrapController:
         # Defensive: ensure the resolved image is present in the selector environment
         if merged_env.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip() != resolved_image:
             merged_env["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = resolved_image
+        # Publish to process environment for direct readers (get_opencode_host_image_ref, etc.)
+        _os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = resolved_image
+        if selector_env["OMNIGENT_IMAGE_REF"]:
+            _os.environ["OMNIGENT_IMAGE_REF"] = selector_env["OMNIGENT_IMAGE_REF"]
         selector = OmnigentHostClassSelector(environment=merged_env)
         # This will fail if image not pinned, but we already resolved
         # Use manual HostClass construction if selector fails

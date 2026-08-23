@@ -210,6 +210,31 @@ def validate_deployment_evidence(
         or parsed.expires_at <= observed_at
     ):
         raise ValueError("deployment evidence is stale or expired")
+    # Enforce compatibility generations at validation time so stale-generation evidence
+    # is rejected even before plan comparison (admission must be generation-aware).
+    from moonmind.omnigent.session_supervisor_rollback import (
+        SUPERVISOR_ROLLBACK_POLICY_VERSION,
+    )
+    from moonmind.schemas.omnigent_session_models import (
+        OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+        OMNIGENT_SESSION_FEATURE_GENERATION,
+    )
+
+    if parsed.feature_generation != OMNIGENT_SESSION_FEATURE_GENERATION:
+        raise ValueError(
+            f"deployment evidence featureGeneration {parsed.feature_generation!r} "
+            f"does not match current {OMNIGENT_SESSION_FEATURE_GENERATION!r}"
+        )
+    if parsed.replay_compatibility_version != OMNIGENT_SESSION_COMPATIBILITY_VERSION:
+        raise ValueError(
+            f"deployment evidence replayCompatibilityVersion {parsed.replay_compatibility_version!r} "
+            f"does not match current {OMNIGENT_SESSION_COMPATIBILITY_VERSION!r}"
+        )
+    if parsed.rollback_policy_version != SUPERVISOR_ROLLBACK_POLICY_VERSION:
+        raise ValueError(
+            f"deployment evidence rollbackPolicyVersion {parsed.rollback_policy_version!r} "
+            f"does not match current {SUPERVISOR_ROLLBACK_POLICY_VERSION!r}"
+        )
     return parsed
 
 
