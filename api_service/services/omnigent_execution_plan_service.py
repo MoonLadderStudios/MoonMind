@@ -18,7 +18,7 @@ from typing import Any
 from api_service.db.models import TemporalArtifactRetentionClass
 from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
 from moonmind.omnigent.execution_support_evidence import (
-    load_protected_execution_support_evidence,  # noqa: F401 - re-export for hermetic test patching
+    load_protected_execution_support_evidence,  # re-export for hermetic test patching
 )
 from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
 from moonmind.omnigent.harness_platform.catalog import (
