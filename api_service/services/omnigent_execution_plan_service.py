@@ -18,7 +18,7 @@ from typing import Any
 from api_service.db.models import TemporalArtifactRetentionClass
 from moonmind.omnigent.evidence_resolver import resolve_execution_evidence
 from moonmind.omnigent.execution_support_evidence import (
-    load_protected_execution_support_evidence,  # re-export for hermetic test patching
+    load_protected_execution_support_evidence,  # noqa: F401 - re-export for hermetic test patching
 )
 from moonmind.omnigent.harness_platform.agent_profile import OmnigentAgentProfileV2
 from moonmind.omnigent.harness_platform.catalog import (
@@ -290,9 +290,7 @@ async def _resolve_runtime_policy_snapshot(
                 synthetic["boundaries"]["execution"]["agentIdentities"] = ["opencode"]
                 synthetic["boundaries"]["execution"]["compatibleProviders"] = ["opencode-go"]
                 synthetic["boundaries"]["providerProfile"]["compatibleProviders"] = ["opencode-go"]
-                boundaries = synthetic["boundaries"]
-                execution = boundaries.get("execution", {})
-                host = boundaries.get("host", {})
+                host = synthetic["boundaries"].get("host", {})
                 # Use resolved opencode image if available
                 opencode_ref = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip()
                 if opencode_ref and "@sha256:" in opencode_ref:

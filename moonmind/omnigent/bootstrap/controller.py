@@ -357,7 +357,7 @@ class BootstrapController:
                         cand = str(_persisted.opencode_host_image_ref).strip()
                         if "@sha256:" in cand:
                             image_ref = cand
-                except Exception:
+                except Exception:  # best-effort fallback to passed resolved if persisted state unavailable
                     pass
 
             def _is_substrate_unavailable(exc: Exception) -> bool:
