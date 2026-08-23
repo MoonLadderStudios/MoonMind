@@ -889,7 +889,7 @@ def _derive_pr_resolver_title(
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
-        return str(settings.workflow.default_runtime or "codex_cli").strip().lower()
+        return str(settings.workflow.default_runtime or "omnigent").strip().lower()
     return normalized
 
 

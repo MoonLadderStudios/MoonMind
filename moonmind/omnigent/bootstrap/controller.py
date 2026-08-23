@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import re
 from datetime import UTC, datetime
@@ -749,22 +747,39 @@ class BootstrapController:
             harness = synth_catalog.harnesses[0]
             # Override catalog for support identity build digest to use synthetic
             catalog = type("obj", (), {"snapshot": synth_catalog})()
-        # Feed resolved host image into selection via explicit environment dict
+        # Feed resolved host image into selection via explicit environment dict.
+        # Ensure resolve_omnigent_images() was called upstream; if the passed
+        # resolved state is empty, try the persisted resolved state before failing.
+        if not resolved or not getattr(resolved, "opencode_host_image_ref", None):
+            try:
+                from moonmind.omnigent.bootstrap.store import load_resolved_state as _load_resolved
+
+                _persisted = _load_resolved()
+                if _persisted and getattr(_persisted, "opencode_host_image_ref", None):
+                    resolved = _persisted
+            except Exception:
+                pass
         resolved_image = getattr(resolved, "opencode_host_image_ref", None) or getattr(resolved, "opencodeHostImageRef", None) or ""
         if isinstance(resolved_image, str):
             resolved_image = resolved_image.strip()
         else:
             resolved_image = str(resolved_image or "").strip()
+        if not resolved_image or "@sha256:" not in resolved_image:
+            raise RuntimeError(
+                "resolved opencode host image is missing or not digest-pinned; "
+                "ensure resolve_omnigent_images() succeeded before host class selection and that OMNIGENT_OPENCODE_HOST_IMAGE_REF is digest-pinned"
+            )
         selector_env = {
             "OMNIGENT_OPENCODE_HOST_IMAGE_REF": resolved_image,
-            # Also propagate to os.environ fallback for any downstream code that reads directly
             "OMNIGENT_IMAGE_REF": getattr(resolved, "server_image_ref", "") or getattr(resolved, "serverImageRef", "") or "",
         }
-        # Merge with current env so other required vars remain available
         import os as _os
 
         merged_env = dict(_os.environ)
         merged_env.update({k: v for k, v in selector_env.items() if v})
+        # Defensive: ensure the resolved image is present in the selector environment
+        if merged_env.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF", "").strip() != resolved_image:
+            merged_env["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = resolved_image
         selector = OmnigentHostClassSelector(environment=merged_env)
         # This will fail if image not pinned, but we already resolved
         # Use manual HostClass construction if selector fails

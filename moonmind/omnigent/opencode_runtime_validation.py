@@ -157,12 +157,17 @@ class OpenCodeProviderRuntimeValidationService:
                 ),
             ]
             code, stdout, _stderr = await self._backend.run(argv, timeout_seconds=120)
-            # If digest-pinned image is not found, try local dev path via image Id.
-            # For images built with --load and no RepoDigest, the Id equals the digest.
             if code != 0 and "Unable to find image" in _stderr.decode("utf-8", errors="replace"):
-                # Attempt to resolve via image Id for local dev
+                # Pinned image not found. Only allow local --load fallback where the
+                # image Id equals the pinned digest; never substitute a mutable tag.
                 import os
 
+                expected_digest = "sha256:" + self._image_ref.rpartition("@sha256:")[2]
+                if len(expected_digest) != 71 or expected_digest == "sha256:":
+                    raise HarnessPlatformError(
+                        f"pinned OpenCode image {self._image_ref} has invalid digest",
+                        code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                    )
                 tag_ref = self._image_ref.split("@")[0] + ":1.18.11"
                 env_tag = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE", "").strip()
                 env_tag_full = f"{env_tag}:1.18.11" if env_tag and ":" not in env_tag else env_tag
@@ -171,18 +176,18 @@ class OpenCodeProviderRuntimeValidationService:
                 for cand in candidates:
                     if not cand:
                         continue
-                    # Try to get Id via inspect
                     ic, out, _ = await self._backend.run(
                         ["docker", "image", "inspect", cand, "--format", "{{.Id}}"],
                         timeout_seconds=30,
                     )
                     if ic == 0:
                         candidate_id = out.decode("utf-8", errors="replace").strip()
-                        if candidate_id.startswith("sha256:"):
+                        if candidate_id == expected_digest:
                             resolved_id = candidate_id
                             break
+                        # Digest mismatch – do not use this tag's image.
+                        continue
                 if resolved_id is not None:
-                    # Use Id as runtime image but keep self._image_ref as authority (Id == digest)
                     fallback_argv = list(argv)
                     fallback_argv[-3] = resolved_id
                     code, stdout, _stderr = await self._backend.run(fallback_argv, timeout_seconds=120)
@@ -191,10 +196,9 @@ class OpenCodeProviderRuntimeValidationService:
                             f"pinned OpenCode image {self._image_ref} not available locally (tried Id {resolved_id})",
                             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                         )
-                    # Record that we used Id but authority remains pinned digest
                 else:
                     raise HarnessPlatformError(
-                        f"pinned OpenCode image {self._image_ref} not found and no local Id fallback available",
+                        f"pinned OpenCode image {self._image_ref} not found and no local image Id matches the pinned digest {expected_digest}",
                         code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                     )
             if code != 0:
@@ -241,9 +245,15 @@ class OpenCodeProviderRuntimeValidationService:
                     ]
                 )
                 if version_code != 0 and "Unable to find image" in _version_err.decode("utf-8", errors="replace"):
-                    # Local dev Id fallback: resolve Id via tag and try again, but keep pinned digest as authority
+                    # Only allow Id == pinned digest fallback; never substitute a different tag's image.
                     import os
 
+                    expected_digest = "sha256:" + self._image_ref.rpartition("@sha256:")[2]
+                    if len(expected_digest) != 71 or expected_digest == "sha256:":
+                        raise HarnessPlatformError(
+                            f"pinned image {self._image_ref} has invalid digest for {binary} version check",
+                            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+                        )
                     tag_ref = self._image_ref.split("@")[0] + ":1.18.11"
                     env_tag = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE", "").strip()
                     env_tag_full = f"{env_tag}:1.18.11" if env_tag and ":" not in env_tag else env_tag
@@ -258,9 +268,10 @@ class OpenCodeProviderRuntimeValidationService:
                         )
                         if ic == 0:
                             cid = out.decode("utf-8", errors="replace").strip()
-                            if cid.startswith("sha256:"):
+                            if cid == expected_digest:
                                 resolved_id = cid
                                 break
+                            continue
                     if resolved_id is not None:
                         fallback_code, fallback_out, fallback_err = await self._backend.run(
                             [
@@ -284,7 +295,7 @@ class OpenCodeProviderRuntimeValidationService:
                             )
                     else:
                         raise HarnessPlatformError(
-                            f"pinned image {self._image_ref} not found for {binary} version check",
+                            f"pinned image {self._image_ref} not found for {binary} version check and no local Id matches {expected_digest}",
                             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
                         )
                 if version_code != 0:
