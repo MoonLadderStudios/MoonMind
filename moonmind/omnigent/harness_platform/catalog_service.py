@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -31,6 +32,11 @@ from moonmind.omnigent.harness_platform.failures import (
     HarnessPlatformError,
     HarnessPlatformFailure,
 )
+
+# Bounded observation history per endpoint. Launch readiness and planning only
+# consume the newest observation plus authority snapshots pinned by trust
+# records or Agent Profile versions, so older observations are pruned.
+_MAX_SNAPSHOTS_PER_ENDPOINT = 50
 
 
 class OmnigentInventoryClient(Protocol):
@@ -320,7 +326,6 @@ class InMemoryHarnessCatalogRepository:
 class DbHarnessCatalogRepository:
     def __init__(self, session_factory: Any) -> None:
         self._session_factory = session_factory
-
     async def persist(
         self, result: HarnessCatalogSyncResult
     ) -> HarnessCatalogSyncResult:
@@ -401,7 +406,70 @@ class DbHarnessCatalogRepository:
                     "catalog persistence conflict",
                     code=HarnessPlatformFailure.OMNIGENT_EXECUTION_PLAN_CONFLICT,
                 ) from exc
+            await self._prune_observations(
+                session, endpoint_ref=snapshot.endpointRef
+            )
         return result
+
+    @staticmethod
+    async def _pinned_catalog_refs(session: Any) -> set[str]:
+        """Catalog refs that authority records still bind and must survive."""
+
+        from api_service.db.models import (
+            OmnigentAgentProfileVersion,
+            OmnigentHarnessTrustRecord as DbTrustRecord,
+        )
+
+        pinned = set(
+            (await session.execute(select(DbTrustRecord.catalog_ref))).scalars()
+        )
+        documents = (
+            await session.execute(select(OmnigentAgentProfileVersion.document))
+        ).scalars()
+        for document in documents:
+            if not isinstance(document, dict):
+                continue
+            harness = document.get("harness")
+            candidates = [document.get("catalogRef")]
+            candidates.append(
+                harness.get("catalogRef") if isinstance(harness, dict) else None
+            )
+            for candidate in candidates:
+                if isinstance(candidate, str) and candidate:
+                    pinned.add(candidate)
+        return pinned
+
+    async def _prune_observations(self, session: Any, *, endpoint_ref: str) -> None:
+        """Bound per-endpoint observation history without touching authority."""
+
+        from api_service.db.models import OmnigentHarnessCatalogSnapshotRecord
+
+        refs = list(
+            (
+                await session.execute(
+                    select(OmnigentHarnessCatalogSnapshotRecord.catalog_ref)
+                    .where(
+                        OmnigentHarnessCatalogSnapshotRecord.endpoint_ref
+                        == endpoint_ref
+                    )
+                    .order_by(
+                        OmnigentHarnessCatalogSnapshotRecord.observed_at.desc()
+                    )
+                )
+            ).scalars()
+        )
+        keep = set(refs[:_MAX_SNAPSHOTS_PER_ENDPOINT])
+        stale = [
+            ref for ref in refs[len(keep):] if ref not in await self._pinned_catalog_refs(session)
+        ]
+        if not stale:
+            return
+        await session.execute(
+            sa_delete(OmnigentHarnessCatalogSnapshotRecord).where(
+                OmnigentHarnessCatalogSnapshotRecord.catalog_ref.in_(tuple(stale))
+            )
+        )
+        await session.commit()
 
     async def load(self, catalog_ref: str) -> HarnessCatalogSyncResult | None:
         from api_service.db.models import OmnigentHarnessCatalogSnapshotRecord

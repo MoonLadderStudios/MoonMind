@@ -1724,38 +1724,9 @@ async def synchronize_omnigent_harness_catalog(
 ) -> dict[str, Any]:
     """Synchronize authenticated endpoint inventory into immutable authority."""
 
-    from api_service.api.routers.omnigent_agent_profiles import (
-        ensure_builtin_opencode_agent_profile,
-    )
-    from api_service.db.base import async_session_maker
     from api_service.services.omnigent_agent_profile_service import (
-        synchronize_upstream_inventory,
+        synchronize_omnigent_harness_catalog as synchronize_harness_catalog,
     )
-    from moonmind.omnigent.production import build_generic_omnigent_execution_services
 
     _require_provider_profile_permission(current_user, "provider_profiles.write")
-    services = build_generic_omnigent_execution_services(
-        session_factory=async_session_maker
-    )
-    result = await services.catalog_service.synchronize()
-    await synchronize_upstream_inventory(
-        session,
-        endpoint_ref=result.snapshot.endpointRef,
-        bridge_mode="proxy",
-        inventory=[
-            item
-            for item in result.diagnostics.get("agents", [])
-            if isinstance(item, dict)
-        ],
-    )
-    builtin = await ensure_builtin_opencode_agent_profile(
-        session=session, catalog=result
-    )
-    return {
-        "catalogRef": result.snapshot.catalogRef,
-        "observedAt": result.snapshot.observedAt,
-        "omnigentVersion": result.snapshot.omnigentVersion,
-        "harnessCount": len(result.snapshot.harnesses),
-        "pluginLoadErrors": result.snapshot.pluginLoadErrors,
-        "builtinAgentProfile": builtin,
-    }
+    return await synchronize_harness_catalog(session)

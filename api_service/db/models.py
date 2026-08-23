@@ -4584,9 +4584,6 @@ class OmnigentHarnessCatalogSnapshotRecord(Base):
 
     __tablename__ = "omnigent_harness_catalog_snapshots"
     __table_args__ = (
-        UniqueConstraint(
-            "endpoint_ref", "source_digest", name="uq_omnigent_catalog_endpoint_source"
-        ),
         Index("ix_omnigent_catalog_endpoint_observed", "endpoint_ref", "observed_at"),
     )
 

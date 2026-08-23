@@ -30,6 +30,7 @@ from api_service.db.models import (
     OmnigentAgentProfileAuditEvent,
     OmnigentAgentProfileUsage,
     OmnigentAgentProfileVersion,
+    OmnigentHarnessCatalogSnapshotRecord,
     OmnigentUpstreamAgentProjection,
     RecurringWorkflowDefinition,
     TemporalExecutionCanonicalRecord,
@@ -405,6 +406,31 @@ async def ensure_builtin_opencode_agent_profile(
             ).scalars()
         )
     )
+    # Re-observations of identical inventory produce timestamp-shifted
+    # catalogRefs because observation time is part of the catalog identity.
+    # The active immutable version already binds equivalent authority, so
+    # reuse its document verbatim instead of minting a new version per sync.
+    if profile is not None and profile.active_version is not None:
+        active = next(
+            (
+                item
+                for item in existing_versions
+                if item.version == profile.active_version
+            ),
+            None,
+        )
+        if active is not None:
+            harness_document = (active.document or {}).get("harness") or {}
+            bound_ref = harness_document.get("catalogRef")
+            if isinstance(bound_ref, str):
+                bound_row = await session.get(
+                    OmnigentHarnessCatalogSnapshotRecord, bound_ref
+                )
+                if (
+                    bound_row is not None
+                    and bound_row.source_digest == catalog.snapshot.sourceDigest
+                ):
+                    document = dict(active.document)
     digest = _digest(document)
     version = next((item for item in existing_versions if item.digest == digest), None)
     if profile is None:

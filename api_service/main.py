@@ -324,6 +324,54 @@ async def _sync_managed_bootstrap_recurring_schedules() -> bool:
         return False
 
 
+async def _sync_omnigent_harness_catalog() -> bool:
+    """Keep the authenticated harness catalog synchronized automatically.
+
+    The execution-readiness gate fails closed when the Omnigent endpoint
+    inventory has never been synchronized or no longer attests to the current
+    build, so this boundary refreshes the catalog on the same bounded startup
+    and maintenance cadence as the rest of the bootstrap reconciliation.
+    """
+
+    try:
+        from api_service.services.omnigent_agent_profile_service import (
+            synchronize_omnigent_harness_catalog,
+        )
+        from moonmind.omnigent.settings import (
+            build_omnigent_gate,
+            generic_host_enabled,
+        )
+
+        if not build_omnigent_gate().enabled or not generic_host_enabled():
+            # Without the runtime gate there is no endpoint to authenticate
+            # against; without the generic host plane there is nothing that
+            # consumes the catalog. Neither state should block readiness.
+            return True
+
+        async with get_async_session_context() as session:
+            result = await synchronize_omnigent_harness_catalog(session)
+        logger.info(
+            "Synchronized Omnigent harness catalog: catalogRef=%s "
+            "harnessCount=%s pluginLoadErrors=%s",
+            result.get("catalogRef"),
+            result.get("harnessCount"),
+            len(result.get("pluginLoadErrors") or []),
+        )
+        return True
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning(
+            "Omnigent harness catalog synchronization deferred: %s",
+            exc,
+        )
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning(
+            "Omnigent harness catalog synchronization deferred: %s",
+            exc,
+        )
+        return False
+
+
 async def _reconcile_omnigent_bootstrap_once(
     *,
     refresh_images: bool,
@@ -332,12 +380,13 @@ async def _reconcile_omnigent_bootstrap_once(
         refresh_images=refresh_images
     )
     agent_ready = await _sync_omnigent_bootstrap_agent_profile()
+    catalog_ready = await _sync_omnigent_harness_catalog()
     schedules_ready = (
         await _sync_managed_bootstrap_recurring_schedules()
         if policies_ready and agent_ready
         else False
     )
-    return policies_ready and agent_ready and schedules_ready
+    return policies_ready and agent_ready and catalog_ready and schedules_ready
 
 
 async def _maintain_omnigent_bootstrap_reconciliation(
