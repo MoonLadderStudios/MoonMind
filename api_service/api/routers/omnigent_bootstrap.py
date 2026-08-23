@@ -181,7 +181,7 @@ async def bootstrap_readiness(
                     raise ValueError("exact deployment execution evidence is unavailable")
                 candidate = candidates[0]
             # Validate evidence (checks HMAC, expiry, future-dated, support key recompute, secret-free)
-            parsed = validate_deployment_evidence(candidate)
+            validate_deployment_evidence(candidate)
             has_evidence = True
             # If we have resolved state, additionally verify host image matches evidence where possible
             # For full plan match, we would need to reconstruct plan payload; at minimum ensure evidence is not stale

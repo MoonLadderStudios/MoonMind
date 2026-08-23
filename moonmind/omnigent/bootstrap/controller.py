@@ -3,12 +3,8 @@
 from __future__ import annotations
 
 import os
-import re
 from datetime import UTC, datetime
 from typing import Any
-
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from moonmind.omnigent.bootstrap.image_resolution import resolve_omnigent_images
 from moonmind.omnigent.bootstrap.models import (
@@ -19,13 +15,11 @@ from moonmind.omnigent.bootstrap.models import (
 )
 from moonmind.omnigent.bootstrap.opencode import (
     DEFAULT_OPENCODE_MODEL_DISPLAY,
-    DEFAULT_OPENCODE_QUALIFIED,
     resolve_model_by_display,
     validate_effort,
 )
 from moonmind.omnigent.bootstrap.store import (
     load_bootstrap_record,
-    load_resolved_state,
     save_bootstrap_record,
     save_resolved_state,
 )
@@ -330,7 +324,6 @@ class BootstrapController:
             guard = None
         try:
             # Validate via pinned runtime if image available and guard available, otherwise treat as substrate unavailable
-            validation_passed = False
             image_ref = None
             try:
                 image_ref = get_opencode_host_image_ref()
@@ -371,7 +364,6 @@ class BootstrapController:
                         candidate_secret=api_key,
                         candidate_generation=candidate_gen,
                     )
-                    validation_passed = True
                 except Exception as exc:
                     if _is_substrate_unavailable(exc):
                         # Substrate unavailable: degrade to format check but report setup failure, not success
@@ -392,9 +384,6 @@ class BootstrapController:
                     )
                 else:
                     raise ValueError("API key validation failed: invalid format")
-
-            if not validation_passed:
-                raise RuntimeError("Provider validation did not pass")
 
             # Persist secret and update profile
             from api_service.api.routers.provider_profiles import (
@@ -832,7 +821,6 @@ class BootstrapController:
             auth_model="own-auth",
         )
         # Build a minimal planner run to get the exact supportIdentity
-        impl_ref = harness.implementation.implementation_ref()
         trust = classify_harness_trust(
             harnessId="opencode-native",
             implementation=harness.implementation,

@@ -5824,7 +5824,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     {};
   const supportedAgentRuntimes = dashboardConfig.system
     ?.supportedAgentRuntimes ||
-    dashboardConfig.system?.supportedRuntimes || ["codex_cli", "claude_code"];
+    dashboardConfig.system?.supportedRuntimes || ["omnigent", "codex_cli", "claude_code"];
   const runtimeOptions = Array.from(new Set(supportedAgentRuntimes));
 
   const [steps, setSteps] = useState<StepState[]>([createStepStateEntry(1)]);
