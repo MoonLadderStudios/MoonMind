@@ -32,10 +32,11 @@ class OmnigentRuntimeScriptService:
             for item in tool_attachments
             if item.get("targetPath")
         ]
-        if tool_bins:
-            environment["PATH"] = ":".join(
-                [*tool_bins, "/opt/venv/bin", "/usr/local/bin", "/usr/bin", "/bin"]
-            )
+        # Always include the Omnigent venv so `docker exec` probes (attestation,
+        # version checks) resolve the omnigent binary without a full PATH.
+        environment["PATH"] = ":".join(
+            [*tool_bins, "/opt/venv/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+        )
         allowed_runtime_environment = {"OMNIGENT_CONFIG_HOME"}
         for handle in credential_handles:
             for key, value in dict(handle.get("runtimeEnvironment") or {}).items():
@@ -57,6 +58,11 @@ class OmnigentRuntimeScriptService:
             else ""
         )
         environment["MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"] = control_path
+        # Stage harness credentials from read-only volumes into the writable
+        # tmpfs home. OpenCode needs to create repos/, cache/ etc. inside its
+        # data directory, which a read-only credential mount would block.
+        staging_dir = "/run/mm-credentials/opencode"
+        opencode_data = "/home/app/.local/share/opencode"
         script = (
             "set -eu; "
             "unset OPENAI_API_KEY ANTHROPIC_API_KEY OPENCODE_AUTH_CONTENT "
@@ -66,6 +72,15 @@ class OmnigentRuntimeScriptService:
             "path=${check%:*}; generation=${check##*:}; "
             'test -r "$path"; test "$(cat "$path")" = "$generation"; done; '
             'IFS=$oldifs; test -d "$MOONMIND_ACTIVE_SKILLS_DIR"; '
+            "if [ -d "
+            '"' + staging_dir + '"'
+            " ]; then "
+            "mkdir -p " + opencode_data + "; "
+            "cp "
+            '"' + staging_dir + '/auth.json" '
+            + opencode_data + "/auth.json; "
+            "chown 1000:1000 " + opencode_data + "/auth.json; "
+            "chmod 0600 " + opencode_data + "/auth.json; fi; "
             'if [ -n "${MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE:-}" ]; then '
             'test -r "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"; '
             'OMNIGENT_API_TOKEN=$(cat "$MOONMIND_OMNIGENT_CONTROL_CREDENTIAL_FILE"); '

@@ -150,7 +150,7 @@ def anticipated_credential_handle(
             {
                 "kind": "volume",
                 "sourceRef": f"mm-omnigent-credential-{digest[:32]}",
-                "targetPath": "/home/app/.local/share/opencode",
+                "targetPath": "/run/mm-credentials/opencode",
                 "accessMode": "read-only",
             }
         )
@@ -349,7 +349,7 @@ class DockerOpencodeAuthJsonMaterializer:
             "attachment": {
                 "kind": "volume",
                 "sourceRef": volume_name,
-                "targetPath": "/home/app/.local/share/opencode",
+                "targetPath": "/run/mm-credentials/opencode",
                 "accessMode": "read-only",
             },
             "owner": f"{OPENCODE_AUTH_UID}:{OPENCODE_AUTH_GID}",
