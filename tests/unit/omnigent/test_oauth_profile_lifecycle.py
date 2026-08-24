@@ -5062,6 +5062,9 @@ async def _run_coordinator_failure_case(
         async def mark_host_lease_failed(self, *_args, **_kwargs):
             return None
 
+        async def heartbeat_host_lease(self, lease_id, *, ttl_seconds):
+            return self.lease
+
     runtime = OmnigentOAuthHostRuntime(client=SimpleNamespace())
     runtime._prepare_skill_projection = AsyncMock(  # type: ignore[method-assign]
         return_value=Path("/tmp/skills")
@@ -5574,7 +5577,17 @@ async def test_coordinator_cleanup_failure_defers_provider_release_and_requires_
 async def test_coordinator_provider_release_has_bounded_retry_evidence(
     monkeypatch, release_failures: int, release_status: str, janitor_required: bool
 ) -> None:
+    real_sleep = asyncio.sleep
+    release_delays: list[int] = []
+
+    async def sleep_side_effect(delay: float) -> None:
+        if delay in {1, 2}:
+            release_delays.append(int(delay))
+            return
+        await real_sleep(delay)
+
     sleep = AsyncMock()
+    sleep.side_effect = sleep_side_effect
     monkeypatch.setattr(
         "moonmind.omnigent.profile_bound_execution.asyncio.sleep", sleep
     )
@@ -5588,7 +5601,7 @@ async def test_coordinator_provider_release_has_bounded_retry_evidence(
         for stage, kwargs in events
         if stage == "profile_lease_release" and kwargs.get("status") == release_status
     )
-    assert sleep.await_count == 2
+    assert release_delays == [1, 2]
     assert release["metadata"]["leaseReleased"] is (not janitor_required)
     if janitor_required:
         assert release["remediation_action"] == "inspect_cleanup_diagnostics"
