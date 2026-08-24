@@ -21,9 +21,17 @@ architecture.
 from __future__ import annotations
 
 import importlib
+from datetime import datetime
 from enum import Enum
+from pathlib import Path
+from typing import Any, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from moonmind.omnigent.conformance import ConformanceContractError
+from moonmind.omnigent.workflow_chat_acceptance import (
+    validate_workflow_chat_acceptance_manifest,
+)
 
 RETIREMENT_CONTRACT_VERSION = "moonmind.omnigent-legacy-retirement/v1"
 
@@ -179,6 +187,35 @@ def evaluate_retirement(
     )
 
 
+def criteria_from_native_chat_acceptance(
+    manifest: Mapping[str, Any] | None,
+    *,
+    evidence_root: Path,
+    expected_commit: str | None = None,
+    now: datetime | None = None,
+) -> frozenset[RetirementCriterion]:
+    """Project a #3642 acceptance manifest into passing retirement criteria.
+
+    A retirement guard must be able to consume the published protected report
+    without a human asserting the criterion. A missing, incomplete, failed,
+    expired, or unresolvable manifest yields no criterion, so the guard stays
+    fail-closed instead of inheriting an operator's interpretation.
+    """
+
+    if manifest is None:
+        return frozenset()
+    try:
+        validate_workflow_chat_acceptance_manifest(
+            manifest,
+            evidence_root=evidence_root,
+            expected_commit=expected_commit,
+            now=now,
+        )
+    except (ConformanceContractError, ValueError):
+        return frozenset()
+    return frozenset({RetirementCriterion.NATIVE_CHAT_ACCEPTANCE_PASSED})
+
+
 def _ref_resolves(ref: str) -> bool:
     """Whether a machine-checkable ``module:symbol`` reference still resolves.
 
@@ -253,6 +290,7 @@ __all__ = [
     "RETIREMENT_INVENTORY",
     "TEMPORARY_ROLLOUT_FLAGS",
     "LEGACY_RETIREMENT_COMPLETE",
+    "criteria_from_native_chat_acceptance",
     "evaluate_retirement",
     "assert_retirement_guard",
     "assert_temporary_flags_have_retirement",

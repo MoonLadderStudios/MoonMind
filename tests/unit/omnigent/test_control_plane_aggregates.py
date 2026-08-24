@@ -21,6 +21,8 @@ from api_service.db.models import (
     Base,
     OmnigentBridgeSession,
     OmnigentBridgeSessionEvent,
+    OmnigentExecutionPlanRecord,
+    OmnigentRuntimeBindingRecord,
     OmnigentSession,
     OmnigentTurnAttempt,
 )
@@ -29,6 +31,7 @@ from moonmind.omnigent.control_plane import (
     TURN_STATE_TERMINAL,
     CommandIdempotencyConflictError,
     ConflictingSessionAuthorityError,
+    ControlPlaneOutcome,
     FencingConflictError,
     FencingScope,
     OmnigentControlPlaneStore,
@@ -39,6 +42,10 @@ from moonmind.omnigent.control_plane import (
     compute_digest,
     plan_backfill,
     run_backfill,
+)
+from moonmind.omnigent.control_plane.turn_commands import (
+    CanonicalSessionBootstrap,
+    CanonicalTurnCommandService,
 )
 
 
@@ -446,6 +453,78 @@ async def test_supervisor_runtime_authority_bind_is_fenced_and_idempotent(store)
 
 
 @pytest.mark.asyncio
+async def test_provider_runtime_replacement_advances_both_fences(store) -> None:
+    async with store.transaction() as repos:
+        created = await repos.sessions.create(
+            session_id="s1", moonmind_workflow_id="wf-1", provider="omnigent"
+        )
+        provider_owner = await repos.sessions.acquire_fencing_generation(
+            "s1",
+            FencingScope.PROVIDER_PROFILE_LEASE,
+            expected_revision=created.revision,
+        )
+        initial = await repos.sessions.bind_runtime_authority(
+            "s1",
+            expected_revision=provider_owner.revision,
+            expected_fencing_generation=created.fencing_generation,
+            provider_profile_id="provider-1",
+            provider_profile_generation=1,
+            credential_generation=5,
+            metadata_patch={
+                "executionPlanRef": "plan-1",
+                "providerLeaseRef": "provider-lease-1",
+                "providerLeaseOwnerId": "owner-1",
+                "providerRuntimeId": "opencode",
+                "runtimeBindingRef": "binding-1",
+                "runtimeBindingRevision": 1,
+                "runtimeBindingFencingGeneration": 1,
+            },
+        )
+        replacement_owner = await repos.sessions.acquire_fencing_generation(
+            "s1",
+            FencingScope.PROVIDER_PROFILE_LEASE,
+            expected_revision=initial.revision,
+        )
+        replaced = await repos.sessions.replace_provider_runtime_authority(
+            "s1",
+            expected_revision=replacement_owner.revision,
+            expected_fencing_generation=created.fencing_generation,
+            expected_provider_profile_generation=2,
+            provider_profile_id="provider-1",
+            credential_generation=6,
+            metadata_patch={
+                "executionPlanRef": "plan-1",
+                "providerLeaseRef": "provider-lease-2",
+                "providerLeaseOwnerId": "owner-1",
+                "providerRuntimeId": "opencode",
+                "runtimeBindingRef": "binding-2",
+                "runtimeBindingRevision": 2,
+                "runtimeBindingFencingGeneration": 2,
+            },
+        )
+
+    assert replaced.credential_generation == 6
+    assert replaced.provider_profile_generation == 2
+    assert replaced.metadata["runtimeBindingRef"] == "binding-2"
+    assert replaced.metadata["providerLeaseRef"] == "provider-lease-2"
+
+    with pytest.raises(FencingConflictError):
+        async with store.transaction() as repos:
+            await repos.sessions.replace_provider_runtime_authority(
+                "s1",
+                expected_revision=replaced.revision,
+                expected_fencing_generation=created.fencing_generation,
+                expected_provider_profile_generation=1,
+                provider_profile_id="provider-1",
+                credential_generation=7,
+                metadata_patch={
+                    "runtimeBindingRevision": 3,
+                    "runtimeBindingFencingGeneration": 3,
+                },
+            )
+
+
+@pytest.mark.asyncio
 async def test_supervisor_terminal_evidence_is_immutable(store) -> None:
     """MoonLadderStudios/MoonMind#3705 keeps historical reads authoritative."""
 
@@ -736,6 +815,252 @@ async def test_continuation_turn_reuses_session_without_new_binding(store) -> No
     async with store.transaction() as repos:
         by_binding = await repos.sessions.get_by_chat_binding("cb-1")
     assert by_binding.session_id == "s1"
+
+
+@pytest.mark.asyncio
+async def test_workflow_chat_uses_canonical_turn_and_command_authority(
+    store, session_factory
+) -> None:
+    session, initial = await store.establish_session(
+        session_id="s-chat-command",
+        moonmind_workflow_id="wf-chat-command",
+        provider="omnigent",
+        chat_binding_id="canonical-chat-binding",
+        provider_session_ref="provider-session-chat-command",
+        first_turn_attempt_id="initial-chat-command",
+        first_turn_idempotency_key="initial-chat-command-idempotency",
+    )
+    service = CanonicalTurnCommandService(store)
+
+    claim = await service.claim(
+        workflow_id="wf-chat-command",
+        provider_session_ref="provider-session-chat-command",
+        chat_binding_id="browser-chat-binding",
+        command_type="message",
+        idempotency_key="browser-message-1",
+        payload_digest="sha256:" + "5" * 64,
+        step_execution_id="step-chat-command",
+    )
+
+    assert claim.owns_delivery is True
+    async with store.transaction() as repos:
+        current = await repos.sessions.get(session.session_id)
+        turn = await repos.turn_attempts.get(claim.turn_attempt_id)
+        command = await repos.commands.get(claim.command_id)
+        alias = await repos.chat_binding_aliases.resolve("browser-chat-binding")
+    assert current is not None and current.terminal_state is None
+    assert current.active_turn_attempt_id == claim.turn_attempt_id
+    assert turn is not None and turn.lineage_kind == "continuation"
+    assert turn.parent_turn_attempt_id == initial.turn_attempt_id
+    assert command is not None and command.status == "claimed"
+    assert alias is not None and alias.session_id == session.session_id
+
+    outcome = await service.settle(
+        workflow_id="wf-chat-command",
+        idempotency_key="browser-message-1",
+        outcome=ControlPlaneOutcome.APPLIED,
+        provider_receipt_id="provider-receipt-1",
+        result_ref="omnigent-bridge-event://receipt-1",
+    )
+
+    assert outcome is ControlPlaneOutcome.APPLIED
+    async with store.transaction() as repos:
+        current = await repos.sessions.get(session.session_id)
+        turn = await repos.turn_attempts.get(claim.turn_attempt_id)
+        command = await repos.commands.get(claim.command_id)
+    assert current is not None and current.terminal_state is None
+    assert turn is not None and turn.state == "accepted" and not turn.is_terminal
+    assert command is not None and command.status == "applied"
+
+    replay = await service.claim(
+        workflow_id="wf-chat-command",
+        provider_session_ref="provider-session-chat-command",
+        chat_binding_id="browser-chat-binding",
+        command_type="message",
+        idempotency_key="browser-message-1",
+        payload_digest="sha256:" + "5" * 64,
+        step_execution_id="step-chat-command",
+    )
+    assert replay.outcome is ControlPlaneOutcome.ALREADY_APPLIED
+
+
+@pytest.mark.asyncio
+async def test_initial_command_uses_the_single_bootstrap_turn(
+    store, session_factory
+) -> None:
+    service = CanonicalTurnCommandService(store)
+
+    claim = await service.claim(
+        workflow_id="wf-initial-command",
+        provider_session_ref="",
+        chat_binding_id=None,
+        command_type="execute_admitted_plan",
+        idempotency_key="initial-command-idempotency",
+        payload_digest="sha256:" + "7" * 64,
+        step_execution_id="step-initial-command",
+        bootstrap=CanonicalSessionBootstrap(
+            provider="omnigent",
+            step_execution_id="step-initial-command",
+            agent_run_id="agent-run-initial-command",
+            source_idempotency_key="initial-command-idempotency",
+            execution_plan_ref=None,
+        ),
+    )
+
+    async with store.transaction() as repos:
+        turns = await repos.turn_attempts.list_for_session(claim.session_id)
+    assert len(turns) == 1
+    assert turns[0].turn_attempt_id == claim.turn_attempt_id
+    assert turns[0].lineage_kind == "initial"
+    assert turns[0].instruction_digest == "sha256:" + "7" * 64
+
+    await service.settle(
+        workflow_id="wf-initial-command",
+        idempotency_key="initial-command-idempotency",
+        outcome=ControlPlaneOutcome.APPLIED,
+    )
+    replay = await service.claim(
+        workflow_id="wf-initial-command",
+        provider_session_ref="",
+        chat_binding_id=None,
+        command_type="execute_admitted_plan",
+        idempotency_key="initial-command-idempotency",
+        payload_digest="sha256:" + "7" * 64,
+        step_execution_id="step-initial-command",
+        bootstrap=CanonicalSessionBootstrap(
+            provider="omnigent",
+            step_execution_id="step-initial-command",
+            agent_run_id="agent-run-initial-command",
+            source_idempotency_key="initial-command-idempotency",
+            execution_plan_ref=None,
+        ),
+    )
+    assert replay.outcome is ControlPlaneOutcome.ALREADY_APPLIED
+
+
+@pytest.mark.asyncio
+async def test_canonical_command_idempotency_is_scoped_to_workflow(store) -> None:
+    service = CanonicalTurnCommandService(store)
+    claims = []
+    for workflow_id in ("wf-scope-one", "wf-scope-two"):
+        claims.append(
+            await service.claim(
+                workflow_id=workflow_id,
+                provider_session_ref="",
+                chat_binding_id=None,
+                command_type="execute_admitted_plan",
+                idempotency_key="shared-client-key",
+                payload_digest="sha256:" + "8" * 64,
+                step_execution_id=f"step-{workflow_id}",
+                bootstrap=CanonicalSessionBootstrap(
+                    provider="omnigent",
+                    step_execution_id=f"step-{workflow_id}",
+                    agent_run_id=f"agent-{workflow_id}",
+                    source_idempotency_key="shared-client-key",
+                    execution_plan_ref=None,
+                ),
+            )
+        )
+
+    assert claims[0].session_id != claims[1].session_id
+    assert claims[0].command_id != claims[1].command_id
+    assert claims[0].idempotency_key != claims[1].idempotency_key
+    assert all(claim.owns_delivery for claim in claims)
+
+
+@pytest.mark.asyncio
+async def test_session_binds_plan_and_runtime_authority_without_mutating_plan(
+    store, session_factory
+) -> None:
+    plan_ref = "omnigent-execution-plan:sha256:" + "3" * 64
+    runtime_binding_ref = "omnigent-runtime-binding:sha256:" + "4" * 64
+    alternate_binding_ref = "omnigent-runtime-binding:sha256:" + "6" * 64
+    async with session_factory() as db_session:
+        db_session.add(
+            OmnigentExecutionPlanRecord(
+                plan_ref=plan_ref,
+                schema_version="moonmind.omnigent-execution-plan.v1",
+                payload_json={},
+                harness_id="codex-native",
+                harness_implementation_ref="core:omnigent@1",
+                host_class_ref="omnigent-codex-current@1",
+                launch_policy_ref="codex-on-demand@1",
+                execution_realizer_ref="codex-profile-bound@1",
+            )
+        )
+        db_session.add(
+            OmnigentRuntimeBindingRecord(
+                runtime_binding_ref=runtime_binding_ref,
+                binding_id=runtime_binding_ref,
+                latest_snapshot_ref=runtime_binding_ref,
+                execution_plan_ref=plan_ref,
+                state="credentials_acquired",
+                provider_leases_json={},
+            )
+        )
+        db_session.add(
+            OmnigentRuntimeBindingRecord(
+                runtime_binding_ref=alternate_binding_ref,
+                binding_id=alternate_binding_ref,
+                latest_snapshot_ref=alternate_binding_ref,
+                execution_plan_ref=plan_ref,
+                state="credentials_acquired",
+                provider_leases_json={},
+            )
+        )
+        await db_session.commit()
+    session, _turn = await store.establish_session(
+        session_id="s-authority",
+        moonmind_workflow_id="wf-authority",
+        provider="omnigent",
+        chat_binding_id="cb-authority",
+        first_turn_attempt_id="turn-authority",
+        first_turn_idempotency_key="idem-authority",
+        execution_plan_ref=plan_ref,
+    )
+    assert session.execution_plan_ref == plan_ref
+    assert session.runtime_binding_ref is None
+
+    async with store.transaction() as repos:
+        bound = await repos.sessions.bind_runtime_authority(
+            "s-authority",
+            expected_revision=session.revision,
+            expected_fencing_generation=session.fencing_generation,
+            execution_plan_ref=plan_ref,
+            runtime_binding_ref=runtime_binding_ref,
+        )
+    assert bound.execution_plan_ref == plan_ref
+    assert bound.runtime_binding_ref == runtime_binding_ref
+
+    async with store.transaction() as repos:
+        replayed = await repos.sessions.bind_runtime_authority(
+            "s-authority",
+            expected_revision=session.revision,
+            expected_fencing_generation=session.fencing_generation,
+            execution_plan_ref=plan_ref,
+            runtime_binding_ref=runtime_binding_ref,
+        )
+    assert replayed == bound
+
+    async with store.transaction() as repos:
+        with pytest.raises(ConflictingSessionAuthorityError):
+            await repos.sessions.bind_runtime_authority(
+                "s-authority",
+                expected_revision=bound.revision,
+                expected_fencing_generation=bound.fencing_generation,
+                execution_plan_ref=plan_ref,
+                runtime_binding_ref=alternate_binding_ref,
+            )
+
+    async with store.transaction() as repos:
+        with pytest.raises(ConflictingSessionAuthorityError):
+            await repos.sessions.bind_runtime_authority(
+                "s-authority",
+                expected_revision=bound.revision,
+                expected_fencing_generation=bound.fencing_generation,
+                execution_plan_ref="omnigent-execution-plan:sha256:" + "5" * 64,
+                runtime_binding_ref=runtime_binding_ref,
+            )
 
 
 @pytest.mark.asyncio

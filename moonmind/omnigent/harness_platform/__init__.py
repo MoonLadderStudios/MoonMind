@@ -15,8 +15,8 @@ from moonmind.omnigent.harness_platform.agent_profile import (
     BundleSource,
     OmnigentAgentProfileV2,
     UpstreamSource,
-    validate_agent_profile,
     decode_v1_profile_to_v2_inputs,
+    validate_agent_profile,
 )
 from moonmind.omnigent.harness_platform.attestation import (
     HostHarnessAttestation,
@@ -27,10 +27,11 @@ from moonmind.omnigent.harness_platform.catalog import (
     HarnessImplementationIdentity,
     HarnessTrustRecord,
     TrustState,
-    create_catalog_snapshot,
-    compute_catalog_ref,
     assert_catalog_fresh,
+    assert_catalog_refresh_attests,
     classify_harness_trust,
+    compute_catalog_ref,
+    create_catalog_snapshot,
     is_launchable_trust,
 )
 from moonmind.omnigent.harness_platform.credential_bindings import (
@@ -39,18 +40,21 @@ from moonmind.omnigent.harness_platform.credential_bindings import (
     parse_binding_set_ref,
 )
 from moonmind.omnigent.harness_platform.execution_plan import (
-    OmnigentExecutionPlanPayload,
     OmnigentExecutionPlanEnvelope,
-    create_execution_plan_envelope,
-    compute_plan_ref,
+    OmnigentExecutionPlanPayload,
     compute_model_config_digest,
+    compute_plan_ref,
+    create_execution_plan_envelope,
     verify_execution_plan_envelope,
 )
+from moonmind.omnigent.harness_platform.failures import (
+    HarnessPlatformError,
+    HarnessPlatformFailure,
+)
 from moonmind.omnigent.harness_platform.host_classes import (
+    OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
     OPENCODE_PINNED_VERSION,
     OPENCODE_SUPPORTED_RANGE,
-    OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT,
-    OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
     HostClass,
     LaunchPolicy,
     get_host_class,
@@ -70,33 +74,22 @@ from moonmind.omnigent.harness_platform.materializers import (
     CredentialMaterializer,
     assert_opencode_materialization_secret_free,
     build_opencode_auth_json_bytes,
-    cleanup_opencode_auth,
     clear_forbidden_ambient_env,
     get_materializer,
     materialize_credential,
-    materialize_opencode_auth_json,
-    verify_opencode_auth_file,
 )
+from moonmind.omnigent.harness_platform.planner import compile_execution_plan
 from moonmind.omnigent.harness_platform.runtime_binding import (
     OmnigentRuntimeBinding,
-    create_runtime_binding,
     assert_runtime_binding_generation_sticky,
+    create_runtime_binding,
 )
-from moonmind.omnigent.harness_platform.skills import (
-    ResolvedSkillSet,
-)
+from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet
 from moonmind.omnigent.harness_platform.support import (
     SupportClassification,
     SupportKeyPayload,
-    compute_support_combination_key,
     compute_required_capabilities_digest,
-)
-from moonmind.omnigent.harness_platform.planner import (
-    compile_execution_plan,
-)
-from moonmind.omnigent.harness_platform.failures import (
-    HarnessPlatformError,
-    HarnessPlatformFailure,
+    compute_support_combination_key,
 )
 
 __all__ = [
@@ -114,6 +107,7 @@ __all__ = [
     "create_catalog_snapshot",
     "compute_catalog_ref",
     "assert_catalog_fresh",
+    "assert_catalog_refresh_attests",
     "classify_harness_trust",
     "is_launchable_trust",
     "CredentialBindingSet",
@@ -134,15 +128,11 @@ __all__ = [
     "register_host_class",
     "register_launch_policy",
     "OMNIGENT_OPENCODE_HOST_IMAGE_ENV",
-    "OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT",
     "OPENCODE_PINNED_VERSION",
     "OPENCODE_SUPPORTED_RANGE",
     "CredentialMaterializer",
     "get_materializer",
     "materialize_credential",
-    "materialize_opencode_auth_json",
-    "verify_opencode_auth_file",
-    "cleanup_opencode_auth",
     "build_opencode_auth_json_bytes",
     "assert_opencode_materialization_secret_free",
     "clear_forbidden_ambient_env",

@@ -151,6 +151,8 @@ A launch has two immutable authority objects:
 
 The plan never pretends to know an exact host or a leased credential generation before those exist. The runtime binding cannot change plan decisions such as harness, agent source, Provider Profile, materializer, Host Class, policy, model configuration, Skills, or realizer.
 
+One immutable plan may govern multiple execution realizations. Each rerun, linked continuation, and recurring occurrence owns a distinct runtime-binding aggregate identified by `(planRef, executionScopeRef)`. Activity retries within that execution scope reconcile the same aggregate; they do not create a second live owner. The digest-addressed `runtimeBindingRef`, revision, and fencing generation advance when acquired or attested authority is replaced.
+
 ### 4.6 Plan digests are not self-referential
 
 The canonical plan payload does not contain its own digest. MoonMind canonicalizes and hashes `OmnigentExecutionPlanPayload`, then stores it in an envelope:
@@ -244,6 +246,7 @@ The following identities are distinct:
 | `modelConfigDigest` | Digest of qualified model id, effort, route, and normalized options |
 | `executionRealizerRef` | Versioned implementation that realizes the plan |
 | `executionPlanRef` | Digest of the canonical pre-host plan payload |
+| `executionScopeRef` | Durable Workflow/execution identity that owns one live binding aggregate |
 | `runtimeBindingRef` | Digest-addressed acquired-generation and exact-host binding |
 | `hostBindingRef` and `hostLeaseRef` | Durable host ownership |
 | `providerLeaseRef` | Durable provider-account capacity ownership |
@@ -603,15 +606,15 @@ Plans and evidence carry that exact ref. Editing a binding set appends a new ver
 
 The plan selects a Provider Profile and materializer. It does not select or record a credential generation before lease acquisition.
 
-After the Provider Profile lease is acquired, the runtime binding records the exact acquired generation. This rule handles rotation safely:
+After the Provider Profile lease is acquired, the execution-scoped runtime binding records the exact acquired generation. This rule handles rotation safely:
 
 - rotation before the first lease acquisition is allowed because no run has acquired a generation yet.
-- the acquired generation becomes sticky once the runtime binding is persisted.
-- rotation after runtime binding requires the credential-maintenance lane to fence or drain the bound host and session.
-- a retry reuses the recorded generation while it remains authoritative.
-- no retry silently adopts a newer generation.
+- an Activity retry reuses the recorded lease and generation when the acquisition authority is unchanged.
+- when the Provider Profile manager returns a newly acquired lease or generation for the same execution scope, the store compare-and-swaps a replacement binding revision, advances its fencing generation, and clears superseded host/session authority before any new provider mutation.
+- rotation after host or session realization requires the credential-maintenance lane to drain or fence the bound consumer; a former host, lease owner, cleanup worker, or janitor cannot write through the replacement fence.
+- reruns, linked continuations, and recurring occurrences reuse the immutable plan but acquire independent execution-scoped bindings.
 
-A generation mismatch after binding produces a typed fenced outcome and reconciliation. It never causes plan mutation or credential substitution.
+A generation mismatch after binding produces a typed fenced outcome and reconciliation. It never causes plan mutation or selection of another Provider Profile.
 
 ### 11.5 Capacity
 
@@ -955,7 +958,7 @@ credentialBindings:
     materializerRef: opencode-auth-json@1
 
 hostClassRef: omnigent-native-standard@3
-launchPolicyRef: omnigent-on-demand@1
+launchPolicyRef: opencode-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 
 model:
@@ -1043,6 +1046,7 @@ After the plan is committed and Provider Profile leases are acquired, the realiz
 schemaVersion: moonmind.omnigent-runtime-binding.v1
 runtimeBindingRef: omnigent-runtime-binding:sha256:...
 executionPlanRef: omnigent-execution-plan:sha256:...
+executionScopeRef: mm:<workflow-id>
 providerLeases:
   primary-model:
     providerProfileRef: opencode-go-default
@@ -1062,7 +1066,7 @@ omnigentSessionId: null
 cleanupAuthorityRefs: []
 ```
 
-Mutable lifecycle fields are stored through the fenced control-plane aggregates. The logical binding identity and its immutable acquired generations never change.
+Mutable lifecycle fields are stored through the fenced control-plane aggregates. The stable aggregate identity is `(executionPlanRef, executionScopeRef)`; each accepted authority transition produces a new digest-addressed binding ref and a monotonic revision. Replaced acquired generations remain historical evidence and cannot authorize a current write.
 
 ### 17.2 Credential rotation
 
@@ -1071,7 +1075,8 @@ The first successful Provider Profile lease acquisition determines the binding g
 After the runtime binding exists:
 
 - the recorded generation is mandatory at materialization, host readiness, session creation, execution, and cleanup boundaries.
-- a newer Provider Profile generation does not update the binding.
+- an unchanged acquisition reuses the current binding idempotently.
+- a newly acquired Provider Profile lease or generation advances the execution-scoped binding revision and fence without changing the plan.
 - credential maintenance drains or fences bound consumers before activating replacement state according to the Provider Profile contract.
 - a stale activity receives `fencing_conflict` or an equivalent typed result and reconciles.
 
@@ -1137,7 +1142,7 @@ A conforming realization preserves this order:
 34. Persist terminal cleanup evidence.
 35. Release Provider Profile leases last.
 
-A retry reuses the same plan, runtime binding after it exists, acquired generations, resolved Skills, session, command identities, workspace authority, and applicable host authority. It does not replan against a newer catalog or silently change account, model, harness implementation, bundle content, Host Class, policy, or realizer.
+A retry reuses the same plan, execution-scoped runtime-binding aggregate, resolved Skills, session, command identities, workspace authority, and applicable host authority. If lease acquisition returns replacement live authority, it advances that aggregate through revision-checked fencing; it does not replan against a newer catalog or silently change account, model, harness implementation, bundle content, Host Class, policy, or realizer.
 
 An exact-host validation failure does not invalidate the pre-host plan. It proves that the chosen realization did not satisfy it. A new Host Class, model, binding-set version, or realizer requires a new plan and explicit lineage.
 
@@ -1533,7 +1538,7 @@ model:
   modelConfigDigest: sha256:...
 
 hostClassRef: omnigent-native-standard@3
-launchPolicyRef: omnigent-on-demand@1
+launchPolicyRef: opencode-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 ```
 
@@ -1686,7 +1691,37 @@ The design is realized when:
 29. Omnigent can be the preselected execution provider while Codex remains the default proven Agent Profile.
 30. Direct runtimes remain available only according to their existing rollback and retirement contracts.
 
-## 33. Document authority and future promotion
+## 33. Enforced module dependency boundaries
+
+The settled control plane uses the following one-way ownership boundaries:
+
+| Boundary | Owned modules | May depend on | Must not depend on |
+| --- | --- | --- | --- |
+| Pure reconciliation and authority values | `omnigent/reconciler`, `control_plane/records.py`, `control_plane/identities.py`, immutable harness-platform value modules | Python and validation libraries, other pure value modules | API, SQL, Temporal, HTTP, process, container, filesystem, or environment adapters |
+| Application coordination | `control_plane/turn_commands.py`, `realizers/base.py`, `realizers/generic_host.py` | Pure contracts and injected repository/runtime capabilities | FastAPI, SQLAlchemy, Temporal clients, HTTP clients, Docker clients, or provider-specific harness selection |
+| Persistence | `control_plane/repositories.py`, `harness_platform/stores.py` | Pure records and database models | Router or provider-transport policy |
+| Provider transport and host lifecycle | bridge/execute adapters, `host_runtime.py`, `host_services/`, `provider_leases.py`, `credential_materializers.py` | Application requests, Provider Profile and host interfaces | UI facade policy or plan recompilation |
+| Composition | `production.py`, catalog-readiness and worker activity adapters | Every concrete capability needed to assemble a supported realizer | Harness-name selection or alternate authority semantics |
+| UI facade | API routers and WebSocket adapters | Application services and projections | Direct persistence mutation, provider identity selection, host lifecycle, or credential materialization |
+| Evidence and publication | conformance, acceptance, timeline, and publication adapters | Immutable plan/binding/session refs and observed artifacts | Replacement plan, session, or lifecycle authority |
+
+Dependency direction is from outer adapters toward application coordination and
+pure contracts. Pure modules never import infrastructure. Generic application
+coordination receives infrastructure through the composition boundary and does
+not branch on `codex-native`, `opencode-native`, `pi-native`, Provider Profile
+ids, or model vendors. Deterministic session and turn identities have one owner,
+`control_plane/identities.py`; callers import those functions rather than
+creating alternate authority vocabulary.
+
+The unit architecture contract parses imports and identity definitions. It
+fails when framework or infrastructure imports leak into declared pure or
+application modules, when generic coordination gains a harness-name branch, or
+when canonical identity functions acquire another definition. The existing
+Codex realizer is an explicit replay-visible legacy adapter and remains outside
+the generic-application rule until its evidence-qualified retirement gate
+allows removal.
+
+## 34. Document authority and future promotion
 
 This design owns the target generic harness-platform model.
 

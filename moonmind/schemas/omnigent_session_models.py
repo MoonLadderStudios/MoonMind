@@ -14,10 +14,16 @@ import re
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.alias_generators import to_camel
 
-from moonmind.schemas.agent_runtime_models import AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentRunResult,
+    OmnigentExecutionPlanBinding,
+)
+from moonmind.schemas.temporal_payload_policy import (
+    validate_compact_temporal_mapping,
+)
 
 
 OMNIGENT_SESSION_WORKFLOW_SCHEMA_VERSION = "omnigent-session-workflow/v1"
@@ -100,6 +106,11 @@ class OmnigentSessionWorkflowInput(_OmnigentSessionModel):
     compiled_execution_intent_digest: str = Field(
         alias="compiledExecutionIntentDigest", min_length=1, max_length=128
     )
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None,
+        alias="omnigentExecutionPlan",
+        exclude_if=lambda value: value is None,
+    )
     workflow_id: str = Field(alias="workflowId", min_length=1, max_length=255)
     step_execution_id: str = Field(
         alias="stepExecutionId", min_length=1, max_length=255
@@ -165,12 +176,35 @@ class OmnigentSessionSignal(_OmnigentSessionModel):
 class OmnigentResolveIntentRequest(_OmnigentSessionModel):
     """AgentRun-to-Activity handoff used before the compact child starts."""
 
-    request: dict[str, Any]
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None, alias="omnigentExecutionPlan"
+    )
+    # Replay-only field for histories scheduled before the compact plan-bound
+    # handoff. New AgentRun histories never populate it.
+    request: dict[str, Any] | None = None
     workflow_id: str = Field(alias="workflowId", min_length=1, max_length=255)
     step_execution_id: str = Field(
         alias="stepExecutionId", min_length=1, max_length=255
     )
     agent_run_id: str = Field(alias="agentRunId", min_length=1, max_length=255)
+    logical_step_id: str | None = Field(
+        None, alias="logicalStepId", min_length=1, max_length=255
+    )
+    execution_instruction_ref: str | None = Field(
+        None, alias="executionInstructionRef", min_length=1, max_length=65536
+    )
+    execution_instruction_digest: str | None = Field(
+        None, alias="executionInstructionDigest"
+    )
+    execution_input_refs: list[str] = Field(
+        default_factory=list,
+        alias="executionInputRefs",
+        max_length=128,
+        exclude_if=lambda value: not value,
+    )
+    execution_input_refs_digest: str | None = Field(
+        None, alias="executionInputRefsDigest"
+    )
     admitted_feature_generation: Literal[OMNIGENT_SESSION_FEATURE_GENERATION] = Field(
         OMNIGENT_SESSION_FEATURE_GENERATION,
         alias="admittedFeatureGeneration",
@@ -178,6 +212,47 @@ class OmnigentResolveIntentRequest(_OmnigentSessionModel):
     compatibility_version: Literal[OMNIGENT_SESSION_COMPATIBILITY_VERSION] = Field(
         OMNIGENT_SESSION_COMPATIBILITY_VERSION, alias="compatibilityVersion"
     )
+
+    @model_validator(mode="after")
+    def require_one_authority(self) -> "OmnigentResolveIntentRequest":
+        if (self.omnigent_execution_plan is None) == (self.request is None):
+            raise ValueError(
+                "resolve intent requires exactly one persisted plan authority"
+            )
+        if self.request is not None and any(
+            (
+                self.execution_instruction_ref,
+                self.execution_instruction_digest,
+                self.execution_input_refs,
+                self.execution_input_refs_digest,
+            )
+        ):
+            raise ValueError(
+                "legacy request authority cannot carry compact execution inputs"
+            )
+        if (self.execution_instruction_ref is None) != (
+            self.execution_instruction_digest is None
+        ):
+            raise ValueError(
+                "execution instruction ref and digest must be recorded atomically"
+            )
+        if bool(self.execution_input_refs) != bool(
+            self.execution_input_refs_digest
+        ):
+            raise ValueError(
+                "execution input refs and digest must be recorded atomically"
+            )
+        for digest in (
+            self.execution_instruction_digest,
+            self.execution_input_refs_digest,
+        ):
+            if digest is not None and not _DIGEST_PATTERN.match(digest):
+                raise ValueError("compact execution input digest must be sha256")
+        self.execution_input_refs = [
+            _require_compact_identifier(item, field_name="executionInputRefs[]")
+            for item in self.execution_input_refs
+        ]
+        return self
 
 
 class OmnigentSessionAdmissionRequest(_OmnigentSessionModel):
@@ -190,6 +265,18 @@ class OmnigentSessionAdmissionRequest(_OmnigentSessionModel):
     agent_run_id: str = Field(alias="agentRunId", min_length=1, max_length=255)
     execution_profile_ref: str = Field(
         alias="executionProfileRef", min_length=1, max_length=255
+    )
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None,
+        alias="omnigentExecutionPlan",
+        exclude_if=lambda value: value is None,
+    )
+    execution_plan_ref: str | None = Field(
+        None,
+        alias="executionPlanRef",
+        min_length=1,
+        max_length=255,
+        exclude_if=lambda value: value is None,
     )
 
     @field_validator(
@@ -211,6 +298,7 @@ class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
         "canary_owner_not_allowlisted",
         "execution_profile_not_allowlisted",
         "feature_generation_mismatch",
+        "realizer_managed_lifecycle",
     ] = Field(alias="reasonCode")
     admission_mode: Literal["disabled", "canary", "enabled"] = Field(
         alias="admissionMode"
@@ -220,6 +308,9 @@ class OmnigentSessionAdmissionDecision(_OmnigentSessionModel):
             OMNIGENT_SESSION_FEATURE_GENERATION,
             alias="admittedFeatureGeneration",
         )
+    )
+    execution_realizer_ref: str | None = Field(
+        None, alias="executionRealizerRef", max_length=255
     )
 
 
@@ -263,8 +354,22 @@ class OmnigentSessionActivityRequest(_OmnigentSessionModel):
     compiled_execution_intent_digest: str = Field(
         alias="compiledExecutionIntentDigest", min_length=1, max_length=128
     )
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None,
+        alias="omnigentExecutionPlan",
+        exclude_if=lambda value: value is None,
+    )
     expected_revision: int = Field(alias="expectedRevision", ge=1)
     fencing_generation: int = Field(alias="fencingGeneration", ge=0)
+    runtime_binding_ref: str | None = Field(
+        None, alias="runtimeBindingRef", max_length=255
+    )
+    runtime_binding_revision: int | None = Field(
+        None, alias="runtimeBindingRevision", ge=1
+    )
+    runtime_binding_fencing_generation: int | None = Field(
+        None, alias="runtimeBindingFencingGeneration", ge=1
+    )
     decision_id: str | None = Field(None, alias="decisionId", max_length=255)
     command_id: str | None = Field(None, alias="commandId", max_length=255)
     turn_attempt_id: str | None = Field(None, alias="turnAttemptId", max_length=255)
@@ -282,6 +387,30 @@ class OmnigentSessionActivityRequest(_OmnigentSessionModel):
         if not _DIGEST_PATTERN.match(normalized):
             raise ValueError("compiledExecutionIntentDigest must be a sha256 digest")
         return normalized
+
+    @model_validator(mode="after")
+    def _validate_runtime_binding_authority(
+        self,
+    ) -> "OmnigentSessionActivityRequest":
+        authority = (
+            self.runtime_binding_ref,
+            self.runtime_binding_revision,
+            self.runtime_binding_fencing_generation,
+        )
+        if any(value is not None for value in authority) and not all(
+            value is not None for value in authority
+        ):
+            raise ValueError(
+                "runtime binding ref, revision, and fencing generation "
+                "must be recorded atomically"
+            )
+        if self.runtime_binding_ref is not None and not (
+            self.runtime_binding_ref.startswith(
+                "omnigent-runtime-binding:sha256:"
+            )
+        ):
+            raise ValueError("runtimeBindingRef is invalid")
+        return self
 
 
 class OmnigentPersistDecisionRequest(OmnigentSessionActivityRequest):
@@ -324,7 +453,15 @@ class OmnigentSessionTerminalResult(_OmnigentSessionModel):
             "providerSessionRef",
             "chatBindingId",
             "terminalState",
+            "executionPlanRef",
+            "executionPlanDigest",
+            "runtimeBindingRef",
+            "runtimeBindingRevision",
+            "runtimeBindingFencingGeneration",
+            "runtimeBindingState",
             "publicationEvidenceRef",
+            "externalStateRef",
+            "omnigentCheckpointCapture",
             "omnigentSessionStatus",
             "reasonCode",
             "cleanupEvidenceRef",
@@ -336,9 +473,96 @@ class OmnigentSessionTerminalResult(_OmnigentSessionModel):
         unknown_metadata = sorted(set(value.metadata) - allowed_metadata)
         if unknown_metadata:
             raise ValueError(
-                "Omnigent terminal result metadata must be reference-only; "
+                "Omnigent terminal result metadata must be reference-only or "
+                "bounded checkpoint authority; "
                 f"unsupported keys: {unknown_metadata}"
             )
+        plan_ref = value.metadata.get("executionPlanRef")
+        plan_digest = value.metadata.get("executionPlanDigest")
+        if (plan_ref is None) != (plan_digest is None):
+            raise ValueError(
+                "Omnigent terminal plan ref and digest must be recorded atomically"
+            )
+        if plan_ref is not None:
+            prefix = "omnigent-execution-plan:sha256:"
+            suffix = str(plan_ref).removeprefix(prefix)
+            if not str(plan_ref).startswith(prefix) or not re.fullmatch(
+                r"[0-9a-f]{64}", suffix
+            ):
+                raise ValueError("result.metadata.executionPlanRef is invalid")
+            if plan_digest != f"sha256:{suffix}":
+                raise ValueError(
+                    "result.metadata.executionPlanDigest must match executionPlanRef"
+                )
+        runtime_authority = (
+            value.metadata.get("runtimeBindingRef"),
+            value.metadata.get("runtimeBindingRevision"),
+            value.metadata.get("runtimeBindingFencingGeneration"),
+            value.metadata.get("runtimeBindingState"),
+        )
+        if any(item is not None for item in runtime_authority) and not all(
+            item is not None for item in runtime_authority
+        ):
+            raise ValueError(
+                "Omnigent terminal runtime binding authority must be recorded atomically"
+            )
+        if all(item is not None for item in runtime_authority):
+            runtime_ref, revision, fencing_generation, state = runtime_authority
+            prefix = "omnigent-runtime-binding:sha256:"
+            suffix = str(runtime_ref).removeprefix(prefix)
+            if not str(runtime_ref).startswith(prefix) or not re.fullmatch(
+                r"[0-9a-f]{64}", suffix
+            ):
+                raise ValueError("result.metadata.runtimeBindingRef is invalid")
+            if (
+                isinstance(revision, bool)
+                or not isinstance(revision, int)
+                or revision < 1
+                or isinstance(fencing_generation, bool)
+                or not isinstance(fencing_generation, int)
+                or fencing_generation < 1
+            ):
+                raise ValueError(
+                    "Omnigent terminal runtime binding counters must be positive integers"
+                )
+            if state not in {
+                "credentials_acquired",
+                "host_attested",
+                "session_bound",
+                "cleanup_complete",
+            }:
+                raise ValueError("result.metadata.runtimeBindingState is invalid")
+        for field_name in (
+            "publicationEvidenceRef",
+            "externalStateRef",
+            "cleanupEvidenceRef",
+            "workflowFailureEvidenceRef",
+        ):
+            ref = value.metadata.get(field_name)
+            if ref is not None:
+                _require_artifact_ref(ref, field_name=f"result.metadata.{field_name}")
+        checkpoint_capture = value.metadata.get("omnigentCheckpointCapture")
+        if checkpoint_capture is not None:
+            validate_compact_temporal_mapping(
+                checkpoint_capture,
+                field_name="result.metadata.omnigentCheckpointCapture",
+            )
+            encoded_capture = json.dumps(
+                checkpoint_capture,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            forbidden = (
+                "/var/run/docker.sock",
+                "providerPayload",
+                "secretBody",
+                "accessToken",
+                "refreshToken",
+            )
+            if any(value in encoded_capture for value in forbidden):
+                raise ValueError(
+                    "Omnigent checkpoint authority contains forbidden runtime data"
+                )
         for ref in value.output_refs:
             _require_artifact_ref(ref, field_name="result.outputRefs[]")
         if value.diagnostics_ref is not None:

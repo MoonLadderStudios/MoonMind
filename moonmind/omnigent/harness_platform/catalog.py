@@ -220,6 +220,57 @@ def assert_catalog_fresh(
         )
 
 
+def assert_catalog_refresh_attests(
+    *,
+    authority: HarnessCatalogSnapshot,
+    observation: HarnessCatalogSnapshot,
+    harness_id: str,
+    implementation_ref: str,
+) -> None:
+    """Prove a fresh observation still matches immutable profile authority.
+
+    Agent Profile versions remain bound to their original catalog snapshot.
+    A later synchronization supplies only freshness/liveness evidence and may
+    not silently replace the selected build or harness implementation.
+    """
+
+    assert_catalog_fresh(observation)
+    if authority.endpointRef != observation.endpointRef:
+        raise HarnessPlatformError(
+            "fresh catalog observation is for a different endpoint",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_CATALOG_UNAVAILABLE,
+        )
+    if (
+        authority.omnigentVersion != observation.omnigentVersion
+        or authority.omnigentBuildDigest != observation.omnigentBuildDigest
+    ):
+        raise HarnessPlatformError(
+            "fresh catalog observation reports a different Omnigent build",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    authority_harness = next(
+        (item for item in authority.harnesses if item.id == harness_id), None
+    )
+    observation_harness = next(
+        (item for item in observation.harnesses if item.id == harness_id), None
+    )
+    if authority_harness is None or observation_harness is None:
+        raise HarnessPlatformError(
+            f"harness {harness_id} is absent from catalog authority",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_UNKNOWN,
+        )
+    if (
+        authority_harness.implementation.implementation_ref()
+        != implementation_ref
+        or observation_harness.implementation.implementation_ref()
+        != implementation_ref
+    ):
+        raise HarnessPlatformError(
+            "fresh catalog observation reports a different harness implementation",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+
+
 class HarnessTrustRecord(BaseModel):
     """Binds trust state to exact implementation identity, not just harness id."""
 

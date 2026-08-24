@@ -27,6 +27,7 @@ from api_service.api.routers.omnigent_bridge import (
     _get_bridge_store,
     _get_create_embedded_facade,
     _get_execution_service,
+    _claim_facade_message,
     _require_bridge_enabled,
     _validate_native_resource_path,
     workflow_chat_router,
@@ -39,6 +40,7 @@ from moonmind.omnigent.bridge_config import (
     HOST_PROTOCOL_MODE_PROXY,
 )
 from moonmind.omnigent.effective_capabilities import CAPABILITY_NAMES
+from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
 from moonmind.omnigent.settings import resolved_proxy_forward_headers
 from moonmind.omnigent.workflow_chat_facade import (
     CAP_CONTROL_UNSUPPORTED,
@@ -2099,6 +2101,28 @@ def test_message_claim_records_scanned_payload_digest(monkeypatch) -> None:
         and entry["metadata"].get("controlOutcome") == "pending"
         for entry in store.lifecycle
     )
+
+
+@pytest.mark.asyncio
+async def test_canonical_settlement_suppresses_facade_ledger_redelivery() -> None:
+    store = _FakeStore()
+
+    async def claim_canonical_turn_command(**_kwargs: Any) -> Any:
+        return SimpleNamespace(outcome=ControlPlaneOutcome.ALREADY_APPLIED)
+
+    store.claim_canonical_turn_command = claim_canonical_turn_command  # type: ignore[attr-defined]
+
+    claimed = await _claim_facade_message(
+        store=store,  # type: ignore[arg-type]
+        row=_row(),
+        event_type="message",
+        actor="operator",
+        idempotency_key="canonical-replay-1",
+        payload_digest="sha256:" + "a" * 64,
+    )
+
+    assert claimed is False
+    assert store.lifecycle == []
 
 
 # --- Approval authority ------------------------------------------------------

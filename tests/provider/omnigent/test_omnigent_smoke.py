@@ -38,6 +38,7 @@ from moonmind.omnigent.workflow_chat_acceptance import (
     REQUIRED_WORKFLOW_CHAT_ROWS,
     WORKFLOW_CHAT_ACCEPTANCE_ISSUE,
     validate_workflow_chat_acceptance_manifest,
+    workflow_chat_combinations,
 )
 from moonmind.workflows.adapters.omnigent_client import OmnigentHttpClient
 
@@ -331,7 +332,20 @@ async def test_live_native_workflow_chat_release_matrix(bridge_store) -> None:
         expected_commit=expected_commit,
     )
     assert payload.get("issue") == WORKFLOW_CHAT_ACCEPTANCE_ISSUE
-    assert set(payload.get("rows") or {}) == set(REQUIRED_WORKFLOW_CHAT_ROWS)
+    combinations = payload.get("combinations") or {}
+    assert set(combinations) == set(workflow_chat_combinations())
+    for combination_id, combination in workflow_chat_combinations().items():
+        entry = combinations[combination_id]
+        if not combination.native_chat_claimed:
+            assert entry.get("status") == "unsupported"
+            assert entry.get("unsupportedReason")
+            continue
+        assert entry.get("status") == "passed"
+        assert set(entry.get("rows") or {}) == set(REQUIRED_WORKFLOW_CHAT_ROWS)
+        # The combination is only qualified by the host image that ran it.
+        assert entry.get("hostImageRef") == (payload.get("images") or {}).get(
+            combination.host_image_key
+        )
 
 
 async def test_live_cumulative_remediation_journey(bridge_store) -> None:

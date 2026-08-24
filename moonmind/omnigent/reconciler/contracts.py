@@ -311,6 +311,9 @@ class DurableSessionState(_ReconcilerModel):
     revision: int
     owner_token: str
     fencing_generation: int
+    runtime_binding_ref: str | None = None
+    runtime_binding_revision: int | None = None
+    runtime_binding_fencing_generation: int | None = None
     desired: DesiredLifecycle = DesiredLifecycle.RUN
 
     provider_session_attached: bool = False

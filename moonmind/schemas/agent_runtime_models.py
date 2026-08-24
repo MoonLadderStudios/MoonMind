@@ -96,6 +96,7 @@ AgentRunState = Literal[
     "timed_out",
 ]
 FailureClass = Literal[
+    "configuration_error",
     "user_error",
     "integration_error",
     "execution_error",
@@ -135,6 +136,40 @@ ProviderProfileDisabledReason = Literal[
 ProviderProfileAuthMethod = Literal["oauth_volume", "secret_ref", "manual"]
 
 
+class OmnigentExecutionPlanBinding(BaseModel):
+    """Compact immutable identity for a persisted Omnigent execution plan."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid", frozen=True)
+
+    plan_ref: str = Field(alias="planRef")
+    plan_digest: str = Field(alias="planDigest")
+    plan_artifact_ref: str = Field(alias="planArtifactRef")
+    task_input_snapshot_ref: str = Field(alias="taskInputSnapshotRef")
+    task_input_snapshot_digest: str = Field(alias="taskInputSnapshotDigest")
+
+    @model_validator(mode="after")
+    def _validate_plan_identity(self) -> "OmnigentExecutionPlanBinding":
+        prefix = "omnigent-execution-plan:sha256:"
+        if not self.plan_ref.startswith(prefix):
+            raise ValueError("planRef must be an Omnigent execution-plan ref")
+        suffix = self.plan_ref.removeprefix(prefix)
+        if not re.fullmatch(r"[0-9a-f]{64}", suffix):
+            raise ValueError("planRef must contain a sha256 digest")
+        expected = f"sha256:{suffix}"
+        if self.plan_digest != expected:
+            raise ValueError("planDigest must match planRef")
+        for name, value in (
+            ("planArtifactRef", self.plan_artifact_ref),
+            ("taskInputSnapshotRef", self.task_input_snapshot_ref),
+        ):
+            normalized = require_non_blank(value, field_name=name)
+            if normalized.startswith(("/", "./", "../", "~")):
+                raise ValueError(f"{name} must be an opaque artifact reference")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", self.task_input_snapshot_digest):
+            raise ValueError("taskInputSnapshotDigest must be a sha256 digest")
+        return self
+
+
 class AgentRuntimeStepExecutionLaunch(BaseModel):
     """Compact adapter-visible launch envelope for one Step Execution."""
 
@@ -159,6 +194,9 @@ class AgentRuntimeStepExecutionLaunch(BaseModel):
         default_factory=list, alias="preparedInputRefs"
     )
     resolved_skillset_ref: str | None = Field(None, alias="resolvedSkillsetRef")
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None, alias="omnigentExecutionPlan"
+    )
     runtime_selection: dict[str, Any] = Field(
         default_factory=dict, alias="runtimeSelection"
     )
@@ -716,6 +754,9 @@ class AgentExecutionRequest(BaseModel):
     agent_kind: AgentKind = Field(..., alias="agentKind")
     agent_id: str = Field(..., alias="agentId", min_length=1)
     execution_profile_ref: str | None = Field(None, alias="executionProfileRef", min_length=1)
+    omnigent_execution_plan: OmnigentExecutionPlanBinding | None = Field(
+        None, alias="omnigentExecutionPlan"
+    )
     correlation_id: str = Field(..., alias="correlationId", min_length=1)
     idempotency_key: str = Field(..., alias="idempotencyKey", min_length=1)
     instruction_ref: str | None = Field(None, alias="instructionRef")
@@ -774,6 +815,21 @@ class AgentExecutionRequest(BaseModel):
                 self.execution_profile_ref = require_non_blank(
                     self.execution_profile_ref, field_name="executionProfileRef"
                 )
+        if self.omnigent_execution_plan is not None and not (
+            self.agent_kind == "external" and self.agent_id.strip().lower() == "omnigent"
+        ):
+            raise ValueError(
+                "omnigentExecutionPlan is supported only for external/omnigent requests"
+            )
+        if (
+            self.step_execution is not None
+            and self.step_execution.omnigent_execution_plan is not None
+            and self.step_execution.omnigent_execution_plan
+            != self.omnigent_execution_plan
+        ):
+            raise ValueError(
+                "stepExecution.omnigentExecutionPlan must match request authority"
+            )
         self.correlation_id = require_non_blank(
             self.correlation_id, field_name="correlationId"
         )
@@ -2008,6 +2064,7 @@ __all__ = [
     "DEFAULT_MANAGED_TIMEOUT_SECONDS",
     "resolve_execution_timeout_seconds",
     "AgentExecutionRequest",
+    "OmnigentExecutionPlanBinding",
     "AgentKind",
     "ExternalExecutionStyle",
     "AgentRunHandle",

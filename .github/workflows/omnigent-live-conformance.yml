@@ -13,6 +13,10 @@ on:
         description: "Optional digest-pinned stock Omnigent host image override"
         required: false
         type: string
+      opencode_host_image:
+        description: "Optional digest-pinned dedicated OpenCode host image override"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -61,9 +65,12 @@ jobs:
           DISPATCH_HOST_IMAGE: ${{ inputs.host_image }}
           DEFAULT_SERVER_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_SERVER_IMAGE }}
           DEFAULT_HOST_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_HOST_IMAGE }}
+          DISPATCH_OPENCODE_HOST_IMAGE: ${{ inputs.opencode_host_image }}
+          DEFAULT_OPENCODE_HOST_IMAGE: ${{ vars.OMNIGENT_CONFORMANCE_OPENCODE_HOST_IMAGE }}
         run: |
           server_image="${DISPATCH_SERVER_IMAGE:-$DEFAULT_SERVER_IMAGE}"
           host_image="${DISPATCH_HOST_IMAGE:-$DEFAULT_HOST_IMAGE}"
+          opencode_host_image="${DISPATCH_OPENCODE_HOST_IMAGE:-$DEFAULT_OPENCODE_HOST_IMAGE}"
           if [[ ! "$server_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
             echo "::error::The Omnigent server image must be configured by immutable digest"
             exit 1
@@ -72,8 +79,18 @@ jobs:
             echo "::error::The Omnigent host image must be configured by immutable digest"
             exit 1
           fi
+          # The OpenCode combination runs the dedicated OpenCode host image, so
+          # workflow_chat cannot be qualified by the Codex host digest alone.
+          # Any configured value must be digest-pinned in every mode.
+          if [[ "${{ matrix.mode }}" == "workflow_chat" || -n "$opencode_host_image" ]]; then
+            if [[ ! "$opencode_host_image" =~ @sha256:[0-9a-fA-F]{64}$ ]]; then
+              echo "::error::The dedicated OpenCode host image must be configured by immutable digest"
+              exit 1
+            fi
+          fi
           echo "server=$server_image" >> "$GITHUB_OUTPUT"
           echo "host=$host_image" >> "$GITHUB_OUTPUT"
+          echo "opencode_host=$opencode_host_image" >> "$GITHUB_OUTPUT"
       - name: Record case start
         id: case_start
         shell: bash
@@ -96,11 +113,13 @@ jobs:
           MOONMIND_OMNIGENT_TEST_BRANCH: ${{ vars.MOONMIND_OMNIGENT_TEST_BRANCH }}
           MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE: ${{ runner.temp }}/moonmind-browser-state.json
           MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN: ${{ secrets.MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN }}
+          MOONMIND_OMNIGENT_WORKFLOW_CHAT_SUPERSEDED_REPORT: ${{ vars.MOONMIND_OMNIGENT_WORKFLOW_CHAT_SUPERSEDED_REPORT }}
         run: |
           python tools/run_omnigent_live_conformance.py \
             --mode "${{ matrix.mode }}" \
             --server-image "${{ steps.images.outputs.server }}" \
             --host-image "${{ steps.images.outputs.host }}" \
+            --opencode-host-image "${{ steps.images.outputs.opencode_host }}" \
             --source-commit "${{ github.sha }}" \
             --output-dir "artifacts/omnigent-conformance/live/${{ matrix.mode }}"
       - name: Stage secret-safe case evidence
@@ -167,6 +186,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          import hashlib
           import json
           import os
           from datetime import datetime, timedelta, timezone
@@ -249,6 +269,130 @@ jobs:
               workflow_chat,
               evidence_root=workflow_chat_path.parent,
               expected_commit=os.environ["GITHUB_SHA"],
+          )
+          # #3712 retirement guards consume the acceptance report directly:
+          # the criterion is derived from the manifest, never asserted by hand.
+          from moonmind.omnigent.legacy_retirement import (
+              RetirementCriterion,
+              criteria_from_native_chat_acceptance,
+          )
+          native_chat_criteria = criteria_from_native_chat_acceptance(
+              workflow_chat,
+              evidence_root=workflow_chat_path.parent,
+              expected_commit=os.environ["GITHUB_SHA"],
+          )
+          if RetirementCriterion.NATIVE_CHAT_ACCEPTANCE_PASSED not in native_chat_criteria:
+              raise SystemExit(
+                  "native Workflow Chat acceptance evidence does not satisfy its "
+                  "retirement criterion"
+              )
+          # Execution admission consumes a distinct, protected exact-combination
+          # projection. It is derived only after the credentialed matrix and its
+          # complete evidence manifest validate; the API cannot manufacture this
+          # authority from the plan it is trying to admit.
+          from moonmind.omnigent.execution_support_evidence import (
+              ProtectedExecutionSupportEvidence,
+          )
+          from moonmind.omnigent.session_supervisor_rollback import (
+              SUPERVISOR_ROLLBACK_POLICY_VERSION,
+          )
+          from moonmind.schemas.omnigent_session_models import (
+              OMNIGENT_SESSION_COMPATIBILITY_VERSION,
+              OMNIGENT_SESSION_FEATURE_GENERATION,
+          )
+          support_fields = {
+              "omnigentServerBuildRef", "omnigentHostBuildRef",
+              "harnessImplementationRef", "vendorRuntimeRefs",
+              "agentSourceRef", "materializerRefs",
+              "providerCompatibilityClass", "hostClassRef", "architecture",
+              "launchPolicyRef", "modelConfigDigest", "executionRealizerRef",
+              "requiredCapabilitiesDigest",
+          }
+          workflow_chat_digest = "sha256:" + hashlib.sha256(
+              workflow_chat_path.read_bytes()
+          ).hexdigest()
+          protected_run_ref = (
+              f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+              f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+          )
+          support_entries = []
+          for combination_id, combination in sorted(
+              workflow_chat["combinations"].items()
+          ):
+              if combination.get("status") != "passed":
+                  continue
+              identity = combination.get("bindingIdentity") or {}
+              candidate = {
+                  "schemaVersion": (
+                      "moonmind.omnigent-protected-execution-support-evidence/v1"
+                  ),
+                  "evidenceIssuer": (
+                      "moonmind-protected-omnigent-conformance@1"
+                  ),
+                  "status": "passed",
+                  "sourceCommit": workflow_chat["sourceCommit"],
+                  "protectedRunRef": protected_run_ref,
+                  "evidenceManifestRef": str(
+                      workflow_chat_path.relative_to(root)
+                  ),
+                  "evidenceManifestDigest": workflow_chat_digest,
+                  "generatedAt": workflow_chat["generatedAt"],
+                  "expiresAt": workflow_chat["expiresAt"],
+                  "supportClassification": (
+                      "connected_host"
+                      if combination.get("hostMode") == "static_compose"
+                      else "fully_managed"
+                  ),
+                  "supportCombinationKey": identity.get(
+                      "supportCombinationKey"
+                  ),
+                  "supportIdentity": {
+                      field: identity.get(field) for field in support_fields
+                  },
+                  "hostImageRef": combination.get("hostImageRef"),
+                  "policySnapshotDigest": identity.get(
+                      "policySnapshotDigest"
+                  ),
+                  "effectiveLaunchSnapshotDigest": identity.get(
+                      "effectiveLaunchSnapshotDigest"
+                  ),
+                  "policyGateRef": (
+                      "github-actions:omnigent-live-conformance/"
+                      f"{os.environ['GITHUB_RUN_ID']}/"
+                      f"{os.environ['GITHUB_RUN_ATTEMPT']}/{combination_id}"
+                  ),
+                  "policyQualified": True,
+                  "exactArtifactsVerified": True,
+                  "featureGeneration": OMNIGENT_SESSION_FEATURE_GENERATION,
+                  "replayCompatibilityVersion": (
+                      OMNIGENT_SESSION_COMPATIBILITY_VERSION
+                  ),
+                  "rollbackPolicyVersion": (
+                      SUPERVISOR_ROLLBACK_POLICY_VERSION
+                  ),
+              }
+              support_entries.append(
+                  ProtectedExecutionSupportEvidence.model_validate(
+                      candidate
+                  ).model_dump(mode="json", by_alias=True)
+              )
+          if not support_entries:
+              raise SystemExit(
+                  "protected execution support has no passing combinations"
+              )
+          (root / "execution-support-evidence.json").write_text(
+              json.dumps(
+                  {
+                      "schemaVersion": (
+                          "moonmind.omnigent-protected-execution-support-index/v1"
+                      ),
+                      "sourceCommit": workflow_chat["sourceCommit"],
+                      "entries": support_entries,
+                  },
+                  indent=2,
+                  sort_keys=True,
+              ) + "\n",
+              encoding="utf-8",
           )
           authority_fields = {
               "authoredWorkflowRef", "taskInputSnapshotRef", "compiledRuntimeRequestRef",
@@ -411,6 +555,10 @@ jobs:
               "browserRows": rows,
               "cumulativeRemediationEvidence": str(cumulative_paths[0].relative_to(root)),
               "nativeWorkflowChatEvidence": str(workflow_chat_path.relative_to(root)),
+              "nativeWorkflowChatCombinations": sorted(workflow_chat["combinations"]),
+              "nativeWorkflowChatRetirementCriteria": sorted(
+                  criterion.value for criterion in native_chat_criteria
+              ),
               "productSchemaVersions": product["schemaVersions"],
               "selection": selection,
               "executionProfileRef": acceptance["executionProfileRef"],

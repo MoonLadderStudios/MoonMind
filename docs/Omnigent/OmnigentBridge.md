@@ -929,16 +929,19 @@ Rules:
 13. Embedded mode must pass stock-host auth conformance before production enablement.
 
 Native Workflow Chat rollout evidence uses
-`moonmind.omnigent.workflow-chat-acceptance/v1`. The controlling artifact is
-commit- and immutable-image-bound, covers every required browser-to-stock-host
-row, and contains SHA-256 bindings for independently resolvable case evidence,
-typed source records, conformance reports, and the logs, Temporal history,
-screenshot, and archive secret-scan results. The required source records bind
-browser traces to binding/capability snapshots, facade requests, resource and
-receipt inventories, denial/scan/credential audits, terminal evidence,
-continuation receipts, and replay snapshots. A bare pass flag, repository-only
-test result, unresolved artifact ref, mutable image tag, stale report, or
-self-asserted secret scan is not rollout evidence.
+`moonmind.omnigent.workflow-chat-acceptance/v2`. The controlling artifact is
+commit- and immutable-image-bound, covers every claimed native-chat support
+combination and every required browser-to-stock-host row within each of them,
+and contains SHA-256 bindings for independently resolvable case evidence, typed
+source records, per-combination conformance reports, the durable operator
+timeline, and the logs, Temporal history, screenshot, and archive secret-scan
+results. The required source records bind browser traces to the
+`/api/executions` creation receipt, binding/capability snapshots, facade
+requests, resource and receipt inventories, denial/scan/credential audits,
+terminal evidence, continuation receipts, replay snapshots, and the
+release-last cleanup receipt. A bare pass flag, repository-only test result,
+unresolved artifact ref, mutable image tag, stale report, self-asserted secret
+scan, or silently omitted support combination is not rollout evidence.
 `tools/build_omnigent_workflow_chat_acceptance.py` builds and validates the
 artifact produced by the protected controller against its required current
 `--expected-commit`; the provider gate independently requires the same commit
@@ -1071,14 +1074,28 @@ Verify host registration, heartbeat/capabilities, session creation, harness laun
 
 ### 20.5 Native Workflow Chat rollout gate
 
-The protected browser-to-stock-host matrix covers the live native conversation,
-scoped transports and resources, authority/security denials, and terminal
-evidence/linked continuation. Each row records browser-originated observations
-against an unchanged digest-pinned stock host and resolves its source evidence
-before the `moonmind.omnigent.workflow-chat-acceptance/v1` manifest can pass.
-Every raw evidence channel is secret-scanned, and the manifest is valid only for
-its recorded source commit, compatibility profile, image digests, and freshness
-window.
+The protected browser-to-stock-host matrix runs one journey per claimed native
+Workflow Chat support combination. Every combination MoonMind claims appears in
+the matrix; a combination it does not claim appears as `unsupported` with a
+stable code-owned reason. Each combination's journey covers the live native
+conversation (created through the normal `/api/executions` and Temporal path),
+scoped transports and resources, authority/security denials (including
+cross-user and cross-workflow denials), and terminal evidence, linked
+continuation, and release-last cleanup. Each row records browser-originated
+observations against an unchanged digest-pinned stock host and resolves its
+source evidence before the `moonmind.omnigent.workflow-chat-acceptance/v2`
+manifest can pass. Every raw evidence channel is secret-scanned, and the
+manifest is valid only for its recorded source commit, compatibility profile,
+image digests, bundle digests, scenario and route-inventory versions, and
+freshness window. Each combination binds its evidence to the exact
+support-combination identity — harness implementation, vendor runtime,
+materializers, Host Class, architecture, launch policy, normalized model
+configuration, execution realizer, required capabilities, and Provider Profile
+class — and the recorded `supportCombinationKey` must recompute from it. The
+Provider Profile class, credential materializer, authentication mode, and the
+digest-pinned host image that executed the combination are pinned by the claimed
+inventory, so evidence gathered under one credential authority or host image can
+never qualify another.
 
 Every source record carries an observation timestamp, immutable image digests,
 and one server-owned correlation envelope containing the Workflow, chat binding,
@@ -1096,14 +1113,16 @@ record-specific observed facts are:
 | `facadeRequests` | every compatibility route bound to an observed request path/method/transport, HTML/HTTP/SSE/WebSocket authorization, server-resolved binding/session, reconnect reauthorization |
 | `resourceInventory` | request-correlated approval/tool/file/terminal/agent/task resources |
 | `mutationReceipts` | exactly one receipt for every mutation derived from the compatibility map, including actor, idempotency, expected state, outcome, upstream correlation, and audit ref |
-| `denialAudit` | alternate-binding, provider-session, hidden-control, and immutable-policy denials before upstream forwarding |
-| `capabilitySnapshot` | upstream/profile/provider-policy/workflow/caller inputs and their recomputed intersection digest |
+| `denialAudit` | alternate-binding, provider-session, hidden-control, immutable-policy, cross-user, and cross-workflow denials before upstream forwarding; each cross-scope denial records the authorized and attempted user and Workflow identities and varies exactly the scope it claims to isolate |
+| `executionCreation` | the browser-originated `POST /api/executions` create — cross-checked against the matching browser trace event's method and normalized path — the Temporal workflow/run/task-queue routing it produced, the resolved Agent Profile snapshot, execution plan, and Provider Profile, and the live bridge session it resolved to |
+| `capabilitySnapshot` | upstream/profile/provider-policy/workflow/caller inputs, their recomputed intersection digest over exactly the combination's advertised capability contract, and one observed enforcement outcome per advertised capability; a denied capability's enforcement request is expected to be denied in the browser trace |
 | `scanAudit` | blocked-content and unavailable-enforcement sends, neither forwarded |
 | `credentialBoundary` | every traced request verified to expose no upstream credential in the browser and forward no MoonMind credential upstream, plus a server-side credential injection ref |
 | `terminalSnapshot` | terminal state, read-only projection, denied mutation requests |
 | `capturedEvidence` | packaged MoonMind artifact and capture-manifest refs resolved and digest-bound into the acceptance manifest |
 | `continuationReceipt` | production destination-creation receipt, pinned source run, durable outbound `linked_continuation` relationship identity, idempotency, and matching source before/after digests |
 | `replaySnapshot` | host unavailable and replay resolved from the captured MoonMind artifacts |
+| `cleanupReceipt` | the consecutively ordered cleanup steps the combination's cleanup mode can truthfully emit — live-host stop for `remove`, live-host drain for `drain` — then provider-session removal, workspace publication, and Provider Profile release last, plus the observed host mode, launch-policy cleanup mode, live-resource disposition, and cleanup state |
 
 ---
 

@@ -17,6 +17,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 import api_service.api.routers.omnigent_session_timeline as timeline_api
+import api_service.services.omnigent_session_timeline_service as timeline_service
 from api_service.auth_providers import get_current_user
 from api_service.db.base import get_async_session
 from moonmind.omnigent.control_plane.records import (
@@ -160,7 +161,7 @@ def session_record():
 @pytest.mark.asyncio
 async def test_timeline_endpoint_returns_projection(monkeypatch, session_record):
     monkeypatch.setattr(
-        timeline_api.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: _FakeRepos(session_record))
+        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: _FakeRepos(session_record))
     )
     app = _build_app(session_record, _FakeUser())
     transport = ASGITransport(app=app)
@@ -176,7 +177,7 @@ async def test_timeline_endpoint_returns_projection(monkeypatch, session_record)
 @pytest.mark.asyncio
 async def test_timeline_endpoint_404_for_unknown_session(monkeypatch, session_record):
     monkeypatch.setattr(
-        timeline_api.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: _FakeRepos(session_record))
+        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: _FakeRepos(session_record))
     )
     app = _build_app(session_record, _FakeUser())
     transport = ASGITransport(app=app)
@@ -188,7 +189,7 @@ async def test_timeline_endpoint_404_for_unknown_session(monkeypatch, session_re
 @pytest.mark.asyncio
 async def test_timeline_endpoint_requires_operator_permission(monkeypatch, session_record):
     monkeypatch.setattr(
-        timeline_api.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: _FakeRepos(session_record))
+        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: _FakeRepos(session_record))
     )
     unauthorized = _FakeUser(is_superuser=False, settings_permissions=set())
     app = _build_app(session_record, unauthorized)
@@ -221,7 +222,7 @@ async def test_timeline_links_redirect_through_authorized_server_routes(
     )
     repos = _FakeRepos(session_record, latest_decision=decision)
     monkeypatch.setattr(
-        timeline_api.ControlPlaneRepositories,
+        timeline_service.ControlPlaneRepositories,
         "bind",
         classmethod(lambda cls, db: repos),
     )
@@ -281,7 +282,7 @@ async def test_stuck_state_endpoint_returns_findings_and_response(monkeypatch):
     )
     repos = _FakeRepos(active, active_turn=_active_turn(), turn_count=1)
     monkeypatch.setattr(
-        timeline_api.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: repos)
+        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: repos)
     )
     app = _build_app(active, _FakeUser())
     transport = ASGITransport(app=app)
@@ -317,7 +318,7 @@ async def test_stuck_state_endpoint_escalates_with_durable_detection_count(monke
         reason_counts={"moonmind_active_no_recent_evidence": 3},
     )
     monkeypatch.setattr(
-        timeline_api.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: repos)
+        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: repos)
     )
     app = _build_app(active, _FakeUser())
     transport = ASGITransport(app=app)
@@ -356,7 +357,7 @@ async def test_stuck_state_endpoint_projects_provider_and_lease_divergence(monke
     )
     repos = _FakeRepos(active, latest_snapshot=snapshot)
     monkeypatch.setattr(
-        timeline_api.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: repos)
+        timeline_service.ControlPlaneRepositories, "bind", classmethod(lambda cls, db: repos)
     )
     app = _build_app(active, _FakeUser())
     transport = ASGITransport(app=app)

@@ -11,8 +11,6 @@ correctness backstop for lost terminal edges.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 from datetime import datetime, timedelta
 from typing import Any, Mapping
 
@@ -21,6 +19,11 @@ from temporalio.common import RetryPolicy
 from temporalio.exceptions import CancelledError
 
 with workflow.unsafe.imports_passed_through():
+    from moonmind.omnigent.control_plane.identities import (
+        canonical_omnigent_session_id,
+        canonical_omnigent_turn_attempt_id,
+        omnigent_session_workflow_id,
+    )
     from moonmind.omnigent.reconciler import (
         DecisionKind,
         DurableSessionState,
@@ -61,6 +64,25 @@ MAX_PENDING_SIGNAL_INTENTS = 100
 # The janitor reclaims an assigned host this long after its last heartbeat,
 # independently of the much longer lease expiry.
 HOST_LEASE_HEARTBEAT_TIMEOUT_SECONDS = 90
+
+
+def _align_with_workflow_clock(
+    value: datetime,
+    workflow_now: datetime,
+) -> datetime:
+    """Normalize persistence timestamps to Temporal's deterministic clock.
+
+    SQLite and older serialized state may return a timezone-naive timestamp,
+    while Temporal's workflow clock is UTC-aware. The missing timezone is UTC
+    by contract, so attach the workflow clock's zone before comparing. Keep the
+    inverse case for direct unit construction with a naive clock.
+    """
+
+    if value.tzinfo is None and workflow_now.tzinfo is not None:
+        return value.replace(tzinfo=workflow_now.tzinfo)
+    if value.tzinfo is not None and workflow_now.tzinfo is None:
+        return value.replace(tzinfo=None)
+    return value
 
 # A reconciler decision may authorize several independently retryable cleanup or
 # publication phases, but never more than this fixed, bounded sequence.
@@ -144,27 +166,6 @@ def _is_cancellation_failure(error: BaseException) -> bool:
         )
         current = cause if isinstance(cause, BaseException) else None
     return False
-
-
-def canonical_omnigent_session_id(
-    *, workflow_id: str, step_execution_id: str, agent_run_id: str
-) -> str:
-    """Return the canonical identity derived only from durable owner scope."""
-
-    authority = json.dumps(
-        ["omnigent-session/v1", workflow_id, step_execution_id, agent_run_id],
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return "oms_" + hashlib.sha256(authority).hexdigest()[:40]
-
-
-def canonical_omnigent_turn_attempt_id(session_id: str, ordinal: int = 1) -> str:
-    authority = f"omnigent-turn/v1:{session_id}:{ordinal}".encode("utf-8")
-    return "ota_" + hashlib.sha256(authority).hexdigest()[:40]
-
-
-def omnigent_session_workflow_id(session_id: str) -> str:
-    return f"omnigent-session:{session_id}"
 
 
 @workflow.defn(name=WORKFLOW_TYPE)
@@ -286,8 +287,14 @@ class MoonMindOmnigentSessionWorkflow:
             compiledExecutionIntentDigest=(
                 session_input.compiled_execution_intent_digest
             ),
+            omnigentExecutionPlan=session_input.omnigent_execution_plan,
             expectedRevision=durable.revision,
             fencingGeneration=durable.fencing_generation,
+            runtimeBindingRef=durable.runtime_binding_ref,
+            runtimeBindingRevision=durable.runtime_binding_revision,
+            runtimeBindingFencingGeneration=(
+                durable.runtime_binding_fencing_generation
+            ),
             decisionId=(
                 f"{session_input.session_id}:decision:{self._decision_count + 1}"
                 if decision is not None
@@ -525,6 +532,7 @@ class MoonMindOmnigentSessionWorkflow:
         deadline = decision.next_deadline or (
             now + timedelta(seconds=SNAPSHOT_INTERVAL_SECONDS)
         )
+        deadline = _align_with_workflow_clock(deadline, now)
         wait_seconds = max(
             0.001,
             min(
@@ -697,6 +705,13 @@ class MoonMindOmnigentSessionWorkflow:
                     "compiledExecutionIntentDigest": (
                         session_input.compiled_execution_intent_digest
                     ),
+                    "omnigentExecutionPlan": (
+                        session_input.omnigent_execution_plan.model_dump(
+                            mode="json", by_alias=True
+                        )
+                        if session_input.omnigent_execution_plan is not None
+                        else None
+                    ),
                 },
             )
             if not isinstance(loaded, Mapping):
@@ -720,7 +735,11 @@ class MoonMindOmnigentSessionWorkflow:
                 timeout_at = datetime.fromisoformat(
                     str(timeout_at_raw).replace("Z", "+00:00")
                 )
-                timeout_elapsed = workflow.now() >= timeout_at
+                now = workflow.now()
+                timeout_elapsed = now >= _align_with_workflow_clock(
+                    timeout_at,
+                    now,
+                )
 
             # Persisted signal intent mutates canonical revision/desired state.
             # Re-load before reconciling so no command is issued against the

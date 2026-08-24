@@ -24,6 +24,7 @@ def test_evidence_sources_write_the_compose_default_filenames() -> None:
 
     assert destinations == {
         "acceptance-manifest.json",
+        "execution-support-evidence.json",
         "exact-artifact-projection.json",
         "live-health-projection.json",
     }
@@ -87,7 +88,9 @@ def test_select_artifact_skips_expired_and_prefers_newest() -> None:
 def test_materialize_source_writes_evidence_for_the_deployed_commit(
     monkeypatch, tmp_path
 ) -> None:
-    source = materialize.EVIDENCE_SOURCES[1]
+    source = next(
+        item for item in materialize.EVIDENCE_SOURCES if item.key == "exactArtifact"
+    )
     document = {"sourceCommit": COMMIT, "verdict": "passed"}
 
     monkeypatch.setattr(
@@ -135,7 +138,9 @@ def test_materialize_source_rejects_evidence_for_another_commit(
     monkeypatch, tmp_path
 ) -> None:
     """Evidence naming another commit proves nothing about the deployed image."""
-    source = materialize.EVIDENCE_SOURCES[1]
+    source = next(
+        item for item in materialize.EVIDENCE_SOURCES if item.key == "exactArtifact"
+    )
 
     monkeypatch.setattr(
         materialize,

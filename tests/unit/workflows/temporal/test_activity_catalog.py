@@ -90,12 +90,12 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
         == INTEGRATIONS_TASK_QUEUE
     )
     omnigent_route = catalog.resolve_activity("integration.omnigent.execute")
-    assert omnigent_route.task_queue == INTEGRATIONS_TASK_QUEUE
-    assert omnigent_route.capability_class == "integration:omnigent"
+    assert omnigent_route.task_queue == AGENT_RUNTIME_TASK_QUEUE
+    assert omnigent_route.capability_class == "agent_runtime"
     assert omnigent_route.heartbeat_required is True
     assert (
         catalog.resolve_activity("integration.omnigent.execute").task_queue
-        == INTEGRATIONS_TASK_QUEUE
+        == AGENT_RUNTIME_TASK_QUEUE
     )
     assert (
         catalog.resolve_activity("workload.run").task_queue

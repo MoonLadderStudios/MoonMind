@@ -9,9 +9,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from moonmind.auth.github_credentials import ResolvedGitHubCredential
+from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
 from moonmind.schemas.agent_runtime_models import RuntimeCommandRenderResult
+from moonmind.security.execution_fanout_capabilities import (
+    ExecutionFanoutCapabilityError,
+    verify_execution_fanout_capability,
+)
 from moonmind.workflows.executions.repository_contract import (
     RepositoryClientEvidence,
     RepositoryClientPolicy,
@@ -378,6 +383,44 @@ async def test_default_repository_readiness_allows_gh_for_read_only_skill(tmp_pa
     assert resolved is not None
     assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
     assert resolved.remote_tip_expectation["kind"] == "must_equal"
+
+
+@pytest.mark.asyncio
+async def test_default_repository_readiness_defers_execution_fanout_to_runtime(
+    tmp_path,
+):
+    """Replay mm:91c47b8e at the repository-to-runtime readiness handoff."""
+
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(return_value="abcdef0123456789")
+
+    with patch(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        AsyncMock(return_value=ResolvedGitHubCredential(token="test-token")),
+    ):
+        resolved = await launcher._ensure_repository_ready_for_launch(
+            _repository_readiness_request(
+                publish_mode="none",
+                skill_capabilities=["gh", "execution.fanout"],
+            ),
+            None,
+        )
+
+    assert resolved is not None
+    assert resolved.prepared_revision.commit_sha == "abcdef0123456789"
 
 
 @pytest.mark.asyncio
@@ -4480,6 +4523,123 @@ async def test_launch_generic_env_uses_logical_step_id_for_artifacts_dir(
         run_root / "artifacts" / "implement"
     )
     assert (run_root / "artifacts" / "implement").is_dir()
+
+
+@pytest.mark.asyncio
+async def test_direct_managed_launch_materializes_scoped_execution_fanout(
+    tmp_path, monkeypatch
+):
+    """Replay mm:91c47b8e through the direct Claude launch environment."""
+
+    monkeypatch.setenv("MOONMIND_AGENT_RUNTIME_STORE", str(tmp_path))
+    monkeypatch.setenv("MOONMIND_URL", "http://api:8000")
+    captured_env = _patch_generic_env_subprocess(monkeypatch)
+    workspace = tmp_path / "workspaces" / "agent-run-1" / "repo"
+    workspace.mkdir(parents=True)
+    launcher = ManagedRuntimeLauncher(ManagedRunStore(tmp_path / "managed_runs"))
+    request = _make_request(
+        parameters={"requiredCapabilities": ["execution.fanout"]},
+        timeout_policy={"timeout_seconds": 300},
+        step_execution={
+            "workflowId": "mm:parent",
+            "runId": "workflow-run-1",
+            "logicalStepId": "batch-workflows",
+            "executionOrdinal": 1,
+            "stepExecutionId": (
+                "mm:parent:workflow-run-1:batch-workflows:execution:1"
+            ),
+            "runtimeContextPolicy": "fresh_agent_run",
+            "skillSourcePolicy": {
+                "executionFanout": {
+                    "authorized": True,
+                    "selectedSkill": "batch-workflows",
+                    "sourceKind": "built_in",
+                    "reasonCode": "trusted_resolved_skill_requirement",
+                }
+            },
+        },
+    )
+
+    _record, process, _cleanup, _deferred = await launcher.launch(
+        run_id="agent-run-1",
+        workflow_id="mm:parent",
+        request=request,
+        profile=_make_profile(
+            runtime_id="claude_code",
+            command_template=["echo", "hello"],
+        ),
+        workspace_path=str(workspace),
+    )
+    await process.wait()
+
+    capability = verify_execution_fanout_capability(
+        captured_env["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
+        secret=str(settings.security.JWT_SECRET_KEY),
+    )
+    assert capability.parent_workflow_id == "mm:parent"
+    assert capability.agent_run_id == "agent-run-1"
+    assert capability.step_id == "batch-workflows"
+    assert capability.session_id == "agent-run-1"
+    assert capability.runtime_id == "claude_code"
+    assert capability.source_kind == "managed_process"
+    assert captured_env["MOONMIND_TASK_WORKFLOW_ID"] == "mm:parent"
+    assert captured_env["MOONMIND_AGENT_RUN_ID"] == "agent-run-1"
+    assert captured_env["MOONMIND_RUNTIME_ID"] == "claude_code"
+    assert captured_env["MOONMIND_STEP_ID"] == "batch-workflows"
+
+
+def test_direct_managed_launch_removes_unrequested_ambient_fanout_authority() -> None:
+    environment = {
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "stale-inline-token",
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": "/stale/token-file",
+    }
+
+    ManagedRuntimeLauncher._materialize_execution_fanout_environment(
+        environment=environment,
+        request=_make_request(parameters={"requiredCapabilities": []}),
+        workflow_id="mm:parent",
+        run_id="agent-run-1",
+        runtime_id="claude_code",
+    )
+
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE" not in environment
+
+
+def test_direct_managed_launch_rejects_denied_fanout_authorization() -> None:
+    request = _make_request(
+        parameters={"requiredCapabilities": ["execution.fanout"]},
+        step_execution={
+            "workflowId": "mm:parent",
+            "runId": "workflow-run-1",
+            "logicalStepId": "batch-workflows",
+            "executionOrdinal": 1,
+            "stepExecutionId": (
+                "mm:parent:workflow-run-1:batch-workflows:execution:1"
+            ),
+            "runtimeContextPolicy": "fresh_agent_run",
+            "skillSourcePolicy": {
+                "executionFanout": {
+                    "authorized": False,
+                    "selectedSkill": "batch-workflows",
+                    "sourceKind": "repo",
+                    "reasonCode": "resolved_skill_policy_denied",
+                }
+            },
+        },
+    )
+    environment: dict[str, str] = {}
+
+    with pytest.raises(ExecutionFanoutCapabilityError, match="not authorized"):
+        ManagedRuntimeLauncher._materialize_execution_fanout_environment(
+            environment=environment,
+            request=request,
+            workflow_id="mm:parent",
+            run_id="agent-run-1",
+            runtime_id="claude_code",
+        )
+
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN" not in environment
 
 
 @pytest.mark.asyncio
