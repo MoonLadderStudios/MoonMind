@@ -46,7 +46,7 @@ done
 
 # Verify opencode provider key is present in auth.json (without leaking)
 if command -v python3 >/dev/null 2>&1; then
-  python3 -c "import json,sys; d=json.load(open('$opencode_auth')); sys.exit(0 if 'opencode-go' in d and 'apiKey' in d['opencode-go'] else 1)" || exit 84
+  python3 -c "import json,sys; d=json.load(open('$opencode_auth')); p=d.get('opencode-go'); sys.exit(0 if isinstance(p,dict) and p.get('type') == 'api' and isinstance(p.get('key'),str) and p.get('key') else 1)" || exit 84
 else
   grep -q "opencode-go" "$opencode_auth" || exit 84
 fi

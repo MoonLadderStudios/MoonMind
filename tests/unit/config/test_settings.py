@@ -662,7 +662,7 @@ class TestWorkflowSettings:
         settings = WorkflowSettings(_env_file=None)
         assert settings.codex_model == "gpt-5.5"
         assert settings.codex_effort == "high"
-        assert settings.default_runtime == "codex_cli"
+        assert settings.default_runtime == "omnigent"
         assert settings.default_publish_mode == "pr"
         assert settings.claude_volume_name == "claude_auth_volume"
         assert settings.claude_volume_path == "/home/app/.claude"

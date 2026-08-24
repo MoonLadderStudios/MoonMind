@@ -640,6 +640,70 @@ describe('Workflow Detail Entrypoint', () => {
     });
   }
 
+  it('shows the persisted Omnigent plan and fenced runtime binding authority', async () => {
+    window.history.pushState(
+      {},
+      'Omnigent authority test',
+      '/workflows/test-123/overview?source=temporal',
+    );
+    const planRef = `omnigent-execution-plan:sha256:${'a'.repeat(64)}`;
+    const bindingRef = `omnigent-runtime-binding:sha256:${'b'.repeat(64)}`;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/artifacts')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ artifacts: [] }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          taskId: 'test-123',
+          workflowId: 'test-123',
+          namespace: 'default',
+          runId: '02-run',
+          source: 'temporal',
+          workflowType: 'MoonMind.UserWorkflow',
+          title: 'OpenCode plan-bound run',
+          summary: 'Using persisted authority.',
+          status: 'running',
+          state: 'executing',
+          rawState: 'executing',
+          temporalStatus: 'running',
+          targetRuntime: 'omnigent',
+          createdAt: '2026-04-09T00:00:00Z',
+          updatedAt: '2026-04-09T00:00:04Z',
+          omnigentExecutionPlan: {
+            planRef,
+            planDigest: `sha256:${'a'.repeat(64)}`,
+            planArtifactRef: 'art_plan_1',
+          },
+          omnigentRuntimeBinding: {
+            runtimeBindingRef: bindingRef,
+            revision: 3,
+            fencingGeneration: 1,
+            state: 'session_bound',
+          },
+          actions: {},
+        }),
+      } as Response);
+    });
+
+    renderWithClient(<WorkflowDetailPage payload={mockPayload} />);
+
+    expect(await screen.findByText('Omnigent authority')).toBeTruthy();
+    expect(screen.getByText(planRef)).toBeTruthy();
+    expect(screen.getByText(bindingRef)).toBeTruthy();
+    expect(
+      screen.getByText(
+        (_content, node) =>
+          node?.tagName === 'DD' &&
+          node.textContent?.includes('revision 3 · generation 1 · session bound') === true,
+      ),
+    ).toBeTruthy();
+  });
+
   it('explains terminal quality-gate outcomes without claiming a failed step', async () => {
     window.history.pushState(
       {},

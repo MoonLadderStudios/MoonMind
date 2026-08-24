@@ -20,19 +20,26 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api_service.api.routers.executions import _get_service, get_temporal_client, router
+from api_service.db.base import get_async_session
 from moonmind.omnigent.remediation_workspace import (
     RemediationLoopHead,
     RemediationWorkspaceBinding,
     RemediationWorkspaceError,
     SandboxRemediationWorkspaceOwner,
 )
+from moonmind.schemas.agent_runtime_models import OmnigentExecutionPlanBinding
 from moonmind.workflows.temporal.remediation_workspace_head import (
     RemediationAttemptOutput,
     RemediationWorkspaceHead,
     advance_head,
     freeze_attempt_input,
 )
-from moonmind.workflows.temporal.workflows.run import MoonMindRunWorkflow
+from moonmind.workflows.temporal.workflows.run import (
+    RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
+    RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+    RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
+    MoonMindRunWorkflow,
+)
 from tests.unit.api.routers.test_executions import (
     _build_execution_record,
     _override_user_dependencies,
@@ -135,8 +142,68 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     service.create_execution.return_value = _build_execution_record()
     app.dependency_overrides[_get_service] = lambda: service
     app.dependency_overrides[get_temporal_client] = AsyncMock
+    provider_profile = SimpleNamespace(
+        profile_id="omnigent-codex", provider_id="openai"
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(return_value=provider_profile),
+        commit=AsyncMock(),
+    )
+    app.dependency_overrides[get_async_session] = lambda: db_session
     _override_user_dependencies(app, is_superuser=False)
-    with TestClient(app) as client:
+    profile_snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-bootstrap-default",
+        "version": 1,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "omnigent-codex",
+        "executionProfileRef": "omnigent-host-codex",
+        "launchPolicyRef": "codex-on-demand@1",
+        "agentId": "codex-native-ui",
+        "document": {
+            "endpointRef": "default",
+            "harness": "codex-native",
+            "model": {"model": "gpt-5"},
+            "capture": {},
+            "rag": {},
+            "publish": {},
+            "workspace": {},
+        },
+    }
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_plan_3480",
+        taskInputSnapshotRef="art_task_3480",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    compiled_plan = SimpleNamespace(
+        binding=plan_binding,
+        artifact_refs=("art_profile_3480", "art_skills_3480", "art_plan_3480"),
+        resolved_skillset_ref="art_skills_3480",
+    )
+    with (
+        patch(
+            "api_service.api.routers.executions."
+            "resolve_default_agent_profile_snapshot",
+            AsyncMock(return_value=profile_snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service."
+            "persist_json_artifact",
+            AsyncMock(return_value=("art_task_3480", "sha256:" + "c" * 64)),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service."
+            "compile_and_persist_execution_plan",
+            AsyncMock(return_value=compiled_plan),
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+        TestClient(app) as client,
+    ):
         response = client.post("/api/executions", json={
             "type": "workflow",
             "payload": {
@@ -160,6 +227,12 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     assert authored["targetRuntime"] == "omnigent"
     assert authored["omnigent"]["executionTargetRef"] == "omnigent-host-codex"
     assert authored["workflow"]["runtime"]["executionProfileRef"] == "omnigent-codex"
+    assert authored["agentProfileSnapshot"]["profileId"] == (
+        "omnigent-bootstrap-default"
+    )
+    assert authored["omnigentExecutionPlan"] == plan_binding.model_dump(
+        mode="json", by_alias=True, exclude_none=True
+    )
 
     # Cross the real deterministic workflow compiler boundary.  This is the
     # request shape consumed by the Temporal agent activity; an API-shaped
@@ -170,6 +243,14 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
         return_value=SimpleNamespace(
             workflow_id="mm:wf-3480", run_id="run-1", namespace="default"
         ),
+    ), patch(
+        "moonmind.workflows.temporal.workflows.run.workflow.patched",
+        side_effect=lambda patch_id: patch_id
+        in {
+            RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
+            RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
+            RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
+        },
     ):
         compiled = compiler._build_agent_execution_request(
             node_inputs={
@@ -179,7 +260,6 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
                         "executionProfileRef"
                     ],
                 },
-                "omnigent": {"harness": "codex-native"},
             },
             node_id="initial-implementation",
             tool_name="omnigent",
@@ -188,7 +268,13 @@ async def test_normal_create_c0_c1_c2_survives_destroyed_attempts_and_restarts(
     assert compiled.agent_kind == "external"
     assert compiled.agent_id == "omnigent"
     assert compiled.execution_profile_ref == "omnigent-codex"
-    assert compiled.parameters["omnigent"] == {"harness": "codex-native"}
+    assert "executionPlanRef" not in compiled.parameters
+    assert compiled.parameters["omnigent"]["executionTargetRef"] == (
+        "omnigent-host-codex"
+    )
+    assert compiled.parameters["omnigent"]["agent"]["harnessOverride"] == (
+        "codex-native"
+    )
     assert compiled.step_execution.workflow_id == "mm:wf-3480"
 
     artifacts = _CheckpointStore(tmp_path / "artifacts")

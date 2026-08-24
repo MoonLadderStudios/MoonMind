@@ -25,6 +25,13 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
+    resolve_execution_timeout_seconds,
+)
+from moonmind.security.execution_fanout_capabilities import (
+    EXECUTION_FANOUT_REQUIRED_CAPABILITY,
+    ExecutionFanoutCapabilityError,
+    mint_execution_fanout_capability,
+    require_execution_fanout_authorization,
 )
 from moonmind.workflows.executions.repository_contract import (
     AuthoredLoreRepositoryTarget,
@@ -488,6 +495,7 @@ class ManagedRuntimeLauncher:
                 "jira",
                 "docker",
                 "container.run",
+                EXECUTION_FANOUT_REQUIRED_CAPABILITY,
             )
         )
 
@@ -881,6 +889,116 @@ class ManagedRuntimeLauncher:
             "MOONMIND_ARTIFACTS_DIR": str(artifacts_dir),
             "CI": "1",
         }
+
+    @staticmethod
+    def _execution_fanout_authorization(
+        request: AgentExecutionRequest,
+    ) -> Mapping[str, Any] | None:
+        step_execution = request.step_execution
+        if step_execution is None:
+            return None
+        policy = step_execution.skill_source_policy
+        if "executionFanout" not in policy:
+            return None
+        evidence = policy.get("executionFanout")
+        if not isinstance(evidence, Mapping):
+            raise ExecutionFanoutCapabilityError(
+                "execution fan-out authorization evidence is malformed"
+            )
+        return evidence
+
+    @classmethod
+    def _materialize_execution_fanout_environment(
+        cls,
+        *,
+        environment: dict[str, str],
+        request: AgentExecutionRequest,
+        workflow_id: str | None,
+        run_id: str,
+        runtime_id: str,
+    ) -> None:
+        """Mint direct-process fan-out authority from workflow-owned evidence."""
+
+        environment.pop("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN", None)
+        environment.pop("MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE", None)
+        raw_capabilities = request.parameters.get("requiredCapabilities")
+        if raw_capabilities is None:
+            required_capabilities: tuple[str, ...] = ()
+        elif isinstance(raw_capabilities, (list, tuple)):
+            required_capabilities = tuple(
+                str(value or "").strip().lower()
+                for value in raw_capabilities
+                if str(value or "").strip()
+            )
+        else:
+            raise ExecutionFanoutCapabilityError(
+                "requiredCapabilities must be a list when present on an agent request"
+            )
+        if EXECUTION_FANOUT_REQUIRED_CAPABILITY not in required_capabilities:
+            return
+
+        authorization = cls._execution_fanout_authorization(request)
+        require_execution_fanout_authorization(
+            required_capabilities,
+            authorization,
+        )
+        step_execution = request.step_execution
+        request_workflow_id = (
+            str(step_execution.workflow_id or "").strip()
+            if step_execution is not None
+            else ""
+        )
+        activity_workflow_id = str(workflow_id or "").strip()
+        if (
+            request_workflow_id
+            and activity_workflow_id
+            and request_workflow_id != activity_workflow_id
+        ):
+            raise ExecutionFanoutCapabilityError(
+                "execution fan-out parent workflow identity does not match the "
+                "Step Execution"
+            )
+        parent_workflow_id = activity_workflow_id or request_workflow_id
+        if not parent_workflow_id:
+            raise ExecutionFanoutCapabilityError(
+                "execution fan-out requires a parent workflow identity"
+            )
+        normalized_runtime_id = str(runtime_id or "").strip()
+        if not normalized_runtime_id:
+            raise ExecutionFanoutCapabilityError(
+                "execution fan-out requires a runtime identity"
+            )
+        if not str(environment.get("MOONMIND_URL") or "").strip():
+            raise ExecutionFanoutCapabilityError(
+                "execution fan-out requires the MoonMind execution API endpoint"
+            )
+
+        from moonmind.config.settings import settings as _mm_settings
+
+        environment["MOONMIND_TASK_WORKFLOW_ID"] = parent_workflow_id
+        environment["MOONMIND_AGENT_RUN_ID"] = run_id
+        environment["MOONMIND_RUNTIME_ID"] = normalized_runtime_id
+        if step_execution is not None:
+            environment["MOONMIND_STEP_ID"] = step_execution.logical_step_id
+        environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"] = (
+            mint_execution_fanout_capability(
+                secret=str(_mm_settings.security.JWT_SECRET_KEY or ""),
+                parent_workflow_id=parent_workflow_id,
+                agent_run_id=run_id,
+                step_id=(
+                    step_execution.logical_step_id
+                    if step_execution is not None
+                    else None
+                ),
+                session_id=run_id,
+                runtime_id=normalized_runtime_id,
+                source_kind="managed_process",
+                lifetime_seconds=resolve_execution_timeout_seconds(
+                    agent_kind=request.agent_kind,
+                    timeout_policy=request.timeout_policy,
+                ),
+            )
+        )
 
     @staticmethod
     def _build_github_socket_path(*, run_id: str, support_root: str | None) -> str:
@@ -2240,6 +2358,13 @@ class ManagedRuntimeLauncher:
                     resolved_workspace_path=resolved_workspace_path,
                     request=request,
                 )
+            )
+            self._materialize_execution_fanout_environment(
+                environment=env_overrides,
+                request=request,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                runtime_id=normalize_runtime_id(profile.runtime_id),
             )
 
             github_token = await resolve_github_token_for_launch(env_overrides)

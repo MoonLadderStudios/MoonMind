@@ -3597,6 +3597,43 @@ async def _claim_facade_message(
     """
 
     event_identity = f"workflow-chat-message:{idempotency_key}"
+    canonical_claim = getattr(store, "claim_canonical_turn_command", None)
+    if callable(canonical_claim):
+        try:
+            claim = await canonical_claim(
+                row=row,
+                command_type=event_type,
+                idempotency_key=idempotency_key,
+                payload_digest=payload_digest,
+            )
+        except Exception as exc:
+            from moonmind.omnigent.control_plane.turn_commands import (
+                CanonicalTurnAuthorityUnavailable,
+            )
+
+            if isinstance(exc, CanonicalTurnAuthorityUnavailable):
+                raise WorkflowChatFacadeError(
+                    str(exc),
+                    failure_class="system_error",
+                    status_code=status.HTTP_409_CONFLICT,
+                    code=CODE_SESSION_NOT_READY,
+                ) from exc
+            raise
+        from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+
+        if claim.outcome is ControlPlaneOutcome.ALREADY_APPLIED:
+            # Canonical settlement is authoritative even if the facade's
+            # compatibility ledger was lost or has not yet converged. Never
+            # redeliver a provider turn (or duplicate billing) from a second
+            # transport-local claim.
+            return False
+        if claim.outcome is not ControlPlaneOutcome.APPLIED:
+            raise WorkflowChatFacadeError(
+                "The canonical turn command is owned by another delivery.",
+                failure_class="system_error",
+                status_code=status.HTTP_409_CONFLICT,
+                code=CODE_SESSION_NOT_READY,
+            )
     now = request_time or datetime.now(tz=UTC).isoformat()
     launch = dict(getattr(row, "effective_launch_snapshot_json", None) or {})
     policy = dict(launch.get("policyAuthority") or {})
@@ -3678,6 +3715,32 @@ async def _claim_facade_message(
             status_code=status.HTTP_409_CONFLICT,
             code=CODE_IDEMPOTENCY_CONFLICT,
         )
+    # A process may have persisted the bridge receipt and then failed before
+    # settling the canonical command. Reconcile that narrow handoff on replay;
+    # never re-forward the provider mutation.
+    canonical_settle = getattr(store, "settle_canonical_turn_command", None)
+    if callable(canonical_settle):
+        from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+
+        for prior_outcome, canonical_outcome in (
+            ("posted", ControlPlaneOutcome.APPLIED),
+            ("delivery_unknown", ControlPlaneOutcome.DELIVERY_UNKNOWN),
+        ):
+            receipt = await store.get_lifecycle_event_metadata(
+                row.idempotency_key,
+                event_identity=(
+                    f"workflow-chat-control:{event_type}:{prior_outcome}:"
+                    f"{idempotency_key}"
+                ),
+            )
+            if receipt is not None:
+                await canonical_settle(
+                    workflow_id=str(row.moonmind_workflow_id),
+                    idempotency_key=idempotency_key,
+                    outcome=canonical_outcome,
+                    result_ref=str(receipt.get("durableAuditRef") or "") or None,
+                )
+                break
     return False
 
 
@@ -3807,6 +3870,27 @@ async def _record_facade_mutation_audit(
         summary=f"workflow chat {control_type} {outcome}",
         metadata=metadata,
     )
+    canonical_settle = getattr(store, "settle_canonical_turn_command", None)
+    if callable(canonical_settle) and outcome in {
+        "posted",
+        "completed",
+        "accepted",
+        "delivery_unknown",
+    }:
+        from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+
+        provider_receipt_id = str(metadata.get("upstreamCorrelation") or "") or None
+        await canonical_settle(
+            workflow_id=str(row.moonmind_workflow_id),
+            idempotency_key=request_id,
+            outcome=(
+                ControlPlaneOutcome.DELIVERY_UNKNOWN
+                if outcome == "delivery_unknown"
+                else ControlPlaneOutcome.APPLIED
+            ),
+            provider_receipt_id=provider_receipt_id,
+            result_ref=str(metadata["durableAuditRef"]),
+        )
     return request_time or now
 
 

@@ -1135,6 +1135,11 @@ async def test_agent_profile_snapshot_compiler_histories_replay() -> None:
             "harnessOverride": "codex-native",
             "agentId": "upstream-codex-agent",
         },
+        "agentProfileRef": {
+            "profileId": "omnigent-bootstrap-default",
+            "version": 1,
+            "digest": "sha256:" + "a" * 64,
+        },
     }
     async with await WorkflowEnvironment.start_time_skipping() as env:
         async with Worker(

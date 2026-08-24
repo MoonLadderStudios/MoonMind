@@ -299,6 +299,8 @@ class SessionRecord:
     chat_binding_id: Optional[str] = None
     intent_ref: Optional[str] = None
     intent_digest: Optional[str] = None
+    execution_plan_ref: Optional[str] = None
+    runtime_binding_ref: Optional[str] = None
     desired_state: str = "pending"
     observed_state: Optional[str] = None
     reconciled_state: Optional[str] = None

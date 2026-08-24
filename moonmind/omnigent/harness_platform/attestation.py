@@ -45,7 +45,9 @@ class RuntimeDependency(BaseModel):
 class HostHarnessAttestation(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schemaVersion: str = Field("moonmind.omnigent-host-harness-attestation.v1", alias="schemaVersion")
+    schemaVersion: str = Field(
+        "moonmind.omnigent-host-harness-attestation.v1", alias="schemaVersion"
+    )
     hostId: str = Field(alias="hostId")
     hostClassRef: str = Field(alias="hostClassRef")
     hostImageRef: str = Field(alias="hostImageRef")
@@ -53,11 +55,15 @@ class HostHarnessAttestation(BaseModel):
     omnigentBuildDigest: str = Field(alias="omnigentBuildDigest")
     harnessId: str = Field(alias="harnessId")
     harnessImplementation: dict[str, Any] = Field(alias="harnessImplementation")
-    runtimeDependencies: tuple[RuntimeDependency, ...] = Field(default_factory=tuple, alias="runtimeDependencies")
+    runtimeDependencies: tuple[RuntimeDependency, ...] = Field(
+        default_factory=tuple, alias="runtimeDependencies"
+    )
     configured: bool
     capabilities: dict[str, Any]
     architecture: str | None = Field(default=None, alias="architecture")
-    attestationGeneration: int | None = Field(default=None, alias="attestationGeneration")
+    attestationGeneration: int | None = Field(
+        default=None, alias="attestationGeneration"
+    )
     observedAt: datetime = Field(alias="observedAt")
     attestationRef: str | None = Field(default=None, alias="attestationRef")
 
@@ -81,10 +87,14 @@ class HostHarnessAttestation(BaseModel):
 
 
 def compute_attestation_ref(attestation: HostHarnessAttestation) -> str:
-    payload = attestation.model_dump(by_alias=True, mode="json", exclude={"attestationRef"})
+    payload = attestation.model_dump(
+        by_alias=True, mode="json", exclude={"attestationRef"}
+    )
     # Normalize datetime
     if isinstance(payload.get("observedAt"), datetime):
-        payload["observedAt"] = payload["observedAt"].astimezone(UTC).isoformat().replace("+00:00", "Z")
+        payload["observedAt"] = (
+            payload["observedAt"].astimezone(UTC).isoformat().replace("+00:00", "Z")
+        )
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return "artifact:" + hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -153,15 +163,26 @@ def validate_exact_host_attestation(
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
     # Vendor runtime: prefer explicit HostClass-declared runtimes if supplied, else fallback to implementation
-    vendor_source = expectedVendorRuntimes if expectedVendorRuntimes is not None else expectedImplementation.get("runtimeDependencies", [])
-    expected_runtimes = {d["name"] if isinstance(d, dict) else getattr(d, "name", ""): d for d in vendor_source}
+    vendor_source = (
+        expectedVendorRuntimes
+        if expectedVendorRuntimes is not None
+        else expectedImplementation.get("runtimeDependencies", [])
+    )
+    expected_runtimes = {
+        d["name"] if isinstance(d, dict) else getattr(d, "name", ""): d
+        for d in vendor_source
+    }
     # Normalize expected dict values to dict
     normalized_expected = {}
     for name, dep in expected_runtimes.items():
         if isinstance(dep, dict):
             normalized_expected[name] = dep
         else:
-            normalized_expected[name] = {"name": dep.name, "version": dep.version, "digest": dep.digest}
+            normalized_expected[name] = {
+                "name": dep.name,
+                "version": dep.version,
+                "digest": dep.digest,
+            }
     expected_runtimes = normalized_expected
     actual_runtimes = {d.name: d for d in attestation.runtimeDependencies}
     for name, exp_dep in expected_runtimes.items():
@@ -200,7 +221,11 @@ def validate_exact_host_attestation(
                 "attestation generation does not match host lease generation",
                 code=HarnessPlatformFailure.OMNIGENT_RUNTIME_BINDING_CONFLICT,
             )
-    if expectedArchitecture is not None and attestation.architecture is not None and attestation.architecture != expectedArchitecture:
+    if (
+        expectedArchitecture is not None
+        and attestation.architecture is not None
+        and attestation.architecture != expectedArchitecture
+    ):
         raise HarnessPlatformError(
             f"architecture mismatch: {attestation.architecture} != {expectedArchitecture}",
             code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
@@ -256,7 +281,6 @@ def validate_opencode_exact_host_preflight(
     expectedImageRef: str,
     expectedOmnigentBuildDigest: str,
     expectedImplementation: dict[str, Any],
-    expectedCredentialGeneration: int | None = None,
     expectedHostId: str | None = None,
     requiredCapabilities: list[str] | None = None,
     expectedArchitecture: str | None = None,
@@ -267,8 +291,6 @@ def validate_opencode_exact_host_preflight(
     # Additional OpenCode-specific checks
     expect_opencode_native: bool = True,
     expectedOpencodeVersion: str | None = OPENCODE_PINNED_VERSION,
-    verify_credential_file: bool = False,
-    credential_host_root: str | None = None,
     requiredSkillDeliveryRef: str | None = None,
     require_restricted_egress: bool = True,
 ) -> None:
@@ -281,8 +303,7 @@ def validate_opencode_exact_host_preflight(
     - harness implementation identity matches plan
     - host image digest matches Host Class
     - Omnigent build matches
-    - credential file exists at expected location without printing contents (optional)
-    - ownership/permissions via materializer verifier (optional)
+    - credential mount, generation, ownership, and permissions through host evidence
     - acquired credential generation is the one materialized
     - resolved Skill delivery and mounted tools match plan (optional)
     - enforced network/egress policy active
@@ -298,7 +319,11 @@ def validate_opencode_exact_host_preflight(
     caps = list(requiredCapabilities or ["interrupt"])
     if require_restricted_egress:
         lower_caps = [str(c).lower() for c in caps]
-        if "restricted-egress" not in lower_caps and "restrictedegress" not in lower_caps and "restricted_egress" not in lower_caps:
+        if (
+            "restricted-egress" not in lower_caps
+            and "restrictedegress" not in lower_caps
+            and "restricted_egress" not in lower_caps
+        ):
             caps.append("restricted-egress")
     # Resolve expected vendor runtimes (including digest) from HostClass for exact digest validation
     expectedVendorRuntimes: list[dict[str, Any]] | None = None
@@ -308,7 +333,9 @@ def validate_opencode_exact_host_preflight(
         hc = get_host_class(expectedHostClassRef)
         for entry in hc.declaredHarnessImplementations:
             if entry.harnessId == "opencode-native":
-                expectedVendorRuntimes = [dict(dep) for dep in entry.runtimeDependencies]
+                expectedVendorRuntimes = [
+                    dict(dep) for dep in entry.runtimeDependencies
+                ]
                 break
     except Exception:
         expectedVendorRuntimes = None
@@ -317,7 +344,11 @@ def validate_opencode_exact_host_preflight(
         expectedHostClassRef=expectedHostClassRef,
         expectedImageRef=expectedImageRef,
         expectedOmnigentBuildDigest=expectedOmnigentBuildDigest,
-        expectedHarnessId="opencode-native" if expect_opencode_native else expectedImplementation.get("harnessId", attestation.harnessId),
+        expectedHarnessId=(
+            "opencode-native"
+            if expect_opencode_native
+            else expectedImplementation.get("harnessId", attestation.harnessId)
+        ),
         expectedImplementation=expectedImplementation,
         requiredCapabilities=caps,
         expectedArchitecture=expectedArchitecture,
@@ -329,7 +360,9 @@ def validate_opencode_exact_host_preflight(
         expectedVendorRuntimes=expectedVendorRuntimes,
     )
     # Verify opencode binary present via runtimeDependencies
-    opencode_dep = next((d for d in attestation.runtimeDependencies if d.name == "opencode"), None)
+    opencode_dep = next(
+        (d for d in attestation.runtimeDependencies if d.name == "opencode"), None
+    )
     if opencode_dep is None:
         raise HarnessPlatformError(
             "opencode binary missing from exact host",
@@ -337,7 +370,10 @@ def validate_opencode_exact_host_preflight(
         )
     # Version within pinned supported range
     assert_opencode_version_supported(opencode_dep.version)
-    if expectedOpencodeVersion is not None and opencode_dep.version != expectedOpencodeVersion:
+    if (
+        expectedOpencodeVersion is not None
+        and opencode_dep.version != expectedOpencodeVersion
+    ):
         # Allow compatible range but warn when pinned exact mismatch; still require supported
         # For strict pin, require exact; here we enforce supported range above and log exact mismatch as diagnostic
         # To satisfy issue §8, we require exact pinned or compatible; we fail only if outside range above.
@@ -348,15 +384,9 @@ def validate_opencode_exact_host_preflight(
             "opencode host not configured",
             code=HarnessPlatformFailure.OMNIGENT_HOST_HARNESS_NOT_READY,
         )
-    # Credential file check (without printing contents)
-    if verify_credential_file:
-        from moonmind.omnigent.harness_platform.materializers import verify_opencode_auth_file
-
-        verify_opencode_auth_file(
-            host_root=credential_host_root or "/",
-            expected_generation=expectedCredentialGeneration,
-        )
-    # Generation fencing already checked via attestationGeneration; additionally ensure
+    # Credential-file I/O belongs to the outer trusted materializer adapter.
+    # This pure validator receives only its secret-free generation evidence.
+    # Generation fencing is already checked via attestationGeneration; additionally ensure
     # the credential generation matches materialized handle if provided
     # Enforce required Skill delivery ref if caller requested it
     if requiredSkillDeliveryRef is not None:
@@ -378,23 +408,8 @@ def validate_opencode_exact_host_preflight(
             or attestation.capabilities.get("skillDelivery")
         )
         if attested_ref is not None:
-            from moonmind.omnigent.harness_platform.skills import ResolvedSkillSet, assert_skill_delivery_attestation
-
-            attested_digest = (
-                attestation.capabilities.get("skillDeliveryDigest")
-                or attestation.capabilities.get("skill_digest")
-                or "sha256:" + "a" * 64
-            )
-            # Construct minimal planned set for delivery verification; digest is taken from attested when not otherwise known
-            planned = ResolvedSkillSet.model_validate(
-                {
-                    "resolvedSkillSetRef": "artifact:sha256:" + "a" * 64,
-                    "resolvedSkillSetDigest": attested_digest,
-                    "skillDeliveryRef": requiredSkillDeliveryRef,
-                }
-            )
-            assert_skill_delivery_attestation(
-                planned=planned,
-                attested_delivery_ref=str(attested_ref),
-                attested_digest=str(attested_digest),
-            )
+            if str(attested_ref) != requiredSkillDeliveryRef:
+                raise HarnessPlatformError(
+                    "skill delivery ref mismatch",
+                    code=HarnessPlatformFailure.OMNIGENT_SKILL_DELIVERY_MISMATCH,
+                )

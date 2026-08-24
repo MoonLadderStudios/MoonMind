@@ -24,17 +24,32 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from api_service.db.models import (
+    ManagedAgentProviderProfile,
     OmnigentChatBindingAlias,
     OmnigentCleanupAuthority,
     OmnigentCommand,
+    OmnigentCredentialRuntimeRecord,
+    OmnigentExecutionPlanRecord,
+    OmnigentHostBindingRecordV2,
+    OmnigentHostLeaseRecordV2,
     OmnigentObservation,
     OmnigentReconciliationDecision,
+    OmnigentRuntimeBindingRecord,
     OmnigentSession,
     OmnigentTurnAttempt,
 )
 from moonmind.omnigent.control_plane import OmnigentControlPlaneStore
 
 _CONTROL_PLANE_TABLES = [
+    # MoonLadderStudios/MoonMind#3701: the canonical session now has foreign
+    # keys to the immutable admission authority, so PostgreSQL integration
+    # fixtures must exercise those real handoff tables too.
+    ManagedAgentProviderProfile.__table__,
+    OmnigentExecutionPlanRecord.__table__,
+    OmnigentRuntimeBindingRecord.__table__,
+    OmnigentHostBindingRecordV2.__table__,
+    OmnigentHostLeaseRecordV2.__table__,
+    OmnigentCredentialRuntimeRecord.__table__,
     OmnigentSession.__table__,
     OmnigentTurnAttempt.__table__,
     OmnigentObservation.__table__,

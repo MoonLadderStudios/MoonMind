@@ -67,6 +67,7 @@ services:
       - OMNIGENT_NATIVE_UI_ENABLED=${OMNIGENT_NATIVE_UI_ENABLED:-true}
       - OMNIGENT_NATIVE_UI_VERSION=${OMNIGENT_NATIVE_UI_VERSION:-}
       - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
+      - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
       - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
       - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
       - OMNIGENT_HOST_IMAGE_REF=${OMNIGENT_HOST_IMAGE_REF:-}
@@ -75,6 +76,14 @@ services:
       - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
       - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-opencode}
       - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_PI_HOST_IMAGE_REF=${OMNIGENT_PI_HOST_IMAGE_REF:-}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
+      - MOONMIND_OMNIGENT_OPENCODE_ENABLED=${MOONMIND_OMNIGENT_OPENCODE_ENABLED:-true}
+      - MOONMIND_OMNIGENT_EVIDENCE_POLICY=${MOONMIND_OMNIGENT_EVIDENCE_POLICY:-either}
+      - MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE=${MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE:-/workspace/omnigent-evidence/deployment-execution-evidence.json}
+      - MOONMIND_OMNIGENT_HOST_SERVER_URL=${MOONMIND_OMNIGENT_HOST_SERVER_URL:-http://omnigent:8000}
+      - MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER=${MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER:-local}
+      - MOONMIND_OMNIGENT_TOOLS_VOLUME_REF=${MOONMIND_OMNIGENT_TOOLS_VOLUME_REF:-moonmind-omnigent-tools-gh-2.76.2}
       - MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE=${MOONMIND_CODEX_OMNIGENT_CUTOVER_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE=${MOONMIND_CODEX_OMNIGENT_DEPLOYED_PHASE:-opt_in}
       - MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF=${MOONMIND_CODEX_OMNIGENT_CONFORMANCE_EVIDENCE_REF:-/workspace/cutover/promotion.json}
@@ -86,6 +95,7 @@ services:
       # real acceptance, exact-artifact, and protected-live status. No env
       # configuration is required for the default deployment path.
       - MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST=${MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST:-/workspace/omnigent-evidence/acceptance-manifest.json}
+      - MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE=${MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE:-/workspace/omnigent-evidence/execution-support-evidence.json}
       - MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE=${MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE:-/workspace/omnigent-evidence/exact-artifact-projection.json}
       - MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION=${MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION:-/workspace/omnigent-evidence/live-health-projection.json}
       # The API needs DOCKER_HOST only for its remaining direct Docker paths
@@ -129,7 +139,8 @@ services:
       # Durable release-support evidence for the deployed commit, materialized by
       # tools/materialize_omnigent_evidence.py. Read-only: the API consumes
       # published evidence and never produces it.
-      - ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}:/workspace/omnigent-evidence:ro
+      - ${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}:/workspace/omnigent-evidence:rw
+      - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
       - ./keycloak:/app/keycloak:ro # Mount keycloak configs if needed by api, or remove if only for keycloak service
       - moonmind_secrets:/app/var/secrets
       # Live retrieval capability authority, accounting, and bounded evidence.
@@ -645,9 +656,19 @@ services:
       - MOONMIND_CONTAINER_JOBS_ENABLED=${MOONMIND_CONTAINER_JOBS_ENABLED:-true}
       - OMNIGENT_ENABLED=${OMNIGENT_ENABLED:-true}
       - OMNIGENT_SERVER_URL=${OMNIGENT_SERVER_URL:-http://omnigent:8000}
+      - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
+      - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
       - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
       - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-opencode}
       - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_PI_HOST_IMAGE_REF=${OMNIGENT_PI_HOST_IMAGE_REF:-}
+      - MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=${MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED:-true}
+      - MOONMIND_OMNIGENT_OPENCODE_ENABLED=${MOONMIND_OMNIGENT_OPENCODE_ENABLED:-true}
+      - MOONMIND_OMNIGENT_EVIDENCE_POLICY=${MOONMIND_OMNIGENT_EVIDENCE_POLICY:-either}
+      - MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE=${MOONMIND_OMNIGENT_DEPLOYMENT_EVIDENCE:-/workspace/omnigent-evidence/deployment-execution-evidence.json}
+      - MOONMIND_OMNIGENT_HOST_SERVER_URL=${MOONMIND_OMNIGENT_HOST_SERVER_URL:-http://omnigent:8000}
+      - MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER=${MOONMIND_OMNIGENT_EXPECTED_HOST_OWNER:-local}
+      - MOONMIND_OMNIGENT_TOOLS_VOLUME_REF=${MOONMIND_OMNIGENT_TOOLS_VOLUME_REF:-moonmind-omnigent-tools-gh-2.76.2}
       - MOONMIND_AGENT_WORKSPACES_VOLUME_NAME=${MOONMIND_AGENT_WORKSPACES_VOLUME_NAME:-agent_workspaces}
       # Optional prebuilt override. Empty selects the deployment-owned local
       # recipe, which is built lazily by the first Python-test job.
@@ -705,6 +726,8 @@ services:
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
+      - ./var/omnigent-evidence:/workspace/omnigent-evidence:rw
+      - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
       - codex_auth_volume:${CODEX_VOLUME_PATH:-/home/app/.codex}
       - claude_auth_volume:${CLAUDE_VOLUME_PATH:-/home/app/.claude}
       - agent_workspaces:/work/agent_jobs
@@ -735,6 +758,8 @@ services:
       claude-auth-init:
         condition: service_completed_successfully
       omnigent-tools-init:
+        condition: service_completed_successfully
+      omnigent-runtime-bootstrap:
         condition: service_completed_successfully
       docker-proxy:
         condition: service_started
@@ -787,6 +812,8 @@ services:
       - ./services:/app/services:ro
       - ./.agents:/app/.agents:ro
       - moonmind_secrets:/app/var/secrets
+      - ./var/omnigent-evidence:/workspace/omnigent-evidence:rw
+      - ./var/omnigent-runtime-state:/app/var/omnigent-runtime-state:rw
     entrypoint:
       - /bin/sh
       - /app/services/temporal/scripts/start-worker.sh
@@ -882,6 +909,33 @@ services:
       - qdrant-storage:/qdrant/storage
     networks:
       - control-plane-network
+
+  omnigent-runtime-bootstrap:
+    image: ${MOONMIND_IMAGE:-ghcr.io/moonladderstudios/moonmind:latest}
+    init: true
+    environment:
+      - PYTHONPATH=/app
+      - OMNIGENT_IMAGE=${OMNIGENT_IMAGE:-ghcr.io/omnigent-ai/omnigent-server}
+      - OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG:-latest}
+      - OMNIGENT_IMAGE_REF=${OMNIGENT_IMAGE_REF:-}
+      - OMNIGENT_BUILD_DIGEST=${OMNIGENT_BUILD_DIGEST:-}
+      - OMNIGENT_OPENCODE_HOST_IMAGE=${OMNIGENT_OPENCODE_HOST_IMAGE:-ghcr.io/moonladderstudios/omnigent-host-opencode}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_TAG=${OMNIGENT_OPENCODE_HOST_IMAGE_TAG:-1.18.11}
+      - OMNIGENT_OPENCODE_HOST_IMAGE_REF=${OMNIGENT_OPENCODE_HOST_IMAGE_REF:-}
+      - MOONMIND_OMNIGENT_EVIDENCE_POLICY=${MOONMIND_OMNIGENT_EVIDENCE_POLICY:-either}
+      - DOCKER_HOST=${SYSTEM_DOCKER_HOST:-tcp://docker-proxy:2375}
+    volumes:
+      - ./moonmind:/app/moonmind:ro
+      - ./var:/app/var:rw
+      - moonmind_secrets:/app/var/secrets
+    command: ["python", "-m", "moonmind.omnigent.bootstrap.infrastructure"]
+    networks:
+      - control-plane-network
+      - docker-proxy-network
+    depends_on:
+      docker-proxy:
+        condition: service_started
+    restart: "no"
 
   omnigent-tools-init:
     image: ${OMNIGENT_GH_IMAGE:-serversideup/github-cli:alpine-2.76.2}

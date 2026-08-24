@@ -2302,11 +2302,12 @@ async def test_build_activity_bindings_resolves_omnigent_execute_handler(
                 binding.activity_type: binding
                 for binding in build_activity_bindings(
                     catalog,
-                    integration_activities=TemporalIntegrationActivities(
+                    agent_runtime_activities=TemporalAgentRuntimeActivities(
                         artifact_service=service,
-                        client_factory=_FakeJulesClient,
+                        workspace_root=tmp_path / "agent-workspaces",
                     ),
-                    fleets=(INTEGRATIONS_FLEET,),
+                    agent_skills_activities=AgentSkillsActivities(),
+                    fleets=(AGENT_RUNTIME_FLEET,),
                 )
             }
 

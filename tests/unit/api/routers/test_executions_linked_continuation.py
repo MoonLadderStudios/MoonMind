@@ -39,7 +39,12 @@ async def _database():
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 
-async def _seed_canonical(sessions, owner_id: str) -> None:
+async def _seed_canonical(
+    sessions, owner_id: str, *, omnigent_plan: dict | None = None
+) -> None:
+    parameters = {"workflow": {"instructions": "original intent"}}
+    if omnigent_plan is not None:
+        parameters["omnigentExecutionPlan"] = dict(omnigent_plan)
     async with sessions() as session:
         session.add(
             TemporalExecutionCanonicalRecord(
@@ -50,8 +55,23 @@ async def _seed_canonical(sessions, owner_id: str) -> None:
                 owner_id=owner_id,
                 owner_type=TemporalExecutionOwnerType.USER,
                 state=MoonMindWorkflowState.COMPLETED,
-                parameters={"workflow": {"instructions": "original intent"}},
-                memo={"title": "Source workflow"},
+                parameters=parameters,
+                memo={
+                    "title": "Source workflow",
+                    **(
+                        {
+                            "omnigent_execution_plan_ref": omnigent_plan["planRef"],
+                            "omnigent_execution_plan_digest": omnigent_plan[
+                                "planDigest"
+                            ],
+                            "omnigent_execution_plan_artifact_ref": omnigent_plan[
+                                "planArtifactRef"
+                            ],
+                        }
+                        if omnigent_plan is not None
+                        else {}
+                    ),
+                },
             )
         )
         await session.commit()
@@ -135,6 +155,11 @@ def _patch_collaborators(
         "_persist_original_workflow_input_snapshot_from_parameters",
         _snapshot,
     )
+    monkeypatch.setattr(
+        ex,
+        "_reuse_original_task_input_snapshot_from_source",
+        _snapshot,
+    )
     # Keep the artifact-store-backed materialization out of the hermetic router
     # tests by default; the materialization logic is covered separately.
     monkeypatch.setattr(
@@ -155,7 +180,16 @@ def _payload(**overrides) -> ex.ContinueInNewWorkflowRequest:
 async def test_continue_creates_linked_workflow_and_pins_source(monkeypatch) -> None:
     engine, sessions = await _database()
     user = SimpleNamespace(id=uuid4())
-    await _seed_canonical(sessions, owner_id=str(user.id))
+    plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art_plan_3706",
+        "taskInputSnapshotRef": "art_task_3706",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+    await _seed_canonical(
+        sessions, owner_id=str(user.id), omnigent_plan=plan
+    )
     _patch_collaborators(monkeypatch)
     service = _FakeService()
 
@@ -209,6 +243,7 @@ async def test_continue_creates_linked_workflow_and_pins_source(monkeypatch) -> 
     assert call["plan_artifact_ref"] is None
     assert call["manifest_artifact_ref"] is None
     params = call["initial_parameters"]
+    assert params["omnigentExecutionPlan"] == plan
     assert params["continuationSource"]["relationshipType"] == "linked_continuation"
     assert params["workflow"]["instructions"] == "continue the work"
 
@@ -221,6 +256,50 @@ async def test_continue_creates_linked_workflow_and_pins_source(monkeypatch) -> 
         ]
         assert outbound[0].created_by == str(user.id)
         assert outbound[0].bounded_purpose == "ship the follow-up"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_continue_rejects_authored_execution_plan_replacement(
+    monkeypatch,
+) -> None:
+    engine, sessions = await _database()
+    user = SimpleNamespace(id=uuid4())
+    source_plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art_plan_source",
+        "taskInputSnapshotRef": "art_task_source",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+    replacement = {
+        **source_plan,
+        "planRef": "omnigent-execution-plan:sha256:" + "c" * 64,
+        "planDigest": "sha256:" + "c" * 64,
+        "planArtifactRef": "art_plan_replacement",
+    }
+    await _seed_canonical(
+        sessions, owner_id=str(user.id), omnigent_plan=source_plan
+    )
+    _patch_collaborators(monkeypatch)
+    service = _FakeService()
+
+    with pytest.raises(HTTPException) as excinfo:
+        async with sessions() as session:
+            await ex.continue_in_new_workflow(
+                workflow_id="mm:source",
+                payload=_payload(
+                    initialParameters={"omnigentExecutionPlan": replacement}
+                ),
+                service=service,  # type: ignore[arg-type]
+                session=session,
+                user=user,
+                _submit_enabled=None,
+            )
+
+    assert excinfo.value.status_code == 409
+    assert excinfo.value.detail["code"] == "continuation_execution_plan_conflict"
+    assert service.create_calls == []
     await engine.dispose()
 
 

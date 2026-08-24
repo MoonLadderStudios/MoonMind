@@ -436,8 +436,13 @@ async def test_public_checkpoint_branch_launch_is_idempotent_under_postgres_race
         "publicationState": "none",
     }
     omnigent_checkpoint = SimpleNamespace(
+        workflow_id=workflow_id,
+        step_execution_id=f"{workflow_id}:source-step",
+        bridge_session_id=f"bridge-{suffix}",
+        omnigent_session_id=None,
         execution_profile_ref="profile-race",
         launch_policy_ref="codex-on-demand@1",
+        execution_plan_ref=None,
         idempotency_key=f"source-message-{suffix}",
         source_branch="main",
         publication_state="none",
