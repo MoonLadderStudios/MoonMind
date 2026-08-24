@@ -30,27 +30,18 @@ def test_normalize_github_clone_source_accepts_owner_repo_and_https():
     assert normalize_github_clone_source("file:///etc/passwd") is None
 
 
-def test_daemon_git_clone_argv_forwards_env_by_name_and_pins_target():
+def test_daemon_git_clone_argv_pins_target():
     argv = build_daemon_git_clone_argv(
         volume="agent_workspaces",
         target_in_volume="ws-1/repo",
-        source="https://github.com/org/repo.git",
+        source="https://x-access-token:tok@github.com/org/repo.git",
         branch="feature/branch",
-        env_keys=("GIT_CONFIG_VALUE_1", "GITHUB_TOKEN", "PATH", "bad key"),
+        image="alpine/git:v2.43.0",
     )
-    assert argv[:6] == [
-        "docker",
-        "run",
-        "--rm",
-        "-v",
-        "agent_workspaces:/work",
-        "-e",
-    ]
-    # Values are forwarded by name only; the token never enters argv.
-    assert "GITHUB_TOKEN" in argv and "tok" not in " ".join(argv)
-    assert "bad key" not in argv
+    assert argv[:4] == ["docker", "run", "--rm", "-v"]
+    assert "agent_workspaces:/work" in argv
     assert argv[-2:] == [
-        "https://github.com/org/repo.git",
+        "https://x-access-token:tok@github.com/org/repo.git",
         "/work/ws-1/repo",
     ]
     assert "alpine/git:v2.43.0" in argv

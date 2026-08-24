@@ -50,6 +50,7 @@ class DockerCommandBackend:
             "Config.Image": "{{.Config.Image}}",
             "Config.Labels": "{{json .Config.Labels}}",
             "Config.Env": "{{json .Config.Env}}",
+            "Mounts": "{{json .Mounts}}",
         }
         result: dict[str, Any] = {"Config": {}}
         for key, fmt in probes.items():
@@ -68,18 +69,20 @@ class DockerCommandBackend:
             elif key == "Config.Env":
                 try:
                     env_list = json.loads(text) or []
-                    # Convert to dict like real docker inspect does
                     env_dict: dict[str, str] = {}
                     for item in env_list:
                         k, _, v = str(item).partition("=")
                         env_dict[k] = v
                     result["Config"]["Env"] = env_dict
-                    result["Config"][
-                        "_EnvList"
-                    ] = env_list  # keep raw for attestation compat
+                    result["Config"]["_EnvList"] = env_list
                 except json.JSONDecodeError:
                     result["Config"]["Env"] = {}
                     result["Config"]["_EnvList"] = []
+            elif key == "Mounts":
+                try:
+                    result["Mounts"] = json.loads(text) or []
+                except json.JSONDecodeError:
+                    result["Mounts"] = []
         return result
 
 

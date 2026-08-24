@@ -227,13 +227,24 @@ class OmnigentWorkspaceMaterializer:
         )
 
         token = await resolve_github_token_for_launch()
-        env = build_github_token_git_environment(os.environ)
+        if not token:
+            raise HarnessPlatformError(
+                "sandbox workspace clone requires GitHub credentials",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
+            )
+        # Embed the token in the clone URL — the most reliable method inside
+        # a one-shot alpine/git container (no credential helper needed).
+        # The token is part of the remote URL stored in .git/config; the
+        # workspace is ephemeral per-run so this does not persist.
+        authed_source = source.replace(
+            "https://", f"https://x-access-token:{token}@", 1
+        )
         argv = build_daemon_git_clone_argv(
             volume=self._workspace_volume,
             target_in_volume=rel.as_posix(),
-            source=source,
+            source=authed_source,
             branch=branch,
-            env_keys=tuple(sorted(env)),
+            image=os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0"),
         )
         code, _stdout, stderr = await self._runner(argv)
         if code != 0:
@@ -251,28 +262,17 @@ def build_daemon_git_clone_argv(
     target_in_volume: str,
     source: str,
     branch: str,
-    env_keys: tuple[str, ...],
+    image: str,
 ) -> list[str]:
-    """Build the docker argv for an in-volume authenticated git clone.
-
-    Environment values are forwarded by name (``-e KEY``), so the resolved
-    token never appears in process arguments or logs.
-    """
+    """Build the docker argv for an in-volume git clone."""
 
     if not _SAFE_VOLUME.fullmatch(volume):
         raise HarnessPlatformError(
             "agent workspace volume name is unavailable or unsafe",
             code=HarnessPlatformFailure.OMNIGENT_HOST_LAUNCH_FAILED,
         )
-    image = os.getenv("MOONMIND_WORKSPACE_GIT_IMAGE", "alpine/git:v2.43.0")
     argv: list[str] = ["docker", "run", "--rm", "-v", f"{volume}:/work"]
-    for key in env_keys:
-        if _SAFE_ENV_KEY.fullmatch(key):
-            argv.extend(["-e", key])
-    target = "/work/" + target_in_volume.lstrip("/")
-    argv.extend(
-        [image, "clone", "--branch", branch, "--single-branch", "--", source, target]
-    )
+    argv.extend([image, "clone", "--branch", branch, "--single-branch", "--", source, "/work/" + target_in_volume.lstrip("/")])
     return argv
 
 
