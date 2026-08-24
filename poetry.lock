@@ -2329,32 +2329,32 @@ files = [
 
 [[package]]
 name = "llama-index"
-version = "0.14.23"
+version = "0.14.24"
 description = "Interface between LLMs and your data"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index-0.14.23-py3-none-any.whl", hash = "sha256:c205de2442a7186b8e05096f0771f96fa6bdc9603fcad2e07eab1bc96dcf086a"},
-    {file = "llama_index-0.14.23.tar.gz", hash = "sha256:eac2049816a7410ff4568490cce4bdff99cda3ab99d59f52f6227dad22cda44b"},
+    {file = "llama_index-0.14.24-py3-none-any.whl", hash = "sha256:6ce075253ddc84e8f09077a86642a341940a338213a7794f07a8b78305435a4c"},
+    {file = "llama_index-0.14.24.tar.gz", hash = "sha256:9574d3dbd6ba247bd523e78771647807794cce9a47410dbc70ed337bb610a6ff"},
 ]
 
 [package.dependencies]
-llama-index-core = ">=0.14.23,<0.15.0"
+llama-index-core = ">=0.14.24,<0.15.0"
 llama-index-embeddings-openai = ">=0.6.0,<0.7"
 llama-index-llms-openai = ">=0.7.0,<0.8"
 nltk = ">=3.9.3"
 
 [[package]]
 name = "llama-index-core"
-version = "0.14.23"
+version = "0.14.24"
 description = "Interface between LLMs and your data"
 optional = false
 python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_core-0.14.23-py3-none-any.whl", hash = "sha256:6a54d267826732a8507f81df40785b107f7592af20f451a39a59005147caf84c"},
-    {file = "llama_index_core-0.14.23.tar.gz", hash = "sha256:c4baf2f2ab4f84e95090fe7941e0c87d6c514304f7bd2a749b8fa22164c1822b"},
+    {file = "llama_index_core-0.14.24-py3-none-any.whl", hash = "sha256:a12f39b8a777cc526bf400d929016cd244372af61c5e98f6f4186f51a0b9288c"},
+    {file = "llama_index_core-0.14.24.tar.gz", hash = "sha256:4b2eb3af98eecf3579707ef018be0346bd851be2c7660102d88fab0457b95b61"},
 ]
 
 [package.dependencies]
