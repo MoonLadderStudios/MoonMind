@@ -670,6 +670,26 @@ async def compile_and_persist_execution_plan(
     config = real_config or _HARNESS_PRODUCT_CONFIG.get(harness_id)
     if config is None:
         raise ValueError(f"unsupported trusted Omnigent harness: {harness_id!r}")
+    # Resolve the actual Omnigent server version from the latest catalog
+    # snapshot so the HostClass and plan's mini-catalog carry the real
+    # version rather than a stale hard-coded placeholder.
+    catalog_omnigent_version = "0.10.0"
+    if callable(session_factory):
+        try:
+            from moonmind.omnigent.harness_platform.catalog_service import (
+                DbHarnessCatalogRepository as _CatRepo,
+            )
+
+            _cat_repo = _CatRepo(session_factory)
+            _latest_cat = await _cat_repo.latest(
+                str(document.get("endpointRef") or "default")
+            )
+            if _latest_cat is not None:
+                catalog_omnigent_version = str(
+                    _latest_cat.snapshot.omnigentVersion
+                )
+        except Exception:
+            pass
     provider_profile_ref = str(
         getattr(provider_profile, "profile_id", None)
         or agent_profile_snapshot.get("providerProfileRef")
@@ -784,7 +804,7 @@ async def compile_and_persist_execution_plan(
                 "hostClassId": config["hostClassRef"].rpartition("@")[0],
                 "version": int(config["hostClassRef"].rpartition("@")[2]),
                 "imageRef": effective_launch.get("hostImageRef"),
-                "omnigentVersion": "1.0.0",
+                "omnigentVersion": catalog_omnigent_version,
                 "omnigentBuildDigest": omnigent_build_digest,
                 "architectures": architectures,
                 "declaredHarnessImplementations": [
@@ -818,7 +838,7 @@ async def compile_and_persist_execution_plan(
     else:
         host_class = OmnigentHostClassSelector().select(
             harness=harness_record,
-            omnigent_version="1.0.0",
+            omnigent_version=catalog_omnigent_version,
             omnigent_build_digest=omnigent_build_digest,
             integration_mode=config["integrationMode"],
             materializer_refs=[config["materializerRef"]],
