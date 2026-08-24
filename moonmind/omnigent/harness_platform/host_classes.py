@@ -1,14 +1,16 @@
-"""Host Classes and Launch Policies (sections 13, 14).
+"""Host Class selection and launch-policy contracts.
 
-Host Class is immutable class-level admission evidence. Exact host must still
-pass attestation. Launch policy governs host behavior, not provider identity.
+Production Host Classes are compiled from deployment runtime-pack templates and
+an exact persisted harness-catalog row. This module deliberately registers no
+synthetic Host Classes at import time.
 """
 
 from __future__ import annotations
 
 import os
 import re
-from typing import Any, Literal
+from dataclasses import dataclass
+from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -20,58 +22,34 @@ from moonmind.omnigent.harness_platform.failures import (
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _IMAGE_RE = re.compile(r"^[^\s@]+@sha256:[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
-# Dedicated OpenCode host image env (issue §11)
+
 OMNIGENT_OPENCODE_HOST_IMAGE_ENV = "OMNIGENT_OPENCODE_HOST_IMAGE_REF"
-OMNIGENT_OPENCODE_HOST_IMAGE_DEFAULT = "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "c" * 64
+OMNIGENT_PI_HOST_IMAGE_ENV = "OMNIGENT_PI_HOST_IMAGE_REF"
 OPENCODE_PINNED_VERSION = "1.18.11"
 OPENCODE_SUPPORTED_RANGE = ">=1.17.7,<1.19.0"
 
 
+def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
+    raw = str(environment.get(key) or "").strip()
+    if not raw or not _IMAGE_RE.fullmatch(raw):
+        raise HarnessPlatformError(
+            f"{key} must be set to a digest-pinned image ref",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    if raw.endswith("0" * 64) or raw.endswith("c" * 64):
+        raise HarnessPlatformError(
+            f"{key} digest must not be a placeholder",
+            code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+    return raw
+
+
 def get_opencode_host_image_ref() -> str:
-    """Return the digest-pinned OpenCode host image ref from deployment config.
-
-    Fails closed when only a mutable tag is configured for production launch
-    authority (issue §11). When OMNIGENT_OPENCODE_HOST_IMAGE_REF is omitted,
-    the resolver consults OMNIGENT_OPENCODE_HOST_IMAGE and
-    OMNIGENT_OPENCODE_HOST_IMAGE_TAG so the default path remains executable
-    and exercises the same production image resolution (per AGENTS.md default
-    contract). For hermetic tests without any env, synthesizes a stable
-    digest-pinned ref from image:tag instead of the fabricated c*64 placeholder.
-    """
-    raw = os.getenv(OMNIGENT_OPENCODE_HOST_IMAGE_ENV, "").strip()
-    if raw:
-        if not _IMAGE_RE.fullmatch(raw):
-            raise HarnessPlatformError(
-                f"{OMNIGENT_OPENCODE_HOST_IMAGE_ENV} must be digest-pinned (got {raw!r})",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
-        if raw.endswith("0" * 64) or raw.endswith("c" * 64):
-            raise HarnessPlatformError(
-                f"{OMNIGENT_OPENCODE_HOST_IMAGE_ENV} digest must not be placeholder",
-                code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
-            )
-        return raw
-    # Default path: consult image + tag so omitted REF still yields executable ref
-    host_image = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE", "").strip() or "ghcr.io/moonladderstudios/omnigent-host-opencode"
-    tag = os.getenv("OMNIGENT_OPENCODE_HOST_IMAGE_TAG", "").strip() or OPENCODE_PINNED_VERSION
-    # Synthesize a stable digest-pinned ref from image:tag for local/hermetic default;
-    # production should set OMNIGENT_OPENCODE_HOST_IMAGE_REF to a real GHCR digest for exact attestation.
-    import hashlib
-
-    digest = hashlib.sha256(f"{host_image}:{tag}".encode()).hexdigest()
-    # Avoid placeholder digests that would be rejected if supplied explicitly
-    if digest in {"0" * 64, "c" * 64}:
-        digest = "a" * 64
-    return f"{host_image}@sha256:{digest}"
+    return _require_image_ref(os.environ, OMNIGENT_OPENCODE_HOST_IMAGE_ENV)
 
 
-def get_opencode_host_class() -> HostClass:
-    """Convenience for the dedicated OpenCode host class (omnigent-opencode@1)."""
-    # Defined early for import convenience; actual lookup after registry init
-    from typing import TYPE_CHECKING as _TC  # noqa: F401
-
-    # Defer to get_host_class after registry populated
-    return get_host_class("omnigent-opencode@1")
+def get_pi_host_image_ref() -> str:
+    return _require_image_ref(os.environ, OMNIGENT_PI_HOST_IMAGE_ENV)
 
 
 class HostClassHarnessEntry(BaseModel):
@@ -79,7 +57,9 @@ class HostClassHarnessEntry(BaseModel):
 
     harnessId: str = Field(alias="harnessId")
     implementationRef: str = Field(alias="implementationRef")
-    runtimeDependencies: tuple[dict[str, Any], ...] = Field(default_factory=tuple, alias="runtimeDependencies")
+    runtimeDependencies: tuple[dict[str, Any], ...] = Field(
+        default_factory=tuple, alias="runtimeDependencies"
+    )
 
 
 class HostClass(BaseModel):
@@ -92,7 +72,9 @@ class HostClass(BaseModel):
     omnigentVersion: str = Field(alias="omnigentVersion")
     omnigentBuildDigest: str = Field(alias="omnigentBuildDigest")
     architectures: tuple[str, ...]
-    declaredHarnessImplementations: tuple[HostClassHarnessEntry, ...] = Field(alias="declaredHarnessImplementations")
+    declaredHarnessImplementations: tuple[HostClassHarnessEntry, ...] = Field(
+        alias="declaredHarnessImplementations"
+    )
     integrationModes: tuple[str, ...] = Field(alias="integrationModes")
     materializerRefs: tuple[str, ...] = Field(alias="materializerRefs")
     features: dict[str, bool]
@@ -108,12 +90,13 @@ class HostClass(BaseModel):
             raise ValueError("omnigentBuildDigest must be sha256")
         if not self.architectures:
             raise ValueError("architectures required")
-        for entry in self.declaredHarnessImplementations:
-            if not entry.implementationRef.startswith("omnigent-harness-implementation:sha256:"):
-                raise ValueError("implementationRef invalid")
         if not self.integrationModes:
             raise ValueError("integrationModes required")
-        # Host classes may omit some features; admission via policy will enforce required ones.
+        for entry in self.declaredHarnessImplementations:
+            if not entry.implementationRef.startswith(
+                "omnigent-harness-implementation:sha256:"
+            ):
+                raise ValueError("implementationRef invalid")
         return self
 
     @property
@@ -122,165 +105,224 @@ class HostClass(BaseModel):
 
     def declares_harness(self, harness_id: str, implementation_ref: str) -> bool:
         return any(
-            e.harnessId == harness_id and e.implementationRef == implementation_ref
-            for e in self.declaredHarnessImplementations
+            entry.harnessId == harness_id
+            and entry.implementationRef == implementation_ref
+            for entry in self.declaredHarnessImplementations
         )
 
     def supports_materializer(self, materializer_ref: str) -> bool:
         return materializer_ref in self.materializerRefs
 
 
+@dataclass(frozen=True)
+class HostClassTemplate:
+    """Deployment-owned runtime-pack compatibility declaration."""
+
+    host_class_id: str
+    version: int
+    harness_ids: tuple[str, ...]
+    image_env: str
+    integration_modes: tuple[str, ...]
+    materializer_refs: tuple[str, ...]
+    architectures: tuple[str, ...] = ("linux/amd64", "linux/arm64")
+    runtime_dependencies: tuple[dict[str, Any], ...] = ()
+
+    @property
+    def ref(self) -> str:
+        return f"{self.host_class_id}@{self.version}"
+
+
+DEFAULT_HOST_CLASS_TEMPLATES: tuple[HostClassTemplate, ...] = (
+    HostClassTemplate(
+        host_class_id="omnigent-opencode",
+        version=1,
+        harness_ids=("opencode-native",),
+        image_env=OMNIGENT_OPENCODE_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=("opencode-auth-json@1",),
+        runtime_dependencies=(
+            {"name": "opencode", "version": OPENCODE_PINNED_VERSION},
+        ),
+    ),
+    HostClassTemplate(
+        host_class_id="omnigent-pi",
+        version=1,
+        harness_ids=("pi-native",),
+        image_env=OMNIGENT_PI_HOST_IMAGE_ENV,
+        integration_modes=("native-server",),
+        materializer_refs=(
+            "omnigent-provider-config@1",
+            "host-owned-auth@1",
+            "none@1",
+        ),
+    ),
+)
+
+
+class OmnigentHostClassSelector:
+    """Select a Host Class from catalog identity and deployment data."""
+
+    def __init__(
+        self,
+        *,
+        templates: tuple[HostClassTemplate, ...] = DEFAULT_HOST_CLASS_TEMPLATES,
+        environment: Mapping[str, str] | None = None,
+    ) -> None:
+        self._templates = templates
+        self._environment = environment if environment is not None else os.environ
+
+    def select(
+        self,
+        *,
+        harness: Any,
+        omnigent_version: str,
+        omnigent_build_digest: str,
+        integration_mode: str,
+        materializer_refs: list[str],
+        architecture: str = "linux/amd64",
+        requested_host_mode: str = "on-demand",
+        requested_host_class_ref: str | None = None,
+    ) -> HostClass:
+        candidates: list[HostClass] = []
+        reasons: list[str] = []
+        for template in sorted(self._templates, key=lambda item: item.ref):
+            if requested_host_class_ref and template.ref != requested_host_class_ref:
+                continue
+            if harness.id not in template.harness_ids:
+                continue
+            try:
+                image_ref = _require_image_ref(self._environment, template.image_env)
+            except HarnessPlatformError:
+                reasons.append(
+                    f"{template.ref}: {template.image_env} is not digest-pinned"
+                )
+                continue
+            if integration_mode not in template.integration_modes:
+                reasons.append(
+                    f"{template.ref}: integration mode {integration_mode} unsupported"
+                )
+                continue
+            if architecture not in template.architectures:
+                reasons.append(
+                    f"{template.ref}: architecture {architecture} unsupported"
+                )
+                continue
+            unsupported = sorted(
+                set(materializer_refs) - set(template.materializer_refs)
+            )
+            if unsupported:
+                reasons.append(
+                    f"{template.ref}: materializers unsupported: {unsupported}"
+                )
+                continue
+            if requested_host_mode not in {"on-demand", "on_demand_docker"}:
+                reasons.append(
+                    f"{template.ref}: host mode {requested_host_mode} unsupported"
+                )
+                continue
+            candidates.append(
+                HostClass.model_validate(
+                    {
+                        "hostClassId": template.host_class_id,
+                        "version": template.version,
+                        "imageRef": image_ref,
+                        "omnigentVersion": omnigent_version,
+                        "omnigentBuildDigest": omnigent_build_digest,
+                        "architectures": list(template.architectures),
+                        "declaredHarnessImplementations": [
+                            {
+                                "harnessId": harness.id,
+                                "implementationRef": harness.implementation.implementation_ref(),
+                                "runtimeDependencies": list(
+                                    template.runtime_dependencies
+                                ),
+                            }
+                        ],
+                        "integrationModes": list(template.integration_modes),
+                        "materializerRefs": list(template.materializer_refs),
+                        "features": {
+                            "git": True,
+                            "tmux": True,
+                            "bubblewrap": True,
+                            "workspaceBind": True,
+                            "readOnlyRoot": True,
+                            "restrictedEgress": True,
+                            "mountedSkills": True,
+                            "mountedTools": True,
+                        },
+                        "runtime": {
+                            "uid": 1000,
+                            "gid": 1000,
+                            "home": "/home/app",
+                        },
+                    }
+                )
+            )
+        if not candidates:
+            detail = "; ".join(reasons) or "no registered template matched"
+            raise HarnessPlatformError(
+                f"no admissible Host Class for {harness.id}: {detail}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+            )
+        if len(candidates) > 1:
+            raise HarnessPlatformError(
+                f"Host Class selection is ambiguous: {[item.ref for item in candidates]}",
+                code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+            )
+        return candidates[0]
+
+
+# Available only for isolated contract tests and explicitly registered static
+# classes. Production planning uses OmnigentHostClassSelector.
 HOST_CLASSES: dict[str, HostClass] = {}
 
 
 def register_host_class(data: dict[str, Any]) -> HostClass:
-    hc = HostClass.model_validate(data)
-    existing = HOST_CLASSES.get(hc.ref)
-    if existing is not None and existing != hc:
-        raise ValueError(f"Host Class {hc.ref} already registered with different definition; new version required")
-    HOST_CLASSES[hc.ref] = hc
-    return hc
-
-
-# Bootstrap some built-ins based on design sections 13.3, 13.4
-# Compute implementation refs deterministically from harness implementation identities
-# to align with catalog and planner expectations.
-def _impl_ref(package: str, version: str, digest: str, kind: str = "core", entry: str | None = None) -> str:
-    import hashlib, json
-    payload = {
-        "sourceKind": kind,
-        "package": package,
-        "version": version,
-        "digest": digest,
-        "pluginEntryPoint": entry,
-    }
-    # Use same canonical as HarnessImplementationIdentity
-    from moonmind.omnigent.harness_platform.catalog import HarnessImplementationIdentity
-    return HarnessImplementationIdentity.model_validate(payload).implementation_ref()
-
-register_host_class(
-    {
-        "schemaVersion": "moonmind.omnigent-host-class.v1",
-        "hostClassId": "omnigent-native-standard",
-        "version": 3,
-        "imageRef": "ghcr.io/example/omnigent-host@sha256:" + "a" * 64,
-        "omnigentVersion": "1.0.0",
-        "omnigentBuildDigest": "sha256:" + "b" * 64,
-        "architectures": ["linux/amd64"],
-        "declaredHarnessImplementations": [
-            {
-                "harnessId": "opencode-native",
-                "implementationRef": _impl_ref("omnigent", "1.0.0", "sha256:" + "a" * 64),
-                "runtimeDependencies": [{"name": "opencode", "version": "1.18.11", "digest": "sha256:" + "d" * 64}],
-            },
-            {
-                "harnessId": "codex-native",
-                "implementationRef": _impl_ref("omnigent", "1.0.0", "sha256:" + "e" * 64),
-                "runtimeDependencies": [],
-            },
-        ],
-        "integrationModes": ["native-tui", "native-server", "cli-subprocess", "sdk-in-process"],
-        "materializerRefs": ["codex-oauth-home@1", "opencode-auth-json@1", "omnigent-provider-config@1"],
-        "features": {
-            "git": True,
-            "tmux": True,
-            "bubblewrap": True,
-            "workspaceBind": True,
-            "readOnlyRoot": True,
-            "restrictedEgress": True,
-            "mountedSkills": True,
-            "mountedTools": True,
-        },
-        "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
-    }
-)
-
-# Dedicated harness-specific OpenCode host (issue §1, §6)
-# This is the first explicit harness-specific Host Class realization.
-# It contains only opencode-native, not Codex or other harnesses.
-register_host_class(
-    {
-        "schemaVersion": "moonmind.omnigent-host-class.v1",
-        "hostClassId": "omnigent-opencode",
-        "version": 1,
-        "imageRef": get_opencode_host_image_ref(),
-        "omnigentVersion": "1.0.0",
-        "omnigentBuildDigest": "sha256:" + "b" * 64,
-        "architectures": ["linux/amd64", "linux/arm64"],
-        "declaredHarnessImplementations": [
-            {
-                "harnessId": "opencode-native",
-                "implementationRef": _impl_ref("omnigent", "1.0.0", "sha256:" + "a" * 64),
-                # Exact OpenCode runtime digest pinned to image (issue §6)
-                "runtimeDependencies": [{"name": "opencode", "version": OPENCODE_PINNED_VERSION, "digest": "sha256:" + "d" * 64}],
-            }
-        ],
-        "integrationModes": ["native-server"],
-        "materializerRefs": ["opencode-auth-json@1"],
-        "features": {
-            "git": True,
-            "tmux": True,
-            "bubblewrap": True,
-            "workspaceBind": True,
-            "readOnlyRoot": True,
-            "restrictedEgress": True,
-            "mountedSkills": True,
-            "mountedTools": True,
-        },
-        "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
-    }
-)
-
-register_host_class(
-    {
-        "schemaVersion": "moonmind.omnigent-host-class.v1",
-        "hostClassId": "omnigent-codex-current",
-        "version": 1,
-        "imageRef": "ghcr.io/example/omnigent-host@sha256:" + "f" * 64,
-        "omnigentVersion": "1.0.0",
-        "omnigentBuildDigest": "sha256:" + "b" * 64,
-        "architectures": ["linux/amd64"],
-        "declaredHarnessImplementations": [
-            {
-                "harnessId": "codex-native",
-                "implementationRef": _impl_ref("omnigent", "1.0.0", "sha256:" + "e" * 64),
-                "runtimeDependencies": [],
-            }
-        ],
-        "integrationModes": ["native-server"],
-        "materializerRefs": ["codex-oauth-home@1"],
-        "features": {
-            "git": True,
-            "tmux": True,
-            "bubblewrap": True,
-            "workspaceBind": True,
-            "readOnlyRoot": True,
-            "restrictedEgress": True,
-            "mountedSkills": True,
-            "mountedTools": True,
-        },
-        "runtime": {"uid": 1000, "gid": 1000, "home": "/home/app"},
-    }
-)
+    host_class = HostClass.model_validate(data)
+    existing = HOST_CLASSES.get(host_class.ref)
+    if existing is not None and existing != host_class:
+        raise ValueError(
+            f"Host Class {host_class.ref} already registered with a different definition"
+        )
+    HOST_CLASSES[host_class.ref] = host_class
+    return host_class
 
 
 def get_host_class(ref: str) -> HostClass:
-    if ref not in HOST_CLASSES:
+    host_class = HOST_CLASSES.get(ref)
+    if host_class is None:
         raise HarnessPlatformError(
             f"host class {ref} unavailable",
             code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
         )
-    return HOST_CLASSES[ref]
+    return host_class
 
 
-# Launch Policies section 14
+def get_opencode_host_class() -> HostClass:
+    raise HarnessPlatformError(
+        "context-free OpenCode Host Class lookup is unsupported; use OmnigentHostClassSelector",
+        code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+    )
+
+
+def get_pi_host_class() -> HostClass:
+    raise HarnessPlatformError(
+        "context-free Pi Host Class lookup is unsupported; use OmnigentHostClassSelector",
+        code=HarnessPlatformFailure.OMNIGENT_HOST_CLASS_UNAVAILABLE,
+    )
+
+
 class LaunchPolicy(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schemaVersion: str = Field("moonmind.omnigent-launch-policy.v2", alias="schemaVersion")
+    schemaVersion: str = Field(
+        "moonmind.omnigent-launch-policy.v2", alias="schemaVersion"
+    )
     policyId: str = Field(alias="policyId")
     version: int = Field(ge=1)
-    hostMode: Literal["on-demand", "static-connected", "on_demand_docker", "static_compose"] = Field(alias="hostMode")
+    hostMode: Literal[
+        "on-demand", "static-connected", "on_demand_docker", "static_compose"
+    ] = Field(alias="hostMode")
     hostClassSelector: dict[str, Any] = Field(alias="hostClassSelector")
     isolation: dict[str, Any]
     limits: dict[str, int]
@@ -293,12 +335,19 @@ class LaunchPolicy(BaseModel):
     def validate_top(self) -> "LaunchPolicy":
         if not _SAFE_ID_RE.fullmatch(self.policyId):
             raise ValueError("invalid policyId")
-        required_limits = {"cpuMillis", "memoryMiB", "processes", "timeoutSeconds", "temporaryStorageMiB"}
-        if set(self.limits.keys()) != required_limits:
+        required_limits = {
+            "cpuMillis",
+            "memoryMiB",
+            "processes",
+            "timeoutSeconds",
+            "temporaryStorageMiB",
+        }
+        if set(self.limits) != required_limits:
             raise ValueError(f"limits must contain {required_limits}")
-        if any(not isinstance(v, int) or v <= 0 for v in self.limits.values()):
+        if any(
+            not isinstance(value, int) or value <= 0 for value in self.limits.values()
+        ):
             raise ValueError("limits must be positive ints")
-        # Normalize hostMode aliases for new v2 vs legacy
         return self
 
     @property
@@ -306,11 +355,10 @@ class LaunchPolicy(BaseModel):
         return f"{self.policyId}@{self.version}"
 
     def allows_host_class(self, host_class: HostClass) -> bool:
-        required_features = self.hostClassSelector.get("requiredFeatures", [])
-        for feat in required_features:
-            if not host_class.features.get(feat):
-                return False
-        return True
+        return all(
+            host_class.features.get(feature)
+            for feature in self.hostClassSelector.get("requiredFeatures", [])
+        )
 
     def allows_integration_mode(self, mode: str, host_class: HostClass) -> bool:
         return mode in host_class.integrationModes
@@ -320,70 +368,73 @@ LAUNCH_POLICIES: dict[str, LaunchPolicy] = {}
 
 
 def register_launch_policy(data: dict[str, Any]) -> LaunchPolicy:
-    lp = LaunchPolicy.model_validate(data)
-    existing = LAUNCH_POLICIES.get(lp.ref)
-    if existing is not None and existing != lp:
-        raise ValueError(f"Launch Policy {lp.ref} already registered with different definition; new version required")
-    LAUNCH_POLICIES[lp.ref] = lp
-    return lp
+    policy = LaunchPolicy.model_validate(data)
+    existing = LAUNCH_POLICIES.get(policy.ref)
+    if existing is not None and existing != policy:
+        raise ValueError(
+            f"Launch Policy {policy.ref} already registered with a different definition"
+        )
+    LAUNCH_POLICIES[policy.ref] = policy
+    return policy
 
 
-register_launch_policy(
-    {
-        "schemaVersion": "moonmind.omnigent-launch-policy.v2",
-        "policyId": "omnigent-on-demand",
-        "version": 1,
-        "hostMode": "on-demand",
-        "hostClassSelector": {"requiredFeatures": ["readOnlyRoot", "restrictedEgress", "workspaceBind"]},
-        "isolation": {"runDedicated": True},
-        "limits": {"cpuMillis": 2000, "memoryMiB": 4096, "processes": 256, "timeoutSeconds": 5400, "temporaryStorageMiB": 256},
-        "network": {"egressPolicyRef": "omnigent-restricted-egress@1"},
-        "capture": {"required": True, "retentionDays": 30},
-        "cleanup": {"mode": "remove", "janitor": True},
-        "controlCapabilities": ["interrupt", "terminate", "clear_context"],
-    }
+def _register_policy(
+    policy_id: str,
+    host_mode: Literal["on-demand", "static-connected"],
+    required_features: list[str],
+) -> None:
+    register_launch_policy(
+        {
+            "policyId": policy_id,
+            "version": 1,
+            "hostMode": host_mode,
+            "hostClassSelector": {"requiredFeatures": required_features},
+            "isolation": {"runDedicated": host_mode == "on-demand"},
+            "limits": {
+                "cpuMillis": 2000,
+                "memoryMiB": 4096,
+                "processes": 256,
+                "timeoutSeconds": 5400,
+                "temporaryStorageMiB": 256,
+            },
+            "network": {"egressPolicyRef": "omnigent-restricted-egress@1"},
+            "capture": {"required": True, "retentionDays": 30},
+            "cleanup": {
+                "mode": "remove" if host_mode == "on-demand" else "drain",
+                "janitor": True,
+            },
+            "controlCapabilities": ["interrupt", "terminate", "clear_context"],
+        }
+    )
+
+
+_register_policy(
+    "omnigent-on-demand",
+    "on-demand",
+    ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
 )
-
-register_launch_policy(
-    {
-        "schemaVersion": "moonmind.omnigent-launch-policy.v2",
-        "policyId": "codex-on-demand",
-        "version": 1,
-        "hostMode": "on-demand",
-        "hostClassSelector": {"requiredFeatures": ["readOnlyRoot", "restrictedEgress", "workspaceBind"]},
-        "isolation": {"runDedicated": True},
-        "limits": {"cpuMillis": 2000, "memoryMiB": 4096, "processes": 256, "timeoutSeconds": 5400, "temporaryStorageMiB": 256},
-        "network": {"egressPolicyRef": "omnigent-restricted-egress@1"},
-        "capture": {"required": True, "retentionDays": 30},
-        "cleanup": {"mode": "remove", "janitor": True},
-        "controlCapabilities": ["interrupt", "terminate", "clear_context"],
-    }
+_register_policy(
+    "opencode-on-demand",
+    "on-demand",
+    ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
 )
-
-register_launch_policy(
-    {
-        "schemaVersion": "moonmind.omnigent-launch-policy.v2",
-        "policyId": "codex-static",
-        "version": 1,
-        "hostMode": "static-connected",
-        "hostClassSelector": {"requiredFeatures": ["workspaceBind"]},
-        "isolation": {"runDedicated": False},
-        "limits": {"cpuMillis": 2000, "memoryMiB": 4096, "processes": 256, "timeoutSeconds": 5400, "temporaryStorageMiB": 256},
-        "network": {"egressPolicyRef": "omnigent-restricted-egress@1"},
-        "capture": {"required": True, "retentionDays": 30},
-        "cleanup": {"mode": "drain", "janitor": True},
-        "controlCapabilities": ["interrupt", "terminate", "clear_context"],
-    }
+_register_policy("opencode-static", "static-connected", ["workspaceBind"])
+_register_policy(
+    "codex-on-demand",
+    "on-demand",
+    ["readOnlyRoot", "restrictedEgress", "workspaceBind"],
 )
+_register_policy("codex-static", "static-connected", ["workspaceBind"])
 
 
 def get_launch_policy(ref: str) -> LaunchPolicy:
-    if ref not in LAUNCH_POLICIES:
+    policy = LAUNCH_POLICIES.get(ref)
+    if policy is None:
         raise HarnessPlatformError(
             f"launch policy {ref} incompatible or unavailable",
             code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
         )
-    return LAUNCH_POLICIES[ref]
+    return policy
 
 
 def validate_policy_for_host_class(
@@ -394,6 +445,7 @@ def validate_policy_for_host_class(
     materializer_refs: list[str],
     workspace_mutation: bool = True,
 ) -> None:
+    del workspace_mutation
     if not policy.allows_host_class(host_class):
         raise HarnessPlatformError(
             f"policy {policy.ref} incompatible with host class {host_class.ref}",
@@ -404,9 +456,11 @@ def validate_policy_for_host_class(
             f"harness integration mode {harness_integration_mode} not in host class",
             code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
         )
-    for mat in materializer_refs:
-        if not host_class.supports_materializer(mat):
-            raise HarnessPlatformError(
-                f"materializer {mat} not supported by host class {host_class.ref}",
-                code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
-            )
+    unsupported = [
+        ref for ref in materializer_refs if not host_class.supports_materializer(ref)
+    ]
+    if unsupported:
+        raise HarnessPlatformError(
+            f"materializers {unsupported} not supported by host class {host_class.ref}",
+            code=HarnessPlatformFailure.OMNIGENT_LAUNCH_POLICY_INCOMPATIBLE,
+        )

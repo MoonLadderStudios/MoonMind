@@ -958,6 +958,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/agent-profiles/guided": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Guided Profile
+         * @description Create an activated v2 profile from live catalog authority.
+         */
+        post: operations["create_guided_profile_api_omnigent_agent_profiles_guided_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/agent-profiles/{profile_id}": {
         parameters: {
             query?: never;
@@ -3701,6 +3721,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/omnigent/execution-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Omnigent Execution Readiness
+         * @description Compile generic launchability with the planner's catalog/selector data.
+         */
+        get: operations["get_omnigent_execution_readiness_api_omnigent_execution_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/harness-catalog/synchronize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Synchronize Omnigent Harness Catalog
+         * @description Synchronize authenticated endpoint inventory into immutable authority.
+         */
+        post: operations["synchronize_omnigent_harness_catalog_api_omnigent_harness_catalog_synchronize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/omnigent/policies": {
         parameters: {
             query?: never;
@@ -3910,6 +3970,61 @@ export interface paths {
          *     executes the same pure response plan.
          */
         get: operations["get_session_stuck_state_api_omnigent_sessions__session_id__stuck_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/bootstrap/opencode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Bootstrap State */
+        get: operations["get_bootstrap_state_api_omnigent_bootstrap_opencode_get"];
+        put?: never;
+        /** Bootstrap Opencode */
+        post: operations["bootstrap_opencode_api_omnigent_bootstrap_opencode_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/bootstrap/opencode/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry Bootstrap */
+        post: operations["retry_bootstrap_api_omnigent_bootstrap_opencode_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/omnigent/bootstrap/readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bootstrap Readiness
+         * @description Return computed readiness for OpenCode via Omnigent.
+         */
+        get: operations["bootstrap_readiness_api_omnigent_bootstrap_readiness_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5628,6 +5743,47 @@ export interface components {
         Body_verify_verify_api_v1_auth_verify_post: {
             /** Token */
             token: string;
+        };
+        /** BootstrapOpencodeRequest */
+        BootstrapOpencodeRequest: {
+            /** Apikey */
+            apiKey: string;
+            /**
+             * Modeldisplayname
+             * @default Muse Spark 1.2 Contributor
+             */
+            modelDisplayName: string;
+            /**
+             * Effort
+             * @default xhigh
+             */
+            effort: string;
+            /**
+             * Acceptcontributordatause
+             * @default false
+             */
+            acceptContributorDataUse: boolean;
+        };
+        /** BootstrapOpencodeResponse */
+        BootstrapOpencodeResponse: {
+            /** Bootstrapid */
+            bootstrapId: string;
+            /** State */
+            state: string;
+            /** Providerprofileref */
+            providerProfileRef?: string | null;
+            /** Requestedmodel */
+            requestedModel: string;
+            /** Requestedeffort */
+            requestedEffort: string;
+            /** Failure */
+            failure?: {
+                [key: string]: unknown;
+            } | null;
+            /** Resolved */
+            resolved?: {
+                [key: string]: unknown;
+            } | null;
         };
         /** BridgeEventPageResponse */
         BridgeEventPageResponse: {
@@ -8332,6 +8488,14 @@ export interface components {
             /** Inputartifactref */
             inputArtifactRef?: string | null;
             taskInputSnapshot?: components["schemas"]["WorkflowInputSnapshotDescriptorModel"];
+            /** Omnigentexecutionplan */
+            omnigentExecutionPlan?: {
+                [key: string]: unknown;
+            } | null;
+            /** Omnigentruntimebinding */
+            omnigentRuntimeBinding?: {
+                [key: string]: unknown;
+            } | null;
             /** Targetruntime */
             targetRuntime?: string | null;
             /** Targetskill */
@@ -8962,6 +9126,36 @@ export interface components {
             /** Artifactref */
             artifactRef?: string | null;
         };
+        /** GenericExecutionTargetReadiness */
+        GenericExecutionTargetReadiness: {
+            /** Ref */
+            ref: string;
+            /** Harnessid */
+            harnessId: string;
+            /** Agentprofileref */
+            agentProfileRef: {
+                [key: string]: unknown;
+            };
+            /** Available */
+            available: boolean;
+            /**
+             * Supporttier
+             * @enum {string}
+             */
+            supportTier: "experimental" | "supported";
+            /** Compatibleproviderprofiles */
+            compatibleProviderProfiles: {
+                [key: string]: unknown;
+            }[];
+            /** Compatiblehostclasses */
+            compatibleHostClasses: string[];
+            /** Policies */
+            policies: string[];
+            /** Models */
+            models: string[];
+            /** Gatereasons */
+            gateReasons: components["schemas"]["GateReason"][];
+        };
         /**
          * GitHubTokenProbeRequest
          * @description Targeted GitHub token validation request.
@@ -8977,6 +9171,71 @@ export interface components {
             mode: "indexing" | "publish" | "readiness" | "full_pr_automation";
             /** Basebranch */
             baseBranch?: string | null;
+        };
+        /**
+         * GuidedProfileCreate
+         * @description Low-ceremony v2 authoring; the server fills immutable catalog refs.
+         */
+        GuidedProfileCreate: {
+            /** Profileid */
+            profileId: string;
+            /** Displayname */
+            displayName: string;
+            /** Description */
+            description?: string | null;
+            /**
+             * Preset
+             * @default opencode
+             * @constant
+             */
+            preset: "opencode";
+            /** Sourceupstreamid */
+            sourceUpstreamId?: string | null;
+            /** Providerid */
+            providerId?: string | null;
+            /** Defaultmodel */
+            defaultModel: string;
+            /**
+             * Launchpolicyref
+             * @default omnigent-on-demand@1
+             */
+            launchPolicyRef: string;
+            /**
+             * Workspacemutation
+             * @default allowed
+             * @enum {string}
+             */
+            workspaceMutation: "read_only" | "allowed" | "checkpoint_branch";
+            /** Skills */
+            skills?: string[];
+            /** Tools */
+            tools?: string[];
+            /**
+             * Capturestream
+             * @default true
+             */
+            captureStream: boolean;
+            /**
+             * Captureevidence
+             * @default true
+             */
+            captureEvidence: boolean;
+            /**
+             * Continuationcheckpoint
+             * @default true
+             */
+            continuationCheckpoint: boolean;
+            /**
+             * Continuationbranch
+             * @default true
+             */
+            continuationBranch: boolean;
+            /**
+             * Publicationmode
+             * @default none
+             * @enum {string}
+             */
+            publicationMode: "none" | "draft" | "required";
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -9965,6 +10224,29 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** OmnigentExecutionReadiness */
+        OmnigentExecutionReadiness: {
+            /**
+             * Schemaversion
+             * @default moonmind.omnigent-execution-readiness.v3
+             * @constant
+             */
+            schemaVersion: "moonmind.omnigent-execution-readiness.v3";
+            /**
+             * Runtimeid
+             * @default omnigent
+             * @constant
+             */
+            runtimeId: "omnigent";
+            /**
+             * Displayname
+             * @default Omnigent
+             * @constant
+             */
+            displayName: "Omnigent";
+            /** Executiontargets */
+            executionTargets: components["schemas"]["GenericExecutionTargetReadiness"][];
+        };
         /** OmnigentHostResponse */
         OmnigentHostResponse: {
             /** Id */
@@ -10817,6 +11099,17 @@ export interface components {
             model_overrides?: {
                 [key: string]: string;
             };
+            /**
+             * Credential Generation
+             * @default 1
+             */
+            credential_generation: number;
+            /** Capacity Scope Ref */
+            capacity_scope_ref: string;
+            /** Model Catalog Evidence */
+            model_catalog_evidence?: {
+                [key: string]: unknown;
+            } | null;
             /** Credential Source */
             credential_source: string;
             /** Runtime Materialization Mode */
@@ -15953,6 +16246,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ProfileCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_guided_profile_api_omnigent_agent_profiles_guided_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GuidedProfileCreate"];
             };
         };
         responses: {
@@ -22675,6 +23003,48 @@ export interface operations {
             };
         };
     };
+    get_omnigent_execution_readiness_api_omnigent_execution_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OmnigentExecutionReadiness"];
+                };
+            };
+        };
+    };
+    synchronize_omnigent_harness_catalog_api_omnigent_harness_catalog_synchronize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     list_policies_api_omnigent_policies_get: {
         parameters: {
             query?: never;
@@ -23135,6 +23505,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bootstrap_state_api_omnigent_bootstrap_opencode_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapOpencodeResponse"];
+                };
+            };
+        };
+    };
+    bootstrap_opencode_api_omnigent_bootstrap_opencode_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BootstrapOpencodeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapOpencodeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_bootstrap_api_omnigent_bootstrap_opencode_retry_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BootstrapOpencodeResponse"];
+                };
+            };
+        };
+    };
+    bootstrap_readiness_api_omnigent_bootstrap_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };

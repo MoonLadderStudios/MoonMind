@@ -901,6 +901,25 @@ const ExecutionDetailSchema = z
     modelSource: z.string().nullable().optional(),
     profileId: z.string().nullable().optional(),
     inputParameters: z.record(z.string(), z.unknown()).default({}),
+    omnigentExecutionPlan: z
+      .object({
+        planRef: z.string(),
+        planDigest: z.string(),
+        planArtifactRef: z.string(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
+    omnigentRuntimeBinding: z
+      .object({
+        runtimeBindingRef: z.string(),
+        revision: z.number().nullable().optional(),
+        fencingGeneration: z.number().nullable().optional(),
+        state: z.string().nullable().optional(),
+      })
+      .passthrough()
+      .nullable()
+      .optional(),
     agentProfile: z.object({
       profileId: z.string(),
       version: z.number().int().positive().optional(),
@@ -10343,6 +10362,37 @@ function WorkflowDetailPageContent({ payload }: { payload: BootPayload }) {
                   <Fact label="Priority">{execution.priority}</Fact>
                 ) : null}
               </FactGroup>
+
+              {execution.omnigentExecutionPlan ? (
+                <FactGroup title="Omnigent authority">
+                  <Fact label="Execution Plan">
+                    <code className="text-xs break-all">
+                      {execution.omnigentExecutionPlan.planRef}
+                    </code>
+                  </Fact>
+                  <Fact label="Plan Digest">
+                    <code className="text-xs break-all">
+                      {execution.omnigentExecutionPlan.planDigest}
+                    </code>
+                  </Fact>
+                  {execution.omnigentRuntimeBinding ? (
+                    <>
+                      <Fact label="Runtime Binding">
+                        <code className="text-xs break-all">
+                          {execution.omnigentRuntimeBinding.runtimeBindingRef}
+                        </code>
+                      </Fact>
+                      <Fact label="Binding Fence">
+                        revision {execution.omnigentRuntimeBinding.revision ?? '—'} · generation{' '}
+                        {execution.omnigentRuntimeBinding.fencingGeneration ?? '—'} ·{' '}
+                        {formatStatusLabel(execution.omnigentRuntimeBinding.state)}
+                      </Fact>
+                    </>
+                  ) : (
+                    <Fact label="Runtime Binding">Pending post-lease acquisition</Fact>
+                  )}
+                </FactGroup>
+              ) : null}
 
               <FactGroup title="Git & Publish">
                 {execution.repository ? (

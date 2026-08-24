@@ -230,6 +230,7 @@ class CheckpointBranchTurnExecutionOwner:
         principal: str,
         client: TemporalClientAdapter | None = None,
         artifact_service: TemporalArtifactService | None = None,
+        turn_command_service: Any | None = None,
     ) -> None:
         self._session = session
         self._principal = principal
@@ -240,6 +241,14 @@ class CheckpointBranchTurnExecutionOwner:
         # may inject the real boundary fake directly.
         self._artifacts = artifact_service
         self._artifact_link: dict[str, Any] | None = None
+        self._turn_commands = turn_command_service
+
+    def _bound_session_factory(self) -> Any:
+        return (
+            async_sessionmaker(self._session.bind, expire_on_commit=False)
+            if self._session.bind is not None
+            else async_session_maker
+        )
 
     @asynccontextmanager
     async def _artifact_service(
@@ -248,11 +257,7 @@ class CheckpointBranchTurnExecutionOwner:
         if self._artifacts is not None:
             yield None, self._artifacts
             return
-        bound_factory = (
-            async_sessionmaker(self._session.bind, expire_on_commit=False)
-            if self._session.bind is not None
-            else async_session_maker
-        )
+        bound_factory = self._bound_session_factory()
         async with bound_factory() as artifact_session:
             yield artifact_session, get_checkpoint_branch_artifact_service(
                 artifact_session
@@ -477,7 +482,15 @@ class CheckpointBranchTurnExecutionOwner:
             raise CheckpointBranchTurnLaunchError(
                 "branch_head_stale", "expected branch head version does not match"
             )
-        if branch.current_head_checkpoint_ref != turn.source_checkpoint_ref:
+        # A successfully launched turn advances ``current_head_checkpoint_ref``
+        # to its output checkpoint.  Exact idempotent delivery must reattach to
+        # that already-owned turn, not reinterpret its immutable source as a
+        # fresh claim against the now-advanced branch head.  Unlaunched turns
+        # still require the current head to match before any side effect.
+        if (
+            not turn.created_step_execution_id
+            and branch.current_head_checkpoint_ref != turn.source_checkpoint_ref
+        ):
             raise CheckpointBranchTurnLaunchError(
                 "branch_head_checkpoint_changed",
                 "turn source no longer matches the persisted branch head",
@@ -767,6 +780,15 @@ class CheckpointBranchTurnExecutionOwner:
                 "execution_profile_mismatch",
                 "stored execution profile differs from checkpoint authority",
             )
+        selected_plan_ref = str(selection.get("executionPlanRef") or "").strip()
+        checkpoint_plan_ref = str(
+            omnigent.execution_plan_ref or ""
+        ).strip()
+        if selected_plan_ref and selected_plan_ref != checkpoint_plan_ref:
+            raise CheckpointBranchTurnLaunchError(
+                "execution_plan_mismatch",
+                "stored execution plan differs from checkpoint authority",
+            )
         agent_snapshot = selection.get("agentProfileSnapshot")
         agent_identity = selection.get("agentProfile")
         if agent_snapshot is not None:
@@ -942,10 +964,6 @@ class CheckpointBranchTurnExecutionOwner:
             branch_id=branch_id,
             branch_turn_id=branch_turn_id,
         )
-        if turn.created_step_execution_id:
-            await self._start_claimed_turn(branch=branch, turn=turn, binding=binding)
-            return turn
-
         checkpoint, profile, policy_snapshot = await self._validate_source_authority(
             branch=branch,
             turn=turn,
@@ -953,6 +971,71 @@ class CheckpointBranchTurnExecutionOwner:
             source=source,
             expected_head_version=request.expected_branch_head_version,
         )
+        from moonmind.omnigent.control_plane.turn_commands import (
+            CanonicalSessionBootstrap,
+            CanonicalTurnCommandService,
+        )
+        from moonmind.omnigent.control_plane.repositories import (
+            ControlPlaneRepositories,
+            OmnigentControlPlaneStore,
+        )
+
+        source_command = self._turn_commands or CanonicalTurnCommandService(
+            OmnigentControlPlaneStore(self._bound_session_factory())
+        )
+
+        canonical_claim = await source_command.claim_with_repositories(
+            ControlPlaneRepositories.bind(self._session),
+            workflow_id=checkpoint.omnigent.workflow_id,
+            provider_session_ref=str(
+                checkpoint.omnigent.omnigent_session_id or ""
+            ),
+            chat_binding_id=None,
+            command_type="checkpoint_branch_resume",
+            idempotency_key=turn.idempotency_key,
+            payload_digest=turn.instruction_digest,
+            step_execution_id=checkpoint.omnigent.step_execution_id,
+            bootstrap=CanonicalSessionBootstrap(
+                provider="omnigent",
+                step_execution_id=checkpoint.omnigent.step_execution_id,
+                agent_run_id=checkpoint.omnigent.bridge_session_id,
+                source_idempotency_key=checkpoint.omnigent.idempotency_key,
+                execution_plan_ref=checkpoint.omnigent.execution_plan_ref,
+            ),
+        )
+        from moonmind.omnigent.control_plane.records import ControlPlaneOutcome
+
+        if canonical_claim.outcome not in {
+            ControlPlaneOutcome.APPLIED,
+            ControlPlaneOutcome.ALREADY_APPLIED,
+        }:
+            raise CheckpointBranchTurnLaunchError(
+                "canonical_turn_command_not_owned",
+                "checkpoint branch command is owned by another delivery",
+            )
+        if (
+            canonical_claim.outcome is ControlPlaneOutcome.ALREADY_APPLIED
+            and not turn.created_step_execution_id
+        ):
+            raise CheckpointBranchTurnLaunchError(
+                "canonical_turn_reconciliation_required",
+                "the canonical checkpoint command is settled without matching "
+                "branch execution authority",
+            )
+        # The canonical command is the authority for every later artifact,
+        # workflow start, and provider-facing turn. Make it durable before any
+        # such side effect, including replay reattachment.
+        await self._session.commit()
+        if turn.created_step_execution_id:
+            await self._start_claimed_turn(branch=branch, turn=turn, binding=binding)
+            if canonical_claim.outcome is ControlPlaneOutcome.APPLIED:
+                await source_command.settle(
+                    workflow_id=checkpoint.omnigent.workflow_id,
+                    idempotency_key=turn.idempotency_key,
+                    outcome=ControlPlaneOutcome.APPLIED,
+                    result_ref=str(turn.step_execution_manifest_ref or "") or None,
+                )
+            return turn
         count = int(
             (
                 await self._session.execute(
@@ -1027,6 +1110,16 @@ class CheckpointBranchTurnExecutionOwner:
             "publishMode": publish_mode,
             "gitWorkBranch": binding.work_branch,
         }
+        # A checkpoint continuation consumes the source session's immutable
+        # plan. It must not re-resolve harness, model, Provider Profile, Host
+        # Class, launch policy, repository, workspace, or Skill authority.
+        # Checkpoints created before plan admission remain on the replay-visible
+        # legacy path and therefore carry no synthesized replacement plan.
+        source_plan_ref = str(
+            checkpoint.omnigent.execution_plan_ref or ""
+        ).strip()
+        if source_plan_ref:
+            runtime_selection["executionPlanRef"] = source_plan_ref
         remediation_context_ref = await self._validated_remediation_context_ref(turn)
         branch.diagnostics = {
             **(branch.diagnostics or {}),
@@ -1253,6 +1346,12 @@ class CheckpointBranchTurnExecutionOwner:
         )
         await self._session.commit()
         await self._start_claimed_turn(branch=branch, turn=claimed, binding=binding)
+        await source_command.settle(
+            workflow_id=checkpoint.omnigent.workflow_id,
+            idempotency_key=turn.idempotency_key,
+            outcome=ControlPlaneOutcome.APPLIED,
+            result_ref=manifest_ref,
+        )
         await self._session.refresh(claimed)
         return claimed
 

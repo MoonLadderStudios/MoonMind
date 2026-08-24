@@ -16,7 +16,6 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
@@ -53,15 +52,24 @@ class BundleSource(BaseModel):
 
     @model_validator(mode="after")
     def validate(self) -> "BundleSource":
-        for field in ("bundleArtifactRef", "importReceiptRef", "importedAgentId", "importedAgentVersion"):
+        for field in (
+            "bundleArtifactRef",
+            "importReceiptRef",
+            "importedAgentId",
+            "importedAgentVersion",
+        ):
             if not str(getattr(self, field) or "").strip():
                 raise ValueError(f"{field} required")
         if not _DIGEST_RE.fullmatch(self.bundleDigest):
             raise ValueError("bundleDigest must be sha256")
         if not _DIGEST_RE.fullmatch(self.importedContentDigest):
             raise ValueError("importedContentDigest must be sha256")
-        if not self.importReceiptRef.startswith("omnigent-agent-import:"):
-            raise ValueError("importReceiptRef must start with omnigent-agent-import:")
+        if not re.fullmatch(
+            r"omnigent-agent-import:sha256:[0-9a-f]{64}", self.importReceiptRef
+        ):
+            raise ValueError(
+                "importReceiptRef must be a digest-addressed import receipt"
+            )
         return self
 
 
@@ -78,7 +86,9 @@ class HarnessSelection(BaseModel):
             raise ValueError("invalid harness id")
         if not self.catalogRef.startswith("omnigent-harness-catalog:sha256:"):
             raise ValueError("catalogRef invalid")
-        if not self.implementationRef.startswith("omnigent-harness-implementation:sha256:"):
+        if not self.implementationRef.startswith(
+            "omnigent-harness-implementation:sha256:"
+        ):
             raise ValueError("implementationRef invalid")
         return self
 
@@ -103,19 +113,31 @@ class CredentialSlot(BaseModel):
 
     id: str
     optional: bool = False
-    acceptedAuthModels: tuple[str, ...] = Field(default_factory=tuple, alias="acceptedAuthModels")
-    acceptedProviderIds: tuple[str, ...] = Field(default_factory=tuple, alias="acceptedProviderIds")
+    acceptedAuthModels: tuple[str, ...] = Field(
+        default_factory=tuple, alias="acceptedAuthModels"
+    )
+    acceptedProviderIds: tuple[str, ...] = Field(
+        default_factory=tuple, alias="acceptedProviderIds"
+    )
 
 
 class OmnigentAgentProfileV2(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schemaVersion: str = Field("moonmind.omnigent-agent-profile.v2", alias="schemaVersion", pattern=r"^moonmind\.omnigent-agent-profile\.v2$")
+    schemaVersion: str = Field(
+        "moonmind.omnigent-agent-profile.v2",
+        alias="schemaVersion",
+        pattern=r"^moonmind\.omnigent-agent-profile\.v2$",
+    )
     endpointRef: str = Field(alias="endpointRef")
     source: UpstreamSource | BundleSource = Field(discriminator="kind")
     harness: HarnessSelection
-    requirements: AgentProfileRequirements = Field(default_factory=AgentProfileRequirements)
-    credentialSlots: tuple[CredentialSlot, ...] = Field(default_factory=tuple, alias="credentialSlots")
+    requirements: AgentProfileRequirements = Field(
+        default_factory=AgentProfileRequirements
+    )
+    credentialSlots: tuple[CredentialSlot, ...] = Field(
+        default_factory=tuple, alias="credentialSlots"
+    )
     model: dict[str, Any] = Field(default_factory=dict)
     workspace: dict[str, Any] = Field(default_factory=dict)
     skills: tuple[str, ...] = ()
@@ -123,7 +145,9 @@ class OmnigentAgentProfileV2(BaseModel):
     capture: dict[str, Any] = Field(default_factory=dict)
     continuations: dict[str, Any] = Field(default_factory=dict)
     publish: dict[str, Any] = Field(default_factory=dict)
-    allowedLaunchPolicyRefs: tuple[str, ...] = Field(default_factory=tuple, alias="allowedLaunchPolicyRefs")
+    allowedLaunchPolicyRefs: tuple[str, ...] = Field(
+        default_factory=tuple, alias="allowedLaunchPolicyRefs"
+    )
 
     @model_validator(mode="after")
     def validate_top(self) -> "OmnigentAgentProfileV2":
@@ -132,11 +156,22 @@ class OmnigentAgentProfileV2(BaseModel):
         return self
 
     def snapshot_ref(self) -> str:
-        canonical = json.dumps(self.model_dump(by_alias=True, mode="json"), sort_keys=True, separators=(",", ":"))
-        return "omnigent-agent-profile:sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+        canonical = json.dumps(
+            self.model_dump(by_alias=True, mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return (
+            "omnigent-agent-profile:sha256:"
+            + hashlib.sha256(canonical.encode()).hexdigest()
+        )
 
     def snapshot_digest(self) -> str:
-        canonical = json.dumps(self.model_dump(by_alias=True, mode="json"), sort_keys=True, separators=(",", ":"))
+        canonical = json.dumps(
+            self.model_dump(by_alias=True, mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
@@ -148,64 +183,136 @@ def decode_v1_profile_to_v2_inputs(v1: dict[str, Any]) -> dict[str, Any]:
     harness, providerRequirements -> credentialSlots, etc.
     Historical and in-flight authority depends on this decoder.
     """
+
+    def require_authority(value: Any, field: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError(
+                f"legacy Agent Profile requires durable {field}; "
+                "synthetic authority is forbidden"
+            )
+        return normalized
+
     endpointRef = str(v1.get("endpointRef") or v1.get("endpoint") or "default")
+
     # Source mapping: handle legacy v1 where source is nested without kind discriminator
     source: dict[str, Any]
     if "source" in v1 and isinstance(v1["source"], dict):
         src = v1["source"]
         if "kind" in src:
             source = src
-        elif "bundleArtifactRef" in src or "bundleDigest" in src or "importReceiptRef" in src:
+        elif (
+            "bundleArtifactRef" in src
+            or "bundleDigest" in src
+            or "importReceiptRef" in src
+        ):
             # Legacy bundle shape nested under source without kind
             source = {
                 "kind": "bundle",
-                "bundleArtifactRef": src.get("bundleArtifactRef") or "artifact:placeholder",
-                "bundleDigest": src.get("bundleDigest") or "sha256:" + "a" * 64,
-                "importReceiptRef": src.get("importReceiptRef") or "omnigent-agent-import:placeholder",
-                "importedAgentId": src.get("importedAgentId") or src.get("upstreamId") or "imported-agent",
-                "importedAgentVersion": src.get("importedAgentVersion") or src.get("upstreamVersion") or "0.0.0",
-                "importedContentDigest": src.get("importedContentDigest") or src.get("upstreamSnapshotDigest") or "sha256:" + "b" * 64,
+                "bundleArtifactRef": require_authority(
+                    src.get("bundleArtifactRef"), "source.bundleArtifactRef"
+                ),
+                "bundleDigest": require_authority(
+                    src.get("bundleDigest"), "source.bundleDigest"
+                ),
+                "importReceiptRef": require_authority(
+                    src.get("importReceiptRef"), "source.importReceiptRef"
+                ),
+                "importedAgentId": require_authority(
+                    src.get("importedAgentId") or src.get("upstreamId"),
+                    "source.importedAgentId",
+                ),
+                "importedAgentVersion": require_authority(
+                    src.get("importedAgentVersion") or src.get("upstreamVersion"),
+                    "source.importedAgentVersion",
+                ),
+                "importedContentDigest": require_authority(
+                    src.get("importedContentDigest")
+                    or src.get("upstreamSnapshotDigest"),
+                    "source.importedContentDigest",
+                ),
             }
         elif "upstreamId" in src or "agentName" in src:
             source = {
                 "kind": "upstream",
-                "upstreamId": src.get("upstreamId") or src.get("agentName") or "codex-native-ui",
-                "upstreamVersion": src.get("upstreamVersion") or "1.0.0",
-                "upstreamSnapshotDigest": src.get("upstreamSnapshotDigest") or "sha256:" + "c" * 64,
+                "upstreamId": require_authority(
+                    src.get("upstreamId") or src.get("agentName"), "source.upstreamId"
+                ),
+                "upstreamVersion": require_authority(
+                    src.get("upstreamVersion"), "source.upstreamVersion"
+                ),
+                "upstreamSnapshotDigest": require_authority(
+                    src.get("upstreamSnapshotDigest"), "source.upstreamSnapshotDigest"
+                ),
             }
         else:
             source = {
                 "kind": "upstream",
-                "upstreamId": v1.get("upstreamId") or v1.get("agentName") or "codex-native-ui",
-                "upstreamVersion": v1.get("upstreamVersion") or "1.0.0",
-                "upstreamSnapshotDigest": v1.get("upstreamSnapshotDigest") or "sha256:" + "c" * 64,
+                "upstreamId": require_authority(
+                    v1.get("upstreamId") or v1.get("agentName"), "upstreamId"
+                ),
+                "upstreamVersion": require_authority(
+                    v1.get("upstreamVersion"), "upstreamVersion"
+                ),
+                "upstreamSnapshotDigest": require_authority(
+                    v1.get("upstreamSnapshotDigest"), "upstreamSnapshotDigest"
+                ),
             }
     elif "bundleArtifactRef" in v1 or "bundle" in v1:
         bundle = v1.get("bundle") if isinstance(v1.get("bundle"), dict) else v1
         source = {
             "kind": "bundle",
-            "bundleArtifactRef": bundle.get("bundleArtifactRef") or "artifact:placeholder",
-            "bundleDigest": bundle.get("bundleDigest") or "sha256:" + "a" * 64,
-            "importReceiptRef": bundle.get("importReceiptRef") or "omnigent-agent-import:placeholder",
-            "importedAgentId": bundle.get("importedAgentId") or "imported-agent",
-            "importedAgentVersion": bundle.get("importedAgentVersion") or "0.0.0",
-            "importedContentDigest": bundle.get("importedContentDigest") or "sha256:" + "b" * 64,
+            "bundleArtifactRef": require_authority(
+                bundle.get("bundleArtifactRef"), "bundleArtifactRef"
+            ),
+            "bundleDigest": require_authority(
+                bundle.get("bundleDigest"), "bundleDigest"
+            ),
+            "importReceiptRef": require_authority(
+                bundle.get("importReceiptRef"), "importReceiptRef"
+            ),
+            "importedAgentId": require_authority(
+                bundle.get("importedAgentId"), "importedAgentId"
+            ),
+            "importedAgentVersion": require_authority(
+                bundle.get("importedAgentVersion"), "importedAgentVersion"
+            ),
+            "importedContentDigest": require_authority(
+                bundle.get("importedContentDigest"), "importedContentDigest"
+            ),
         }
     else:
         source = {
             "kind": "upstream",
-            "upstreamId": v1.get("upstreamId") or v1.get("agentName") or "codex-native-ui",
-            "upstreamVersion": v1.get("upstreamVersion") or "1.0.0",
-            "upstreamSnapshotDigest": v1.get("upstreamSnapshotDigest") or "sha256:" + "c" * 64,
+            "upstreamId": require_authority(
+                v1.get("upstreamId") or v1.get("agentName"), "upstreamId"
+            ),
+            "upstreamVersion": require_authority(
+                v1.get("upstreamVersion"), "upstreamVersion"
+            ),
+            "upstreamSnapshotDigest": require_authority(
+                v1.get("upstreamSnapshotDigest"), "upstreamSnapshotDigest"
+            ),
         }
     harness = v1.get("harness") or {}
     if isinstance(harness, str):
-        harness = {"id": harness, "catalogRef": "omnigent-harness-catalog:sha256:" + "d" * 64, "implementationRef": "omnigent-harness-implementation:sha256:" + "e" * 64}
+        harness = {
+            "id": harness,
+            "catalogRef": require_authority(v1.get("catalogRef"), "catalogRef"),
+            "implementationRef": require_authority(
+                v1.get("implementationRef"), "implementationRef"
+            ),
+        }
     else:
         harness = {
             "id": harness.get("id") or harness.get("harnessId") or "codex-native",
-            "catalogRef": harness.get("catalogRef") or "omnigent-harness-catalog:sha256:" + "d" * 64,
-            "implementationRef": harness.get("implementationRef") or "omnigent-harness-implementation:sha256:" + "e" * 64,
+            "catalogRef": require_authority(
+                harness.get("catalogRef") or v1.get("catalogRef"), "harness.catalogRef"
+            ),
+            "implementationRef": require_authority(
+                harness.get("implementationRef") or v1.get("implementationRef"),
+                "harness.implementationRef",
+            ),
         }
     # Credential slots from providerRequirements
     cred_slots = []
@@ -214,21 +321,38 @@ def decode_v1_profile_to_v2_inputs(v1: dict[str, Any]) -> dict[str, Any]:
         provider_reqs = [provider_reqs]
     for slot in provider_reqs:
         if isinstance(slot, dict):
-            cred_slots.append({
-                "id": slot.get("id") or slot.get("slotId") or "primary-model",
-                "optional": bool(slot.get("optional", False)),
-                "acceptedAuthModels": slot.get("acceptedAuthModels") or ["own-auth"],
-                "acceptedProviderIds": slot.get("acceptedProviderIds") or slot.get("acceptedProviders") or ["openai"],
-            })
+            cred_slots.append(
+                {
+                    "id": slot.get("id") or slot.get("slotId") or "primary-model",
+                    "optional": bool(slot.get("optional", False)),
+                    "acceptedAuthModels": slot.get("acceptedAuthModels")
+                    or ["own-auth"],
+                    "acceptedProviderIds": slot.get("acceptedProviderIds")
+                    or slot.get("acceptedProviders")
+                    or ["openai"],
+                }
+            )
         elif isinstance(slot, str):
-            cred_slots.append({"id": slot, "optional": False, "acceptedAuthModels": ["own-auth"], "acceptedProviderIds": ["openai"]})
+            cred_slots.append(
+                {
+                    "id": slot,
+                    "optional": False,
+                    "acceptedAuthModels": ["own-auth"],
+                    "acceptedProviderIds": ["openai"],
+                }
+            )
 
     return {
         "schemaVersion": "moonmind.omnigent-agent-profile.v2",
         "endpointRef": endpointRef,
         "source": source,
         "harness": harness,
-        "requirements": v1.get("requirements") or {"harness": {"required": [], "preferred": []}, "moonmind": {"required": []}, "host": {"required": []}},
+        "requirements": v1.get("requirements")
+        or {
+            "harness": {"required": [], "preferred": []},
+            "moonmind": {"required": []},
+            "host": {"required": []},
+        },
         "credentialSlots": cred_slots,
         "model": v1.get("model") or {},
         "workspace": v1.get("workspace") or {},
@@ -241,7 +365,9 @@ def decode_v1_profile_to_v2_inputs(v1: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def validate_agent_profile(profile: dict[str, Any] | OmnigentAgentProfileV2) -> OmnigentAgentProfileV2:
+def validate_agent_profile(
+    profile: dict[str, Any] | OmnigentAgentProfileV2
+) -> OmnigentAgentProfileV2:
     if isinstance(profile, OmnigentAgentProfileV2):
         return profile
     # Try v2 first

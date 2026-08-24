@@ -1,6 +1,6 @@
 # OpenCode Host (omnigent-host-opencode)
 
-**Status:** Implemented (MoonLadderStudios/MoonMind#3752)  
+**Status:** Implemented; launch remains qualification-gated
 **Document Class:** System / Operator Guide  
 **Owners:** MoonMind Platform  
 
@@ -51,19 +51,20 @@ Trusted boundary writes:
 
 ```
 target: /home/app/.local/share/opencode/auth.json  (0600, uid 1000:1000, parent 0700)
-payload: { "opencode-go": { "apiKey": "<secret>", "type": "api" } }
+payload: { "opencode-go": { "key": "<secret>", "type": "api" } }
 providerKey: opencode-go (verified against pinned CLI)
-mount: read-only when compatible
-cleanup: remove-owned-state (run-scoped)
+state: lease-owned Docker volume with generation sidecar
+mount: read-only
+cleanup: remove the run-owned volume without resolving the secret again
 ```
 
 Steps (issue §5):
 
 1. Acquire Provider Profile lease
 2. Record acquired generation in fenced runtime binding (sticky)
-3. Resolve API-key SecretRef in trusted worker
-4. Create lease-owned credential state
-5. Write exact OpenCode credential structure
+3. Resolve only the `opencode_api_key` SecretRef role at the trusted Activity boundary
+4. Create a labeled lease-owned Docker volume
+5. Send the exact OpenCode credential structure to a trusted writer container over stdin
 6. Verify provider key `opencode-go`
 7. Write to `/home/app/.local/share/opencode/auth.json`
 8. Parent `0700`, file `0600`
@@ -79,7 +80,7 @@ OPENCODE_AUTH_CONTENT, OPENCODE_CONFIG, OPENCODE_CONFIG_CONTENT,
 OPENAI_API_KEY, ANTHROPIC_API_KEY
 ```
 
-Never use `OPENCODE_AUTH_CONTENT`, CLI args, or ordinary Docker env for the production secret path.
+Never use `OPENCODE_AUTH_CONTENT`, CLI arguments, labels, generated environment files, or ordinary Docker environment variables for the production secret path. The execution plan, runtime binding, Temporal payloads, Docker inspection data, and cleanup handles contain only references and generations.
 
 ## Provider Profile: OpenCode Go
 
@@ -98,39 +99,62 @@ Create in **Settings → Provider Profiles**:
 
 Validation (Settings → Validate):
 
-1. Materialize proposed key to an isolated disposable credential directory using the same pinned `opencode` binary the host image uses
-2. Query OpenCode's model catalog
-3. Require at least one `opencode-go/<model-id>` result
-4. Optionally run a minimal protected live inference when requested
-5. Delete temporary credential state
-6. Persist only normalized model metadata and validation evidence
+1. Acquire a temporary Provider Profile maintenance lease
+2. Materialize the proposed key through `opencode-auth-json@1` into a disposable Docker volume
+3. Launch the digest-pinned OpenCode host image and query its model options through Omnigent
+4. Require at least one `opencode-go/<model-id>` result
+5. Delete the validation host and credential volume, then release the maintenance lease
+6. Persist only normalized model metadata, image/runtime identity, and validation evidence
 
 Raw key is never returned after submission.
 
 ## Agent Profile
 
 ```
-agentKind: external
-agentId: omnigent
+profileId: omnigent-opencode-default
+version: 1
+digest: sha256:...
+endpointRef: default
 harness:
   id: opencode-native
+  catalogRef: omnigent-harness-catalog:sha256:...
   implementationRef: omnigent-harness-implementation:sha256:...
 source:
-  kind: upstream | bundle
-  upstreamId: opencode-native-ui (or imported bundle)
+  kind: upstream
+  upstreamId: opencode-native-ui
+  upstreamVersion: ...
+  upstreamSnapshotDigest: sha256:...
 credentialSlots:
   - id: primary-model
     acceptedAuthModels: [own-auth]
     acceptedProviderIds: [opencode, opencode-go]
 hostClassRef: omnigent-opencode@1
-launchPolicyRef: omnigent-on-demand@1
+launchPolicyRef: opencode-on-demand@1
 executionRealizerRef: generic-omnigent-host@1
 model:
   qualifiedId: opencode-go/<model-id>
-  routeRef: opencode-go
+allowedLaunchPolicyRefs: [omnigent-on-demand@1]
 ```
 
-Generic upstream harness and agent projection, Host Class and launch-policy selection, and model selection using qualified IDs are exposed in Workflow Create.
+The guided editor asks for the preset, model, host policy, workspace mutation, Skills, tools, capture, continuation, and publication behavior. The server resolves the current upstream projection plus exact catalog and implementation authority; users do not author implementation digests.
+
+Workflow Create persists the immutable profile selection and ordinary product intent:
+
+```yaml
+agentKind: external
+agentId: omnigent
+executionProfileRef: <OpenCode Go Provider Profile ID>
+parameters:
+  omnigent:
+    agentProfileRef:
+      profileId: omnigent-opencode-default
+      version: 1
+      digest: sha256:...
+    launchPolicyRef: omnigent-on-demand@1
+    model: opencode-go/<model-id>
+```
+
+Planning resolves the Host Class, credential materializer, image, acquired credential generation, and `generic-omnigent-host@1` realizer from durable data. Temporal dispatch does not branch on harness identity.
 
 ## Exact-host attestation (issue §8)
 
@@ -156,17 +180,30 @@ Readiness by harness name alone is insufficient.
 ## Deployment configuration
 
 ```
+MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=true
+MOONMIND_OMNIGENT_OPENCODE_ENABLED=true
+OMNIGENT_BUILD_DIGEST=sha256:<shared-server-and-host-build-identity>
 OMNIGENT_OPENCODE_HOST_IMAGE_REF=ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<digest>
-# Fallbacks (mutable, not launch authority):
+# Optional mutable build/pull coordinates; never launch authority:
 OMNIGENT_OPENCODE_HOST_IMAGE=ghcr.io/moonladderstudios/omnigent-host-opencode
 OMNIGENT_OPENCODE_HOST_IMAGE_TAG=1.18.11
 ```
 
+- Keep `MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED=false` until the generic services, database migration, Docker backend, endpoint, images, and egress policy are configured.
+- Keep `MOONMIND_OMNIGENT_OPENCODE_ENABLED=false` until the protected OpenCode Go conformance workflow has published evidence for the exact support combination.
 - Build from pinned Omnigent source/base image
 - Publish to GHCR with provenance and digest evidence
-- Make digest available to Host Class bootstrap via `get_opencode_host_image_ref()`
+- Make the immutable digest available to the data-driven Host Class selector
 - Fail closed when only a mutable tag is configured
 - Image is pulled lazily only when an OpenCode workflow requires it; cached layers are reused
+
+Synchronize the authenticated Omnigent endpoint after deployment or plugin changes:
+
+```text
+POST /api/omnigent/harness-catalog/synchronize
+```
+
+Synchronization reads `/v1/harnesses`, `/v1/agents`, and `/v1/hosts`, normalizes one immutable build-bound catalog snapshot, and persists exact-implementation trust records plus plugin-load diagnostics. `moonmind.omnigent-execution-readiness.v3` advertises OpenCode only when the same selectors used by planning find a fresh, trusted, host-class-admissible, credential-compatible target and both gates allow it. Otherwise Workflow Create shows the specific `generic_realizer_not_ready` or qualification blocker while Provider Profile setup remains available.
 
 ## Generic realizer lifecycle (issue §7)
 
@@ -193,23 +230,11 @@ No separate OpenCode Temporal workflow; no duplication of the Codex coordinator.
 ## Operator diagnostics (no secret exposure)
 
 ```bash
-# Host attestation (secret-free)
+# Image identity (secret-free)
 docker inspect ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:<digest> --format '{{.Id}} {{.RepoDigests}}'
-python -c "from moonmind.omnigent.harness_platform import get_opencode_host_class; print(get_opencode_host_class().model_dump(by_alias=True, mode='json'))"
-
-# Materializer evidence (secret-free handle)
-python -c "
-from moonmind.omnigent.harness_platform import materialize_opencode_auth_json
-handle = materialize_opencode_auth_json(api_key='sk-test-...', provider_profile_ref='opencode-go-default', provider_lease_ref='lease:1', credential_generation=4, host_root='/tmp/test')
-print(handle)  # no apiKey present
-"
-
-# Verify credential file (without printing contents)
-python -c "
-from moonmind.omnigent.harness_platform import verify_opencode_auth_file
-print(verify_opencode_auth_file(host_root='/', expected_generation=4))
-"
 ```
+
+Use Workflow Detail and the runtime binding's artifact references to inspect bounded catalog, image, host-registration, credential-mount, Skill, tool, egress, harness-readiness, and model-option attestations. Do not inspect `auth.json` or inject a test key into a worker filesystem. Materialization verification occurs inside the trusted writer/host boundary and records only structure, modes, ownership, and generation.
 
 Check logs for:
 
@@ -218,6 +243,9 @@ Check logs for:
 - `OMNIGENT_CREDENTIAL_GENERATION_FENCED` — stale generation
 - `OMNIGENT_CREDENTIAL_MATERIALIZATION_FAILED` — materializer failure or permission mismatch
 - `OMNIGENT_MODEL_UNAVAILABLE` — selected `opencode-go/<model>` not in catalog
+- `OMNIGENT_HOST_REGISTRATION_TIMEOUT` — the correlated host did not become fresh and online
+- `OMNIGENT_RUNTIME_BINDING_CONFLICT` — stale lifecycle owner or replay conflict
+- `OMNIGENT_CLEANUP_DEFERRED` — durable cleanup remains for the janitor
 
 ## Key rotation
 
@@ -229,14 +257,16 @@ Check logs for:
 
 ## Cleanup
 
-- On-demand host: `--rm` or `remove` after harvest
-- Credential state: `remove-owned-state` via `cleanup_opencode_auth(tmp_root, ...)`
-- Janitor: reconciles abandoned `generic-omnigent-host@1` and materializer state using durable `credential-cleanup:...` authority (secret-free)
-- Provider Profile lease: released last
+- Stop or drain the session before removing its host.
+- Remove the fenced host container and verify it no longer consumes credentials.
+- Remove egress/runtime state, then the run-owned credential volume and workspace/Skill/tool projections according to retention policy.
+- Persist terminal cleanup evidence before releasing Provider Profile leases in reverse acquisition order.
+- The janitor claims stale nonterminal bindings with a new fencing generation and replays materializer-specific cleanup using secret-free handles. It never needs the raw key to remove a volume.
+- Provider Profile capacity is always released last.
 
 ## Rollback
 
-Existing Codex-through-Omnigent path remains on `codex-profile-bound@1` with `omnigent-codex-current@1` and OAuth host runtime. Direct Codex remains available as migration fallback. Removing `OMNIGENT_OPENCODE_HOST_IMAGE_REF` makes OpenCode Workflows un-launchable without affecting Codex.
+Existing Codex-through-Omnigent remains on `codex-profile-bound@1` and the mature OAuth host coordinator. There is no execution-time fallback from OpenCode to Codex. Disabling either generic feature gate or removing `OMNIGENT_OPENCODE_HOST_IMAGE_REF` makes OpenCode unlaunchable without affecting Codex.
 
 ## Build and publish
 
@@ -245,6 +275,7 @@ See `services/omnigent/opencode-host/Dockerfile` and `.github/workflows/docker-p
 ```
 docker buildx build --platform linux/amd64,linux/arm64 \
   --build-arg OMNIGENT_HOST_BASE_IMAGE=ghcr.io/omnigent-ai/omnigent-host@sha256:<base> \
+  --build-arg OMNIGENT_BUILD_DIGEST=sha256:<shared-server-and-host-build-identity> \
   -f services/omnigent/opencode-host/Dockerfile \
   -t ghcr.io/moonladderstudios/omnigent-host-opencode:1.18.11 --push .
 ```

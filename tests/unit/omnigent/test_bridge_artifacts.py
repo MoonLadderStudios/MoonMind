@@ -12,6 +12,8 @@ from moonmind.omnigent.bridge_artifacts import (
     LocalOmnigentArtifactGateway,
     OmnigentArtifactError,
     OmnigentCaptureBundle,
+    TemporalOmnigentArtifactGateway,
+    _build_capture_bundle_impl,
     _associate_resource_events,
     _capture_resource_projection,
     _reconcile_changed_file_evidence,
@@ -31,7 +33,27 @@ def _request() -> AgentExecutionRequest:
     )
 
 
-def test_provider_endpoint_provenance_is_accepted_but_credentials_are_redacted() -> None:
+def _step_request() -> AgentExecutionRequest:
+    payload = _request().model_dump(by_alias=True, mode="json")
+    payload.update(
+        {
+            "stepExecution": {
+                "schemaVersion": "v1",
+                "workflowId": "workflow-1",
+                "runId": "run-1",
+                "logicalStepId": "step-a",
+                "executionOrdinal": 1,
+                "stepExecutionId": "workflow-1:run-1:step-a:execution:1",
+                "runtimeContextPolicy": "fresh_agent_run",
+            },
+        }
+    )
+    return AgentExecutionRequest.model_validate(payload)
+
+
+def test_provider_endpoint_provenance_is_accepted_but_credentials_are_redacted() -> (
+    None
+):
     assert (
         _redacted_endpoint_url(
             "https://provider-user:provider-password@omnigent.example:8443/v1/?token=secret#session"
@@ -39,6 +61,30 @@ def test_provider_endpoint_provenance_is_accepted_but_credentials_are_redacted()
         == "https://omnigent.example:8443/v1"
     )
     assert _redacted_endpoint_url("provider-native-session-id") == "redacted"
+
+
+def test_durable_artifact_gateway_accepts_only_temporal_artifact_ids() -> None:
+    assert TemporalOmnigentArtifactGateway._artifact_id("artifact:art_123") == "art_123"
+    assert TemporalOmnigentArtifactGateway._artifact_id("art_456") == "art_456"
+
+    with pytest.raises(OmnigentArtifactError, match="Unsupported durable artifact ref"):
+        TemporalOmnigentArtifactGateway._artifact_id(
+            "artifact://omnigent/local-only/evidence.json"
+        )
+
+
+def test_durable_artifact_gateway_links_generic_evidence_to_step_execution() -> None:
+    link = TemporalOmnigentArtifactGateway._execution_link(
+        _step_request(),
+        name="host-attestation.json",
+        link_type="evidence.host",
+    )
+
+    assert link is not None
+    assert link.workflow_id == "workflow-1"
+    assert link.run_id == "run-1"
+    assert link.link_type == "evidence.host"
+    assert link.created_by_activity_type == "integration.omnigent.execute"
 
 
 class FakeHarvestClient:
@@ -138,6 +184,39 @@ async def test_read_bytes_roundtrips_written_artifact(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_capture_policy_disables_stream_and_evidence_artifacts(tmp_path) -> None:
+    gateway = LocalOmnigentArtifactGateway(root=tmp_path)
+
+    bundle = await _build_capture_bundle_impl(
+        client=FakeHarvestClient(),
+        artifact_gateway=gateway,
+        request=_request(),
+        session_id="session-1",
+        agent_id="agent-1",
+        initial_snapshot={"id": "session-1"},
+        final_snapshot={"id": "session-1", "status": "completed"},
+        first_message_request={"parts": [{"text": "read the repository"}]},
+        first_message_response={"id": "message-1"},
+        first_message_posted=True,
+        first_message_response_identifiers={"messageId": "message-1"},
+        raw_events=[{"type": "session.completed"}],
+        normalized_events=[{"type": "session.completed"}],
+        terminal_status="completed",
+        diagnostics={},
+        harvest_resources=True,
+        capture_policy={"stream": False, "evidence": False},
+    )
+
+    assert "rawSseStreamRef" not in bundle.metadata_refs
+    assert "normalizedEventStreamRef" not in bundle.metadata_refs
+    assert "finalSnapshotRef" not in bundle.metadata_refs
+    captured_names = {path.name for path in tmp_path.rglob("*") if path.is_file()}
+    assert "runtime.omnigent.sse.raw.jsonl" not in captured_names
+    assert "runtime.omnigent.snapshot.initial.json" not in captured_names
+    assert "output.omnigent.snapshot.final.json" not in captured_names
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("reader", ["read_text", "read_bytes"])
 @pytest.mark.parametrize(
     "escaping_ref",
@@ -177,8 +256,7 @@ async def test_resource_harvester_does_not_persist_content_over_byte_limit(
 
     for group in ("changedFiles", "workspaceFiles", "workspaceDiffs", "sessionFiles"):
         assert any(
-            "harvest limit" in item.get("unavailable", "")
-            for item in manifest[group]
+            "harvest limit" in item.get("unavailable", "") for item in manifest[group]
         )
     assert not list(tmp_path.rglob("app.py"))
     assert not list(tmp_path.rglob("session.log"))
@@ -208,26 +286,22 @@ async def test_bridge_resource_harvester_writes_section_12_artifacts(tmp_path) -
     assert manifest["workspaceDiffs"][0]["path"] == "src/app.py"
     assert manifest["sessionFiles"][0]["filename"] == "session.log"
     assert manifest["patchUnavailable"] is False
-    assert manifest["changedFiles"][0]["diffArtifactRef"] == manifest["workspaceDiffs"][0]["artifactRef"]
+    assert (
+        manifest["changedFiles"][0]["diffArtifactRef"]
+        == manifest["workspaceDiffs"][0]["artifactRef"]
+    )
     assert refs["changedFilesIndexRef"].endswith(
         "/output.omnigent.changed_files.index.json"
     )
     assert refs["childSessionsRef"].endswith("/runtime.omnigent.child_sessions.jsonl")
 
     diff = (
-        tmp_path
-        / "corr-1"
-        / "output.omnigent.workspace_diffs"
-        / "src"
-        / "app.py.diff"
+        tmp_path / "corr-1" / "output.omnigent.workspace_diffs" / "src" / "app.py.diff"
     )
     assert diff.read_text(encoding="utf-8") == "diff --git a/src/app.py b/src/app.py\n"
     child_snapshot = json.loads(
         (
-            tmp_path
-            / "corr-1"
-            / "runtime.omnigent.child_sessions"
-            / "child-1.json"
+            tmp_path / "corr-1" / "runtime.omnigent.child_sessions" / "child-1.json"
         ).read_text(encoding="utf-8")
     )
     assert child_snapshot["id"] == "child-1"

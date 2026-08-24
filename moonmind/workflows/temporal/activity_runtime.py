@@ -1032,7 +1032,7 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "integration.codex_cloud.cancel": ("integrations", "integration_codex_cloud_cancel"),
     "integration.openclaw.execute": ("integrations", "integration_openclaw_execute"),
-    "integration.omnigent.execute": ("integrations", "integration_omnigent_execute"),
+    "integration.omnigent.execute": ("agent_runtime", "integration_omnigent_execute"),
     "integration.omnigent.profile_bound_execute": ("agent_runtime", "integration_omnigent_profile_bound_execute"),
     "integration.omnigent.oauth_host_janitor": ("agent_runtime", "integration_omnigent_oauth_host_janitor"),
     "omnigent.evaluate_session_admission": (
@@ -5170,22 +5170,6 @@ class TemporalIntegrationActivities:
             
         return await openclaw_execute_activity(req)
 
-    async def integration_omnigent_execute(self, request, /, **kwargs):
-        from moonmind.workflows.temporal.activities.omnigent_activities import omnigent_execute_activity
-        from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-
-        if isinstance(request, Mapping):
-            request_payload = _coerce_activity_request(request, activity_type="integration.omnigent.execute")
-            if not request_payload:
-                raise TemporalActivityRuntimeError("integration.omnigent.execute requires AgentExecutionRequest payload")
-            req = AgentExecutionRequest.model_validate(request_payload)
-        elif isinstance(request, AgentExecutionRequest):
-            req = request
-        else:
-            raise TemporalActivityRuntimeError("integration.omnigent.execute requires AgentExecutionRequest payload")
-
-        return await omnigent_execute_activity(req)
-
 class TemporalProposalActivities:
     """Implementation helpers for ``proposal.*`` activities."""
 
@@ -7408,6 +7392,21 @@ class TemporalAgentRuntimeActivities:
         if errors:
             result["errors"] = errors
         return result
+
+    async def integration_omnigent_execute(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> AgentRunResult:
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_execute_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="integration.omnigent.execute",
+            kwargs=kwargs,
+        )
+        req = AgentExecutionRequest.model_validate(payload)
+        return await omnigent_execute_activity(req)
 
     async def integration_omnigent_profile_bound_execute(
         self, request: Any = None, /, **kwargs: Any
@@ -15921,6 +15920,12 @@ class TemporalCheckpointActivities:
             stepExecutionId=build_step_execution_id(model.identity),
             attemptOrdinal=model.identity.execution_ordinal,
             boundary=model.boundary,
+            executionPlanRef=capture.get("executionPlanRef"),
+            runtimeBindingRef=capture.get("runtimeBindingRef"),
+            runtimeBindingRevision=capture.get("runtimeBindingRevision"),
+            runtimeBindingFencingGeneration=capture.get(
+                "runtimeBindingFencingGeneration"
+            ),
             providerProfileId=capture["providerProfileId"],
             credentialRef=capture["credentialRef"],
             credentialGeneration=capture["credentialGeneration"],
