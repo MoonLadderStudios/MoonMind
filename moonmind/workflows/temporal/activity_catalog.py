@@ -341,6 +341,18 @@ def build_default_activity_catalog(
     cfg = temporal_settings or settings.temporal
     workflow_task_queue = get_workflow_task_queue(cfg)
     workflow_poll_task_queues = get_workflow_poll_task_queues(cfg)
+    agent_runtime_control_task_queue = str(
+        cfg.activity_agent_runtime_control_task_queue or ""
+    ).strip()
+    if not agent_runtime_control_task_queue:
+        raise TemporalActivityCatalogError(
+            "agent runtime control task queue must not be empty"
+        )
+    if agent_runtime_control_task_queue == cfg.activity_agent_runtime_task_queue:
+        raise TemporalActivityCatalogError(
+            "agent runtime control task queue must be isolated from long-lived "
+            "agent runtime activities"
+        )
 
     # See docs/Temporal/ErrorTaxonomy.md
     NON_RETRYABLE_ERRORS = (
@@ -963,9 +975,9 @@ def build_default_activity_catalog(
         TemporalActivityDefinition(
             activity_type="integration.omnigent.execute",
             family="integration",
-            capability_class="integration:omnigent",
-            task_queue=cfg.activity_integrations_task_queue,
-            fleet=INTEGRATIONS_FLEET,
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(
                 3600, 3700, heartbeat_timeout_seconds=120
             ),
@@ -983,6 +995,83 @@ def build_default_activity_catalog(
             ),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=300),
             heartbeat_required=True,
+        ),
+        # MoonLadderStudios/MoonMind#3705: short, retry-safe Omnigent session
+        # supervisor boundaries. Event reads are capped at 30 seconds; every
+        # other phase is bounded to five minutes or less and carries no unique
+        # correctness state in a heartbeat.
+        TemporalActivityDefinition(
+            activity_type="omnigent.evaluate_session_admission",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
+        ),
+        TemporalActivityDefinition(
+            activity_type="omnigent.resolve_intent",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(60, 120),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
+        ),
+        TemporalActivityDefinition(
+            activity_type="omnigent.load_reconciliation_inputs",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
+        ),
+        TemporalActivityDefinition(
+            activity_type="omnigent.load_failure_authority",
+            family="integration",
+            capability_class="agent_runtime",
+            task_queue=cfg.activity_agent_runtime_task_queue,
+            fleet=AGENT_RUNTIME_FLEET,
+            timeouts=TemporalActivityTimeouts(30, 60),
+            retries=_activity_retries(max_attempts=3, max_interval_seconds=10),
+        ),
+        *(
+            TemporalActivityDefinition(
+                activity_type=activity_type,
+                family="integration",
+                capability_class="agent_runtime",
+                task_queue=cfg.activity_agent_runtime_task_queue,
+                fleet=AGENT_RUNTIME_FLEET,
+                timeouts=TemporalActivityTimeouts(start_to_close, schedule_to_close),
+                retries=_activity_retries(
+                    max_attempts=3,
+                    max_interval_seconds=30,
+                    non_retryable=(
+                        "FencingConflictError",
+                        "RevisionConflictError",
+                        "CommandIdempotencyConflictError",
+                    ),
+                ),
+            )
+            for activity_type, start_to_close, schedule_to_close in (
+                ("omnigent.ensure_provider_profile_lease", 60, 180),
+                ("omnigent.ensure_host", 300, 600),
+                ("omnigent.ensure_provider_session", 60, 180),
+                ("omnigent.submit_turn", 60, 180),
+                ("omnigent.heartbeat_host_lease", 30, 60),
+                ("omnigent.read_event_batch", 30, 60),
+                ("omnigent.observe_snapshot", 30, 60),
+                ("omnigent.harvest_evidence", 180, 360),
+                ("omnigent.publish_workspace", 180, 360),
+                ("omnigent.stop_provider_session", 60, 180),
+                ("omnigent.stop_host", 180, 360),
+                ("omnigent.release_leases", 60, 180),
+                ("omnigent.persist_decision", 30, 60),
+                ("omnigent.persist_signal_intents", 30, 60),
+                ("omnigent.record_terminal", 30, 60),
+                ("omnigent.persist_failure", 30, 60),
+            )
         ),
         TemporalActivityDefinition(
             activity_type="integration.omnigent.oauth_host_janitor",
@@ -1422,7 +1511,7 @@ def build_default_activity_catalog(
             activity_type="agent_runtime.evaluate_terminal_evidence",
             family="agent_runtime",
             capability_class="agent_runtime",
-            task_queue=cfg.activity_agent_runtime_task_queue,
+            task_queue=agent_runtime_control_task_queue,
             fleet=AGENT_RUNTIME_FLEET,
             timeouts=TemporalActivityTimeouts(60, 180),
             retries=_activity_retries(max_attempts=2, max_interval_seconds=30),
@@ -1672,7 +1761,10 @@ def build_default_activity_catalog(
         ),
         TemporalWorkerFleet(
             fleet=AGENT_RUNTIME_FLEET,
-            task_queues=(cfg.activity_agent_runtime_task_queue,),
+            task_queues=(
+                cfg.activity_agent_runtime_task_queue,
+                agent_runtime_control_task_queue,
+            ),
             capabilities=("agent_runtime", "docker_workload"),
             privileges=(
                 "isolated_process_execution",

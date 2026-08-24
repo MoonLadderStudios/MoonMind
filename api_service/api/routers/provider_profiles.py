@@ -11,7 +11,7 @@ from typing import Any, AsyncIterator, Optional
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -47,11 +47,11 @@ from moonmind.provider_profiles.oauth_policy import (
     is_codex_oauth_profile,
 )
 from moonmind.schemas.agent_runtime_models import validate_codex_oauth_profile_refs
-from moonmind.workflows.executions.model_resolver import resolve_model_effort
 from moonmind.utils.logging import (
     redact_profile_file_templates,
     redact_sensitive_payload,
 )
+from moonmind.workflows.executions.model_resolver import resolve_model_effort
 
 logger = logging.getLogger(__name__)
 
@@ -396,6 +396,9 @@ class ProviderProfileResponse(BaseModel):
     model_tiers: list[ProviderModelEffortTier]
     default_model_tier: int
     model_overrides: dict[str, str] = Field(default_factory=dict)
+    credential_generation: int = 1
+    capacity_scope_ref: str
+    model_catalog_evidence: Optional[dict[str, Any]] = None
     credential_source: str
     runtime_materialization_mode: str
     volume_ref: Optional[str]
@@ -795,9 +798,11 @@ async def update_profile(
                 model_tiers=(
                     raw_model_tiers
                     if model_tiers_supplied
-                    else None
-                    if should_refresh_single_default_tier
-                    else profile.model_tiers
+                    else (
+                        None
+                        if should_refresh_single_default_tier
+                        else profile.model_tiers
+                    )
                 ),
                 default_model_tier=(
                     raw_default_model_tier
@@ -947,6 +952,7 @@ async def setup_provider_api_key(
     body: ProviderApiKeySetupRequest,
     session: AsyncSession = Depends(_get_session()),  # type: ignore[assignment]
     current_user: User = Depends(get_current_user()),
+    maintenance_guard: object = Depends(_credential_validation_guard),
 ) -> dict[str, Any]:
     _require_provider_profile_permission(current_user, "provider_profiles.write")
     profile = await session.get(ManagedAgentProviderProfile, profile_id)
@@ -964,16 +970,18 @@ async def setup_provider_api_key(
         )
         raise HTTPException(status_code=422, detail="API key validation failed.")
 
-    try:
-        await validate_provider_api_key(profile.provider_id, api_key)
-    except HTTPException as exc:
-        if exc.status_code in {401, 403, 422}:
-            await _mark_api_key_validation_failed(
-                session=session,
-                profile=profile,
-                reason="API key validation failed.",
-            )
-        raise exc
+    is_opencode = mapping.provider_id in {"opencode-go", "opencode"}
+    if not is_opencode:
+        try:
+            await validate_provider_api_key(profile.provider_id, api_key)
+        except HTTPException as exc:
+            if exc.status_code in {401, 403, 422}:
+                await _mark_api_key_validation_failed(
+                    session=session,
+                    profile=profile,
+                    reason="API key validation failed.",
+                )
+            raise exc
 
     validated_at = datetime.now(UTC)
     secret_slug = _provider_api_key_secret_slug(
@@ -981,6 +989,44 @@ async def setup_provider_api_key(
         mapping.secret_role,
     )
     secret_ref = f"db://{secret_slug}"
+    rotated = mapping.secret_role in (profile.secret_refs or {})
+    candidate_generation = int(profile.credential_generation) + (1 if rotated else 0)
+    runtime_evidence: dict[str, Any] | None = None
+    if is_opencode:
+        try:
+            from api_service.db.base import async_session_maker
+            from moonmind.omnigent.harness_platform.host_classes import (
+                get_opencode_host_image_ref,
+            )
+            from moonmind.omnigent.opencode_runtime_validation import (
+                OpenCodeProviderRuntimeValidationService,
+            )
+            from moonmind.omnigent.production import build_omnigent_secret_resolver
+
+            runtime_evidence = await OpenCodeProviderRuntimeValidationService(
+                session_factory=async_session_maker,
+                resolver=build_omnigent_secret_resolver(),
+                image_ref=get_opencode_host_image_ref(),
+            ).validate(
+                profile=profile,
+                lease=maintenance_guard.lease,
+                candidate_secret=api_key,
+                candidate_generation=candidate_generation,
+            )
+        except Exception as exc:
+            # Rotation is atomic: the previously validated SecretRef,
+            # generation, and launch readiness remain authoritative.
+            if not rotated:
+                await _mark_api_key_validation_failed(
+                    session=session,
+                    profile=profile,
+                    reason="Pinned OpenCode runtime validation failed.",
+                )
+            status = 422 if isinstance(exc, ValueError) else 502
+            raise HTTPException(
+                status_code=status,
+                detail="Pinned OpenCode runtime validation failed.",
+            ) from exc
     await _upsert_managed_secret(
         session=session,
         slug=secret_slug,
@@ -1003,6 +1049,27 @@ async def setup_provider_api_key(
         validated_at=validated_at,
         enabled=body.enable_after_validation,
     )
+    profile.credential_generation = candidate_generation
+
+    if is_opencode:
+        assert runtime_evidence is not None
+        evidence = runtime_evidence
+        profile.model_catalog_evidence_json = evidence
+        models = [
+            str(item.get("qualifiedId") or "")
+            for item in evidence.get("models", [])
+            if isinstance(item, dict)
+        ]
+        if not profile.default_model and models:
+            profile.default_model = models[0]
+        behavior = dict(profile.command_behavior or {})
+        behavior["runtime_validation"] = {
+            "last_validated_at": evidence["validatedAt"],
+            "image_ref": evidence["imageRef"],
+            "runtime_versions": evidence["runtimeVersions"],
+            "model_count": len(models),
+        }
+        profile.command_behavior = behavior
 
     await session.flush()
     secret_ref_results = _secret_ref_results_for_rows([profile])
@@ -1233,9 +1300,11 @@ async def validate_claude_oauth_profile(
         "status": "ready",
         "status_label": f"{mapping.label_prefix} OAuth ready",
         "profile_id": profile.profile_id,
-        "readiness": profile.command_behavior.get("auth_readiness")
-        if isinstance(profile.command_behavior, dict)
-        else None,
+        "readiness": (
+            profile.command_behavior.get("auth_readiness")
+            if isinstance(profile.command_behavior, dict)
+            else None
+        ),
     }
 
 
@@ -1427,6 +1496,21 @@ _API_KEY_MAPPINGS: dict[tuple[str, str], _ApiKeyMapping] = {
         auth_strategy="api_key_env",
         ready_label="OpenAI API key ready",
     ),
+    ("opencode", "opencode-go"): _ApiKeyMapping(
+        runtime_id="opencode",
+        provider_id="opencode-go",
+        secret_role="opencode_api_key",
+        env_key="OPENCODE_API_KEY",
+        clear_env_keys=(
+            "OPENCODE_AUTH_CONTENT",
+            "OPENCODE_CONFIG",
+            "OPENCODE_CONFIG_CONTENT",
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+        ),
+        auth_strategy="opencode_auth_json",
+        ready_label="OpenCode Go API key ready",
+    ),
 }
 
 
@@ -1437,7 +1521,7 @@ def _api_key_mapping_for_profile(row: ManagedAgentProviderProfile) -> _ApiKeyMap
             status_code=422,
             detail=(
                 "API-key setup is only supported for first-party Anthropic, "
-                "and OpenAI profiles."
+                "OpenAI, and OpenCode Go profiles."
             ),
         )
     return mapping
@@ -1473,6 +1557,10 @@ def _looks_like_provider_api_key(mapping: _ApiKeyMapping, api_key: str) -> bool:
         return api_key.startswith("sk-ant-") and len(api_key) >= 12
     if mapping.provider_id == "openai":
         return api_key.startswith("sk-") and len(api_key) >= 12
+    if mapping.provider_id in {"opencode-go", "opencode"}:
+        # OpenCode Go API keys are provider-specific; accept common prefixes
+        # but require minimum entropy to avoid trivial values.
+        return len(api_key.strip()) >= 12 and " " not in api_key.strip()
     return False
 
 
@@ -1486,7 +1574,15 @@ def _apply_api_key_setup_to_profile(
     enabled: bool,
 ) -> None:
     row.credential_source = ProviderCredentialSource.SECRET_REF
-    row.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
+    # OpenCode uses file-based auth (opencode-auth-json@1), not env
+    file_materialized = mapping.auth_strategy in {
+        "opencode_auth_json",
+        "omnigent_provider_config",
+    }
+    if file_materialized:
+        row.runtime_materialization_mode = RuntimeMaterializationMode.COMPOSITE
+    else:
+        row.runtime_materialization_mode = RuntimeMaterializationMode.API_KEY_ENV
     clear_oauth_home_path_overrides(
         row,
         mapping=get_first_party_oauth_profile(row.runtime_id, row.provider_id),
@@ -1500,10 +1596,32 @@ def _apply_api_key_setup_to_profile(
         if env_key not in clear_env_keys:
             clear_env_keys.append(env_key)
     row.clear_env_keys = clear_env_keys
-    row.env_template = {
-        **(row.env_template or {}),
-        mapping.env_key: {"from_secret_ref": mapping.secret_role},
-    }
+    if file_materialized:
+        # OpenCode auth is a file materialized via opencode-auth-json@1 trusted
+        # materializer, which knows the exact target path and permissions. Do not
+        # store an invalid file_templates contract (RuntimeFileTemplate forbids
+        # from_secret_ref/mode/provider_key and rejects absolute paths outside
+        # runtime_support_dir). Rely solely on secret_refs + materializer logic.
+        if row.file_templates:
+            row.file_templates = [
+                t
+                for t in row.file_templates
+                if t.get("path") != "/home/app/.local/share/opencode/auth.json"
+            ]
+        # Do not pollute env_template with OpenCode key; clear any prior
+        if mapping.env_key and mapping.env_key in (row.env_template or {}):
+            row.env_template = {
+                k: v
+                for k, v in (row.env_template or {}).items()
+                if k != mapping.env_key
+            }
+        else:
+            row.env_template = row.env_template or {}
+    else:
+        row.env_template = {
+            **(row.env_template or {}),
+            mapping.env_key: {"from_secret_ref": mapping.secret_role},
+        }
     row.account_label = account_label or row.account_label or row.provider_label
     row.enabled = enabled
     row.auth_state = ProviderProfileAuthState.CONNECTED
@@ -1631,6 +1749,11 @@ async def validate_provider_api_key(provider_id: str, api_key: str) -> None:
     if provider_id == "openai":
         await _validate_openai_api_key(api_key)
         return
+    if provider_id in {"opencode-go", "opencode"}:
+        raise HTTPException(
+            status_code=422,
+            detail="OpenCode validation requires the pinned Provider Profile runtime path.",
+        )
     raise HTTPException(
         status_code=422,
         detail="Unsupported provider API-key setup.",
@@ -2050,12 +2173,17 @@ def _row_to_dict(
         "model_tiers": model_tiers,
         "default_model_tier": default_model_tier,
         "model_overrides": row.model_overrides or {},
-        "credential_source": row.credential_source.value
-        if row.credential_source
-        else None,
-        "runtime_materialization_mode": row.runtime_materialization_mode.value
-        if row.runtime_materialization_mode
-        else None,
+        "credential_generation": row.credential_generation,
+        "capacity_scope_ref": row.capacity_scope_ref,
+        "model_catalog_evidence": row.model_catalog_evidence_json,
+        "credential_source": (
+            row.credential_source.value if row.credential_source else None
+        ),
+        "runtime_materialization_mode": (
+            row.runtime_materialization_mode.value
+            if row.runtime_materialization_mode
+            else None
+        ),
         "volume_ref": row.volume_ref,
         "volume_mount_path": row.volume_mount_path,
         "account_label": row.account_label,
@@ -2110,3 +2238,5 @@ from api_service.services.provider_profile_service import (
     sync_provider_profile_manager,
     update_oauth_command_behavior,
 )
+
+# trigger full CI for opencode generic host wiring

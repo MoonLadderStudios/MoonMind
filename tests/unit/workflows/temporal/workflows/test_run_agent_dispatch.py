@@ -32,6 +32,7 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_CHECKPOINT_BRANCH_TURN_CONTEXT_PATCH,
     RUN_CHECKPOINT_RECOVERY_STATE_MACHINE_PATCH,
     RUN_EMPTY_AGENT_SKILLSET_SNAPSHOT_PATCH,
+    RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH,
     RUN_EXISTING_SKILLSET_TERMINAL_CONTRACT_PATCH,
     RUN_EXTERNAL_PUBLISHED_BRANCH_REMEDIATION_PATCH,
     RUN_ISSUE_BRIEF_ATTACHMENT_HANDOFF_PATCH,
@@ -41,11 +42,14 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_OMNIGENT_AGENT_PROFILE_SNAPSHOT_COMPILER_PATCH,
     RUN_OMNIGENT_AUTHORED_SELECTION_COMPILER_PATCH,
     RUN_OMNIGENT_CHECKPOINT_BRANCH_TURN_REQUEST_PATCH,
+    RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH,
     RUN_OMNIGENT_STOCK_AGENT_IDENTITY_PATCH,
     RUN_PR_RESOLVER_SKILL_OWNED_EXECUTION_PATCH,
     RUN_PUBLISH_MODE_REPOSITORY_OPERATION_PATCH,
     RUN_PUBLISHED_BRANCH_HANDOFF_PATCH,
+    RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH,
     RUN_REPOSITORY_BOUND_NO_COMMIT_OUTCOME_PATCH,
+    RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH,
     RUN_RESOLVED_SKILL_TERMINAL_CONTRACT_PATCH,
     RUN_SLOT_CONTINUITY_PATCH,
     RUN_STEP_EXECUTION_NAMING_PATCH,
@@ -53,6 +57,70 @@ from moonmind.workflows.temporal.workflows.run import (
     RUN_TRUSTED_PR_RESOLVER_NATIVE_BINDING_PATCH,
     MoonMindRunWorkflow,
 )
+
+
+def test_omnigent_request_propagates_only_admitted_execution_plan_ref() -> None:
+    workflow = MoonMindRunWorkflow()
+    plan_ref = "omnigent-execution-plan:sha256:" + "4" * 64
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:execution-plan-authority",
+        run_id="run-1",
+        parent=None,
+    )
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH
+            ),
+        ),
+    ):
+        request = workflow._build_agent_execution_request(
+            node_inputs={"runtime": {"mode": "omnigent"}},
+            node_id="omnigent",
+            tool_name="auto",
+            workflow_parameters={"executionPlanRef": plan_ref},
+        )
+
+    assert request.parameters["executionPlanRef"] == plan_ref
+
+
+def test_omnigent_request_rejects_step_plan_substitution() -> None:
+    workflow = MoonMindRunWorkflow()
+    plan_ref = "omnigent-execution-plan:sha256:" + "4" * 64
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:execution-plan-authority",
+        run_id="run-1",
+        parent=None,
+    )
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_OMNIGENT_EXECUTION_PLAN_REF_PATCH
+            ),
+        ),
+        pytest.raises(ValueError, match="executionPlanRef conflicts"),
+    ):
+        workflow._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "omnigent"},
+                "executionPlanRef": "omnigent-execution-plan:sha256:" + "5" * 64,
+            },
+            node_id="omnigent",
+            tool_name="auto",
+            workflow_parameters={"executionPlanRef": plan_ref},
+        )
 
 
 def test_auto_publish_compiles_execution_bound_terminal_contract() -> None:
@@ -207,6 +275,91 @@ def test_agent_request_propagates_required_capabilities_with_replay_gate() -> No
     assert current.parameters["repository"] == "MoonLadderStudios/MoonMind"
     assert "requiredCapabilities" not in replaying.parameters
     assert "repository" not in replaying.parameters
+
+
+def test_agent_request_merges_resolved_skill_capabilities_with_replay_gate() -> None:
+    info = SimpleNamespace(
+        namespace="default",
+        workflow_id="mm:resolved-capabilities",
+        run_id="run-resolved-capabilities",
+        parent=None,
+    )
+    wf = MoonMindRunWorkflow()
+    wf._record_resolved_selected_skill(
+        resolved={
+            "skills": [
+                {
+                    "skillName": "batch-dependabot-resolver",
+                    "provenance": {"sourceKind": "built_in"},
+                    "requiredCapabilities": ["gh", "execution.fanout"],
+                }
+            ]
+        },
+        selected_skill="batch-dependabot-resolver",
+        node_id="node-1",
+        terminal_contract_enabled=False,
+    )
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: patch_id
+            in {
+                RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH,
+                RUN_EXECUTION_FANOUT_AUTHORIZATION_PATCH,
+                RUN_RESOLVED_SKILL_REQUIRED_CAPABILITIES_PATCH,
+            },
+        ),
+    ):
+        current = wf._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "omnigent"},
+                "selectedSkill": "batch-dependabot-resolver",
+            },
+            node_id="node-1",
+            tool_name="omnigent",
+            workflow_parameters={"requiredCapabilities": ["git", "GH"]},
+        )
+
+    with (
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=info,
+        ),
+        patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            side_effect=lambda patch_id: (
+                patch_id == RUN_AGENT_REQUIRED_CAPABILITIES_PROPAGATION_PATCH
+            ),
+        ),
+    ):
+        replaying = wf._build_agent_execution_request(
+            node_inputs={
+                "runtime": {"mode": "omnigent"},
+                "selectedSkill": "batch-dependabot-resolver",
+            },
+            node_id="node-1",
+            tool_name="omnigent",
+            workflow_parameters={"requiredCapabilities": ["git"]},
+        )
+
+    assert current.parameters["requiredCapabilities"] == [
+        "git",
+        "gh",
+        "execution.fanout",
+    ]
+    assert current.step_execution is not None
+    assert current.step_execution.skill_source_policy["executionFanout"] == {
+        "authorized": True,
+        "selectedSkill": "batch-dependabot-resolver",
+        "sourceKind": "built_in",
+        "reasonCode": "trusted_resolved_skill_requirement",
+    }
+    assert replaying.parameters["requiredCapabilities"] == ["git"]
 
 
 def _resolved_skill(skill_name: str) -> ResolvedSkillEntry:
@@ -1540,6 +1693,50 @@ class TestMapAgentRunResult(unittest.TestCase):
 class TestBuildAgentExecutionRequest(unittest.TestCase):
     """Verify the _build_agent_execution_request helper."""
 
+    def test_build_agent_execution_request_propagates_persisted_omnigent_plan(
+        self,
+    ) -> None:
+        from unittest.mock import patch
+
+        wf = MoonMindRunWorkflow()
+
+        class MockInfo:
+            workflow_id = "test-wf-id"
+            run_id = "test-run-id"
+
+        binding = {
+            "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+            "planDigest": "sha256:" + "a" * 64,
+            "planArtifactRef": "art_plan_1",
+            "taskInputSnapshotRef": "art_task_input_1",
+            "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+        }
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "omnigentExecutionPlan": binding,
+                    }
+                },
+                node_id="node-omnigent-plan",
+                tool_name="omnigent",
+            )
+
+        assert request.omnigent_execution_plan is not None
+        assert request.step_execution is not None
+        self.assertEqual(
+            request.omnigent_execution_plan.plan_ref,
+            binding["planRef"],
+        )
+        self.assertEqual(
+            request.step_execution.omnigent_execution_plan,
+            request.omnigent_execution_plan,
+        )
+
     def test_build_agent_execution_request_propagates_steps(self) -> None:
         from unittest.mock import patch
 
@@ -2342,6 +2539,67 @@ class TestBuildAgentExecutionRequest(unittest.TestCase):
             },
         )
         self.assertEqual(request.execution_profile_ref, "codex-openai-oauth")
+
+    def test_agent_profile_snapshot_compiles_admitted_opencode_harness(self) -> None:
+        wf = MoonMindRunWorkflow()
+        wf._profile_snapshots = {
+            "opencode-provider": {
+                "profile_id": "opencode-provider",
+                "runtime_id": "opencode",
+            }
+        }
+
+        class MockInfo:
+            namespace = "default"
+            workflow_id = "mm:opencode-profile"
+            run_id = "run-1"
+
+        snapshot = {
+            "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+            "profileId": "omnigent-opencode-default",
+            "version": 1,
+            "digest": "sha256:" + "b" * 64,
+            "providerProfileRef": "opencode-provider",
+            "executionProfileRef": "generic-omnigent-host@1",
+            "launchPolicyRef": "omnigent-on-demand@1",
+            "agentId": "opencode-agent",
+            "document": {
+                "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+                "endpointRef": "default",
+                "harness": {"id": "opencode-native"},
+            },
+        }
+
+        with patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.info",
+            return_value=MockInfo(),
+        ), patch(
+            "moonmind.workflows.temporal.workflows.run.workflow.patched",
+            return_value=True,
+        ):
+            request = wf._build_agent_execution_request(
+                node_inputs={
+                    "runtime": {
+                        "mode": "omnigent",
+                        "executionProfileRef": "opencode-provider",
+                    },
+                },
+                workflow_parameters={
+                    "omnigent": {
+                        "executionTargetRef": "generic-omnigent-host@1",
+                        "launchPolicyRef": "omnigent-on-demand@1",
+                    },
+                    "agentProfileSnapshot": snapshot,
+                },
+                node_id="node-opencode",
+                tool_name="omnigent",
+            )
+
+        self.assertEqual(request.execution_profile_ref, "opencode-provider")
+        self.assertEqual(
+            request.parameters["omnigent"]["agent"]["harnessOverride"],
+            "opencode-native",
+        )
 
     def test_agent_profile_snapshot_rejects_conflicting_legacy_authority(self) -> None:
         wf = MoonMindRunWorkflow()
@@ -3444,7 +3702,7 @@ class TestFetchProfileSnapshots(unittest.TestCase):
                                 },
                             ]
                         }
-                    elif runtime_id == "claude_code":
+                    elif runtime_id == "opencode_go":
                         return {"profiles": []}
                 return {}
 
@@ -3497,13 +3755,18 @@ class TestFetchProfileSnapshots(unittest.TestCase):
                                 },
                             ]
                         }
-                    elif runtime_id == "claude_code":
+                    elif runtime_id == "opencode":
                         return {"profiles": []}
                 return {}
 
             with patch(
                 "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
                 side_effect=mock_execute_activity,
+            ), patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.patched",
+                side_effect=lambda patch_id: (
+                    patch_id == RUN_PROFILE_SNAPSHOT_RUNTIME_AUTHORITY_PATCH
+                ),
             ):
                 # Should not raise — best-effort fetch
                 await wf._fetch_profile_snapshots()
@@ -3511,6 +3774,24 @@ class TestFetchProfileSnapshots(unittest.TestCase):
             # codex_cli profiles are missing, but claude_code profiles should be there
             self.assertIn("claude_anthropic_sonnet", wf._profile_snapshots)
             self.assertNotIn("codex_openrouter_qwen36_plus", wf._profile_snapshots)
+            self.assertEqual(
+                wf._profile_snapshot_runtime_ids,
+                {"claude_code", "opencode"},
+            )
+            self.assertEqual(
+                wf._validated_execution_profile_ref(
+                    "codex-profile-from-failed-fetch",
+                    agent_id="codex_cli",
+                    source_label="Inherited",
+                ),
+                "codex-profile-from-failed-fetch",
+            )
+            with self.assertRaisesRegex(ValueError, "not a known profile"):
+                wf._validated_execution_profile_ref(
+                    "claude-missing",
+                    agent_id="claude_code",
+                    source_label="Inherited",
+                )
 
         asyncio.run(run_test())
 
@@ -3546,6 +3827,62 @@ class TestFetchProfileSnapshots(unittest.TestCase):
 
             # Should NOT be set when no data was fetched
             self.assertFalse(hasattr(wf, "_profile_snapshots"))
+
+        asyncio.run(run_test())
+
+    def test_fetch_profile_snapshots_preserves_non_launch_ready_identity(self) -> None:
+        """Explicit profiles remain known even when manager routing excludes them."""
+        import asyncio
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        from temporalio.common import RetryPolicy
+
+        wf = MoonMindRunWorkflow()
+        wf._execute_kwargs_for_route = lambda route: {
+            "task_queue": "mm.activity.artifacts",
+            "start_to_close_timeout": timedelta(seconds=60),
+            "schedule_to_close_timeout": timedelta(seconds=120),
+            "retry_policy": RetryPolicy(maximum_attempts=1),
+        }
+
+        async def run_test() -> None:
+            async def mock_execute_activity(
+                activity_name: str, *args: object, **kwargs: object
+            ) -> object:
+                runtime_id = args[0].get("runtime_id") if args else None
+                if (
+                    activity_name == "provider_profile.list"
+                    and runtime_id == "codex_cli"
+                ):
+                    return {
+                        "profiles": [],
+                        "profile_statuses": [
+                            {
+                                "profile_id": "codex-disabled",
+                                "runtime_id": "codex_cli",
+                                "enabled": False,
+                                "launch_ready": False,
+                                "auth_state": "validation_failed",
+                                "disabled_reason": "auth_invalid",
+                            }
+                        ],
+                    }
+                return {"profiles": [], "profile_statuses": []}
+
+            with patch(
+                "moonmind.workflows.temporal.workflows.run.workflow.execute_activity",
+                side_effect=mock_execute_activity,
+            ):
+                await wf._fetch_profile_snapshots()
+
+            self.assertIn("codex-disabled", wf._profile_snapshots)
+            with self.assertRaisesRegex(ValueError, "not launch-ready"):
+                wf._validated_execution_profile_ref(
+                    "codex-disabled",
+                    agent_id="codex_cli",
+                    source_label="Inherited",
+                )
 
         asyncio.run(run_test())
 

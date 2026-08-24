@@ -73,6 +73,9 @@ ManagedSessionControlAction = Literal[
     "cancel_session",
     "terminate_session",
 ]
+ManagedSessionRequestTrackingAction = ManagedSessionControlAction | Literal[
+    "reconcile_session"
+]
 
 ManagedSessionControlMode = Literal["remote_container"]
 ManagedSessionRuntimeFamily = Literal["codex"]
@@ -1664,7 +1667,7 @@ class CodexManagedSessionRequestTrackingEntry(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     request_id: NonBlankStr = Field(..., alias="requestId")
-    action: ManagedSessionControlAction = Field(..., alias="action")
+    action: ManagedSessionRequestTrackingAction = Field(..., alias="action")
     session_epoch: int = Field(..., alias="sessionEpoch", ge=1)
     status: ManagedSessionRequestTrackingStatus = Field(..., alias="status")
     result_ref: str | None = Field(None, alias="resultRef")
@@ -1727,6 +1730,28 @@ class CodexManagedSessionSteerRequest(BaseModel):
         if self.request_id is not None:
             self.request_id = require_non_blank(self.request_id, field_name="requestId")
         return self
+
+
+class CodexManagedSessionReconcileRequest(BaseModel):
+    """Typed, fenced request from the Omnigent stuck-state detector."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    session_id: NonBlankStr = Field(..., alias="sessionId")
+    request_id: NonBlankStr = Field(..., alias="requestId")
+    reason_code: NonBlankStr = Field(..., alias="reasonCode")
+    expected_revision: int = Field(..., alias="expectedRevision", ge=1)
+    expected_fencing_generation: int = Field(
+        ..., alias="expectedFencingGeneration", ge=0
+    )
+
+    @model_validator(mode="after")
+    def _normalize(self) -> "CodexManagedSessionReconcileRequest":
+        self.session_id = require_non_blank(self.session_id, field_name="sessionId")
+        self.request_id = require_non_blank(self.request_id, field_name="requestId")
+        self.reason_code = require_non_blank(self.reason_code, field_name="reasonCode")
+        return self
+
 
 class CodexManagedSessionWorkflowControlRequest(BaseModel):
     """Typed workflow update request for clear/cancel/terminate operations."""
@@ -4824,6 +4849,7 @@ __all__ = [
     "CodexManagedSessionPlaneContract",
     "CodexManagedSessionRecord",
     "CodexManagedSessionRequestTrackingEntry",
+    "CodexManagedSessionReconcileRequest",
     "CodexManagedSessionSendFollowUpRequest",
     "CodexManagedSessionSnapshot",
     "CodexManagedSessionState",
@@ -4852,6 +4878,7 @@ __all__ = [
     "ManagedSessionPlaneContract",
     "ManagedSessionRecord",
     "ManagedSessionRequestTrackingEntry",
+    "ManagedSessionRequestTrackingAction",
     "ManagedSessionSendFollowUpRequest",
     "ManagedSessionSnapshot",
     "ManagedSessionState",

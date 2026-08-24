@@ -2944,8 +2944,15 @@ async def test_create_execution_normalizes_depends_on_before_limit_and_persisten
 
 @pytest.mark.asyncio
 async def test_create_execution_removes_empty_normalized_depends_on_from_parameters(
-    tmp_path, mock_client_adapter
+    tmp_path,
+    mock_client_adapter,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    monkeypatch.setattr(
+        settings.workflow,
+        "moonspec_environment_blocked_publish_action",
+        "fail",
+    )
     async with temporal_db(tmp_path) as session:
         owner_id = uuid4()
         service = TemporalExecutionService(session, client_adapter=mock_client_adapter)
@@ -4047,6 +4054,36 @@ def test_full_retry_recovery_from_patch_rejects_non_string_source_ids():
             source_workflow_id="mm:source",
             source_run_id="run-source",
         )
+
+
+def test_full_rerun_preserves_immutable_omnigent_plan_authority() -> None:
+    plan = {
+        "planRef": "omnigent-execution-plan:sha256:" + "a" * 64,
+        "planDigest": "sha256:" + "a" * 64,
+        "planArtifactRef": "art_plan_3706",
+        "taskInputSnapshotRef": "art_task_3706",
+        "taskInputSnapshotDigest": "sha256:" + "b" * 64,
+    }
+
+    rerun = TemporalExecutionService._full_rerun_parameters(
+        {
+            "omnigentExecutionPlan": plan,
+            "agentRunId": "old-agent-run",
+            "recoveryCheckpointRef": "art_stale_checkpoint",
+            "workflow": {
+                "instructions": "Preserve the planned choices.",
+                "dependsOn": ["old-step"],
+                "recovery": {"kind": "old-recovery"},
+            },
+        }
+    )
+
+    assert rerun["omnigentExecutionPlan"] == plan
+    assert "agentRunId" not in rerun
+    assert "recoveryCheckpointRef" not in rerun
+    assert rerun["workflow"] == {
+        "instructions": "Preserve the planned choices."
+    }
 
 
 def test_full_retry_recovery_from_patch_rejects_forged_source_ids():

@@ -41,6 +41,14 @@ from .stuck_state import (
     detect_stuck_state,
     plan_response,
 )
+from .stuck_state_reconciliation import (
+    DiagnosticPublisher,
+    ReconcileDispatcher,
+    StuckStateInspection,
+    StuckStateReconciliationService,
+    StuckStateSweepResult,
+    inspect_stuck_state,
+)
 from .timeline import (
     SessionTimeline,
     TimelineStatus,
@@ -106,6 +114,12 @@ from .repositories import (
     SessionRepository,
     TurnAttemptRepository,
 )
+from .turn_commands import (
+    CanonicalSessionBootstrap,
+    CanonicalTurnAuthorityUnavailable,
+    CanonicalTurnCommandClaim,
+    CanonicalTurnCommandService,
+)
 
 __all__ = [
     "ALIAS_STATE_ACTIVE",
@@ -123,6 +137,10 @@ __all__ = [
     "COMMAND_STATE_PENDING",
     "COMMAND_STATES",
     "COMMAND_TERMINAL_STATES",
+    "CanonicalTurnAuthorityUnavailable",
+    "CanonicalSessionBootstrap",
+    "CanonicalTurnCommandClaim",
+    "CanonicalTurnCommandService",
     "CONFLICT_OUTCOMES",
     "CURRENT_SCHEMA_VERSION",
     "SUPPORTED_SCHEMA_VERSIONS",
@@ -189,6 +207,12 @@ __all__ = [
     "StuckStateReason",
     "detect_stuck_state",
     "plan_response",
+    "DiagnosticPublisher",
+    "ReconcileDispatcher",
+    "StuckStateInspection",
+    "StuckStateReconciliationService",
+    "StuckStateSweepResult",
+    "inspect_stuck_state",
     # new-admission readiness
     "AdmissionReadiness",
     "CapabilityReadiness",

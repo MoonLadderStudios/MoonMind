@@ -46,14 +46,15 @@ from moonmind.omnigent.bridge_store import (
     OmnigentBridgeSessionStore,
     OmnigentDigestMismatchError,
 )
+from moonmind.omnigent.control_plane import spans as control_plane_spans
 from moonmind.omnigent.failure_classification import (
     OmnigentFailureReason,
     classify_omnigent_failure,
     failure_class_for_terminal_status,
 )
 from moonmind.omnigent.settings import (
-    OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR,
     OMNIGENT_DISABLED_MESSAGE,
+    OMNIGENT_RUNTIME_ACTIVE_SKILLS_DIR,
     build_omnigent_gate,
     resolved_api_token,
     resolved_default_agent_name,
@@ -62,8 +63,8 @@ from moonmind.omnigent.settings import (
 )
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
 from moonmind.workflows.adapters.omnigent_agent_adapter import (
-    OmnigentAgentSelection,
     OmnigentAdapterError,
+    OmnigentAgentSelection,
     build_omnigent_selection,
     build_omnigent_session_create_payload,
     resolve_omnigent_target,
@@ -72,9 +73,7 @@ from moonmind.workflows.adapters.omnigent_client import (
     OmnigentClientError,
     OmnigentHttpClient,
 )
-from moonmind.workflows.skills.run_projection import (
-    prepend_skill_activation_summary,
-)
+from moonmind.workflows.skills.run_projection import prepend_skill_activation_summary
 
 _NON_TERMINAL_STATUSES = {
     "created",
@@ -107,7 +106,9 @@ def _session_id(payload: dict[str, Any]) -> str:
     raw = payload.get("id") or payload.get("session_id") or payload.get("sessionId")
     session_id = str(raw or "").strip()
     if not session_id:
-        raise OmnigentContractError("Omnigent session creation response missing session id")
+        raise OmnigentContractError(
+            "Omnigent session creation response missing session id"
+        )
     return session_id
 
 
@@ -144,7 +145,9 @@ def _agent_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in items if isinstance(item, dict)]
 
 
-def _resolve_agent_id(*, agents_payload: dict[str, Any], requested_name: str | None) -> str:
+def _resolve_agent_id(
+    *, agents_payload: dict[str, Any], requested_name: str | None
+) -> str:
     items = _agent_items(agents_payload)
     if not items:
         raise OmnigentContractError("Omnigent agent target could not be resolved")
@@ -186,7 +189,9 @@ async def _build_omnigent_first_message(
     if not text:
         text = str((request.parameters or {}).get("description") or "").strip()
     if not text:
-        title = str((request.parameters or {}).get("title") or "MoonMind Agent Task").strip()
+        title = str(
+            (request.parameters or {}).get("title") or "MoonMind Agent Task"
+        ).strip()
         workspace_blob = json.dumps(request.workspace_spec or {}, indent=2, default=str)
         parts = [
             f"Task title: {title}",
@@ -204,9 +209,7 @@ async def _build_omnigent_first_message(
         if isinstance(omnigent, Mapping)
         else None
     )
-    if request.resolved_skillset_ref and isinstance(
-        profile_authorization, Mapping
-    ):
+    if request.resolved_skillset_ref and isinstance(profile_authorization, Mapping):
         # The profile-bound host preflight has already verified and mounted the
         # exact resolved snapshot at this fixed runner-visible path. Put the
         # canonical activation block in the actual first message so explicit
@@ -344,11 +347,13 @@ async def _resolve_initial_context_message(
             "sha256:"
         )
         if expected_digest and restored_digest != expected_digest:
-            raise OmnigentContractError("persisted first-message artifact digest mismatch")
+            raise OmnigentContractError(
+                "persisted first-message artifact digest mismatch"
+            )
         context_ref = str(existing.get("contextPackRef") or "").strip()
         if context_ref:
-            moonmind = (
-                request.parameters.setdefault("metadata", {}).setdefault("moonmind", {})
+            moonmind = request.parameters.setdefault("metadata", {}).setdefault(
+                "moonmind", {}
             )
             moonmind["latestContextPackRef"] = context_ref
         return restored, existing
@@ -364,9 +369,9 @@ async def _resolve_initial_context_message(
         ] = request.idempotency_key
         if include_idempotency_marker:
             original_text = _first_message_text(first_message)
-            first_message["data"]["content"][0]["text"] = (
-                f"{original_text}\n\n{_first_message_marker(request=request)}".strip()
-            )
+            first_message["data"]["content"][0][
+                "text"
+            ] = f"{original_text}\n\n{_first_message_marker(request=request)}".strip()
         message_bytes = json.dumps(
             first_message, sort_keys=True, separators=(",", ":")
         ).encode()
@@ -466,10 +471,12 @@ async def _resolve_initial_context_message(
     marker = _first_message_marker(request=request)
     if include_idempotency_marker:
         first_message_text = _first_message_text(first_message)
-        first_message["data"]["content"][0]["text"] = (
-            f"{first_message_text}\n\n{marker}".strip()
-        )
-    message_bytes = json.dumps(first_message, sort_keys=True, separators=(",", ":")).encode()
+        first_message["data"]["content"][0][
+            "text"
+        ] = f"{first_message_text}\n\n{marker}".strip()
+    message_bytes = json.dumps(
+        first_message, sort_keys=True, separators=(",", ":")
+    ).encode()
     evidence["preparedMessageDigest"] = hashlib.sha256(message_bytes).hexdigest()
     evidence["preparedMessageRef"] = await artifact_gateway.write_json(
         request=request,
@@ -477,9 +484,11 @@ async def _resolve_initial_context_message(
         payload=first_message,
         link_type="input.omnigent.first_message.prepared",
     )
-    evidence["firstMessageConsumedContextRef"] = bool(
-        evidence.get("contextPackRef") and resolution.items_count > 0
-    ) if text else False
+    evidence["firstMessageConsumedContextRef"] = (
+        bool(evidence.get("contextPackRef") and resolution.items_count > 0)
+        if text
+        else False
+    )
     record_context = getattr(run_store, "record_initial_context", None)
     if callable(record_context):
         durable_row = await record_context(
@@ -526,6 +535,11 @@ def _profile_authorization_evidence(
         "endpointRef",
         "omnigentHostId",
         "bridgeSessionId",
+        "executionPlanRef",
+        "runtimeBindingRef",
+        "hostClassRef",
+        "launchPolicyRef",
+        "executionRealizerRef",
     }
     return {key: payload[key] for key in allowed if payload.get(key) is not None}
 
@@ -544,7 +558,9 @@ def _snapshot_contains_first_message_marker(
             stack.extend(value.values())
         elif isinstance(value, list):
             stack.extend(value)
-        elif isinstance(value, str) and any(needle in value for needle in needle_values):
+        elif isinstance(value, str) and any(
+            needle in value for needle in needle_values
+        ):
             return True
     return False
 
@@ -623,9 +639,7 @@ def _persisted_pre_dispatch_item_ids(durable_row: Any) -> frozenset[str] | None:
         or FIRST_MESSAGE_ITEM_FRONTIER_KEY not in metadata
     ):
         return None
-    return _validated_pre_dispatch_item_ids(
-        metadata[FIRST_MESSAGE_ITEM_FRONTIER_KEY]
-    )
+    return _validated_pre_dispatch_item_ids(metadata[FIRST_MESSAGE_ITEM_FRONTIER_KEY])
 
 
 def _marked_turn_item_state(
@@ -744,8 +758,7 @@ def _marked_turn_item_state(
             progress = True
             content = item_data.get("content")
             if isinstance(content, list) and any(
-                isinstance(block, Mapping)
-                and str(block.get("text") or "").strip()
+                isinstance(block, Mapping) and str(block.get("text") or "").strip()
                 for block in content
             ):
                 last_text_assistant_index = index
@@ -775,8 +788,7 @@ def _marked_turn_item_state(
         "boundarySource": boundary_source,
         "progress": progress,
         "terminalAssistantAfterWork": (
-            last_text_assistant_index
-            > max(progress_start_index - 1, last_tool_index)
+            last_text_assistant_index > max(progress_start_index - 1, last_tool_index)
         ),
         "unfinishedToolCall": bool(pending_call_ids or anonymous_pending_calls),
         "signature": signature,
@@ -791,9 +803,7 @@ def _snapshot_projects_inactive_turn(snapshot: Mapping[str, Any]) -> bool:
         "active_response_id" in snapshot or "activeResponseId" in snapshot
     )
     active_response_id = str(
-        snapshot.get("active_response_id")
-        or snapshot.get("activeResponseId")
-        or ""
+        snapshot.get("active_response_id") or snapshot.get("activeResponseId") or ""
     ).strip()
     return (
         normalized in _NON_TERMINAL_STATUSES
@@ -948,9 +958,7 @@ async def _await_marked_turn_terminal(
     timeout_seconds: float = 1800.0,
     interval_seconds: float = 2.0,
     quiet_period_seconds: float = _MARKED_TURN_QUIET_PERIOD_SECONDS,
-    tool_only_quiet_period_seconds: float = (
-        _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS
-    ),
+    tool_only_quiet_period_seconds: float = (_MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS),
 ) -> tuple[str, dict[str, Any]]:
     """Wait until a terminal event is stably projected into the marked turn.
 
@@ -970,9 +978,7 @@ async def _await_marked_turn_terminal(
         observation_started_at = loop.time()
         snapshot = await client.get_session(session_id)
         observation_completed_at = loop.time()
-        observation_latency_seconds = (
-            observation_completed_at - observation_started_at
-        )
+        observation_latency_seconds = observation_completed_at - observation_started_at
         # A session read can block behind the provider while a new tool call is
         # being projected. Never let that unobserved interval satisfy the quiet
         # window: the returned snapshot may describe the state at request start,
@@ -1108,9 +1114,7 @@ def _inactive_marked_turn_terminal_status(
         return None
     normalized = normalize_omnigent_observation(snapshot)
     return (
-        normalized
-        if normalized in {"failed", "canceled", "timed_out"}
-        else "completed"
+        normalized if normalized in {"failed", "canceled", "timed_out"} else "completed"
     )
 
 
@@ -1125,9 +1129,7 @@ async def _reconcile_inactive_marked_turn(
     timeout_seconds: float = 1800.0,
     interval_seconds: float = 2.0,
     quiet_period_seconds: float = _MARKED_TURN_QUIET_PERIOD_SECONDS,
-    tool_only_quiet_period_seconds: float = (
-        _MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS
-    ),
+    tool_only_quiet_period_seconds: float = (_MARKED_TOOL_ONLY_QUIET_PERIOD_SECONDS),
 ) -> tuple[str, dict[str, Any]] | None:
     """Recover a terminal turn whose SSE completion edge was not observed.
 
@@ -1301,6 +1303,15 @@ async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
         pass
 
 
+def _activity_attempt() -> int:
+    """Return the current Temporal attempt without requiring Activity context."""
+
+    try:
+        return max(1, int(activity.info().attempt))
+    except RuntimeError:
+        return 1
+
+
 async def _publish_active_journals(
     *,
     artifact_gateway: OmnigentArtifactGateway,
@@ -1440,6 +1451,7 @@ async def run_omnigent_execution(
     resume_session_id: str | None = None,
     first_message_text: str | None = None,
     defer_bridge_terminal: bool = False,
+    session_authority_sink: Any | None = None,
 ) -> AgentRunResult:
     """Execute one Omnigent session and return only terminal AgentRunResult."""
 
@@ -1485,7 +1497,8 @@ async def run_omnigent_execution(
             endpoint_ref=selection.endpoint_ref or "default",
             idempotency_key=request.idempotency_key,
         )
-        external_state.update(_profile_authorization_evidence(request))
+        profile_authorization = _profile_authorization_evidence(request)
+        external_state.update(profile_authorization)
         delete_after_harvest = bool(
             selection.capture.get("deleteOmnigentSessionAfterHarvest", False)
         )
@@ -1538,12 +1551,55 @@ async def run_omnigent_execution(
                         "workspace": selection.session.workspace,
                     },
                 )
+                required_profile_authority = {
+                    "providerProfileId",
+                    "credentialGeneration",
+                    "providerLeaseRef",
+                    "hostBindingRef",
+                    "hostLeaseRef",
+                    "endpointRef",
+                    "executionPlanRef",
+                    "runtimeBindingRef",
+                }
+                if required_profile_authority <= set(profile_authorization):
+                    durable_row = await run_store.bind_profile_authorization(
+                        request=request,
+                        endpoint_ref=str(profile_authorization["endpointRef"]),
+                        provider_profile_id=str(
+                            profile_authorization["providerProfileId"]
+                        ),
+                        provider_lease_id=str(
+                            profile_authorization["providerLeaseRef"]
+                        ),
+                        credential_generation=int(
+                            profile_authorization["credentialGeneration"]
+                        ),
+                        host_binding_ref=str(
+                            profile_authorization["hostBindingRef"]
+                        ),
+                        host_lease_ref=str(profile_authorization["hostLeaseRef"]),
+                        omnigent_host_id=str(
+                            profile_authorization.get("omnigentHostId") or ""
+                        )
+                        or None,
+                        effective_launch_snapshot={
+                            key: profile_authorization[key]
+                            for key in (
+                                "executionPlanRef",
+                                "runtimeBindingRef",
+                                "hostClassRef",
+                                "launchPolicyRef",
+                                "executionRealizerRef",
+                            )
+                            if profile_authorization.get(key) is not None
+                        },
+                    )
                 bridge_session_id = str(
                     getattr(durable_row, "bridge_session_id", "") or ""
                 )
-                restored_status = str(
-                    getattr(durable_row, "status", "") or ""
-                ).strip().lower()
+                restored_status = (
+                    str(getattr(durable_row, "status", "") or "").strip().lower()
+                )
                 if (
                     restored_status in _TERMINAL_STATUSES
                     and getattr(durable_row, "first_message_posted_at", None)
@@ -1626,19 +1682,21 @@ async def run_omnigent_execution(
                     durable_row.first_message_state == FIRST_MESSAGE_POSTED
                     or (
                         durable_row.first_message_state == FIRST_MESSAGE_TERMINAL
-                        and getattr(
-                            durable_row, "first_message_posted_at", None
-                        )
+                        and getattr(durable_row, "first_message_posted_at", None)
                         is not None
                     )
                 )
-                first_message_response_identifiers = _first_message_response_identifiers(
-                    pending_id=getattr(durable_row, "first_message_pending_id", None),
-                    item_id=getattr(durable_row, "first_message_item_id", None),
+                first_message_response_identifiers = (
+                    _first_message_response_identifiers(
+                        pending_id=getattr(
+                            durable_row, "first_message_pending_id", None
+                        ),
+                        item_id=getattr(durable_row, "first_message_item_id", None),
+                    )
                 )
-                external_state["firstMessage"]["durableState"] = (
-                    durable_row.first_message_state
-                )
+                external_state["firstMessage"][
+                    "durableState"
+                ] = durable_row.first_message_state
                 if first_message_response_identifiers:
                     external_state["firstMessage"]["responseIdentifiers"] = dict(
                         first_message_response_identifiers
@@ -1660,7 +1718,13 @@ async def run_omnigent_execution(
                     }
                 )
             if not session_id:
-                create_response = await client.create_session(session_payload)
+                with control_plane_spans.omnigent_span(
+                    control_plane_spans.SESSION_ENSURE_PROVIDER_ATTACHMENT,
+                    runtime="omnigent",
+                    harness=str(session_payload.get("harness") or "unknown"),
+                    attempt_ordinal=_activity_attempt(),
+                ):
+                    create_response = await client.create_session(session_payload)
                 session_id = _session_id(create_response)
                 external_state["retry"].update(
                     {
@@ -1691,6 +1755,10 @@ async def run_omnigent_execution(
                     request.idempotency_key,
                     requested_resume_session_id,
                 )
+            if session_authority_sink is not None:
+                # The realizer's durable runtime binding must own the session id
+                # before snapshot retrieval, prompt preparation, or message POST.
+                await session_authority_sink.session_created(session_id)
             with suppress(Exception):
                 initial_snapshot = await client.get_session(session_id)
             record_session_created = (
@@ -1699,8 +1767,8 @@ async def run_omnigent_execution(
                 else None
             )
             if callable(record_session_created):
-                snapshot_capabilities, snapshot_status = (
-                    _session_authority_observation(initial_snapshot)
+                snapshot_capabilities, snapshot_status = _session_authority_observation(
+                    initial_snapshot
                 )
                 await record_session_created(
                     request.idempotency_key,
@@ -1782,16 +1850,18 @@ async def run_omnigent_execution(
                     prompt=selection.prompt,
                     artifact_gateway=artifact_gateway,
                 )
-                first_message, retrieval_evidence = await _resolve_initial_context_message(
-                    request=request,
-                    first_message=first_message,
-                    artifact_gateway=artifact_gateway,
-                    run_store=run_store,
-                    durable_row=durable_row,
-                    workspace=selection.session.workspace,
-                    include_idempotency_marker=selection.prompt.get(
-                        "includeIdempotencyMarker", True
-                    ),
+                first_message, retrieval_evidence = (
+                    await _resolve_initial_context_message(
+                        request=request,
+                        first_message=first_message,
+                        artifact_gateway=artifact_gateway,
+                        run_store=run_store,
+                        durable_row=durable_row,
+                        workspace=selection.session.workspace,
+                        include_idempotency_marker=selection.prompt.get(
+                            "includeIdempotencyMarker", True
+                        ),
+                    )
                 )
             digest = str(retrieval_evidence["preparedMessageDigest"])
             marker = _first_message_marker(request=request)
@@ -1818,9 +1888,9 @@ async def run_omnigent_execution(
                     first_message_reconcile_required = (
                         durable_row.first_message_state == FIRST_MESSAGE_POSTING
                     )
-                    external_state["firstMessage"]["durableState"] = (
-                        durable_row.first_message_state
-                    )
+                    external_state["firstMessage"][
+                        "durableState"
+                    ] = durable_row.first_message_state
                     external_state["firstMessage"][
                         "reconcileRequired"
                     ] = first_message_reconcile_required
@@ -1873,9 +1943,9 @@ async def run_omnigent_execution(
                             OmnigentFailureReason.FIRST_MESSAGE_DIGEST_MISMATCH
                         ),
                     )
-            stream_queue: asyncio.Queue[
-                tuple[dict[str, Any], bool] | BaseException | None
-            ] | None = None
+            stream_queue: (
+                asyncio.Queue[tuple[dict[str, Any], bool] | BaseException | None] | None
+            ) = None
             message_posted_gate = asyncio.Event()
             if first_message_reconcile_required:
                 reconciliation_snapshot = await client.get_session(session_id)
@@ -1962,10 +2032,17 @@ async def run_omnigent_execution(
                 # before dispatch; anything already queued remains pre-post
                 # replay, while events emitted during request handling are live.
                 message_posted_gate.set()
-                first_message_response = await client.post_event(session_id, first_message)
+                with control_plane_spans.omnigent_span(
+                    control_plane_spans.TURN_SUBMIT,
+                    runtime="omnigent",
+                    attempt_ordinal=_activity_attempt(),
+                ):
+                    first_message_response = await client.post_event(
+                        session_id, first_message
+                    )
                 first_message_posted = True
-                first_message_response_identifiers = _first_message_response_identifiers(
-                    first_message_response
+                first_message_response_identifiers = (
+                    _first_message_response_identifiers(first_message_response)
                 )
                 if run_store is not None:
                     await run_store.mark_posted(
@@ -2001,9 +2078,9 @@ async def run_omnigent_execution(
                 durable_cursor = max(
                     (
                         int(
-                            (
-                                (row.metadata_ or {}).get("reconciliation") or {}
-                            ).get("streamCursor")
+                            ((row.metadata_ or {}).get("reconciliation") or {}).get(
+                                "streamCursor"
+                            )
                             or 0
                         )
                         for row in previous_rows
@@ -2038,7 +2115,9 @@ async def run_omnigent_execution(
                     )
                     gap_event["artifactRef"] = normalized_ref
                     await run_store.attach_active_journal_refs(
-                        bridge_session_id, raw_ref=raw_ref, normalized_ref=normalized_ref
+                        bridge_session_id,
+                        raw_ref=raw_ref,
+                        normalized_ref=normalized_ref,
                     )
                     await run_store.append_events(bridge_session_id, [gap_event])
                     durable_cursor += 1
@@ -2185,17 +2264,14 @@ async def run_omnigent_execution(
                         loop_time = asyncio.get_running_loop().time()
                         if loop_time >= next_terminal_reconciliation_at:
                             next_terminal_reconciliation_at = (
-                                loop_time
-                                + _TERMINAL_RECONCILIATION_INTERVAL_SECONDS
+                                loop_time + _TERMINAL_RECONCILIATION_INTERVAL_SECONDS
                             )
-                            reconciled_terminal = (
-                                await _reconcile_inactive_marked_turn(
-                                    client=client,
-                                    session_id=session_id,
-                                    marker=marker,
-                                    baseline_item_ids=pre_dispatch_item_ids,
-                                    event_count=event_count["value"],
-                                )
+                            reconciled_terminal = await _reconcile_inactive_marked_turn(
+                                client=client,
+                                session_id=session_id,
+                                marker=marker,
+                                baseline_item_ids=pre_dispatch_item_ids,
+                                event_count=event_count["value"],
                             )
                             if reconciled_terminal is not None:
                                 (
@@ -2457,10 +2533,7 @@ async def run_omnigent_execution(
             # completed-with-diagnostics unless policy requires full evidence,
             # in which case the missing required evidence escalates.
             harvest_failure_reason: OmnigentFailureReason | None = None
-            if (
-                terminal_status == "completed"
-                and bundle.resource_harvest_failure_class
-            ):
+            if terminal_status == "completed" and bundle.resource_harvest_failure_class:
                 harvest_failure_reason = (
                     OmnigentFailureReason.OPTIONAL_RESOURCE_HARVEST_FAILED
                 )
@@ -2666,7 +2739,9 @@ async def run_omnigent_execution(
     ) as exc:
         await _cancel_task(heartbeat_task)
         await _cancel_task(stream_task)
-        if isinstance(exc, OmnigentAdapterError) and exc.failure_class == classify_omnigent_failure(
+        if isinstance(
+            exc, OmnigentAdapterError
+        ) and exc.failure_class == classify_omnigent_failure(
             OmnigentFailureReason.INVALID_SESSION_PAYLOAD
         ):
             # §17: invalid session-create payload -> user_error.

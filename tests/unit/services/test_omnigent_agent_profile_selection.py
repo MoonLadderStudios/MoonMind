@@ -1,4 +1,5 @@
 """Authoring-boundary tests for immutable Omnigent profile snapshots."""
+
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -18,26 +19,49 @@ from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
     resolve_agent_profile_snapshot,
+    resolve_default_agent_profile_snapshot,
 )
 
 
 class _Session:
     def __init__(self, *, state="active", ready=True):
         self.profile = SimpleNamespace(
-            profile_id="team-codex", state=state, visibility="workspace",
-            owner_id=uuid4(), active_version=2,
+            profile_id="team-codex",
+            state=state,
+            visibility="workspace",
+            owner_id=uuid4(),
+            active_version=2,
         )
         self.version = SimpleNamespace(
-            version=2, digest="sha256:" + "a" * 64,
+            version=2,
+            digest="sha256:" + "a" * 64,
             document={
-                "endpointRef": "default", "bridgeMode": "proxy",
-                "source": {"bundleArtifactRef": "artifact://bundle", "bundleDigest": "sha256:" + "b" * 64},
-                "harness": "codex-native", "requiredCapabilities": ["session.start"],
-                "execution": {"defaultExecutionProfileRef": "omnigent-codex@1", "allowedLaunchPolicyRefs": ["on-demand@1"]},
-                "providerRequirements": {"runtimeId": "codex_cli", "credentialSource": "oauth", "materializationMode": "host", "providerIds": ["openai"]},
-                "model": {"model": "gpt-5.4"}, "capture": {}, "rag": {}, "publish": {}, "policyRef": "default@1",
+                "endpointRef": "default",
+                "bridgeMode": "proxy",
+                "source": {
+                    "bundleArtifactRef": "artifact://bundle",
+                    "bundleDigest": "sha256:" + "b" * 64,
+                },
+                "harness": "codex-native",
+                "requiredCapabilities": ["session.start"],
+                "execution": {
+                    "defaultExecutionProfileRef": "omnigent-codex@1",
+                    "allowedLaunchPolicyRefs": ["on-demand@1"],
+                },
+                "providerRequirements": {
+                    "runtimeId": "codex_cli",
+                    "credentialSource": "oauth",
+                    "materializationMode": "host",
+                    "providerIds": ["openai"],
+                },
+                "model": {"model": "gpt-5.4"},
+                "capture": {},
+                "rag": {},
+                "publish": {},
+                "policyRef": "default@1",
             },
-            validation_result={"ready": ready}, upstream_snapshot={"id": "bundle"},
+            validation_result={"ready": ready},
+            upstream_snapshot={"id": "bundle"},
             rollout_metadata={
                 "bundleImport": {
                     "status": "succeeded",
@@ -46,23 +70,34 @@ class _Session:
             },
         )
         self.provider = SimpleNamespace(
-            profile_id="oauth-team", enabled=True,
-            auth_state=ProviderProfileAuthState.CONNECTED, disabled_reason=None,
-            max_parallel_runs=1, cooldown_after_429_seconds=900,
-            runtime_id="codex_cli", credential_source=ProviderCredentialSource.OAUTH_VOLUME,
+            profile_id="oauth-team",
+            enabled=True,
+            auth_state=ProviderProfileAuthState.CONNECTED,
+            disabled_reason=None,
+            max_parallel_runs=1,
+            cooldown_after_429_seconds=900,
+            runtime_id="codex_cli",
+            credential_source=ProviderCredentialSource.OAUTH_VOLUME,
             runtime_materialization_mode=RuntimeMaterializationMode.OAUTH_HOME,
-            provider_id="openai", volume_ref="codex-oauth",
-            volume_mount_path="/root/.codex", secret_refs={},
-            credential_bindings=[], command_behavior={"auth_readiness": {"launch_ready": True}},
+            provider_id="openai",
+            volume_ref="codex-oauth",
+            volume_mount_path="/root/.codex",
+            secret_refs={},
+            credential_bindings=[],
+            command_behavior={"auth_readiness": {"launch_ready": True}},
         )
         self.usage = None
         self.added = []
+        self.statements = []
 
     async def get(self, model, key):
         return self.profile if model is OmnigentAgentProfile else None
 
     async def scalar(self, statement):
+        self.statements.append(statement)
         entity = statement.column_descriptions[0].get("entity")
+        if entity is OmnigentAgentProfile:
+            return self.profile
         if entity is OmnigentAgentProfileVersion:
             return self.version
         if entity is ManagedAgentProviderProfile:
@@ -137,8 +172,16 @@ async def test_resolver_persists_exact_version_digest_and_effective_overrides():
     user = SimpleNamespace(id=uuid4())
 
     snapshot = await resolve_agent_profile_snapshot(
-        session, selection={"profileId": "team-codex", "version": 2, "providerProfileRef": "oauth-team", "overrides": {"model": {"effort": "high"}}},
-        consumer_type="checkpoint", consumer_id="branch-1", user=user,
+        session,
+        selection={
+            "profileId": "team-codex",
+            "version": 2,
+            "providerProfileRef": "oauth-team",
+            "overrides": {"model": {"effort": "high"}},
+        },
+        consumer_type="checkpoint",
+        consumer_id="branch-1",
+        user=user,
     )
 
     assert snapshot["profileId"] == "team-codex"
@@ -156,6 +199,107 @@ async def test_resolver_persists_exact_version_digest_and_effective_overrides():
     assert isinstance(usage, OmnigentAgentProfileUsage)
     assert usage.consumer_type == "checkpoint"
     assert usage.effective_snapshot == snapshot
+
+
+@pytest.mark.asyncio
+async def test_resolver_rejects_a_stale_authored_profile_digest():
+    with pytest.raises(HTTPException, match="digest does not match") as caught:
+        await resolve_agent_profile_snapshot(
+            _Session(),
+            selection={
+                "profileId": "team-codex",
+                "version": 2,
+                "digest": "sha256:" + "f" * 64,
+                "providerProfileRef": "oauth-team",
+            },
+            consumer_type="workflow",
+            consumer_id="workflow-1",
+            user=SimpleNamespace(id=uuid4()),
+        )
+    assert caught.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_default_resolver_freezes_default_and_explicit_provider_at_admission():
+    session = _Session()
+
+    snapshot = await resolve_default_agent_profile_snapshot(
+        session,
+        provider_profile_ref="oauth-team",
+        launch_policy_ref="on-demand@1",
+        consumer_type="workflow",
+        consumer_id="workflow-default-1",
+        user=SimpleNamespace(id=uuid4()),
+    )
+
+    assert snapshot["profileId"] == "team-codex"
+    assert snapshot["providerProfileRef"] == "oauth-team"
+    assert snapshot["launchPolicyRef"] == "on-demand@1"
+
+
+@pytest.mark.asyncio
+async def test_provider_profile_selection_is_scoped_to_requesting_user():
+    session = _Session()
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+
+    await resolve_agent_profile_snapshot(
+        session,
+        selection={
+            "profileId": "team-codex",
+            "version": 2,
+            "providerProfileRef": "oauth-team",
+        },
+        consumer_type="workflow",
+        consumer_id="workflow-owner-scope",
+        user=user,
+    )
+
+    provider_queries = [
+        statement
+        for statement in session.statements
+        if statement.column_descriptions[0].get("entity")
+        is ManagedAgentProviderProfile
+    ]
+    assert len(provider_queries) == 1
+    sql = str(provider_queries[0])
+    assert "owner_user_id IS NULL" in sql
+    assert "owner_user_id =" in sql
+
+
+@pytest.mark.asyncio
+async def test_idempotent_default_resolution_reuses_exact_profile_usage():
+    session = _Session()
+    user = SimpleNamespace(id=uuid4(), is_superuser=False)
+    first = await resolve_default_agent_profile_snapshot(
+        session,
+        provider_profile_ref="oauth-team",
+        launch_policy_ref="on-demand@1",
+        consumer_type="workflow",
+        consumer_id="workflow-idempotent-default",
+        user=user,
+    )
+    session.usage = session.added.pop()
+
+    second = await resolve_default_agent_profile_snapshot(
+        session,
+        provider_profile_ref="oauth-team",
+        launch_policy_ref="on-demand@1",
+        consumer_type="workflow",
+        consumer_id="workflow-idempotent-default",
+        user=user,
+    )
+
+    assert second == first
+    assert second is not session.usage.effective_snapshot
+    assert session.added == []
+    provider_queries = [
+        str(statement)
+        for statement in session.statements
+        if statement.column_descriptions[0].get("entity")
+        is ManagedAgentProviderProfile
+    ]
+    assert provider_queries
+    assert all("owner_user_id IS NULL" in statement for statement in provider_queries)
 
 
 @pytest.mark.asyncio
@@ -187,15 +331,21 @@ async def test_resolver_replaces_managed_schedule_usage_in_place():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("state", "ready", "message"), [
-    ("disabled", True, "not active"),
-    ("active", False, "not launch ready"),
-])
+@pytest.mark.parametrize(
+    ("state", "ready", "message"),
+    [
+        ("disabled", True, "not active"),
+        ("active", False, "not launch ready"),
+    ],
+)
 async def test_resolver_rejects_disabled_or_unready_versions(state, ready, message):
     with pytest.raises(HTTPException, match=message):
         await resolve_agent_profile_snapshot(
-            _Session(state=state, ready=ready), selection={"profileId": "team-codex", "providerProfileRef": "oauth-team"},
-            consumer_type="workflow", consumer_id="workflow-1", user=SimpleNamespace(id=uuid4()),
+            _Session(state=state, ready=ready),
+            selection={"profileId": "team-codex", "providerProfileRef": "oauth-team"},
+            consumer_type="workflow",
+            consumer_id="workflow-1",
+            user=SimpleNamespace(id=uuid4()),
         )
 
 
@@ -203,8 +353,11 @@ async def test_resolver_rejects_disabled_or_unready_versions(state, ready, messa
 async def test_resolver_requires_authored_provider_profile_identity():
     with pytest.raises(HTTPException, match="providerProfileRef is required"):
         await resolve_agent_profile_snapshot(
-            _Session(), selection={"profileId": "team-codex"},
-            consumer_type="workflow", consumer_id="workflow-1", user=SimpleNamespace(id=uuid4()),
+            _Session(),
+            selection={"profileId": "team-codex"},
+            consumer_type="workflow",
+            consumer_id="workflow-1",
+            user=SimpleNamespace(id=uuid4()),
         )
 
 
@@ -243,11 +396,14 @@ async def test_resolver_revalidates_effective_override_document():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("overrides", [
-    {"rag": {"maxTokens": 2001}},
-    {"capture": {"retentionDays": 31}},
-    {"publish": {"mode": "auto"}},
-])
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"rag": {"maxTokens": 2001}},
+        {"capture": {"retentionDays": 31}},
+        {"publish": {"mode": "auto"}},
+    ],
+)
 async def test_resolver_rejects_overrides_above_versioned_ceilings(overrides):
     session = _Session()
     session.version.document["rag"] = {"maxTokens": 2000}
@@ -256,8 +412,14 @@ async def test_resolver_rejects_overrides_above_versioned_ceilings(overrides):
     with pytest.raises(HTTPException, match="policy ceiling"):
         await resolve_agent_profile_snapshot(
             session,
-            selection={"profileId": "team-codex", "providerProfileRef": "oauth-team", "overrides": overrides},
-            consumer_type="workflow", consumer_id="workflow-1", user=SimpleNamespace(id=uuid4()),
+            selection={
+                "profileId": "team-codex",
+                "providerProfileRef": "oauth-team",
+                "overrides": overrides,
+            },
+            consumer_type="workflow",
+            consumer_id="workflow-1",
+            user=SimpleNamespace(id=uuid4()),
         )
 
 
@@ -526,10 +688,13 @@ async def test_exact_rerun_preserves_operator_owned_profile_snapshot():
         "agentProfileSnapshot": {"profileId": "operator-profile"},
         "omnigent": {"launchPolicyRef": "operator-policy@7"},
     }
-    assert await refresh_managed_bootstrap_snapshot(
-        SimpleNamespace(),
-        parameters=parameters,
-        consumer_type="workflow",
-        consumer_id="mm:rerun",
-        user=SimpleNamespace(id=uuid4()),
-    ) == parameters
+    assert (
+        await refresh_managed_bootstrap_snapshot(
+            SimpleNamespace(),
+            parameters=parameters,
+            consumer_type="workflow",
+            consumer_id="mm:rerun",
+            user=SimpleNamespace(id=uuid4()),
+        )
+        == parameters
+    )

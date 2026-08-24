@@ -78,6 +78,9 @@ from moonmind.security.egress import (
     OMNIGENT_EGRESS_PROFILE,
     omnigent_proxy_env,
 )
+from moonmind.security.execution_fanout_capabilities import (
+    verify_execution_fanout_capability,
+)
 from moonmind.schemas.managed_session_models import (
     CodexManagedSessionClearRequest,
     SendCodexManagedSessionTurnRequest,
@@ -104,6 +107,10 @@ from moonmind.workflows.adapters.omnigent_agent_adapter import (
     build_omnigent_session_create_payload,
     build_omnigent_selection,
     resolve_omnigent_target,
+)
+from moonmind.workflows.executions.repository_contract import (
+    RepositoryClientEvidence,
+    RepositoryClientPolicy,
 )
 from moonmind.workflows.executions.runtime_capabilities import (
     resolve_runtime_execution_capabilities,
@@ -209,6 +216,77 @@ pytestmark = [
 ]
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+async def test_direct_managed_fanout_crosses_repository_and_launch_readiness(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replay mm:91c47b8e across both pre-launch authority handoffs."""
+
+    replay_id = "direct-managed-fanout-readiness"
+    manifest = load_replay(replay_id, "manifest.json")
+    expected = load_replay(replay_id, "expected-outcome.json")
+    evidence = RepositoryClientEvidence(
+        toolBundleRef="repository-client:git-system",
+        clientVersion="2.46.0",
+        executableSha256="sha256:git",
+    )
+    launcher = ManagedRuntimeLauncher(
+        ManagedRunStore(tmp_path / "managed_runs"),
+        repository_client_policy=RepositoryClientPolicy(
+            pinnedVersion=evidence.client_version,
+            toolBundleRef=evidence.tool_bundle_ref,
+            executableSha256=evidence.executable_sha256,
+        ),
+    )
+    launcher._observe_git_client = AsyncMock(return_value=evidence)
+    launcher._observe_git_remote_tip = AsyncMock(
+        return_value=manifest["preparedCommitSha"]
+    )
+
+    async def resolved_github_credential(*, repo: str) -> SimpleNamespace:
+        assert repo == manifest["repository"]
+        return SimpleNamespace(resolved=True, safe_summary="resolved")
+
+    monkeypatch.setattr(
+        "moonmind.auth.github_credentials.resolve_github_credential",
+        resolved_github_credential,
+    )
+    request = AgentExecutionRequest.model_validate(manifest["request"])
+
+    resolved_repository = await launcher._ensure_repository_ready_for_launch(
+        request,
+        None,
+    )
+    environment = {
+        "MOONMIND_URL": "http://api:8000",
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN": "stale-token",
+        "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE": "/stale/token-file",
+    }
+    launcher._materialize_execution_fanout_environment(
+        environment=environment,
+        request=request,
+        workflow_id=manifest["incidentWorkflowId"],
+        run_id=manifest["agentRunId"],
+        runtime_id=manifest["targetRuntime"],
+    )
+    capability = verify_execution_fanout_capability(
+        environment["MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN"],
+        secret=str(settings.security.JWT_SECRET_KEY),
+    )
+
+    assert resolved_repository is not None
+    assert (
+        resolved_repository.prepared_revision.commit_sha
+        == manifest["preparedCommitSha"]
+    )
+    assert capability.source_kind == expected["capabilitySourceKind"]
+    assert capability.parent_workflow_id == manifest["incidentWorkflowId"]
+    assert capability.agent_run_id == manifest["agentRunId"]
+    assert capability.step_id == manifest["logicalStepId"]
+    assert capability.runtime_id == manifest["targetRuntime"]
+    assert "MOONMIND_EXECUTION_FANOUT_BEARER_TOKEN_FILE" not in environment
 
 
 async def test_managed_launcher_reuses_runtime_owned_workspace_with_exact_git_trust(
@@ -2235,9 +2313,13 @@ async def test_nested_yield_continuation_replays_through_production_agent_run_ro
         ),
     )
 
-    # Every terminal-contract continuation activity crosses the production
-    # managed agent-runtime route, never a per-test task queue.
-    assert routed_queues == {"mm.activity.agent_runtime"}
+    # Continuation work stays on the primary runtime queue while terminal
+    # evaluation uses the isolated control lane. Both are production queues
+    # polled by the same agent-runtime fleet, never per-test task queues.
+    assert routed_queues == {
+        settings.temporal.activity_agent_runtime_task_queue,
+        settings.temporal.activity_agent_runtime_control_task_queue,
+    }
     expected_turns = 1 if recover else expected["continuationCount"]
     assert len(turns) == expected_turns
     assert {

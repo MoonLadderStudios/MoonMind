@@ -31,9 +31,13 @@ def test_current_workflows_have_stable_names() -> None:
         "alembic-migration-gate.yml": "CI / Alembic Migration Gate",
         "codex-conformance-canary.yml": "Provider / Codex Conformance Canary",
         "docker-publish.yml": "Release / Build App Image",
+        "docker-publish-opencode-host.yml": "Release / Build omnigent-host-opencode Image",
         "omnigent-live-conformance.yml": "Provider / Omnigent Live Conformance",
         "omnigent-embedded-acceptance.yml": "Provider / Omnigent Embedded Acceptance",
         "omnigent-fault-image-smoke.yml": "Provider / Omnigent Fault Image Smoke",
+        "omnigent-live-verification-health.yml": (
+            "Provider / Omnigent Live Verification Health"
+        ),
         "promote-ghcr-stable.yml": "Release / Promote Stable",
         "pytest-unit-tests.yml": "CI / Test Suite",
     }

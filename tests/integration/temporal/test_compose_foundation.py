@@ -277,6 +277,32 @@ def test_api_host_port_mapping_and_optional_env_file_for_mm_969():
         "${MOONMIND_OMNIGENT_REMEDIATION_RELEASE_EVIDENCE_REF:-"
         "/workspace/cutover/remediation-release.json}"
     )
+    # Release-support evidence the Omnigent catalog reads must have a working
+    # default in the canonical deployment (MoonLadderStudios/MoonMind#3710):
+    # without one, every catalog response permanently reports the support
+    # failures even after both gates pass.
+    assert api_env["MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST"] == (
+        "${MOONMIND_OMNIGENT_ACCEPTANCE_MANIFEST:-"
+        "/workspace/omnigent-evidence/acceptance-manifest.json}"
+    )
+    assert api_env["MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE"] == (
+        "${MOONMIND_OMNIGENT_EXECUTION_SUPPORT_EVIDENCE:-"
+        "/workspace/omnigent-evidence/execution-support-evidence.json}"
+    )
+    assert api_env["MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE"] == (
+        "${MOONMIND_OMNIGENT_EXACT_ARTIFACT_EVIDENCE:-"
+        "/workspace/omnigent-evidence/exact-artifact-projection.json}"
+    )
+    assert api_env["MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION"] == (
+        "${MOONMIND_OMNIGENT_LIVE_HEALTH_PROJECTION:-"
+        "/workspace/omnigent-evidence/live-health-projection.json}"
+    )
+    # ...and the directory those defaults point at must actually be mounted.
+    # The API now mounts the evidence dir read-write for materialization.
+    assert (
+        "${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}"
+        ":/workspace/omnigent-evidence:rw"
+    ) in services["api"]["volumes"]
     for worker_name in (
         "temporal-worker-agent-runtime",
         "temporal-worker-integrations",

@@ -2,8 +2,8 @@
 
 **Document Class:** Canonical declarative
 **Status:** Current
-**Updated:** 2026-08-13
-**Authority:** MoonLadderStudios/MoonMind#3508 browser-to-host product acceptance, MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract, and MoonLadderStudios/MoonMind#3642 native Workflow Chat release matrix
+**Updated:** 2026-08-19
+**Authority:** MoonLadderStudios/MoonMind#3508 browser-to-host product acceptance, MoonLadderStudios/MoonMind#3480 cumulative-remediation evidence contract, MoonLadderStudios/MoonMind#3642 native Workflow Chat release matrix, and MoonLadderStudios/MoonMind#3710 exact-artifact CI and verification tiers
 
 MoonMind uses the versioned profile at
 `tests/fixtures/omnigent/conformance-v4.json` as the single inventory for the
@@ -113,18 +113,72 @@ and cleanup-reconciliation rows. Every row resolves the full profile, policy,
 runtime, host, session, workspace, artifact, cleanup, janitor, and lease
 authority chain and fails on any direct-Codex or alternate-authority fallback.
 
-`--mode workflow_chat` is the #3642 protected controller. It runs the four
+`--mode workflow_chat` is the #3642 protected controller. It runs the complete
+matrix of native Workflow Chat support combinations declared by
+`moonmind.omnigent.workflow_chat_acceptance.WORKFLOW_CHAT_COMBINATIONS`: the
+Codex-through-Omnigent on-demand combination, the Codex static-connected host
+mode (whose transport and cleanup behavior differ materially), and OpenCode
+through `generic-omnigent-host@1`. For each claimed combination it runs the
 native-conversation, scoped-transport/resource, authority/security-denial, and
 terminal/evidence/continuation actions in order against the digest-pinned stock
-host. It resolves the typed source records returned by the live action adapter,
-derives assertions from those records, scans the logs, Temporal history,
-screenshots, and archives, builds and validates the commit-bound
-`moonmind.omnigent.workflow-chat-acceptance/v1` artifact, and then invokes the
-dedicated provider gate. A missing row, source record, raw evidence channel,
-digest correlation, or provider-test result fails the mode before its evidence
-can enter the publication job. The final publication-tree scan runs after
-per-mode cleanup and final report generation, and therefore covers the cleanup
-logs and the exact report tree uploaded by the workflow.
+host. A combination MoonMind does not claim for native chat is reported as
+`unsupported` with its stable code-owned reason; it is never silently omitted.
+
+The controller resolves the typed source records returned by the live action
+adapter, derives assertions from those records, scans the logs, Temporal
+history, screenshots, and archives, builds and validates the commit-bound
+`moonmind.omnigent.workflow-chat-acceptance/v2` artifact, and then invokes the
+dedicated provider gate. A missing combination, row, source record, raw
+evidence channel, digest correlation, or provider-test result fails the mode
+before its evidence can enter the publication job. The final publication-tree
+scan runs after per-mode cleanup and final report generation, and therefore
+covers the cleanup logs and the exact report tree uploaded by the workflow.
+
+Host images are pinned per host class rather than shared: `--host-image` pins
+the Codex stock host and `--opencode-host-image` pins the dedicated OpenCode
+host, and each claimed combination publishes the digest-pinned image that
+actually executed it. Each per-combination report publishes that combination's
+own authentication mode and exactly the four case ids and row evidence refs of
+the combination it qualifies, so one passing report cannot cover another
+combination.
+
+Each passing combination binds its evidence to the exact support-combination
+identity that ran: Omnigent server and host build refs, harness implementation
+and vendor runtime refs, agent source, materializers, provider compatibility
+class, Host Class, architecture, launch policy, normalized model-configuration
+digest, execution realizer, required-capability digest, and the Provider Profile
+class. The recorded `supportCombinationKey` must recompute from those fields,
+and the Provider Profile class, credential materializer, and authentication mode
+are pinned by the claimed inventory, so evidence for one combination can never
+qualify another. The manifest also carries the scenario and route-inventory
+versions, the deployed dashboard and
+Omnigent UI bundle digests, each case's measured duration, the durable operator
+timeline ref for the terminal cleaned-up session, the cleanup outcome, and the
+superseded report ref.
+
+The advertised capability contract for a combination is derived from declared
+authority rather than a constant: Host Class features gate terminal and
+workspace capabilities, Launch Policy control capabilities gate interrupt,
+stop, and clear-context, capture gates evidence harvest, and only a `remove`
+cleanup mode advertises session cleanup. The `capabilitySnapshot` record must
+cover exactly that set and record one observed enforcement outcome per
+advertised capability that matches the effective intersection.
+
+Cleanup evidence is derived the same way. A `remove` cleanup mode must show the
+live host stopped and its live resources removed; a `drain` cleanup mode retires
+a static-connected host that keeps serving, so it shows a drain and retains its
+live resources. Both orders end with Provider Profile release, and the observed
+step order must match the required order exactly.
+
+`MOONMIND_OMNIGENT_WORKFLOW_CHAT_SUPERSEDED_REPORT` optionally names the report
+this run supersedes. When it is omitted the manifest records no superseded ref
+and takes the same production path.
+
+`#3712` retirement guards consume the published manifest directly through
+`moonmind.omnigent.legacy_retirement.criteria_from_native_chat_acceptance`,
+which returns `native_chat_acceptance_passed` only for a manifest that
+revalidates against its evidence tree, so a missing, incomplete, failed, or
+expired report yields no criterion.
 
 `--mode static` covers restart and replay; `stock`, `product`, `cumulative`,
 `ondemand`, `failures`, and `workflow_chat` can be gated independently in
@@ -154,6 +208,113 @@ contract generation. The comma-separated `CANARY_OWNER_IDS`,
 `FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_` prefix are exact allowlists.
 Disabling the feature or changing its generation blocks new admissions without
 changing replay or historical reads for already-started destinations.
+
+## Verification tiers
+
+Omnigent verification is separated into four tiers with distinct reliability and
+credential needs (MoonLadderStudios/MoonMind#3710). A higher-tier outage never
+flips a lower required tier closed, but it does keep rollout readiness closed
+where the protected tier is required.
+
+- **Tier 1 — required noncredentialed exact-artifact conformance.** The
+  `omnigent-exact-artifact` job in `.github/workflows/pytest-unit-tests.yml`
+  runs for every affected PR on standard Docker-enabled merge infrastructure
+  with no protected credentials. It builds the exact deployable image and tests
+  that immutable artifact through its real entrypoints:
+  - the in-image capability probe (`tools/omnigent_exact_artifact_probe.py`,
+    which proves Uvicorn resolves an installed WebSocket implementation so a
+    #3697-style drop fails closed);
+  - HTTP/SSE/WebSocket route handshakes against the running container, where a
+    fall-through 404 fails the gate;
+  - clean and prior-schema PostgreSQL migrations, each against its **own**
+    freshly created database, invoked with the repository's explicit
+    `api_service/migrations/alembic.ini`; the prior-schema case materializes the
+    revision preceding head and then upgrades, which is what a deployment onto
+    an existing database does;
+  - a restart of the deployable process against the schema it just migrated;
+  - worker task-queue and readiness advertisement against a real Temporal
+    server, which the worker must connect to before it can report ready; and
+  - a browser capture proving the compiled native UI baked into the image is
+    fetched from the deployable origin, renders from its injected boot payload,
+    and issues no root `/v1/*` or cross-origin upstream request.
+
+  The image is referenced by its immutable content id for every `docker run`
+  (a locally built image has no registry repo digest, so `name@sha256:<id>` is
+  unpullable), and probe assets reach the container through an explicit
+  read-only `/probe` mount with `PYTHONPATH=/app`, so the deployable image
+  carries no test-only assets and the mount never shadows the artifact under
+  test. The browser controller's Playwright runtime lives on the CI host for the
+  same reason.
+
+  **Not asserted by Tier 1:** restart and terminal replay *after a fake provider
+  host is removed*. This job runs no provider execution, so claiming that
+  boundary would mean deriving it from an unrelated exit status. It is owned by
+  the reliability-journey and embedded-recovery gates, which the Omnigent
+  contract gate selects on the same commit.
+
+  `tools/run_omnigent_exact_artifact_conformance.py` is the authoritative
+  fail-closed decision (`moonmind.omnigent.exact_artifact_conformance`).
+  Dependency, lockfile, Dockerfile, Compose, and runtime-entrypoint changes
+  (including `api_service/entrypoint.sh`, the image `CMD`) always select this
+  gate, and the `ci-required` aggregator fails when it is selected but skipped,
+  cancelled, or neutral.
+- **Tier 2 — credentialed protected provider canary.** The credentialed
+  publication gate below, run on the dedicated
+  `omnigent-provider-verification` runner.
+- **Tier 3 — post-deployment synthetic.** A bounded disposable execution
+  against the deployed commit and actual image digests through the normal
+  product API, requiring no operator to copy session identifiers.
+- **Tier 4 — scheduled soak and failure matrix.** Broader browser, product,
+  cumulative-remediation, restart, cleanup, and fault scenarios.
+
+`moonmind.omnigent.live_verification_health` projects `tier1Ready` and
+`protectedTierReady` from non-secret runner/queue/freshness/matrix signals; the
+publication/readiness support gate reuses `rolloutReady` so a Tier-4 outage
+fails rollout closed while leaving Tier 1 protecting PRs.
+
+`tools/assemble_omnigent_live_status.py` retrieves the acceptance manifest
+published by the newest passing live-conformance run before evaluation, so
+freshness and digest signals reflect real published evidence rather than a
+permanently absent manifest. Runner health is aggregated across the whole
+provider-verification fleet: the tier is online when at least one labeled runner
+is online, and busy only when no online runner is idle.
+
+### Deployed release-support evidence
+
+The Omnigent catalog and execution admission consume four published documents:
+the #3508 acceptance manifest, protected exact-combination execution support,
+the Tier-1 exact-artifact projection, and the protected-live readiness
+projection. The protected execution-support document qualifies the exact
+support-combination key, immutable host image, policy and effective-launch
+digests, feature generation, replay contract, rollback policy, and realizer;
+it also records the fixed `moonmind-protected-omnigent-conformance@1` issuer.
+The API fails closed before scheduling when that evidence is absent, stale,
+issued by another authority, insufficient, or mismatched. Compose bind-mounts
+`${MOONMIND_OMNIGENT_EVIDENCE_DIR:-./var/omnigent-evidence}` read-only at
+`/workspace/omnigent-evidence` and defaults all four refs to files inside it,
+so the default deployment needs no per-file configuration. Populate it with:
+
+```bash
+python tools/materialize_omnigent_evidence.py --commit "$DEPLOYED_COMMIT"
+```
+
+which copies the newest unexpired document *published for that commit* into the
+mounted directory. Evidence for another commit, an expired artifact, or a
+missing document is never written, so the catalog keeps its fail-closed support
+reason instead of reading stale authority.
+
+Freshness is revalidated at **consumption**, not only at publication:
+`assert_live_health_projection` checks the versioned schema, the ready verdict,
+the deployed commit, the projection's own age against the hourly publication
+cadence, and the acceptance expiry it inherits. A once-ready file therefore stops
+being accepted when its manifest expires, the protected runner goes offline, or
+scheduled monitoring stops publishing.
+
+Retained failure evidence is redacted through the canonical
+`moonmind.omnigent.conformance.redact_secrets`, whose patterns span the complete
+credential — the whole session-bearing header value, JWTs, cookies, and token
+bodies — so a bounded `logTail` cannot publish a credential that survived a
+header-name-only substitution.
 
 ## Credentialed CI publication
 

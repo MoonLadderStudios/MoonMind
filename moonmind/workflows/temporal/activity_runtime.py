@@ -1032,9 +1032,53 @@ _ACTIVITY_HANDLER_ATTRS: dict[str, tuple[str, str]] = {
     ),
     "integration.codex_cloud.cancel": ("integrations", "integration_codex_cloud_cancel"),
     "integration.openclaw.execute": ("integrations", "integration_openclaw_execute"),
-    "integration.omnigent.execute": ("integrations", "integration_omnigent_execute"),
+    "integration.omnigent.execute": ("agent_runtime", "integration_omnigent_execute"),
     "integration.omnigent.profile_bound_execute": ("agent_runtime", "integration_omnigent_profile_bound_execute"),
     "integration.omnigent.oauth_host_janitor": ("agent_runtime", "integration_omnigent_oauth_host_janitor"),
+    "omnigent.evaluate_session_admission": (
+        "agent_runtime",
+        "omnigent_evaluate_session_admission",
+    ),
+    "omnigent.resolve_intent": ("agent_runtime", "omnigent_resolve_intent"),
+    "omnigent.load_reconciliation_inputs": (
+        "agent_runtime",
+        "omnigent_load_reconciliation_inputs",
+    ),
+    "omnigent.load_failure_authority": (
+        "agent_runtime",
+        "omnigent_load_failure_authority",
+    ),
+    "omnigent.ensure_provider_profile_lease": (
+        "agent_runtime",
+        "omnigent_ensure_provider_profile_lease",
+    ),
+    "omnigent.ensure_host": ("agent_runtime", "omnigent_ensure_host"),
+    "omnigent.ensure_provider_session": (
+        "agent_runtime",
+        "omnigent_ensure_provider_session",
+    ),
+    "omnigent.submit_turn": ("agent_runtime", "omnigent_submit_turn"),
+    "omnigent.heartbeat_host_lease": (
+        "agent_runtime",
+        "omnigent_heartbeat_host_lease",
+    ),
+    "omnigent.read_event_batch": ("agent_runtime", "omnigent_read_event_batch"),
+    "omnigent.observe_snapshot": ("agent_runtime", "omnigent_observe_snapshot"),
+    "omnigent.harvest_evidence": ("agent_runtime", "omnigent_harvest_evidence"),
+    "omnigent.publish_workspace": ("agent_runtime", "omnigent_publish_workspace"),
+    "omnigent.stop_provider_session": (
+        "agent_runtime",
+        "omnigent_stop_provider_session",
+    ),
+    "omnigent.stop_host": ("agent_runtime", "omnigent_stop_host"),
+    "omnigent.release_leases": ("agent_runtime", "omnigent_release_leases"),
+    "omnigent.persist_decision": ("agent_runtime", "omnigent_persist_decision"),
+    "omnigent.persist_signal_intents": (
+        "agent_runtime",
+        "omnigent_persist_signal_intents",
+    ),
+    "omnigent.record_terminal": ("agent_runtime", "omnigent_record_terminal"),
+    "omnigent.persist_failure": ("agent_runtime", "omnigent_persist_failure"),
     "agent_runtime.publish_artifacts": (
         "agent_runtime",
         "agent_runtime_publish_artifacts",
@@ -5126,22 +5170,6 @@ class TemporalIntegrationActivities:
             
         return await openclaw_execute_activity(req)
 
-    async def integration_omnigent_execute(self, request, /, **kwargs):
-        from moonmind.workflows.temporal.activities.omnigent_activities import omnigent_execute_activity
-        from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
-
-        if isinstance(request, Mapping):
-            request_payload = _coerce_activity_request(request, activity_type="integration.omnigent.execute")
-            if not request_payload:
-                raise TemporalActivityRuntimeError("integration.omnigent.execute requires AgentExecutionRequest payload")
-            req = AgentExecutionRequest.model_validate(request_payload)
-        elif isinstance(request, AgentExecutionRequest):
-            req = request
-        else:
-            raise TemporalActivityRuntimeError("integration.omnigent.execute requires AgentExecutionRequest payload")
-
-        return await omnigent_execute_activity(req)
-
 class TemporalProposalActivities:
     """Implementation helpers for ``proposal.*`` activities."""
 
@@ -6563,6 +6591,7 @@ class TemporalAgentRuntimeActivities:
         workflow_docker_mode: str = "profiles",
         raw_docker_cli_enabled: bool = False,
         client_adapter: Any = None,
+        omnigent_stuck_state_service: Any = None,
         workspace_root: str | Path | None = None,
     ) -> None:
         self._artifact_service = artifact_service
@@ -6584,6 +6613,7 @@ class TemporalAgentRuntimeActivities:
 
             client_adapter = temporal_client_module.TemporalClientAdapter()
         self._client_adapter = client_adapter
+        self._omnigent_stuck_state_service = omnigent_stuck_state_service
         self._supervision_tasks: set[asyncio.Task] = set()
         from moonmind.workflows.temporal.runtime.checkpoint_restore import (
             ManagedCheckpointRestoreService,
@@ -7363,6 +7393,21 @@ class TemporalAgentRuntimeActivities:
             result["errors"] = errors
         return result
 
+    async def integration_omnigent_execute(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> AgentRunResult:
+        from moonmind.workflows.temporal.activities.omnigent_activities import (
+            omnigent_execute_activity,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type="integration.omnigent.execute",
+            kwargs=kwargs,
+        )
+        req = AgentExecutionRequest.model_validate(payload)
+        return await omnigent_execute_activity(req)
+
     async def integration_omnigent_profile_bound_execute(
         self, request: Any = None, /, **kwargs: Any
     ) -> AgentRunResult:
@@ -7391,6 +7436,225 @@ class TemporalAgentRuntimeActivities:
             kwargs=kwargs,
         )
         return await omnigent_oauth_host_janitor_activity(payload)
+
+    async def _run_omnigent_session_activity(
+        self,
+        handler_name: str,
+        activity_type: str,
+        request: Any = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        from moonmind.workflows.temporal.activities import (
+            omnigent_session_activities,
+        )
+
+        payload = _coerce_activity_payload_input(
+            request,
+            activity_type=activity_type,
+            kwargs=kwargs,
+        )
+        handler = getattr(omnigent_session_activities, handler_name)
+        return await handler(payload)
+
+    async def omnigent_resolve_intent(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_resolve_intent_activity",
+            "omnigent.resolve_intent",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_evaluate_session_admission(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_evaluate_session_admission_activity",
+            "omnigent.evaluate_session_admission",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_load_reconciliation_inputs(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_load_reconciliation_inputs_activity",
+            "omnigent.load_reconciliation_inputs",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_load_failure_authority(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_load_failure_authority_activity",
+            "omnigent.load_failure_authority",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_ensure_provider_profile_lease(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_ensure_provider_profile_lease_activity",
+            "omnigent.ensure_provider_profile_lease",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_ensure_host(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_ensure_host_activity",
+            "omnigent.ensure_host",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_ensure_provider_session(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_ensure_provider_session_activity",
+            "omnigent.ensure_provider_session",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_submit_turn(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_submit_turn_activity",
+            "omnigent.submit_turn",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_heartbeat_host_lease(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_heartbeat_host_lease_activity",
+            "omnigent.heartbeat_host_lease",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_read_event_batch(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_read_event_batch_activity",
+            "omnigent.read_event_batch",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_observe_snapshot(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_observe_snapshot_activity",
+            "omnigent.observe_snapshot",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_harvest_evidence(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_harvest_evidence_activity",
+            "omnigent.harvest_evidence",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_publish_workspace(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_publish_workspace_activity",
+            "omnigent.publish_workspace",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_stop_provider_session(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_stop_provider_session_activity",
+            "omnigent.stop_provider_session",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_stop_host(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_stop_host_activity",
+            "omnigent.stop_host",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_release_leases(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_release_leases_activity",
+            "omnigent.release_leases",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_persist_decision(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_persist_decision_activity",
+            "omnigent.persist_decision",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_persist_signal_intents(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_persist_signal_intents_activity",
+            "omnigent.persist_signal_intents",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_record_terminal(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_record_terminal_activity",
+            "omnigent.record_terminal",
+            request,
+            **kwargs,
+        )
+
+    async def omnigent_persist_failure(
+        self, request: Any = None, /, **kwargs: Any
+    ) -> dict[str, Any]:
+        return await self._run_omnigent_session_activity(
+            "omnigent_persist_failure_activity",
+            "omnigent.persist_failure",
+            request,
+            **kwargs,
+        )
 
     async def oauth_session_prepare_credential_maintenance(
         self,
@@ -11581,6 +11845,58 @@ class TemporalAgentRuntimeActivities:
             activity_type="agent_runtime.reconcile_managed_sessions"
         )
         action_payload = dict(payload or {})
+        omnigent_reconcile_request = action_payload.get("omnigentReconcileRequest")
+        stuck_state_service = self._omnigent_stuck_state_service
+        if stuck_state_service is None and self._artifact_service is not None:
+            from api_service.db.base import async_session_maker
+            from moonmind.omnigent.control_plane.stuck_state_reconciliation import (
+                StuckStateReconciliationService,
+            )
+            from moonmind.workflows.temporal.activities.omnigent_stuck_state import (
+                TemporalOmnigentReconcileDispatcher,
+                TemporalStuckStateDiagnosticPublisher,
+            )
+
+            stuck_state_service = StuckStateReconciliationService(
+                session_factory=async_session_maker,
+                dispatcher=TemporalOmnigentReconcileDispatcher(
+                    self._client_adapter
+                ),
+                diagnostic_publisher=TemporalStuckStateDiagnosticPublisher(
+                    self._artifact_service
+                ),
+            )
+        validated_omnigent_request = None
+        if isinstance(omnigent_reconcile_request, Mapping):
+            if stuck_state_service is None:
+                raise TemporalActivityRuntimeError(
+                    "Omnigent reconcile request requires control-plane persistence"
+                )
+            validated_omnigent_request = (
+                await stuck_state_service.validate_reconcile_request(
+                    session_id=str(
+                        omnigent_reconcile_request.get("sessionId") or ""
+                    ),
+                    workflow_id=str(
+                        action_payload.get("omnigentWorkflowId") or ""
+                    ),
+                    request_id=str(
+                        omnigent_reconcile_request.get("requestId") or ""
+                    ),
+                    reason_code=str(
+                        omnigent_reconcile_request.get("reasonCode") or ""
+                    ),
+                    expected_revision=int(
+                        omnigent_reconcile_request.get("expectedRevision") or 0
+                    ),
+                    expected_fencing_generation=int(
+                        omnigent_reconcile_request.get(
+                            "expectedFencingGeneration"
+                        )
+                        or 0
+                    ),
+                )
+            )
         action_kind = str(action_payload.get("actionKind") or "").strip()
         if action_kind:
             if action_kind not in {
@@ -11693,6 +12009,33 @@ class TemporalAgentRuntimeActivities:
             "orphanVolumeReapSkippedActive": orphan_volume_reap_skipped_active,
             "orphanVolumeReapSkippedRecent": orphan_volume_reap_skipped_recent,
         }
+        # The existing durable operational schedule is the single bounded
+        # sweeper owner for both managed-runtime reattachment and canonical
+        # Omnigent stuck-state inspection.  Reusing it adds no idle container or
+        # second scheduling authority (MoonLadderStudios/MoonMind#3708).
+        if validated_omnigent_request is not None:
+            summary["omnigentReconcileRequest"] = validated_omnigent_request
+            return summary
+        if stuck_state_service is not None:
+            try:
+                stuck_result = await _await_with_activity_heartbeats(
+                    stuck_state_service.sweep(),
+                    heartbeat_payload={
+                        "activityType": "agent_runtime.reconcile_managed_sessions",
+                        "phase": "omnigent_stuck_state_sweep",
+                    },
+                )
+            except Exception:
+                # Managed-session reattachment is the activity's primary result;
+                # an auxiliary sweep outage is observable and retried by the next
+                # durable schedule tick rather than rewriting primary success.
+                logger.warning(
+                    "Omnigent stuck-state sweep failed during managed-session reconcile",
+                    exc_info=True,
+                )
+                summary["omnigentStuckStateSweepFailed"] = 1
+            else:
+                summary["omnigentStuckState"] = stuck_result.to_dict()
         return summary
 
     async def agent_runtime_cleanup_managed_runtime_files(
@@ -15577,6 +15920,12 @@ class TemporalCheckpointActivities:
             stepExecutionId=build_step_execution_id(model.identity),
             attemptOrdinal=model.identity.execution_ordinal,
             boundary=model.boundary,
+            executionPlanRef=capture.get("executionPlanRef"),
+            runtimeBindingRef=capture.get("runtimeBindingRef"),
+            runtimeBindingRevision=capture.get("runtimeBindingRevision"),
+            runtimeBindingFencingGeneration=capture.get(
+                "runtimeBindingFencingGeneration"
+            ),
             providerProfileId=capture["providerProfileId"],
             credentialRef=capture["credentialRef"],
             credentialGeneration=capture["credentialGeneration"],

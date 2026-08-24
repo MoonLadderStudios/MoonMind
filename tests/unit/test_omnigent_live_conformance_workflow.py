@@ -24,6 +24,7 @@ def test_live_conformance_is_scheduled_and_manually_gated() -> None:
     assert set(triggers["workflow_dispatch"]["inputs"]) == {
         "server_image",
         "host_image",
+        "opencode_host_image",
     }
     job = workflow["jobs"]["live-matrix"]
     assert job["environment"] == "omnigent-provider-verification"
@@ -52,6 +53,12 @@ def test_live_conformance_runs_the_complete_independent_matrix() -> None:
     assert "tools/run_omnigent_live_conformance.py" in run_step["run"]
     assert '--mode "${{ matrix.mode }}"' in run_step["run"]
     assert '--source-commit "${{ github.sha }}"' in run_step["run"]
+    # The OpenCode combination runs the dedicated OpenCode host image, so the
+    # protected run pins it separately from the Codex host digest.
+    assert (
+        '--opencode-host-image "${{ steps.images.outputs.opencode_host }}"'
+        in run_step["run"]
+    )
     assert run_step["env"]["MOONMIND_OMNIGENT_ACTION_COMMAND"] == (
         "${{ secrets.MOONMIND_OMNIGENT_ACTION_COMMAND }}"
     )
@@ -84,7 +91,13 @@ def test_live_conformance_always_uploads_case_evidence() -> None:
         step for step in steps if step.get("name") == "Stage secret-safe case evidence"
     )
     assert 'if [[ "$LIVE_CASE_OUTCOME" == "success" ]]' in stage["run"]
-    assert "withheld-after-unsuccessful-safety-gate" in stage["run"]
+    # A failed case must emit bounded, redacted diagnostics (issue #3710) and
+    # must never fall back to a single opaque "withheld" marker.
+    assert "withheld" not in stage["run"]
+    assert "tools/stage_omnigent_failure_evidence.py" in stage["run"]
+    assert "--setup-stage" in stage["run"]
+    assert "--duration-seconds" in stage["run"]
+    assert "--runner-status" in stage["run"]
     assert upload["if"] == "always()"
     assert "github.run_attempt" in upload["with"]["name"]
     assert upload["with"]["path"].endswith("upload/${{ matrix.mode }}")
@@ -113,6 +126,10 @@ def test_publication_requires_every_matrix_case_to_pass() -> None:
     assert '"sourceCommit": os.environ["GITHUB_SHA"]' in manifest["run"]
     assert '"browserRows": rows' in manifest["run"]
     assert "validate_workflow_chat_acceptance_manifest" in manifest["run"]
+    assert "ProtectedExecutionSupportEvidence" in manifest["run"]
+    assert "execution-support-evidence.json" in manifest["run"]
+    assert "policySnapshotDigest" in manifest["run"]
+    assert "effectiveLaunchSnapshotDigest" in manifest["run"]
     assert '"nativeWorkflowChatEvidence"' in manifest["run"]
     assert "product evidence lacks independently resolved production records" in manifest["run"]
     assert '"productSchemaVersions": product["schemaVersions"]' in manifest["run"]

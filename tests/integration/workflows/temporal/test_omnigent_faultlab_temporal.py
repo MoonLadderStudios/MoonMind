@@ -168,11 +168,26 @@ async def fault_terminate_session(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+@activity.defn(name="agent_runtime.reconcile_managed_sessions")
+async def fault_reconcile_managed_sessions(payload: dict[str, Any]) -> dict[str, Any]:
+    request = payload["omnigentReconcileRequest"]
+    assert payload["omnigentWorkflowId"] == "wf-faultlab"
+    assert request == {
+        "sessionId": "sess:faultlab:temporal",
+        "requestId": "ocm-faultlab",
+        "reasonCode": "live_conformance_evidence_stale",
+        "expectedRevision": 7,
+        "expectedFencingGeneration": 3,
+    }
+    return {"accepted": True, "expectedRevision": 7, "expectedFencingGeneration": 3}
+
+
 _ACTIVITIES = [
     fault_send_turn,
     fault_fetch_session_summary,
     fault_publish_session_artifacts,
     fault_terminate_session,
+    fault_reconcile_managed_sessions,
 ]
 
 
@@ -270,6 +285,55 @@ def _dropped_turn_failures() -> int:
     # bounded lost-response window before the world recovers.
     assert len(run.submit_commands) == 1
     return 2
+
+
+async def test_temporal_stuck_state_update_reaches_registered_session_workflow() -> None:
+    async with await WorkflowEnvironment.start_time_skipping() as env:
+        async with Worker(
+            env.client,
+            task_queue="omnigent-faultlab-reconcile-wf",
+            workflows=[MoonMindAgentSessionWorkflow],
+            workflow_runner=UnsandboxedWorkflowRunner(),
+        ):
+            async with Worker(
+                env.client, task_queue=_ACTIVITY_QUEUE, activities=_ACTIVITIES
+            ):
+                handle = await env.client.start_workflow(
+                    MoonMindAgentSessionWorkflow.run,
+                    _input(),
+                    id="wf-faultlab:session:codex_cli",
+                    task_queue="omnigent-faultlab-reconcile-wf",
+                )
+                result = await handle.execute_update(
+                    "ReconcileOmnigentSession",
+                    {
+                        "sessionId": "sess:faultlab:temporal",
+                        "requestId": "ocm-faultlab",
+                        "reasonCode": "live_conformance_evidence_stale",
+                        "expectedRevision": 7,
+                        "expectedFencingGeneration": 3,
+                    },
+                )
+                assert result["accepted"] is True
+                duplicate = await handle.execute_update(
+                    "ReconcileOmnigentSession",
+                    {
+                        "sessionId": "sess:faultlab:temporal",
+                        "requestId": "ocm-faultlab",
+                        "reasonCode": "live_conformance_evidence_stale",
+                        "expectedRevision": 7,
+                        "expectedFencingGeneration": 3,
+                    },
+                )
+                assert duplicate == {"accepted": True, "alreadyApplied": True}
+                status = await handle.query("get_status")
+                assert status["lastControlReason"] == (
+                    "live_conformance_evidence_stale"
+                )
+                await handle.execute_update(
+                    "TerminateSession", {"requestId": "terminate-reconcile-test"}
+                )
+                await handle.result()
 
 
 async def test_temporal_at_most_once_turn_under_dropped_response() -> None:

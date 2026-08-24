@@ -97,6 +97,22 @@ class OmnigentCheckpointIdentity(BaseModel):
     step_execution_id: str = Field(..., alias="stepExecutionId", min_length=1)
     attempt_ordinal: int = Field(..., alias="attemptOrdinal", ge=1)
     boundary: str = Field(..., min_length=1)
+    execution_plan_ref: str | None = Field(
+        None,
+        alias="executionPlanRef",
+        pattern=r"^omnigent-execution-plan:sha256:[0-9a-f]{64}$",
+    )
+    runtime_binding_ref: str | None = Field(
+        None,
+        alias="runtimeBindingRef",
+        pattern=r"^omnigent-runtime-binding:sha256:[0-9a-f]{64}$",
+    )
+    runtime_binding_revision: int | None = Field(
+        None, alias="runtimeBindingRevision", ge=1
+    )
+    runtime_binding_fencing_generation: int | None = Field(
+        None, alias="runtimeBindingFencingGeneration", ge=1
+    )
     provider_profile_id: str = Field(..., alias="providerProfileId", min_length=1)
     credential_ref: str = Field(
         ...,
@@ -120,6 +136,8 @@ class OmnigentCheckpointIdentity(BaseModel):
     effective_launch_ref: str | None = Field(None, alias="effectiveLaunchRef", min_length=1)
     execution_profile_ref: str = Field(..., alias="executionProfileRef", min_length=1)
     launch_policy_ref: str = Field(..., alias="launchPolicyRef", min_length=1)
+    execution_plan_ref: str | None = Field(None, alias="executionPlanRef", min_length=1)
+    runtime_binding_ref: str | None = Field(None, alias="runtimeBindingRef", min_length=1)
     policy_id: str | None = Field(None, alias="policyId", min_length=1)
     policy_version: int | None = Field(None, alias="policyVersion", ge=1)
     policy_ref: str | None = Field(None, alias="policyRef", min_length=1)
@@ -166,6 +184,32 @@ class OmnigentCheckpointIdentity(BaseModel):
 
     @model_validator(mode="after")
     def _reject_raw_credential_like_values(self) -> "OmnigentCheckpointIdentity":
+        plan_binding_authority = (
+            self.execution_plan_ref,
+            self.runtime_binding_ref,
+            self.runtime_binding_revision,
+            self.runtime_binding_fencing_generation,
+        )
+        if any(value is not None for value in plan_binding_authority) and not all(
+            value is not None for value in plan_binding_authority
+        ):
+            raise ValueError(
+                "checkpoint execution-plan/runtime-binding authority is incomplete"
+            )
+        if self.execution_plan_ref is not None and not (
+            self.execution_plan_ref.startswith(
+                "omnigent-execution-plan:sha256:"
+            )
+        ):
+            raise ValueError("executionPlanRef must identify an immutable plan")
+        if self.runtime_binding_ref is not None and not (
+            self.runtime_binding_ref.startswith(
+                "omnigent-runtime-binding:sha256:"
+            )
+        ):
+            raise ValueError(
+                "runtimeBindingRef must identify a fenced runtime binding"
+            )
         policy_fields = (
             self.policy_id,
             self.policy_version,

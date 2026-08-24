@@ -14,6 +14,14 @@ from typing import Any, Literal
 _AUDIENCE = "moonmind-execution-fanout"
 _VERSION = 1
 EXECUTION_FANOUT_REQUIRED_CAPABILITY = "execution.fanout"
+ExecutionFanoutSourceKind = Literal[
+    "managed_process",
+    "managed_session",
+    "omnigent",
+]
+_EXECUTION_FANOUT_SOURCE_KINDS: frozenset[str] = frozenset(
+    {"managed_process", "managed_session", "omnigent"}
+)
 
 
 class ExecutionFanoutCapabilityError(ValueError):
@@ -53,7 +61,7 @@ class ExecutionFanoutCapability:
     step_id: str | None
     session_id: str
     runtime_id: str
-    source_kind: Literal["managed_session", "omnigent"]
+    source_kind: ExecutionFanoutSourceKind
     expires_at: int
 
 
@@ -87,7 +95,7 @@ def mint_execution_fanout_capability(
     agent_run_id: str,
     session_id: str,
     runtime_id: str,
-    source_kind: Literal["managed_session", "omnigent"],
+    source_kind: ExecutionFanoutSourceKind,
     lifetime_seconds: int,
     step_id: str | None = None,
     now: int | None = None,
@@ -99,7 +107,7 @@ def mint_execution_fanout_capability(
         raise ExecutionFanoutCapabilityError(
             "execution fan-out capability lifetime must be positive"
         )
-    if source_kind not in {"managed_session", "omnigent"}:
+    if source_kind not in _EXECUTION_FANOUT_SOURCE_KINDS:
         raise ExecutionFanoutCapabilityError(
             "unsupported execution fan-out capability source kind"
         )
@@ -169,7 +177,7 @@ def verify_execution_fanout_capability(
     if expires_at <= current_time:
         raise ExecutionFanoutCapabilityError("expired execution fan-out capability")
     source_kind = payload.get("sourceKind")
-    if source_kind not in {"managed_session", "omnigent"}:
+    if source_kind not in _EXECUTION_FANOUT_SOURCE_KINDS:
         raise ExecutionFanoutCapabilityError("invalid execution fan-out capability")
     return ExecutionFanoutCapability(
         parent_workflow_id=_required_text(
@@ -188,6 +196,7 @@ __all__ = [
     "EXECUTION_FANOUT_REQUIRED_CAPABILITY",
     "ExecutionFanoutCapability",
     "ExecutionFanoutCapabilityError",
+    "ExecutionFanoutSourceKind",
     "mint_execution_fanout_capability",
     "require_execution_fanout_authorization",
     "verify_execution_fanout_capability",

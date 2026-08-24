@@ -36,7 +36,7 @@ from .repository_contract import (
     decode_legacy_repository_history_v1,
 )
 
-DEFAULT_WORKFLOW_RUNTIME = "codex"
+DEFAULT_WORKFLOW_RUNTIME = "omnigent"
 SUPPORTED_RUNTIME_MODES = {
     "codex",
     "codex_cli",

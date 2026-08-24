@@ -162,6 +162,38 @@ class TestTemporalDashboardSettings:
         )
 
 class TestFeatureFlagsSettings:
+    def test_omnigent_session_supervisor_defaults_and_bounded_overrides(
+        self, monkeypatch
+    ):
+        names = (
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE",
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS",
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION",
+        )
+        for name in names:
+            monkeypatch.delenv(name, raising=False)
+
+        defaults = FeatureFlagsSettings(_env_file=None)
+        assert defaults.omnigent_session_supervisor_admission_mode == "enabled"
+        assert defaults.omnigent_session_supervisor_canary_owner_ids == ""
+        assert defaults.omnigent_session_supervisor_generation == (
+            "omnigent-session-v1"
+        )
+
+        monkeypatch.setenv(names[0], "canary")
+        monkeypatch.setenv(names[1], "agent-run-1,agent-run-2")
+        monkeypatch.setenv(names[2], "profile-a")
+        configured = FeatureFlagsSettings(_env_file=None)
+        assert configured.omnigent_session_supervisor_admission_mode == "canary"
+        assert configured.omnigent_session_supervisor_canary_owner_ids == (
+            "agent-run-1,agent-run-2"
+        )
+        assert (
+            configured.omnigent_session_supervisor_allowed_execution_profile_refs
+            == "profile-a"
+        )
+
     def test_preset_catalog_reads_prefixed_env(self, monkeypatch):
         monkeypatch.setenv("FEATURE_FLAGS__PRESET_CATALOG", "1")
         monkeypatch.delenv("PRESET_CATALOG", raising=False)
@@ -630,7 +662,7 @@ class TestWorkflowSettings:
         settings = WorkflowSettings(_env_file=None)
         assert settings.codex_model == "gpt-5.5"
         assert settings.codex_effort == "high"
-        assert settings.default_runtime == "codex_cli"
+        assert settings.default_runtime == "omnigent"
         assert settings.default_publish_mode == "pr"
         assert settings.claude_volume_name == "claude_auth_volume"
         assert settings.claude_volume_path == "/home/app/.claude"

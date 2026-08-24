@@ -120,6 +120,10 @@ class TemporalSettings(BaseSettings):
         "mm.activity.agent_runtime",
         validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_TASK_QUEUE",
     )
+    activity_agent_runtime_control_task_queue: str = Field(
+        "mm.activity.agent_runtime.control",
+        validation_alias="TEMPORAL_ACTIVITY_AGENT_RUNTIME_CONTROL_TASK_QUEUE",
+    )
     activity_deployment_task_queue: str = Field(
         "mm.activity.deployment",
         validation_alias="TEMPORAL_ACTIVITY_DEPLOYMENT_TASK_QUEUE",
@@ -696,7 +700,7 @@ class WorkflowSettings(BaseSettings):
         description="Override container image for Codex login status checks.",
     )
     default_runtime: str = Field(
-        "codex",
+        "omnigent",
         validation_alias=AliasChoices(
             "WORKFLOW_DEFAULT_RUNTIME",
             "MOONMIND_DEFAULT_RUNTIME",
@@ -715,6 +719,7 @@ class WorkflowSettings(BaseSettings):
                 "apply_mode": "next_workflow",
                 "title": "Default Runtime",
                 "options": [
+                    ("omnigent", "Omnigent (OpenCode)"),
                     ("codex", "Codex"),
                     ("codex_cli", "Codex CLI"),
                     ("claude_code", "Claude Code"),
@@ -1281,11 +1286,11 @@ class WorkflowSettings(BaseSettings):
         (codex, claude) and normalizes them to canonical form so internal state
         is consistent with the runtime_defaults canonical-first direction.
         """
-        normalized = str(value or "").strip().lower() or "codex_cli"
+        normalized = str(value or "").strip().lower() or "omnigent"
         # Map legacy aliases to canonical before validation.
         _aliases = {"codex": "codex_cli", "claude": "claude_code"}
         normalized = _aliases.get(normalized, normalized)
-        allowed = {"codex_cli", "claude_code", "jules"}
+        allowed = {"omnigent", "codex_cli", "claude_code", "jules"}
         if normalized not in allowed:
             supported = ", ".join(sorted(allowed))
             raise ValueError(f"default_runtime must be one of: {supported}")
@@ -2038,6 +2043,82 @@ class FeatureFlagsSettings(BaseSettings):
         validation_alias=AliasChoices(
             "FEATURE_FLAGS__CONTROL_STOP_CONTINUATION_GENERATION",
             "CONTROL_STOP_CONTINUATION_GENERATION",
+        ),
+    )
+    omnigent_session_supervisor_admission_mode: Literal[
+        "disabled", "canary", "enabled"
+    ] = Field(
+        "enabled",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE",
+            "OMNIGENT_SESSION_SUPERVISOR_ADMISSION_MODE",
+        ),
+        description=(
+            "Controls only admission of new profile-bound Omnigent session "
+            "supervisors; admitted histories remain operational."
+        ),
+    )
+    omnigent_session_supervisor_canary_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_CANARY_OWNER_IDS",
+        ),
+    )
+    omnigent_session_supervisor_enabled: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ENABLED",
+            "OMNIGENT_SESSION_SUPERVISOR_ENABLED",
+        ),
+    )
+    omnigent_session_supervisor_shadow: bool = Field(
+        False,
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_SHADOW",
+            "OMNIGENT_SESSION_SUPERVISOR_SHADOW",
+        ),
+    )
+    omnigent_session_supervisor_allowed_owner_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_OWNER_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_OWNER_IDS",
+        ),
+    )
+    omnigent_session_supervisor_allowed_execution_profile_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_EXECUTION_PROFILE_REFS",
+        ),
+    )
+    omnigent_session_supervisor_generation: str = Field(
+        "omnigent-session-v1",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_GENERATION",
+            "OMNIGENT_SESSION_SUPERVISOR_GENERATION",
+        ),
+    )
+    omnigent_session_supervisor_allowed_launch_policy_refs: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_LAUNCH_POLICY_REFS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_LAUNCH_POLICY_REFS",
+        ),
+    )
+    omnigent_session_supervisor_allowed_provider_profile_ids: str = Field(
+        "",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ALLOWED_PROVIDER_PROFILE_IDS",
+            "OMNIGENT_SESSION_SUPERVISOR_ALLOWED_PROVIDER_PROFILE_IDS",
+        ),
+    )
+    omnigent_session_supervisor_rollback_mode: str = Field(
+        "none",
+        validation_alias=AliasChoices(
+            "FEATURE_FLAGS__OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
+            "OMNIGENT_SESSION_SUPERVISOR_ROLLBACK_MODE",
         ),
     )
     live_logs_session_timeline_rollout: Literal[

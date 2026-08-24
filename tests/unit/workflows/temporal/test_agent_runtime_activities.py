@@ -5736,6 +5736,99 @@ async def test_agent_runtime_reconcile_managed_sessions_returns_bounded_summary(
     }
 
 
+async def test_agent_runtime_reconcile_runs_omnigent_stuck_state_sweep() -> None:
+    """The durable operational activity owns the automated #3708 sweep."""
+
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            return []
+
+        async def reap_orphan_session_containers(self) -> ManagedSessionReapResult:
+            return ManagedSessionReapResult()
+
+    class _SweepResult:
+        def to_dict(self) -> dict[str, int]:
+            return {
+                "scanned": 2,
+                "findingsRecorded": 1,
+                "reconcileRequests": 1,
+                "deliveryUnknown": 0,
+                "quarantined": 0,
+                "observationOnly": 0,
+                "conflicts": 0,
+                "failures": 0,
+            }
+
+    class _StuckStateService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def sweep(self) -> _SweepResult:
+            self.calls += 1
+            return _SweepResult()
+
+    stuck_state = _StuckStateService()
+    activities = TemporalAgentRuntimeActivities(
+        session_controller=_Controller(),
+        omnigent_stuck_state_service=stuck_state,
+    )
+
+    result = await activities.agent_runtime_reconcile_managed_sessions({})
+
+    assert stuck_state.calls == 1
+    assert result["omnigentStuckState"] == _SweepResult().to_dict()
+
+
+async def test_targeted_omnigent_reconcile_validates_authority_before_observation() -> None:
+    events: list[str] = []
+
+    class _Controller:
+        async def reconcile(self) -> list[dict[str, Any]]:
+            assert events == ["validate"]
+            events.append("reconcile")
+            return []
+
+        async def reap_orphan_session_containers(self) -> ManagedSessionReapResult:
+            events.append("reap")
+            return ManagedSessionReapResult()
+
+    class _StuckStateService:
+        async def validate_reconcile_request(self, **payload: object):
+            assert payload == {
+                "session_id": "canonical-session",
+                "workflow_id": "wf-1",
+                "request_id": "ocm-1",
+                "reason_code": "provider_terminal_moonmind_nonterminal",
+                "expected_revision": 7,
+                "expected_fencing_generation": 3,
+            }
+            events.append("validate")
+            return {"accepted": True}
+
+        async def sweep(self):
+            raise AssertionError("targeted reconcile must not launch another sweep")
+
+    activities = TemporalAgentRuntimeActivities(
+        session_controller=_Controller(),
+        omnigent_stuck_state_service=_StuckStateService(),
+    )
+    result = await activities.agent_runtime_reconcile_managed_sessions(
+        {
+            "omnigentWorkflowId": "wf-1",
+            "omnigentReconcileRequest": {
+                "sessionId": "canonical-session",
+                "requestId": "ocm-1",
+                "reasonCode": "provider_terminal_moonmind_nonterminal",
+                "expectedRevision": 7,
+                "expectedFencingGeneration": 3,
+            },
+        }
+    )
+
+    assert events == ["validate", "reconcile", "reap"]
+    assert result["omnigentReconcileRequest"] == {"accepted": True}
+
+
 async def test_agent_runtime_reconcile_orphan_reap_failure_is_best_effort() -> None:
     class _Controller:
         async def reconcile(self) -> list[dict[str, Any]]:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 from temporalio import activity
 
+from moonmind.config.settings import TemporalSettings
 from moonmind.workflows.skills.skill_plan_contracts import parse_skill_definition
 from moonmind.workflows.temporal.activity_catalog import (
     ARTIFACTS_FLEET,
@@ -89,12 +90,12 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
         == INTEGRATIONS_TASK_QUEUE
     )
     omnigent_route = catalog.resolve_activity("integration.omnigent.execute")
-    assert omnigent_route.task_queue == INTEGRATIONS_TASK_QUEUE
-    assert omnigent_route.capability_class == "integration:omnigent"
+    assert omnigent_route.task_queue == AGENT_RUNTIME_TASK_QUEUE
+    assert omnigent_route.capability_class == "agent_runtime"
     assert omnigent_route.heartbeat_required is True
     assert (
         catalog.resolve_activity("integration.omnigent.execute").task_queue
-        == INTEGRATIONS_TASK_QUEUE
+        == AGENT_RUNTIME_TASK_QUEUE
     )
     assert (
         catalog.resolve_activity("workload.run").task_queue
@@ -134,6 +135,16 @@ def test_default_catalog_exposes_canonical_queues_and_fleets():
     assert "docker_workload" in fleets[AGENT_RUNTIME_FLEET].capabilities
 
 
+def test_agent_runtime_control_queue_must_be_isolated() -> None:
+    temporal_settings = TemporalSettings(
+        activity_agent_runtime_task_queue="shared-agent-runtime",
+        activity_agent_runtime_control_task_queue="shared-agent-runtime",
+    )
+
+    with pytest.raises(TemporalActivityCatalogError, match="must be isolated"):
+        build_default_activity_catalog(temporal_settings)
+
+
 def test_default_catalog_matches_runtime_binding_inventory() -> None:
     """Every concrete handler must be routable, and every route executable."""
     catalog = build_default_activity_catalog()
@@ -161,12 +172,22 @@ def test_default_catalog_matches_runtime_binding_inventory() -> None:
 
 
 def test_terminal_evidence_evaluation_routes_to_agent_runtime_fleet() -> None:
-    route = build_default_activity_catalog().resolve_activity(
+    temporal_settings = TemporalSettings()
+    catalog = build_default_activity_catalog(temporal_settings)
+    route = catalog.resolve_activity(
         "agent_runtime.evaluate_terminal_evidence"
     )
 
     assert route.fleet == AGENT_RUNTIME_FLEET
-    assert route.task_queue == AGENT_RUNTIME_TASK_QUEUE
+    assert (
+        route.task_queue
+        == temporal_settings.activity_agent_runtime_control_task_queue
+    )
+    fleet = {item.fleet: item for item in catalog.fleets}[AGENT_RUNTIME_FLEET]
+    assert fleet.task_queues == (
+        AGENT_RUNTIME_TASK_QUEUE,
+        temporal_settings.activity_agent_runtime_control_task_queue,
+    )
 
 
 def test_plan_generate_timeout_budget_allows_retry_after_attempt_timeout():

@@ -23,7 +23,10 @@ from api_service.db.models import (
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
-from moonmind.omnigent.oauth_hosts import OmnigentOAuthHostError
+from moonmind.omnigent.oauth_hosts import (
+    HostPreflightFailure,
+    OmnigentOAuthHostError,
+)
 from moonmind.provider_profiles.lease_client import (
     CredentialLeasePurpose,
     ProviderProfileLeaseClient,
@@ -259,6 +262,11 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
                 "host_lease": host_lease,
                 "effective_launch": effective_launch,
             }
+            if observed.get("fail_validation") == "credential":
+                raise OmnigentOAuthHostError(
+                    "credential preflight failed",
+                    code=HostPreflightFailure.LOGIN_STATUS_FAILED.value,
+                )
             if observed.get("fail_validation"):
                 raise RuntimeError("credential preflight failed")
             return {"validationMode": "credential_only"}
@@ -319,17 +327,16 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
     assert lease.status == "stopped"
 
     @asynccontextmanager
-    async def no_profile_context():
-        class Database:
-            async def execute(self, _statement):
-                return SimpleNamespace(scalar_one_or_none=lambda: None)
-
-        yield Database()
+    async def profile_mutation_forbidden():
+        raise AssertionError(
+            "an untyped runtime failure must not mutate credential readiness"
+        )
+        yield
 
     monkeypatch.setattr(
         oauth_session_activities,
         "get_async_session_context",
-        no_profile_context,
+        profile_mutation_forbidden,
     )
     observed["fail_validation"] = True
     lease.status = "allocating"
@@ -345,6 +352,65 @@ async def test_revalidate_bound_host_uses_credential_only_runtime_preflight(
 
     assert lease.status == "stopped"
     assert observed["stop_host"] == {"binding": binding, "host_lease": lease}
+
+    profile = SimpleNamespace(
+        profile_id="codex_openai_oauth",
+        runtime_id="codex_cli",
+        enabled=True,
+        auth_state=ProviderProfileAuthState.CONNECTED,
+        disabled_reason=None,
+        command_behavior={
+            "auth_readiness": {"connected": True, "launch_ready": True}
+        },
+    )
+    commits = 0
+
+    @asynccontextmanager
+    async def profile_context():
+        class Database:
+            async def execute(self, _statement):
+                return SimpleNamespace(scalar_one_or_none=lambda: profile)
+
+            async def commit(self):
+                nonlocal commits
+                commits += 1
+
+        yield Database()
+
+    async def sync_profile_manager(*, session, runtime_id):
+        assert session is not None
+        assert runtime_id == "codex_cli"
+
+    monkeypatch.setattr(
+        oauth_session_activities,
+        "get_async_session_context",
+        profile_context,
+    )
+    monkeypatch.setattr(
+        "api_service.services.provider_profile_service.sync_provider_profile_manager",
+        sync_profile_manager,
+    )
+    observed["fail_validation"] = "credential"
+    lease.status = "allocating"
+
+    with pytest.raises(OmnigentOAuthHostError, match="credential preflight failed"):
+        await oauth_session_activities.oauth_session_revalidate_bound_host(
+            {
+                "session_id": session_id,
+                "profile_id": "codex_openai_oauth",
+                "provider_lease_id": "provider-lease-revalidate",
+            }
+        )
+
+    assert commits == 1
+    assert profile.enabled is False
+    assert profile.auth_state == ProviderProfileAuthState.VALIDATION_FAILED
+    assert profile.disabled_reason.value == "auth_invalid"
+    assert profile.command_behavior["auth_readiness"] == {
+        "connected": False,
+        "launch_ready": False,
+        "failure_reason": "credential_login_status_failed",
+    }
 
     observed["fail_validation"] = False
     observed["fail_cleanup"] = True

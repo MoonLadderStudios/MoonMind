@@ -1,9 +1,9 @@
 # Omnigent Semantic Telemetry, Operator Session Timeline, and Stuck-State Reconciliation
 
-Status: Proposed design
+Status: Implemented
 Document Class: System / Feature Design View
 Owners: MoonMind Platform
-Last updated: 2026-08-18
+Last updated: 2026-08-19
 
 **Issue:** [MoonLadderStudios/MoonMind#3708](https://github.com/MoonLadderStudios/MoonMind/issues/3708) ([Omnigent control plane 7/11]).
 
@@ -93,6 +93,10 @@ and `FORBIDDEN_LABEL_KEYS` rejects any Workflow, run, user, session, binding,
 provider-session, host, runner, profile, credential, repository, or workspace
 identity at registration and at record time. **Metric labels are low cardinality
 and never carry identity.**
+The same bounded recorder writes both the local diagnostic aggregate and real
+OpenTelemetry Counter/Histogram instruments. API and Temporal worker startup
+install the shared OTLP meter provider; instrument or exporter failure is
+contained after local evidence is recorded.
 
 ## Durable operator session timeline
 
@@ -105,6 +109,11 @@ and reconciled state and explains why a session is launching, running,
 delivery-unknown, awaiting observation, retrying, terminal, cleanup-incomplete,
 or quarantined. Refs/digests pass through a secret-free guard and links are
 server-authored relative URLs built from opaque validated ids.
+Authorized trace and log links use
+`/api/omnigent/sessions/{session_id}/trace` and `/logs` redirects. The server
+resolves durable identifiers into validated telemetry templates only after the
+`operations.read` check; backend URLs and workflow/run identities are never
+embedded directly in the timeline document.
 
 The authorized machine-readable endpoint is
 `GET /api/omnigent/sessions/{session_id}/timeline` (operator permission
@@ -136,6 +145,22 @@ Automated response policy (`plan_response`):
 5. Product reads and evidence stay available even when interactive mutation is
    disabled.
 
+The existing durable `MoonMind.ManagedSessionReconcile` schedule is the single
+operational sweep owner. Its activity loads a bounded batch of canonical
+sessions, records each finding as an observation and reconciliation decision,
+journals one revision- and generation-fenced `request_reconcile` command, and
+executes the registered `ReconcileOmnigentSession` Update on the canonical
+`MoonMind.AgentSession` child workflow. The receiving workflow invokes the
+production reconciliation Activity, which reloads the canonical session and
+command journal, confirms that the session belongs to the parent Workflow
+scope, and validates the revision and fencing generation. An ambiguous Update delivery is
+parked as `delivery_unknown` and is never blindly resent. When the bounded
+persistent-ambiguity threshold is reached, the activity first publishes a
+restricted, redacted, long-retention diagnostic artifact and then quarantines
+the session with a fenced compare-and-swap. The read-only
+`GET /api/omnigent/sessions/{session_id}/stuck-state` endpoint projects the same
+pure inspection and response plan without becoming mutation authority.
+
 ## New-admission readiness
 
 `moonmind/omnigent/control_plane/readiness.py` computes a bounded
@@ -146,7 +171,24 @@ manifests, WebSocket availability, worker/container backend, observation
 freshness, janitor health, and the last exact-image and protected-live evidence.
 Admission **fails closed**: a capability is ready only when explicitly observed
 ready; unknown or negative signals block new admission. Historical reads and
-cleanup for existing sessions stay available regardless.
+cleanup for existing sessions stay available regardless. Workflow Create's
+`GET /api/omnigent/codex-catalog-readiness` projection carries this document as
+`admissionReadiness` and derives the loaded supervisor, reconcile Activity,
+janitor Activity, WebSocket route, persisted schema, typed provider snapshot and
+event observations, and the runtime owner's attested server/host image manifest
+from their production registries and durable evidence. A generic healthy
+endpoint, bridge conformance, or configured image ref is never promoted into
+snapshot, transport, or deployed-build evidence.
+
+An empty deployment has one bounded bootstrap path: the authenticated protected
+acceptance canary may attach a five-minute, closed-schema manifest of directly
+observed snapshot/transport support and immutable deployed server, bundled-UI,
+and host build identities to the normal catalog request. The repository-owned
+live controller accepts that manifest only from its live setup adapter and the
+catalog parses it only after constant-time canary-token authentication. Missing,
+stale, future-dated, malformed, mutable, or unauthenticated bootstrap evidence
+fails closed. Once runtime-owned observation and build rows exist, those durable
+records are authoritative; configured refs remain comparison targets only.
 
 ## Non-goals
 

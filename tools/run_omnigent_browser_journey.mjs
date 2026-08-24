@@ -15,6 +15,156 @@ const required = (name) => {
   return value;
 };
 
+/*
+ * Tier-1 exact-artifact UI probe (MoonLadderStudios/MoonMind#3710).
+ *
+ * Credential-free, self-contained mode used by the exact-artifact gate to prove
+ * the compiled native UI baked into the deployable image consumes the hosted
+ * bootstrap and sends no direct-upstream traffic in hosted mode: no root
+ * `/v1/*` request (which would bypass the `/api/omnigent` mount) and no
+ * cross-origin upstream request. It must run without the credentialed journey's
+ * environment, so it short-circuits before those `required(...)` reads. On a
+ * violation it prints a `root-v1-request` line and exits non-zero so the gate
+ * fails closed; on success it prints a summary that never contains that marker.
+ */
+/*
+ * The image's compiled dashboard bundle is served from this mount
+ * (`api_service/main.py` mounts the Vite output at this prefix). A request under
+ * it proves the browser fetched the compiled UI baked into the deployable image.
+ */
+const HOSTED_BUNDLE_PATH_PREFIX = "/static/workflow_console/dist/";
+
+async function runHostedNetworkCapture(argv) {
+  const urlFlagIndex = argv.indexOf("--hosted-url");
+  const hostedUrl = (
+    (urlFlagIndex >= 0 ? argv[urlFlagIndex + 1] : "") ||
+    process.env.MOONMIND_OMNIGENT_DASHBOARD_URL ||
+    "http://127.0.0.1:8000"
+  ).replace(/\/$/, "");
+  const hostedOrigin = new URL(hostedUrl).origin;
+  const captureTimeout = Number(
+    process.env.MOONMIND_OMNIGENT_HOSTED_CAPTURE_TIMEOUT_MS || "60000",
+  );
+  const browser = await chromium.launch({ headless: true });
+  const requests = [];
+  const rootV1Requests = [];
+  const directUpstreamRequests = [];
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    page.on("request", (request) => {
+      let parsed;
+      try {
+        parsed = new URL(request.url());
+      } catch {
+        return;
+      }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return;
+      requests.push({ origin: parsed.origin, pathname: parsed.pathname });
+      if (parsed.origin === hostedOrigin && parsed.pathname.startsWith("/v1/")) {
+        rootV1Requests.push(`${parsed.pathname}`);
+      } else if (parsed.origin !== hostedOrigin) {
+        directUpstreamRequests.push(`${parsed.origin}${parsed.pathname}`);
+      }
+    });
+    const response = await page.goto(hostedUrl, {
+      waitUntil: "networkidle",
+      timeout: captureTimeout,
+    });
+    // Allow any deferred client-side bootstrap requests to settle.
+    await page.waitForTimeout(1000);
+    const documentOk =
+      Boolean(response) &&
+      response.status() < 400 &&
+      new URL(response.url()).origin === hostedOrigin;
+    /*
+     * Bootstrap consumption is asserted from observable state, not from the
+     * presence of a same-origin request. The top-level navigation is itself
+     * same-origin, so counting any non-`/v1/` request would let a compiled UI
+     * that never loads — or never reads its boot payload — report success and
+     * hide exactly the bootstrap regression this gate exists to catch.
+     *
+     * Two concrete facts are required:
+     *   1. the compiled bundle was actually fetched from the deployable origin
+     *      (a request under the image's hashed asset mount), and
+     *   2. the application executed and rendered from the injected boot payload
+     *      (the boot script parses as JSON and the app root has real content).
+     */
+    const bundleRequested = requests.some(
+      (r) =>
+        r.origin === hostedOrigin &&
+        r.pathname.startsWith(HOSTED_BUNDLE_PATH_PREFIX),
+    );
+    const bootstrapState = documentOk
+      ? await page.evaluate(() => {
+          const bootScript = document.querySelector("#moonmind-ui-boot");
+          let bootPayloadParsed = false;
+          if (bootScript && bootScript.textContent) {
+            try {
+              bootPayloadParsed =
+                typeof JSON.parse(bootScript.textContent) === "object";
+            } catch {
+              bootPayloadParsed = false;
+            }
+          }
+          const appRoot = document.querySelector("#dashboard-app-root");
+          return {
+            bootPayloadPresent: Boolean(bootScript),
+            bootPayloadParsed,
+            appRendered: Boolean(appRoot && appRoot.children.length > 0),
+          };
+        })
+      : { bootPayloadPresent: false, bootPayloadParsed: false, appRendered: false };
+    const consumedHostedBootstrap =
+      documentOk &&
+      bundleRequested &&
+      bootstrapState.bootPayloadParsed &&
+      bootstrapState.appRendered;
+    if (rootV1Requests.length > 0) {
+      // The literal marker below is what the Tier-1 probe scans stdout for.
+      console.log(
+        `root-v1-request observed in hosted mode: ${rootV1Requests
+          .slice(0, 10)
+          .join(", ")}`,
+      );
+      return 1;
+    }
+    if (directUpstreamRequests.length > 0) {
+      console.log(
+        `direct-upstream request observed in hosted mode: ${directUpstreamRequests
+          .slice(0, 10)
+          .join(", ")}`,
+      );
+      return 1;
+    }
+    if (!consumedHostedBootstrap) {
+      console.log(
+        "hosted UI did not consume the hosted bootstrap from the deployable " +
+          `origin (document=${documentOk} bundleRequested=${bundleRequested} ` +
+          `bootPayload=${bootstrapState.bootPayloadParsed} ` +
+          `appRendered=${bootstrapState.appRendered})`,
+      );
+      return 1;
+    }
+    console.log(
+      `hosted UI capture ok: compiled bundle served from ${HOSTED_BUNDLE_PATH_PREFIX}, ` +
+        `boot payload parsed and app rendered, ${requests.length} same-origin ` +
+        "requests, no direct-upstream calls",
+    );
+    return 0;
+  } catch (error) {
+    console.log(`hosted UI capture failed: ${String(error).slice(0, 200)}`);
+    return 1;
+  } finally {
+    await browser.close();
+  }
+}
+
+const cliArgs = process.argv.slice(2);
+if (cliArgs.includes("--hosted-network-capture")) {
+  process.exit(await runHostedNetworkCapture(cliArgs));
+}
+
 const baseUrl = required("MOONMIND_OMNIGENT_DASHBOARD_URL").replace(/\/$/, "");
 const row = required("MOONMIND_OMNIGENT_BROWSER_ROW");
 const profileId = required("MOONMIND_OMNIGENT_PROVIDER_PROFILE_ID");
@@ -23,6 +173,9 @@ const branch = required("MOONMIND_OMNIGENT_TEST_BRANCH");
 const outputDir = required("MOONMIND_OMNIGENT_BROWSER_OUTPUT_DIR");
 const storageState = process.env.MOONMIND_OMNIGENT_BROWSER_STORAGE_STATE || undefined;
 const canaryToken = required("MOONMIND_OMNIGENT_ACCEPTANCE_CANARY_TOKEN");
+const catalogBootstrapEvidence = (
+  process.env.MOONMIND_OMNIGENT_CATALOG_BOOTSTRAP_EVIDENCE || ""
+).trim();
 const timeout = Number(process.env.MOONMIND_OMNIGENT_BROWSER_TIMEOUT_MS || "900000");
 const remediationTargetId = (
   process.env.MOONMIND_OMNIGENT_REMEDIATION_TARGET_WORKFLOW_ID || ""
@@ -69,9 +222,15 @@ const staticRows = new Set([
 fs.mkdirSync(outputDir, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 try {
+  const extraHTTPHeaders = {
+    "X-MoonMind-Acceptance-Canary": canaryToken,
+    ...(catalogBootstrapEvidence
+      ? { "X-MoonMind-Acceptance-Evidence": catalogBootstrapEvidence }
+      : {}),
+  };
   const context = await browser.newContext({
     ...(storageState ? { storageState } : {}),
-    extraHTTPHeaders: { "X-MoonMind-Acceptance-Canary": canaryToken },
+    extraHTTPHeaders,
   });
   const page = await context.newPage();
   const requests = [];

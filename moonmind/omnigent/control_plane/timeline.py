@@ -13,7 +13,7 @@ data remains available after live resources are removed").
 
 Every emitted field is bounded and safe: refs and digests are passed through a
 guard that drops anything resembling a credential, presigned URL, or host path
-(:func:`_safe_ref`), and no prompt, transcript, diff, or provider credential is
+(:func:`safe_timeline_ref`), and no prompt, transcript, diff, or provider credential is
 ever included. Trace/artifact links are server-authored relative URLs built from
 opaque, validated ids.
 """
@@ -62,7 +62,7 @@ class TimelineStatus(str, Enum):
     CLOSED = "closed"
 
 
-def _safe_ref(value: Optional[str]) -> Optional[str]:
+def safe_timeline_ref(value: Optional[str]) -> Optional[str]:
     """Return ``value`` if it is a bounded, secret-free ref, else ``None``.
 
     A ref that looks like a credential, presigned URL, host path, or unbounded
@@ -91,7 +91,7 @@ def _safe_link(kind: str, ref: Optional[str]) -> Optional[str]:
     pointed at a nonexistent ``/api/omnigent/traces`` route.
     """
 
-    safe = _safe_ref(ref)
+    safe = safe_timeline_ref(ref)
     if safe is None or not _SAFE_ID.match(safe):
         return None
     if kind in {"artifact", "intent"}:
@@ -142,6 +142,12 @@ class SessionTimeline:
     # compiled intent
     intent_ref: Optional[str]
     intent_digest: Optional[str]
+    execution_plan_ref: Optional[str]
+    execution_plan_digest: Optional[str]
+    runtime_binding_ref: Optional[str]
+    runtime_binding_revision: Optional[int]
+    runtime_binding_fencing_generation: Optional[int]
+    runtime_binding_state: Optional[str]
 
     # canonical session state / authority
     desired_state: str
@@ -189,6 +195,7 @@ class SessionTimeline:
 
     # safe links
     trace_link: Optional[str]
+    log_link: Optional[str]
     terminal_evidence_link: Optional[str]
     intent_link: Optional[str]
 
@@ -221,6 +228,16 @@ class SessionTimeline:
             "sessionId": self.session_id,
             "provider": self.provider,
             "intent": {"ref": self.intent_ref, "digest": self.intent_digest, "link": self.intent_link},
+            "executionPlan": {
+                "ref": self.execution_plan_ref,
+                "digest": self.execution_plan_digest,
+            },
+            "runtimeBinding": {
+                "ref": self.runtime_binding_ref,
+                "revision": self.runtime_binding_revision,
+                "fencingGeneration": self.runtime_binding_fencing_generation,
+                "state": self.runtime_binding_state,
+            },
             "state": {
                 "desired": self.desired_state,
                 "durable": self.durable_state,
@@ -261,7 +278,7 @@ class SessionTimeline:
                 "imageManifestRef": self.image_manifest_ref,
             },
             "explanation": {"status": self.status.value, "detail": self.status_detail},
-            "links": {"trace": self.trace_link},
+            "links": {"trace": self.trace_link, "logs": self.log_link},
         }
 
 
@@ -335,12 +352,14 @@ def build_timeline(
     decisions: Sequence[DecisionRecord] = (),
     cleanup: Optional[CleanupAuthorityRecord] = None,
     turn_attempt_count: Optional[int] = None,
+    trace_link: Optional[str] = None,
+    log_link: Optional[str] = None,
 ) -> SessionTimeline:
     """Project one bounded operator session timeline from durable records.
 
     The projection reads only the passed records; it performs no live-resource
     I/O, so it survives provider/host/workspace cleanup. Every ref/digest is
-    passed through :func:`_safe_ref`, and trace/artifact links are built only
+    passed through :func:`safe_timeline_ref`, and trace/artifact links are built only
     from opaque validated ids, so no credential, presigned URL, host path, or
     unbounded payload can appear.
 
@@ -364,7 +383,18 @@ def build_timeline(
         "observed_at",
     )
     event_obs = _latest(
-        [o for o in observations if o.observation_type in {"event", "event_frontier", "event_batch"}],
+        [
+            o
+            for o in observations
+            if o.observation_type
+            in {
+                "event",
+                "event_frontier",
+                "event_batch",
+                "provider_event",
+                "provider_event_batch",
+            }
+        ],
         "observed_at",
     )
 
@@ -390,7 +420,7 @@ def build_timeline(
             fencing_generation=last_decision_record.fencing_generation,
             next_deadline=last_decision_record.next_deadline,
             product_visible_transition=last_decision_record.product_visible_transition,
-            trace_link=_safe_link("trace", last_decision_record.trace_ref),
+            trace_link=safe_timeline_ref(trace_link),
             diagnostics_link=_safe_link("artifact", last_decision_record.diagnostics_ref),
         )
 
@@ -412,8 +442,26 @@ def build_timeline(
     return SessionTimeline(
         session_id=session.session_id,
         provider=session.provider,
-        intent_ref=_safe_ref(session.intent_ref),
-        intent_digest=_safe_ref(session.intent_digest),
+        intent_ref=safe_timeline_ref(session.intent_ref),
+        intent_digest=safe_timeline_ref(session.intent_digest),
+        execution_plan_ref=safe_timeline_ref(meta.get("executionPlanRef")),
+        execution_plan_digest=safe_timeline_ref(meta.get("executionPlanDigest")),
+        runtime_binding_ref=safe_timeline_ref(meta.get("runtimeBindingRef")),
+        runtime_binding_revision=(
+            int(meta["runtimeBindingRevision"])
+            if meta.get("runtimeBindingRevision") is not None
+            else None
+        ),
+        runtime_binding_fencing_generation=(
+            int(meta["runtimeBindingFencingGeneration"])
+            if meta.get("runtimeBindingFencingGeneration") is not None
+            else None
+        ),
+        runtime_binding_state=(
+            str(meta["runtimeBindingState"])
+            if meta.get("runtimeBindingState") is not None
+            else None
+        ),
         desired_state=session.desired_state,
         durable_state=session.reconciled_state or session.desired_state,
         observed_state=session.observed_state,
@@ -424,10 +472,12 @@ def build_timeline(
         turn_attempt_count=(
             turn_attempt_count if turn_attempt_count is not None else len(turn_attempts)
         ),
-        provider_event_cursor=_safe_ref(session.provider_event_cursor),
-        snapshot_frontier=_safe_ref(session.snapshot_frontier),
+        provider_event_cursor=safe_timeline_ref(session.provider_event_cursor),
+        snapshot_frontier=safe_timeline_ref(session.snapshot_frontier),
         last_snapshot_at=getattr(snapshot_obs, "observed_at", None),
-        last_snapshot_digest=_safe_ref(getattr(snapshot_obs, "source_digest", None)),
+        last_snapshot_digest=safe_timeline_ref(
+            getattr(snapshot_obs, "source_digest", None)
+        ),
         last_event_at=getattr(event_obs, "observed_at", None),
         leases=LeaseObservationSummary(
             profile_generation=session.provider_profile_generation,
@@ -439,15 +489,16 @@ def build_timeline(
         next_reconciliation_deadline=session.next_reconciliation_deadline,
         active_command=command_summary,
         terminal_state=session.terminal_state,
-        terminal_evidence_ref=_safe_ref(session.terminal_evidence_ref),
+        terminal_evidence_ref=safe_timeline_ref(session.terminal_evidence_ref),
         cleanup_state=session.cleanup_state,
         janitor_state=janitor_state,
         workspace_publication_state=workspace_state if isinstance(workspace_state, str) else None,
-        compatibility_ref=_safe_ref(session.compatibility_ref),
-        image_manifest_ref=_safe_ref(session.image_manifest_ref),
+        compatibility_ref=safe_timeline_ref(session.compatibility_ref),
+        image_manifest_ref=safe_timeline_ref(session.image_manifest_ref),
         status=status,
         status_detail=detail,
-        trace_link=_safe_link("trace", last_decision_record.trace_ref if last_decision_record else None),
+        trace_link=safe_timeline_ref(trace_link),
+        log_link=safe_timeline_ref(log_link),
         terminal_evidence_link=_safe_link("artifact", session.terminal_evidence_ref),
         intent_link=_safe_link("intent", session.intent_ref),
     )
@@ -459,5 +510,6 @@ __all__ = [
     "DecisionSummary",
     "CommandSummary",
     "SessionTimeline",
+    "safe_timeline_ref",
     "build_timeline",
 ]

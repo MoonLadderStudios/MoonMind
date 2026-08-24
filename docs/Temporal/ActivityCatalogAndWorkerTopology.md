@@ -177,6 +177,7 @@ Temporal requires Task Queues so Workers can poll. MoonMind uses them strictly a
 - `mm.activity.sandbox`
 - `mm.activity.integrations`
 - `mm.activity.agent_runtime`
+- `mm.activity.agent_runtime.control`
 
 ## 4.2 Queue policy
 
@@ -189,7 +190,7 @@ Examples of deliberate non-decisions:
 - no queue-per-tool explosion
 - no queue-per-provider unless isolation or scaling truly demands it
 
-Rule of thumb: subdivide only when you need different secrets, different egress, different scaling behavior, or materially different isolation.
+Rule of thumb: subdivide only when you need different secrets, different egress, different scaling behavior, or materially different isolation. The agent-runtime control queue is a bounded exception within the same worker fleet: short authority handoffs such as terminal-evidence evaluation must remain schedulable while fan-out launches occupy the long-lived execution queue.
 
 ---
 
@@ -204,7 +205,7 @@ The activity catalog maps activity types onto the following fleets.
 | `llm` | `mm.activity.llm` | planning, validation, review, generic LLM work | model/provider credentials |
 | `sandbox` | `mm.activity.sandbox` | repo and command execution | isolated process execution |
 | `integrations` | `mm.activity.integrations` | external provider APIs and repo operations | provider tokens, egress to provider APIs |
-| `agent_runtime` | `mm.activity.agent_runtime` | managed runtime launch, supervision, status, result fetch, cancellation | isolated runtime execution, auth volume mounts |
+| `agent_runtime` | `mm.activity.agent_runtime`, `mm.activity.agent_runtime.control` | managed runtime launch and supervision; isolated terminal authority handoffs | isolated runtime execution, auth volume mounts |
 
 ## 5.1 Workflow fleet exception rule
 
@@ -500,7 +501,11 @@ Current implemented activities:
 - `agent_runtime.evaluate_terminal_evidence`
 - `agent_runtime.cancel`
 
-Worker queue: `mm.activity.agent_runtime`
+Worker queues: `mm.activity.agent_runtime` for long-lived execution and
+`mm.activity.agent_runtime.control` for terminal-evidence evaluation. Both are
+polled by the same agent-runtime service with independent bounded concurrency,
+so fan-out work cannot starve the terminal authority handoff and no additional
+always-on container is required.
 
 ### Contract expectations
 
@@ -617,6 +622,7 @@ Representative capability classes include:
 - `integration.jules.start` routes to `mm.activity.integrations`
 - `agent_runtime.fetch_result` routes to `mm.activity.agent_runtime`
 - `agent_runtime.restore_workspace_checkpoint` routes to `mm.activity.agent_runtime`
+- `agent_runtime.evaluate_terminal_evidence` routes to `mm.activity.agent_runtime.control`
 - `provider_profile.list` routes to `mm.activity.artifacts`
 - `integration.resolve_adapter_metadata` routes to `mm.workflow`
 

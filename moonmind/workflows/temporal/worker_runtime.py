@@ -2,6 +2,7 @@ import contextlib
 import re
 import uuid
 
+
 def _build_proposal_service_factory():
     from api_service.db.base import get_async_session_context
     from moonmind.workflows import get_workflow_proposal_service
@@ -10,18 +11,20 @@ def _build_proposal_service_factory():
     async def factory():
         async with get_async_session_context() as db_session:
             yield get_workflow_proposal_service(db_session)
+
     return factory
+
 
 """Temporal worker runtime entrypoint."""
 
 import asyncio
-from copy import deepcopy
 import json
 import logging
 import mimetypes
 import os
 import shutil
 from contextlib import AsyncExitStack
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
@@ -31,6 +34,7 @@ import temporalio.workflow
 from opentelemetry import trace as otel_trace
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from structlog.stdlib import ProcessorFormatter
 from temporalio.client import Client
 from temporalio.common import VersioningBehavior
 from temporalio.contrib.pydantic import pydantic_data_converter
@@ -41,7 +45,6 @@ from temporalio.worker import (
     WorkerDeploymentConfig,
     WorkerDeploymentVersion,
 )
-from structlog.stdlib import ProcessorFormatter
 
 from api_service.db.base import get_async_session_context
 from api_service.db.models import (
@@ -52,10 +55,21 @@ from api_service.db.models import (
     TemporalExecutionRecord,
 )
 from moonmind.capabilities.input_contracts import validate_capability_inputs
-from moonmind.config.logging import configure_logging, default_log_fields_from_env
-from moonmind.config.settings import settings
 from moonmind.config.container_backend_settings import (
     resolve_container_backend_settings,
+)
+from moonmind.config.logging import configure_logging, default_log_fields_from_env
+from moonmind.config.settings import settings
+from moonmind.workflows.agent_skills.agent_skills_activities import (
+    AgentSkillsActivities,
+)
+from moonmind.workflows.executions.execution_contract import (
+    build_authoritative_workflow_input_snapshot,
+)
+from moonmind.workflows.executions.preset_expansion import expand_preset_for_child_run
+from moonmind.workflows.executions.repository_contract import (
+    repository_branch_from_value,
+    repository_name_from_value,
 )
 from moonmind.workflows.skills.deployment_execution import (
     DeploymentUpdateExecutor,
@@ -83,60 +97,15 @@ from moonmind.workflows.temporal.activity_runtime import (
     TemporalSandboxActivities,
     TemporalSkillActivities,
 )
-from moonmind.workflows.agent_skills.agent_skills_activities import AgentSkillsActivities
 from moonmind.workflows.temporal.artifacts import (
     TemporalArtifactActivities,
     TemporalArtifactRepository,
     TemporalArtifactService,
 )
 from moonmind.workflows.temporal.container_job_backend import DockerContainerJobBackend
-from moonmind.workflows.temporal.workers import (
-    AGENT_RUNTIME_FLEET,
-    DEPLOYMENT_FLEET,
-    SANDBOX_FLEET,
-    WORKFLOW_FLEET,
-    build_worker_activity_bindings,
-    build_worker_spec,
-    describe_configured_worker,
-    list_registered_workflow_types,
-)
-from moonmind.workflows.executions.execution_contract import (
-    build_authoritative_workflow_input_snapshot,
-)
-from moonmind.workflows.executions.repository_contract import (
-    repository_branch_from_value,
-    repository_name_from_value,
-)
-from moonmind.workflows.executions.preset_expansion import (
-    expand_preset_for_child_run,
-)
-from moonmind.workflows.temporal.workflows.manifest_ingest import (
-    MoonMindManifestIngestWorkflow as MoonMindManifestIngest,  # noqa: F401
-)
-from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
 from moonmind.workflows.temporal.jira_agent_skills import JIRA_AGENT_SKILLS
-from moonmind.workflows.temporal.worker_healthcheck import (
-    WorkerHealthState,
-    start_healthcheck_server,
-)
-from moonmind.workflows.temporal.workflows.agent_run import (
-    MoonMindAgentRun,  # noqa: F401
-    resolve_adapter_metadata,
-    get_activity_route,
-    resolve_external_adapter,
-    external_adapter_execution_style,
-)
-from moonmind.workflows.temporal.workflows.merge_gate import (
-    DEFAULT_RESOLVER_TIMEOUT_SECONDS,
-)
-from moonmind.workflows.temporal.workflow_registry import (
-    workflow_fleet_activity_handlers,
-    workflow_fleet_workflow_classes,
-)
-from moonmind.workflows.temporal.runtime.store import ManagedRunStore
-from moonmind.workflows.temporal.runtime.launcher import (
-    ManagedRuntimeLauncher,
-)
+from moonmind.workflows.temporal.jules_bundle import JULES_AGENT_IDS
+from moonmind.workflows.temporal.runtime.launcher import ManagedRuntimeLauncher
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
 from moonmind.workflows.temporal.runtime.managed_session_controller import (
     DockerCodexManagedSessionController,
@@ -149,14 +118,46 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
     ManagedSessionSupervisor,
 )
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
+from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
+from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.story_output_tools import (
     DOCUMENT_UPDATE_TASKS_TOOL_NAME,
     GITHUB_STORY_TOOL_NAMES,
     JIRA_STORY_TOOL_NAMES,
     register_story_output_tool_handlers,
 )
-from moonmind.workflows.temporal.service import TemporalExecutionService
+from moonmind.workflows.temporal.worker_healthcheck import (
+    WorkerHealthState,
+    start_healthcheck_server,
+)
+from moonmind.workflows.temporal.workers import (
+    AGENT_RUNTIME_FLEET,
+    DEPLOYMENT_FLEET,
+    SANDBOX_FLEET,
+    WORKFLOW_FLEET,
+    build_worker_activity_bindings,
+    build_worker_spec,
+    describe_configured_worker,
+    list_registered_workflow_types,
+)
+from moonmind.workflows.temporal.workflow_registry import (
+    workflow_fleet_activity_handlers,
+    workflow_fleet_workflow_classes,
+)
+from moonmind.workflows.temporal.workflows.agent_run import (  # noqa: F401
+    MoonMindAgentRun,
+    external_adapter_execution_style,
+    get_activity_route,
+    resolve_adapter_metadata,
+    resolve_external_adapter,
+)
+from moonmind.workflows.temporal.workflows.manifest_ingest import (  # noqa: F401
+    MoonMindManifestIngestWorkflow as MoonMindManifestIngest,
+)
+from moonmind.workflows.temporal.workflows.merge_gate import (
+    DEFAULT_RESOLVER_TIMEOUT_SECONDS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,7 @@ _OPENTELEMETRY_LOG_FORMAT = (
     "thread_id=%(managed_session_thread_id)s "
     "turn_id=%(managed_session_turn_id)s] %(message)s"
 )
+
 
 async def _expand_preset_for_child_run(
     *,
@@ -425,13 +427,12 @@ def _build_jira_orchestrate_execution_creator():
                 "workflowId": record.workflow_id,
                 "runId": record.run_id,
                 "title": (
-                    record.memo.get("title")
-                    if isinstance(record.memo, dict)
-                    else None
+                    record.memo.get("title") if isinstance(record.memo, dict) else None
                 ),
             }
 
     return _create_execution
+
 
 _CODEX_CONFIG_FLEETS = frozenset({SANDBOX_FLEET, AGENT_RUNTIME_FLEET})
 # Agent runtimes where PR creation is driven by the provider API (e.g. Jules
@@ -563,10 +564,7 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
         str(os.environ.get("MOONMIND_DEPLOYMENT_DESIRED_STATE_JSON_FILE") or "").strip()
         or None
     )
-    lock_dir = (
-        str(os.environ.get("MOONMIND_DEPLOYMENT_LOCK_DIR") or "").strip()
-        or None
-    )
+    lock_dir = str(os.environ.get("MOONMIND_DEPLOYMENT_LOCK_DIR") or "").strip() or None
     project_name = (
         str(os.environ.get("MOONMIND_DEPLOYMENT_PROJECT_NAME") or "").strip()
         or "moonmind"
@@ -585,9 +583,7 @@ def _build_deployment_update_executor() -> DeploymentUpdateExecutor | None:
         timeout_seconds = int(timeout_raw) if timeout_raw else 900
     except ValueError:
         timeout_seconds = 900
-    runner_local = (
-        local_project_dir if local_project_dir != project_dir else None
-    )
+    runner_local = local_project_dir if local_project_dir != project_dir else None
     desired_state_store = (
         FileDesiredStateStore(
             env_file_path=desired_state_env_file,
@@ -643,6 +639,7 @@ def _coerce_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     return {}
+
 
 def _coerce_non_empty_text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
@@ -725,7 +722,8 @@ def _resolve_workspace_work_branch(
         task_payload.get("workspaceSpec") or task_payload.get("workspace_spec")
     )
     parameter_workspace_spec = _coerce_mapping(
-        parameter_payload.get("workspaceSpec") or parameter_payload.get("workspace_spec")
+        parameter_payload.get("workspaceSpec")
+        or parameter_payload.get("workspace_spec")
     )
     input_workspace_spec = _coerce_mapping(
         input_payload.get("workspaceSpec") or input_payload.get("workspace_spec")
@@ -754,6 +752,7 @@ def _slugify_branch_prefix(value: Any, *, max_length: int = 40) -> str:
         return ""
     cleaned = re.sub(r"[^a-z0-9]+", "-", candidate.lower()).strip("-")
     return cleaned[:max_length].strip("-")
+
 
 def _derive_pr_branch_prefix(
     task_payload: Mapping[str, Any],
@@ -873,14 +872,11 @@ def _derive_pr_resolver_title(
     task_payload: Mapping[str, Any],
     selected_skill_inputs: Mapping[str, Any],
 ) -> str:
-    selected_skill_payload = (
-        _coerce_mapping(task_payload.get("tool"))
-        or _coerce_mapping(task_payload.get("skill"))
-    )
+    selected_skill_payload = _coerce_mapping(
+        task_payload.get("tool")
+    ) or _coerce_mapping(task_payload.get("skill"))
     selected_skill_name = str(
-        selected_skill_payload.get("name")
-        or selected_skill_payload.get("id")
-        or ""
+        selected_skill_payload.get("name") or selected_skill_payload.get("id") or ""
     ).strip()
     if selected_skill_name.lower() != "pr-resolver":
         return ""
@@ -889,10 +885,11 @@ def _derive_pr_resolver_title(
         selected_skill_inputs=selected_skill_inputs,
     )
 
+
 def _normalize_runtime_mode(raw_mode: Any) -> str:
     normalized = str(raw_mode or "").strip().lower()
     if not normalized:
-        return str(settings.workflow.default_runtime or "codex_cli").strip().lower()
+        return str(settings.workflow.default_runtime or "omnigent").strip().lower()
     return normalized
 
 
@@ -903,18 +900,15 @@ def _compile_repository_operation(
 ) -> None:
     """Make repository authority explicit in one durable plan node."""
 
-    repository_operation = str(
-        inputs.get("repositoryOperation") or ""
-    ).strip().lower()
+    repository_operation = str(inputs.get("repositoryOperation") or "").strip().lower()
     if repository_operation == "read":
         # A read-only repository step may still write its declared handoff
         # artifacts, but it cannot own repository mutation or publication.
         inputs["publishMode"] = "none"
-    elif (
-        is_agent_runtime
-        and str(inputs.get("publishMode") or "").strip().lower()
-        in {"branch", "pr"}
-    ):
+    elif is_agent_runtime and str(inputs.get("publishMode") or "").strip().lower() in {
+        "branch",
+        "pr",
+    }:
         # Managed publication is repository mutation authority. Make the
         # default explicit so downstream steps retain the authored base.
         inputs["repositoryOperation"] = "write"
@@ -963,6 +957,7 @@ _INHERITED_SKILL_CONTEXT_KEYS = (
     "skillInputWarnings",
 )
 
+
 def _normalize_required_capability_tokens(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -980,7 +975,13 @@ def _normalize_required_capability_tokens(value: Any) -> list[str]:
 def _has_jira_prefetch_context(task_payload: Mapping[str, Any]) -> bool:
     if task_payload.get("jiraIssueKey") or task_payload.get("jira_issue_key"):
         return True
-    for key in ("jira", "jiraIssue", "jira_issue", "jiraPresetBrief", "jira_preset_brief"):
+    for key in (
+        "jira",
+        "jiraIssue",
+        "jira_issue",
+        "jiraPresetBrief",
+        "jira_preset_brief",
+    ):
         if isinstance(task_payload.get(key), Mapping):
             return True
     steps = task_payload.get("steps")
@@ -988,7 +989,9 @@ def _has_jira_prefetch_context(task_payload: Mapping[str, Any]) -> bool:
         for step in steps:
             if not isinstance(step, Mapping):
                 continue
-            tool = _coerce_mapping(step.get("tool")) or _coerce_mapping(step.get("skill"))
+            tool = _coerce_mapping(step.get("tool")) or _coerce_mapping(
+                step.get("skill")
+            )
             tool_id = str(tool.get("id") or tool.get("name") or "").strip().lower()
             if tool_id.startswith("jira.") or tool_id.startswith("story.create_jira"):
                 return True
@@ -1102,14 +1105,19 @@ def _enforce_required_capability_readiness(
         + json.dumps({"blockers": blockers}, sort_keys=True)
     )
 
+
 def _requires_branch_publish_for_story_output(value: Any) -> bool:
     return str(value or "").strip().lower() not in {"branch", "pr"}
+
 
 def _slug_for_story_breakdown(value: Any) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
     return slug[:48] or "story-breakdown"
 
-def _story_breakdown_paths(*, title: str, existing: Mapping[str, Any]) -> dict[str, str]:
+
+def _story_breakdown_paths(
+    *, title: str, existing: Mapping[str, Any]
+) -> dict[str, str]:
     json_path = str(
         existing.get("storyBreakdownPath")
         or existing.get("story_breakdown_path")
@@ -1128,14 +1136,13 @@ def _story_breakdown_paths(*, title: str, existing: Mapping[str, Any]) -> dict[s
         json_path = f"{folder}/stories.json"
     if not markdown_path:
         markdown_path = (
-            json_path[:-5] + ".md"
-            if json_path.endswith(".json")
-            else f"{json_path}.md"
+            json_path[:-5] + ".md" if json_path.endswith(".json") else f"{json_path}.md"
         )
     return {
         "storyBreakdownPath": json_path,
         "storyBreakdownMarkdownPath": markdown_path,
     }
+
 
 def _selected_step_tool_name(step_entry: Mapping[str, Any]) -> str:
     step_tool = _coerce_mapping(step_entry.get("tool")) or _coerce_mapping(
@@ -1223,10 +1230,8 @@ def _append_selected_skill_inputs(
 ) -> str:
     if not skill_inputs:
         return instructions
-    return (
-        f"{instructions.rstrip()}\n\n"
-        "Selected skill inputs:\n"
-        + json.dumps(skill_inputs, indent=2, sort_keys=True)
+    return f"{instructions.rstrip()}\n\n" "Selected skill inputs:\n" + json.dumps(
+        skill_inputs, indent=2, sort_keys=True
     )
 
 
@@ -1291,6 +1296,7 @@ def _direct_story_tool_context_inputs(
         if key in node_inputs
     }
 
+
 def _canonical_step_fingerprint(step_entry: Mapping[str, Any]) -> str:
     try:
         return json.dumps(step_entry, sort_keys=True, separators=(",", ":"))
@@ -1325,8 +1331,10 @@ def _dedupe_repeated_step_entries(
 
     return deduped
 
+
 def _selected_step_type(step_entry: Mapping[str, Any]) -> str:
     return str(step_entry.get("type") or "").strip().lower()
+
 
 def _selected_step_tool_type(step_entry: Mapping[str, Any]) -> str:
     if _selected_step_tool_name(step_entry).lower() in _STORY_OUTPUT_TASK_TOOLS:
@@ -1335,11 +1343,14 @@ def _selected_step_tool_type(step_entry: Mapping[str, Any]) -> str:
         return "skill"
     return "agent_runtime"
 
+
 def _jira_agent_skill_selected(tool_name: str) -> bool:
     return tool_name.lower() in _JIRA_AGENT_SKILLS
 
+
 def _story_output_task_tool_selected(tool_name: str) -> bool:
     return tool_name.lower() in _STORY_OUTPUT_TASK_TOOLS
+
 
 def _task_uses_only_jira_agent_skill(
     *, selected_skill_name: str, raw_steps: Any
@@ -1348,8 +1359,7 @@ def _task_uses_only_jira_agent_skill(
         if not all(isinstance(step, Mapping) for step in raw_steps):
             return False
         effective_step_tool_names = [
-            _selected_step_tool_name(step).lower()
-            for step in raw_steps
+            _selected_step_tool_name(step).lower() for step in raw_steps
         ]
         return bool(effective_step_tool_names) and all(
             _has_explicit_step_skill_name(name)
@@ -1363,6 +1373,7 @@ def _task_uses_only_jira_agent_skill(
         selected_skill_name
     ) or _story_output_task_tool_selected(selected_skill_name)
 
+
 def _append_agent_skill_instructions(instructions: str, *, selected_skill: str) -> str:
     selected = selected_skill.strip()
     if not _jira_agent_skill_selected(selected):
@@ -1371,6 +1382,7 @@ def _append_agent_skill_instructions(instructions: str, *, selected_skill: str) 
     if marker in instructions:
         return instructions
     return f"Use {marker}.\n\n{instructions.strip()}"
+
 
 def _plan_node_selected_skill(node: Mapping[str, Any]) -> str:
     inputs = node.get("inputs")
@@ -1464,6 +1476,7 @@ def _append_story_breakdown_instructions(
         + f"- The requested story output mode is `{story_output_mode or 'docs_tmp'}`."
     )
 
+
 def _build_runtime_planner():
     """Build a plan generator that produces ``agent_runtime`` plan nodes.
 
@@ -1495,13 +1508,11 @@ def _build_runtime_planner():
         )
         git_payload = _coerce_mapping(task_payload.get("git"))
         task_skill_payload = _coerce_mapping(task_payload.get("skill"))
-        selected_skill_payload = _coerce_mapping(
-            task_payload.get("tool")
-        ) or task_skill_payload
+        selected_skill_payload = (
+            _coerce_mapping(task_payload.get("tool")) or task_skill_payload
+        )
         selected_skill_name = str(
-            selected_skill_payload.get("name")
-            or selected_skill_payload.get("id")
-            or ""
+            selected_skill_payload.get("name") or selected_skill_payload.get("id") or ""
         ).strip()
         selected_skill_inputs = _coerce_mapping(task_payload.get("inputs"))
         if not selected_skill_inputs:
@@ -1589,8 +1600,7 @@ def _build_runtime_planner():
         # --- Resolve runtime mode ---
         runtime_payload = _coerce_mapping(task_payload.get("runtime"))
         runtime_mode = _normalize_runtime_mode(
-            runtime_payload.get("mode")
-            or parameter_payload.get("targetRuntime")
+            runtime_payload.get("mode") or parameter_payload.get("targetRuntime")
         )
         runtime_node: dict[str, Any] = {"mode": runtime_mode}
 
@@ -1641,7 +1651,9 @@ def _build_runtime_planner():
             except (ValueError, TypeError):
                 pass
 
-        max_attempts = task_payload.get("maxAttempts") or parameter_payload.get("maxAttempts")
+        max_attempts = task_payload.get("maxAttempts") or parameter_payload.get(
+            "maxAttempts"
+        )
         if max_attempts is not None:
             try:
                 node_inputs["maxAttempts"] = int(max_attempts)
@@ -1649,9 +1661,7 @@ def _build_runtime_planner():
                 pass
 
         publish_payload = _coerce_mapping(task_payload.get("publish"))
-        publish_mode = publish_payload.get(
-            "mode", parameter_payload.get("publishMode")
-        )
+        publish_mode = publish_payload.get("mode", parameter_payload.get("publishMode"))
         if isinstance(publish_mode, str) and publish_mode.strip():
             node_inputs["publishMode"] = publish_mode.strip()
         commit_message = publish_payload.get(
@@ -1683,9 +1693,7 @@ def _build_runtime_planner():
         )
         if isinstance(repository, Mapping):
             repository_target = dict(repository)
-            repository_identity = _coerce_mapping(
-                repository_target.get("repository")
-            )
+            repository_identity = _coerce_mapping(repository_target.get("repository"))
             repository_name = _coerce_non_empty_text(repository_identity.get("name"))
             branch_identity = _coerce_mapping(repository_target.get("branch"))
             branch_name = _coerce_non_empty_text(branch_identity.get("name"))
@@ -1785,12 +1793,15 @@ def _build_runtime_planner():
             task_payload,
             selected_skill_inputs,
         )
-        title = str(
-            task_payload.get("title")
-            or parameter_payload.get("title")
-            or pr_resolver_title
-            or ""
-        ).strip() or "Generated Plan"
+        title = (
+            str(
+                task_payload.get("title")
+                or parameter_payload.get("title")
+                or pr_resolver_title
+                or ""
+            ).strip()
+            or "Generated Plan"
+        )
         created_at = (
             datetime.now(tz=UTC)
             .replace(microsecond=0)
@@ -1816,11 +1827,16 @@ def _build_runtime_planner():
                 ) or _coerce_mapping(plan_entry.get("skill"))
                 if not tool_payload:
                     raise RuntimeError("task.plan entries require a tool object")
-                authored_tool_type = str(
-                    tool_payload.get("type")
-                    or tool_payload.get("kind")
+                authored_tool_type = (
+                    str(
+                        tool_payload.get("type")
+                        or tool_payload.get("kind")
+                        or "agent_runtime"
+                    )
+                    .strip()
+                    .lower()
                     or "agent_runtime"
-                ).strip().lower() or "agent_runtime"
+                )
                 authored_tool_name = str(
                     tool_payload.get("name") or tool_payload.get("id") or ""
                 ).strip()
@@ -1899,18 +1915,21 @@ def _build_runtime_planner():
             or parameter_payload.get("storyOutput")
             or parameter_payload.get("story_output")
         )
-        story_output_mode = str(
-            story_output_payload.get("mode")
-            or story_output_payload.get("target")
-            or ""
-        ).strip().lower()
+        story_output_mode = (
+            str(
+                story_output_payload.get("mode")
+                or story_output_payload.get("target")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
         should_prepare_story_breakdown = bool(story_output_payload)
         creates_story_breakdown_artifact = False
 
         # --- Expand task.steps[] or stepCount into multiple plan nodes ---
-        has_explicit_step_types = (
-            isinstance(raw_steps, list)
-            and any(isinstance(s, Mapping) and _selected_step_type(s) for s in raw_steps)
+        has_explicit_step_types = isinstance(raw_steps, list) and any(
+            isinstance(s, Mapping) and _selected_step_type(s) for s in raw_steps
         )
         has_multi_steps = (
             isinstance(raw_steps, list)
@@ -1935,11 +1954,15 @@ def _build_runtime_planner():
                     )
                     if step_story_output:
                         story_output_payload = dict(step_story_output)
-                        story_output_mode = str(
-                            story_output_payload.get("mode")
-                            or story_output_payload.get("target")
-                            or ""
-                        ).strip().lower()
+                        story_output_mode = (
+                            str(
+                                story_output_payload.get("mode")
+                                or story_output_payload.get("target")
+                                or ""
+                            )
+                            .strip()
+                            .lower()
+                        )
                         break
             should_prepare_story_breakdown = should_prepare_story_breakdown or bool(
                 step_tool_names & (_STORY_OUTPUT_TASK_TOOLS | _MOONSPEC_BREAKDOWN_TOOLS)
@@ -1949,8 +1972,7 @@ def _build_runtime_planner():
                 selected_skill_name.lower() in _MOONSPEC_BREAKDOWN_TOOLS
             )
             should_prepare_story_breakdown = (
-                should_prepare_story_breakdown
-                or creates_story_breakdown_artifact
+                should_prepare_story_breakdown or creates_story_breakdown_artifact
             )
 
         if should_prepare_story_breakdown:
@@ -1966,11 +1988,14 @@ def _build_runtime_planner():
             ):
                 if node_inputs.get("branch") and not node_inputs.get("startingBranch"):
                     node_inputs["startingBranch"] = node_inputs["branch"]
-                prefix = _derive_pr_branch_prefix(
-                    task_payload=task_payload,
-                    publish_payload=publish_payload,
-                    selected_skill_name=selected_skill_name,
-                ) or "story-breakdown"
+                prefix = (
+                    _derive_pr_branch_prefix(
+                        task_payload=task_payload,
+                        publish_payload=publish_payload,
+                        selected_skill_name=selected_skill_name,
+                    )
+                    or "story-breakdown"
+                )
                 node_inputs["targetBranch"] = _generate_runtime_pr_branch(prefix)
             story_output_payload = dict(story_output_payload)
             story_output_payload.setdefault("mode", story_output_mode or "docs_tmp")
@@ -2013,9 +2038,7 @@ def _build_runtime_planner():
 
                 # Per-step tool/skill override
                 step_tool_name = _selected_step_tool_name(step_entry)
-                has_explicit_step_skill = _has_explicit_step_skill_name(
-                    step_tool_name
-                )
+                has_explicit_step_skill = _has_explicit_step_skill_name(step_tool_name)
                 tool_type = _selected_step_tool_type(step_entry)
                 is_agent_runtime_step = tool_type == "agent_runtime"
                 step_metadata_inputs = _authored_step_metadata_inputs(
@@ -2024,14 +2047,16 @@ def _build_runtime_planner():
                 )
                 step_skill_evidence: dict[str, Any] = {}
                 if is_agent_runtime_step:
-                    step_tool_inputs, step_skill_evidence = _validated_step_skill_inputs(
-                        step_entry=step_entry,
-                        step_index=idx,
-                        raw_inputs=step_tool_inputs,
-                        workflow_context=_skill_input_workflow_context(
-                            parameter_payload=parameter_payload,
-                            git_payload=git_payload,
-                        ),
+                    step_tool_inputs, step_skill_evidence = (
+                        _validated_step_skill_inputs(
+                            step_entry=step_entry,
+                            step_index=idx,
+                            raw_inputs=step_tool_inputs,
+                            workflow_context=_skill_input_workflow_context(
+                                parameter_payload=parameter_payload,
+                                git_payload=git_payload,
+                            ),
+                        )
                     )
                 step_extra_inputs = {
                     k: v
@@ -2086,9 +2111,13 @@ def _build_runtime_planner():
                     step_node_inputs.update(dict(step_tool_inputs))
                     for key, value in step_metadata_inputs.items():
                         if key in {"storyOutput", "story_output"}:
-                            step_node_inputs["storyOutput"] = _merge_story_output_inputs(
-                                _coerce_mapping(step_node_inputs.get("storyOutput")),
-                                value,
+                            step_node_inputs["storyOutput"] = (
+                                _merge_story_output_inputs(
+                                    _coerce_mapping(
+                                        step_node_inputs.get("storyOutput")
+                                    ),
+                                    value,
+                                )
                             )
                             continue
                         step_node_inputs[key] = value
@@ -2153,8 +2182,7 @@ def _build_runtime_planner():
                                 step_node_inputs.get("storyBreakdownPath") or ""
                             ),
                             story_breakdown_markdown_path=str(
-                                step_node_inputs.get("storyBreakdownMarkdownPath")
-                                or ""
+                                step_node_inputs.get("storyBreakdownMarkdownPath") or ""
                             ),
                             story_output_mode=story_output_mode,
                         )
@@ -2168,14 +2196,20 @@ def _build_runtime_planner():
                     is_agent_runtime=is_agent_runtime_step,
                 )
 
-                nodes.append({
-                    "id": step_id,
-                    "tool": {
-                        "type": tool_type,
-                        "name": step_runtime if is_agent_runtime_step else step_tool_name,
-                    },
-                    "inputs": step_node_inputs,
-                })
+                nodes.append(
+                    {
+                        "id": step_id,
+                        "tool": {
+                            "type": tool_type,
+                            "name": (
+                                step_runtime
+                                if is_agent_runtime_step
+                                else step_tool_name
+                            ),
+                        },
+                        "inputs": step_node_inputs,
+                    }
+                )
 
                 if prev_step_id:
                     edges.append({"from": prev_step_id, "to": step_id})
@@ -2216,9 +2250,9 @@ def _build_runtime_planner():
                     expanded_inputs,
                     is_agent_runtime=True,
                 )
-                expanded_publish_mode = str(
-                    expanded_inputs.get("publishMode") or ""
-                ).strip().lower()
+                expanded_publish_mode = (
+                    str(expanded_inputs.get("publishMode") or "").strip().lower()
+                )
                 if expanded_publish_mode in {"auto", "none"}:
                     expanded_inputs["instructions"] = (
                         str(expanded_inputs.get("instructions") or "")
@@ -2226,14 +2260,16 @@ def _build_runtime_planner():
                         + _publish_mode_agent_instructions(expanded_publish_mode)
                     )
                 step_id = f"node-{idx + 1}"
-                nodes.append({
-                    "id": step_id,
-                    "tool": {
-                        "type": "agent_runtime",
-                        "name": runtime_mode,
-                    },
-                    "inputs": expanded_inputs,
-                })
+                nodes.append(
+                    {
+                        "id": step_id,
+                        "tool": {
+                            "type": "agent_runtime",
+                            "name": runtime_mode,
+                        },
+                        "inputs": expanded_inputs,
+                    }
+                )
                 if prev_step_id:
                     edges.append({"from": prev_step_id, "to": step_id})
                 prev_step_id = step_id
@@ -2274,21 +2310,25 @@ def _build_runtime_planner():
                 node_inputs,
                 is_agent_runtime=not is_story_output_tool,
             )
-            node_publish_mode = str(node_inputs.get("publishMode") or "").strip().lower()
+            node_publish_mode = (
+                str(node_inputs.get("publishMode") or "").strip().lower()
+            )
             if node_publish_mode in {"auto", "none"} and not is_story_output_tool:
                 node_inputs["instructions"] = (
                     str(node_inputs.get("instructions") or "")
                     + "\n\n"
                     + _publish_mode_agent_instructions(node_publish_mode)
                 )
-            nodes.append({
-                "id": node_id,
-                "tool": {
-                    "type": node_tool_type,
-                    "name": node_tool_name,
-                },
-                "inputs": node_inputs,
-            })
+            nodes.append(
+                {
+                    "id": node_id,
+                    "tool": {
+                        "type": node_tool_type,
+                        "name": node_tool_name,
+                    },
+                    "inputs": node_inputs,
+                }
+            )
 
         # Append PR creation instructions to the last node so CLI-based agents
         # create the PR in the same workspace where the changes were made.
@@ -2306,9 +2346,7 @@ def _build_runtime_planner():
                     (
                         node
                         for node in nodes
-                        if str(
-                            node.get("tool", {}).get("type") or ""
-                        ).strip().lower()
+                        if str(node.get("tool", {}).get("type") or "").strip().lower()
                         == "agent_runtime"
                         and _plan_node_selected_skill(node).lower()
                         in _MOONSPEC_BREAKDOWN_TOOLS
@@ -2320,9 +2358,7 @@ def _build_runtime_planner():
                     (
                         node
                         for node in reversed(nodes)
-                        if str(
-                            node.get("tool", {}).get("type") or ""
-                        ).strip().lower()
+                        if str(node.get("tool", {}).get("type") or "").strip().lower()
                         == "agent_runtime"
                         and not _jira_agent_skill_selected(
                             _plan_node_selected_skill(node)
@@ -2330,12 +2366,12 @@ def _build_runtime_planner():
                     ),
                     nodes[-1],
                 )
-            publish_tool = str(
-                publish_node.get("tool", {}).get("name") or ""
-            ).strip().lower()
-            publish_tool_type = str(
-                publish_node.get("tool", {}).get("type") or ""
-            ).strip().lower()
+            publish_tool = (
+                str(publish_node.get("tool", {}).get("name") or "").strip().lower()
+            )
+            publish_tool_type = (
+                str(publish_node.get("tool", {}).get("type") or "").strip().lower()
+            )
             publish_selected_skill = _plan_node_selected_skill(publish_node)
             if (
                 publish_tool_type == "agent_runtime"
@@ -2399,12 +2435,14 @@ def _publish_mode_agent_instructions(publish_mode: object) -> str:
         )
     return "Do NOT commit or push. Publishing is disabled for this task."
 
+
 def _csv_env_tuple(value: str | None) -> tuple[str, ...]:
     if value is None:
         return ()
     return tuple(
         dict.fromkeys(part.strip() for part in value.split(",") if part.strip())
     )
+
 
 def _positive_int_env(name: str) -> int | None:
     import os
@@ -2416,6 +2454,7 @@ def _positive_int_env(name: str) -> int | None:
     if value < 1:
         raise RuntimeError(f"{name} must be a positive integer")
     return value
+
 
 def _container_job_evidence_content_type(name: str) -> str:
     """Pick a stable media type for a container-job evidence artifact name."""
@@ -2448,7 +2487,9 @@ def _container_job_evidence_publisher(artifact_service: TemporalArtifactService)
             content_type=content_type,
         )
         return artifact.artifact_id
+
     return publish
+
 
 def _container_job_projection_writer(backend_kind: str, backend_ref: str):
     """Build a projection writer bound to the deployment-selected backend."""
@@ -2483,8 +2524,11 @@ def _container_job_projection_writer(backend_kind: str, backend_ref: str):
                         or request.request.spec.image_source_ref
                         or "unknown"
                     ),
-                    "resolvedDigest": request.resolved_image_ref
-                    if request.resolved_image_ref.startswith("sha256:") else None,
+                    "resolvedDigest": (
+                        request.resolved_image_ref
+                        if request.resolved_image_ref.startswith("sha256:")
+                        else None
+                    ),
                     "cachePresent": True,
                     "cacheHit": True,
                     "pullLockWaitMs": 0,
@@ -2544,12 +2588,11 @@ def _container_job_secret_resolver():
                 {"value": secret_ref}
             )
         if "value" not in resolved:
-            raise RuntimeError(
-                "execution-time secret reference could not be resolved"
-            )
+            raise RuntimeError("execution-time secret reference could not be resolved")
         return resolved["value"]
 
     return _resolve
+
 
 def _build_agent_runtime_deps(
     *,
@@ -2566,13 +2609,14 @@ def _build_agent_runtime_deps(
     """Build shared runtime dependencies for the ``agent_runtime`` fleet."""
     import os
     from pathlib import Path
+
+    from moonmind.repositories.lore_runtime import (
+        build_lore_repository_adapter_from_environment,
+    )
     from moonmind.workloads import (
         DockerWorkloadConcurrencyLimiter,
         DockerWorkloadLauncher,
         RunnerProfileRegistry,
-    )
-    from moonmind.repositories.lore_runtime import (
-        build_lore_repository_adapter_from_environment,
     )
 
     class LocalRuntimeArtifactStorage:
@@ -2696,7 +2740,9 @@ def _build_agent_runtime_deps(
             workspace_root=workspace_root,
             allowed_image_registries=allowed_image_registries or None,
         )
-    workload_fleet_limit = _positive_int_env("MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY")
+    workload_fleet_limit = _positive_int_env(
+        "MOONMIND_DOCKER_WORKLOAD_FLEET_CONCURRENCY"
+    )
     workload_launcher = DockerWorkloadLauncher(
         docker_binary=os.environ.get("MOONMIND_DOCKER_BINARY", "docker"),
         docker_host=docker_host,
@@ -2714,6 +2760,7 @@ def _build_agent_runtime_deps(
         session_store,
     )
 
+
 async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[object]]:
     """Build activity handlers for the configured non-workflow fleet.
 
@@ -2722,21 +2769,41 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
     activity fleets (llm, sandbox, etc.).
     """
     resources = AsyncExitStack()
+    if "integration.omnigent.execute" in topology.activity_types:
+        from moonmind.omnigent.settings import generic_host_enabled
+
+        if generic_host_enabled():
+            from api_service.db.base import async_session_maker
+            from moonmind.omnigent.production import (
+                build_generic_omnigent_execution_services,
+            )
+
+            # Startup is the readiness boundary: an enabled generic deployment
+            # must be complete before this worker can accept any Activity.
+            build_generic_omnigent_execution_services(
+                session_factory=async_session_maker
+            )
     container_job_backend = None
     enforced_network_refs: list[str] = []
     enforced_egress_profile_refs: list[str] = []
+
     class ArtifactServiceProxy:
         def __getattr__(self, name):
             async def wrapper(*args, **kwargs):
                 async with get_async_session_context() as session:
-                    service = TemporalArtifactService(TemporalArtifactRepository(session))
+                    service = TemporalArtifactService(
+                        TemporalArtifactRepository(session)
+                    )
                     func = getattr(service, name)
                     return await func(*args, **kwargs)
+
             return wrapper
 
     try:
         artifact_service = ArtifactServiceProxy()  # type: ignore
-        sandbox_activities = TemporalSandboxActivities(artifact_service=artifact_service)
+        sandbox_activities = TemporalSandboxActivities(
+            artifact_service=artifact_service
+        )
         planner = _build_runtime_planner()
 
         dispatcher = SkillActivityDispatcher()
@@ -2825,18 +2892,13 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 workspace_volume_name=os.environ.get(
                     "MOONMIND_AGENT_WORKSPACES_VOLUME_NAME", "agent_workspaces"
                 ),
-                image_lock_root=os.environ.get(
-                    "MOONMIND_CONTAINER_IMAGE_LOCK_ROOT"
-                )
+                image_lock_root=os.environ.get("MOONMIND_CONTAINER_IMAGE_LOCK_ROOT")
                 or str(
-                    Path(_container_job_store).resolve()
-                    / ".image-acquisition-locks"
+                    Path(_container_job_store).resolve() / ".image-acquisition-locks"
                 ),
                 # Publish bounded live incremental logs to a MoonMind-controlled
                 # spool root that is never mounted into a job container.
-                log_spool_root=os.environ.get(
-                    "MOONMIND_CONTAINER_JOB_LOG_SPOOL_ROOT"
-                )
+                log_spool_root=os.environ.get("MOONMIND_CONTAINER_JOB_LOG_SPOOL_ROOT")
                 or str(
                     Path(_container_job_store).resolve().parent
                     / ".mm-container-job-logs"
@@ -2944,9 +3006,7 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         resources.enforced_egress_profile_refs = tuple(  # type: ignore[attr-defined]
             enforced_egress_profile_refs
         )
-        return resources, [
-            binding.handler for binding in bindings
-        ] + [
+        return resources, [binding.handler for binding in bindings] + [
             resolve_adapter_metadata,
             get_activity_route,
             resolve_external_adapter,
@@ -2956,12 +3016,14 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
         await resources.aclose()
         raise
 
+
 def _worker_concurrency_kwargs(topology) -> dict[str, int]:
     if topology.concurrency_limit is None:
         return {}
     if topology.fleet == WORKFLOW_FLEET:
         return {"max_concurrent_workflow_tasks": topology.concurrency_limit}
     return {"max_concurrent_activities": topology.concurrency_limit}
+
 
 def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
     """Apply Codex managed-runtime defaults for fleets that launch CLI tasks."""
@@ -2989,6 +3051,7 @@ def _enforce_codex_config_for_managed_fleet(fleet: str) -> None:
         result.path,
     )
 
+
 async def main_async() -> None:
     """Run the Temporal worker."""
     topology = describe_configured_worker()
@@ -3006,18 +3069,21 @@ async def main_async() -> None:
     healthcheck_server = await start_healthcheck_server(health_state)
 
     import os
+
     interceptors = []
     runtime = None
     if os.environ.get("MOONMIND_ENABLE_OPENTELEMETRY", "0") == "1":
         try:
-            from opentelemetry.sdk.resources import Resource
-            from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry import trace
             from temporalio.contrib.opentelemetry import TracingInterceptor
 
-            if not isinstance(trace.get_tracer_provider(), TracerProvider):
-                resource = Resource.create({"service.name": topology.service_name})
-                trace.set_tracer_provider(TracerProvider(resource=resource))
+            from moonmind.observability.telemetry import (
+                TelemetrySettings,
+                initialize_telemetry,
+            )
+
+            initialize_telemetry(
+                TelemetrySettings.from_env(service_name=topology.service_name)
+            )
             interceptors.append(TracingInterceptor())
 
             # Setup Prometheus metrics for worker health and queue polling behavior.
@@ -3039,7 +3105,9 @@ async def main_async() -> None:
                 topology.service_name,
             )
         except ImportError as e:
-            logger.warning(f"OpenTelemetry tracing requested but failed to initialize: {e}")
+            logger.warning(
+                f"OpenTelemetry tracing requested but failed to initialize: {e}"
+            )
 
     client_kwargs = {
         "namespace": settings.temporal.namespace,
@@ -3114,20 +3182,14 @@ async def main_async() -> None:
             health_state.readiness_metadata["containerBackend"] = {
                 "ready": container_job_backend is not None,
                 "enforcedNetworkRefs": sorted(set(enforced_network_refs)),
-                "enforcedEgressProfileRefs": sorted(
-                    set(enforced_egress_profile_refs)
-                ),
+                "enforcedEgressProfileRefs": sorted(set(enforced_egress_profile_refs)),
             }
-            egress_attestation = getattr(
-                runtime_resources, "egress_attestation", None
-            )
+            egress_attestation = getattr(runtime_resources, "egress_attestation", None)
             if egress_attestation is not None:
                 health_state.readiness_metadata["containerBackend"][
                     "egressAttestation"
                 ] = egress_attestation.model_dump(by_alias=True, mode="json")
-            egress_attestations = getattr(
-                runtime_resources, "egress_attestations", ()
-            )
+            egress_attestations = getattr(runtime_resources, "egress_attestations", ())
             if egress_attestations:
                 health_state.readiness_metadata["containerBackend"][
                     "egressAttestations"
@@ -3158,6 +3220,7 @@ async def main_async() -> None:
         if healthcheck_server is not None:
             healthcheck_server.close()
             await healthcheck_server.wait_closed()
+
 
 class OpenTelemetryLoggingFilter(logging.Filter):
     """Injects OpenTelemetry and Temporal trace context into standard logging."""
@@ -3224,6 +3287,7 @@ class OpenTelemetryLoggingFilter(logging.Filter):
 
         return True
 
+
 def _configure_worker_logging(*, enable_opentelemetry: bool) -> None:
     configure_logging(
         level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -3241,6 +3305,7 @@ def _configure_worker_logging(*, enable_opentelemetry: bool) -> None:
             for existing_filter in handler.filters
         ):
             handler.addFilter(OpenTelemetryLoggingFilter())
+
 
 if __name__ == "__main__":
     import os

@@ -195,8 +195,9 @@ class TestResolveEffectiveModelNone:
             requested_model=None,
             env={},
         )
-        assert model == "gpt-5.5"
-        assert source == "runtime_default"
+        # Default runtime is now omnigent, which has no hard-coded model default
+        assert model is None
+        assert source == "none"
 
 # ---------------------------------------------------------------------------
 # Precedence ordering (all three levels)

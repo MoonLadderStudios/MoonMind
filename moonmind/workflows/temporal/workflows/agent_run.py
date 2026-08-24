@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import re
@@ -7,7 +9,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from temporalio import workflow, activity
 from temporalio.exceptions import ApplicationError, CancelledError
-from temporalio.workflow import ActivityCancellationType
+from temporalio.workflow import (
+    ActivityCancellationType,
+    ChildWorkflowCancellationType,
+)
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
@@ -31,6 +36,13 @@ with workflow.unsafe.imports_passed_through():
         SendCodexManagedSessionTurnRequest,
         build_codex_managed_session_turn_environment,
         canonical_managed_session_runtime_id,
+    )
+    from moonmind.schemas.omnigent_session_models import (
+        OMNIGENT_SESSION_FEATURE_GENERATION,
+        OmnigentSessionAdmissionDecision,
+        OmnigentSessionAdmissionRequest,
+        OmnigentSessionSignal,
+        OmnigentSessionWorkflowInput,
     )
     from moonmind.schemas.temporal_activity_models import (
         AgentRuntimeCancelInput,
@@ -68,6 +80,9 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.workflows.provider_profile_manager import (
         workflow_id_for_runtime,
     )
+    from moonmind.workflows.temporal.workflows.omnigent_session import (
+        omnigent_session_workflow_id,
+    )
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.provider_failures import (
         build_provider_failure_event,
@@ -104,6 +119,9 @@ PR_RESOLVER_CONTINUATION_OBSERVABILITY_PATCH_ID = (
 RESOLVED_RUNTIME_DISPATCH_PATCH_ID = "agent-run-resolved-runtime-dispatch-v1"
 PARENT_EXECUTION_ARTIFACT_HANDOFF_PATCH_ID = (
     "agent-run-parent-execution-artifact-handoff-v1"
+)
+TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID = (
+    "agent-run-terminal-evidence-control-queue-v1"
 )
 _MAX_TERMINAL_CONTRACT_CONTINUATIONS = 2
 _MAX_MANAGED_PROCESS_LOSS_RECOVERIES = 1
@@ -208,6 +226,18 @@ _CALLBACK_KEY_SAFE_PATTERN = re.compile(r"[^A-Za-z0-9_.-]+")
 STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT = timedelta(seconds=120)
 OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID = (
     "agent-run-omnigent-profile-bound-execution-v1"
+)
+OMNIGENT_SESSION_SUPERVISOR_PATCH_ID = (
+    "agent-run-omnigent-session-supervisor-v1"
+)
+OMNIGENT_SESSION_ADMISSION_PATCH_ID = (
+    "agent-run-omnigent-session-admission-v1"
+)
+OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID = (
+    "agent-run-omnigent-compact-resolve-intent-v1"
+)
+OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID = (
+    "agent-run-omnigent-execution-plan-admission-v1"
 )
 MANAGED_STATUS_ACTIVITY_PATCH_ID = "agent-run-managed-status-activity-v1"
 MANAGED_STATUS_ROLLOUT_TOLERANCE_PATCH_ID = (
@@ -518,10 +548,105 @@ async def external_adapter_execution_style(agent_id: str) -> str:
 @workflow.defn(name="MoonMind.AgentRun")
 class MoonMindAgentRun:
     @staticmethod
+    def _workflow_patch_enabled(patch_id: str) -> bool:
+        try:
+            return bool(workflow.patched(patch_id))
+        except Exception as exc:
+            if exc.__class__.__name__ == "_NotInWorkflowEventLoopError":
+                return False
+            raise
+
+    @staticmethod
     def _workflow_child_task_queue() -> str:
         if workflow.patched(AGENT_RUN_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH):
             return settings.temporal.user_workflow_v2_task_queue
         return WORKFLOW_TASK_QUEUE
+
+    @staticmethod
+    def _omnigent_owner_identities(
+        request: AgentExecutionRequest,
+    ) -> tuple[str, str]:
+        """Resolve the immutable owning Workflow and Step Execution identities."""
+
+        if request.step_execution is not None:
+            return (
+                request.step_execution.workflow_id,
+                request.step_execution.step_execution_id,
+            )
+        parent = workflow.info().parent
+        owner_workflow_id = (
+            str(parent.workflow_id or "").strip()
+            if parent is not None
+            else ""
+        )
+        if not owner_workflow_id:
+            owner_workflow_id = request.correlation_id
+        # Older direct AgentRun callers do not have a Step Execution envelope.
+        # Their immutable request idempotency key is the canonical fallback.
+        return owner_workflow_id, request.idempotency_key
+
+    @staticmethod
+    def _omnigent_resolve_intent_payload(
+        request: AgentExecutionRequest,
+        *,
+        workflow_id: str,
+        step_execution_id: str,
+        agent_run_id: str,
+        admitted_feature_generation: str,
+        compact_plan_authority: bool,
+    ) -> dict[str, Any]:
+        """Build the replay-versioned AgentRun-to-Activity handoff.
+
+        Histories created before the compact contract must continue to emit the
+        request body recorded in their Activity command. New plan-bound runs
+        carry only immutable plan/task refs and digests; the Activity reloads
+        authored input from the artifact system.
+        """
+
+        payload: dict[str, Any] = {
+            "workflowId": workflow_id,
+            "stepExecutionId": step_execution_id,
+            "agentRunId": agent_run_id,
+            "admittedFeatureGeneration": admitted_feature_generation,
+        }
+        if compact_plan_authority:
+            binding = request.omnigent_execution_plan
+            if binding is None:
+                raise ValueError(
+                    "compact Omnigent intent handoff requires persisted plan authority"
+                )
+            payload["omnigentExecutionPlan"] = binding.model_dump(
+                mode="json", by_alias=True
+            )
+            if request.step_execution is not None:
+                payload["logicalStepId"] = request.step_execution.logical_step_id
+            execution_instruction = str(request.instruction_ref or "").strip()
+            if execution_instruction:
+                payload["executionInstructionRef"] = execution_instruction
+                payload["executionInstructionDigest"] = (
+                    "sha256:"
+                    + hashlib.sha256(execution_instruction.encode("utf-8")).hexdigest()
+                )
+            execution_input_refs = [
+                str(item).strip()
+                for item in request.input_refs
+                if str(item).strip()
+            ]
+            if execution_input_refs:
+                payload["executionInputRefs"] = execution_input_refs
+                encoded_refs = json.dumps(
+                    execution_input_refs,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+                payload["executionInputRefsDigest"] = (
+                    "sha256:" + hashlib.sha256(encoded_refs).hexdigest()
+                )
+        else:
+            payload["request"] = request.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        return payload
 
     def _get_logger(self) -> logging.LoggerAdapter | logging.Logger:
         try:
@@ -559,6 +684,7 @@ class MoonMindAgentRun:
         self.agent_kind: str | None = None
         self._assigned_profile_id: str | None = None
         self._external_agent_id: str | None = None
+        self._omnigent_session_workflow_id: str | None = None
         # Auto-answer state (Jules question auto-answer, spec 094)
         self._answered_activity_ids: set[str] = set()
         self._auto_answer_count: int = 0
@@ -697,6 +823,17 @@ class MoonMindAgentRun:
         """Execute an activity using the module-level catalog for routing."""
         route = DEFAULT_ACTIVITY_CATALOG.resolve_activity(activity_name)
         kwargs = self._execute_kwargs_for_route(route)
+        if (
+            activity_name == "agent_runtime.evaluate_terminal_evidence"
+            and not self._workflow_patch_enabled(
+                TERMINAL_EVIDENCE_CONTROL_QUEUE_PATCH_ID
+            )
+        ):
+            # Preserve the exact command emitted by histories created before
+            # terminal evaluation moved to its starvation-resistant control
+            # lane. New histories record the patch marker and use the catalog's
+            # isolated queue; old histories replay against the former queue.
+            kwargs["task_queue"] = settings.temporal.activity_agent_runtime_task_queue
         kwargs.update(overrides)
         kwargs.setdefault(
             "summary",
@@ -4230,6 +4367,18 @@ class MoonMindAgentRun:
         use_managed_status_activity = workflow.patched(
             MANAGED_STATUS_ACTIVITY_PATCH_ID
         )
+        use_omnigent_session_supervisor = workflow.patched(
+            OMNIGENT_SESSION_SUPERVISOR_PATCH_ID
+        )
+        use_omnigent_session_admission = workflow.patched(
+            OMNIGENT_SESSION_ADMISSION_PATCH_ID
+        )
+        use_compact_omnigent_resolve_intent = workflow.patched(
+            OMNIGENT_COMPACT_RESOLVE_INTENT_PATCH_ID
+        )
+        use_omnigent_execution_plan_admission = workflow.patched(
+            OMNIGENT_EXECUTION_PLAN_ADMISSION_PATCH_ID
+        )
         requested_execution_profile_ref = request.execution_profile_ref
         resiliency_policy: Mapping[str, Any] = {}
         if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
@@ -4993,33 +5142,239 @@ class MoonMindAgentRun:
                     self._external_agent_id = validated_id
 
                     if execution_style == "streaming_gateway":
-                        stc_seconds = min(
-                            max(int(timeout_seconds), 60),
-                            86400,
+                        plan_bound_session = (
+                            validated_id == "omnigent"
+                            and request.omnigent_execution_plan is not None
                         )
-                        act_name = f"integration.{validated_id}.execute"
+                        session_admitted = (
+                            use_omnigent_session_supervisor or plan_bound_session
+                        )
+                        recorded_plan_realizer: str | None = None
+                        admitted_feature_generation = (
+                            OMNIGENT_SESSION_FEATURE_GENERATION
+                        )
                         if (
                             validated_id == "omnigent"
                             and request.execution_profile_ref
-                            and workflow.patched(
-                                OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID
+                            and session_admitted
+                            and (
+                                use_omnigent_session_admission
+                                or plan_bound_session
                             )
                         ):
-                            act_name = "integration.omnigent.profile_bound_execute"
-                        result_payload = await self._execute_routed_activity(
-                            act_name,
-                            request,
-                            start_to_close_timeout=timedelta(seconds=stc_seconds),
-                            schedule_to_close_timeout=timedelta(seconds=stc_seconds),
-                            heartbeat_timeout=STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT,
-                            cancellation_type=ActivityCancellationType.TRY_CANCEL,
-                        )
-                        self.final_result = (
-                            AgentRunResult(**result_payload)
-                            if isinstance(result_payload, dict)
-                            else result_payload
-                        )
-                        self.run_status = RunStatus.completed
+                            owner_workflow_id, step_execution_id = (
+                                self._omnigent_owner_identities(request)
+                            )
+                            admission_payload = await self._execute_routed_activity(
+                                "omnigent.evaluate_session_admission",
+                                OmnigentSessionAdmissionRequest(
+                                    workflowId=owner_workflow_id,
+                                    stepExecutionId=step_execution_id,
+                                    agentRunId=workflow.info().workflow_id,
+                                    executionProfileRef=(
+                                        request.execution_profile_ref
+                                    ),
+                                    omnigentExecutionPlan=(
+                                        request.omnigent_execution_plan
+                                    ),
+                                    executionPlanRef=(
+                                        str(
+                                            (request.parameters or {}).get(
+                                                "executionPlanRef"
+                                            )
+                                            or ""
+                                        ).strip()
+                                        or None
+                                        if use_omnigent_execution_plan_admission
+                                        else None
+                                    ),
+                                ).model_dump(mode="json", by_alias=True),
+                                cancellation_type=(
+                                    ActivityCancellationType.TRY_CANCEL
+                                ),
+                            )
+                            admission = (
+                                admission_payload
+                                if isinstance(
+                                    admission_payload,
+                                    OmnigentSessionAdmissionDecision,
+                                )
+                                else OmnigentSessionAdmissionDecision.model_validate(
+                                    admission_payload
+                                )
+                            )
+                            session_admitted = admission.admitted
+                            admitted_feature_generation = (
+                                admission.admitted_feature_generation
+                            )
+                            recorded_plan_realizer = (
+                                admission.execution_realizer_ref
+                            )
+                            if (
+                                plan_bound_session
+                                and not recorded_plan_realizer
+                            ):
+                                raise ValueError(
+                                    "plan-bound admission omitted execution realizer authority"
+                                )
+                            if recorded_plan_realizer == "codex-profile-bound@1":
+                                # Codex remains on its recorded coordinator;
+                                # the generic session supervisor must never
+                                # become an implicit replacement realizer.
+                                session_admitted = False
+                            elif (
+                                plan_bound_session
+                                and recorded_plan_realizer
+                                != "generic-omnigent-host@1"
+                            ):
+                                raise ValueError(
+                                    "plan realizer does not own the Omnigent "
+                                    "session-supervisor path"
+                                )
+                        if (
+                            validated_id == "omnigent"
+                            and request.execution_profile_ref
+                            and session_admitted
+                        ):
+                            owner_workflow_id, step_execution_id = (
+                                self._omnigent_owner_identities(request)
+                            )
+                            resolved_input = await self._execute_routed_activity(
+                                "omnigent.resolve_intent",
+                                self._omnigent_resolve_intent_payload(
+                                    request,
+                                    workflow_id=owner_workflow_id,
+                                    step_execution_id=step_execution_id,
+                                    agent_run_id=workflow.info().workflow_id,
+                                    admitted_feature_generation=(
+                                        admitted_feature_generation
+                                    ),
+                                    compact_plan_authority=(
+                                        use_compact_omnigent_resolve_intent
+                                        and plan_bound_session
+                                    ),
+                                ),
+                                cancellation_type=(
+                                    ActivityCancellationType.TRY_CANCEL
+                                ),
+                            )
+                            session_input = (
+                                resolved_input
+                                if isinstance(
+                                    resolved_input,
+                                    OmnigentSessionWorkflowInput,
+                                )
+                                else OmnigentSessionWorkflowInput.model_validate(
+                                    resolved_input
+                                )
+                            )
+                            self._omnigent_session_workflow_id = (
+                                omnigent_session_workflow_id(
+                                    session_input.session_id
+                                )
+                            )
+                            session_handle = await workflow.start_child_workflow(
+                                "MoonMind.OmnigentSession",
+                                session_input,
+                                id=self._omnigent_session_workflow_id,
+                                task_queue=self._workflow_child_task_queue(),
+                                parent_close_policy=(
+                                    workflow.ParentClosePolicy.ABANDON
+                                ),
+                                cancellation_type=(
+                                    ChildWorkflowCancellationType.ABANDON
+                                ),
+                                static_summary=(
+                                    "Durable Omnigent session supervisor"
+                                ),
+                            )
+                            try:
+                                session_result = await asyncio.shield(
+                                    session_handle
+                                )
+                            except (CancelledError, asyncio.CancelledError):
+                                # Cancellation is durable session intent, not
+                                # authority to tear down the child. Keep the
+                                # same session workflow alive, signal its typed
+                                # cancellation contract, and wait for its
+                                # ordered harvest/cleanup/release result.
+                                async def _cancel_and_wait_for_session() -> Any:
+                                    await session_handle.signal(
+                                        "cancel_or_interrupt_requested",
+                                        OmnigentSessionSignal(
+                                            requestId=(
+                                                f"{session_input.session_id}:"
+                                                "agent-run-cancel"
+                                            ),
+                                            reasonCode="agent_run_cancelled",
+                                        ),
+                                    )
+                                    return await session_handle
+
+                                cancellation_task = asyncio.create_task(
+                                    _cancel_and_wait_for_session()
+                                )
+                                try:
+                                    session_result = await asyncio.shield(
+                                        cancellation_task
+                                    )
+                                except (CancelledError, asyncio.CancelledError):
+                                    session_result = await cancellation_task
+                            self.final_result = (
+                                session_result
+                                if isinstance(session_result, AgentRunResult)
+                                else AgentRunResult.model_validate(session_result)
+                            )
+                            self.run_status = (
+                                RunStatus.completed
+                                if self.final_result.failure_class is None
+                                else RunStatus.failed
+                            )
+                        else:
+                            # Historical sessions retain their recorded lane.
+                            # New plan-bound Codex work also uses the one-
+                            # activity dispatcher because that boundary invokes
+                            # the exact recorded realizer from the persisted
+                            # plan instead of the generic supervisor.
+                            stc_seconds = min(
+                                max(int(timeout_seconds), 60),
+                                86400,
+                            )
+                            act_name = f"integration.{validated_id}.execute"
+                            if (
+                                recorded_plan_realizer
+                                != "codex-profile-bound@1"
+                                and validated_id == "omnigent"
+                                and request.execution_profile_ref
+                                and workflow.patched(
+                                    OMNIGENT_PROFILE_BOUND_EXECUTION_PATCH_ID
+                                )
+                            ):
+                                act_name = (
+                                    "integration.omnigent.profile_bound_execute"
+                                )
+                            result_payload = await self._execute_routed_activity(
+                                act_name,
+                                request,
+                                start_to_close_timeout=timedelta(
+                                    seconds=stc_seconds
+                                ),
+                                schedule_to_close_timeout=timedelta(
+                                    seconds=stc_seconds
+                                ),
+                                heartbeat_timeout=(
+                                    STREAMING_EXTERNAL_HEARTBEAT_TIMEOUT
+                                ),
+                                cancellation_type=(
+                                    ActivityCancellationType.TRY_CANCEL
+                                ),
+                            )
+                            self.final_result = (
+                                AgentRunResult(**result_payload)
+                                if isinstance(result_payload, dict)
+                                else result_payload
+                            )
+                            self.run_status = RunStatus.completed
                         adapter = None
                         skip_poll_and_fetch = True
                     else:
@@ -5777,7 +6132,7 @@ class MoonMindAgentRun:
                 ),
             )
 
-        except CancelledError:
+        except (CancelledError, asyncio.CancelledError):
             tasks = []
 
             if request.agent_kind == "managed" and getattr(request, "execution_profile_ref", None):
@@ -5804,7 +6159,11 @@ class MoonMindAgentRun:
             if self.run_id is not None and self.agent_kind is not None:
                 async def _cancel_agent():
                     try:
-                        if self.agent_kind == "external" and self._external_agent_id is not None:
+                        if (
+                            self.agent_kind == "external"
+                            and self._external_agent_id is not None
+                            and self._omnigent_session_workflow_id is None
+                        ):
                             # Route external cancel through integration activity.
                             act_name = f"integration.{self._external_agent_id}.cancel"
                             await self._execute_routed_activity(
@@ -5813,7 +6172,7 @@ class MoonMindAgentRun:
                                 cancellation_type=ActivityCancellationType.TRY_CANCEL,
 
                             )
-                        else:
+                        elif self._omnigent_session_workflow_id is None:
                             await self._execute_routed_activity(
                                 "agent_runtime.cancel",
                                 AgentRuntimeCancelInput(

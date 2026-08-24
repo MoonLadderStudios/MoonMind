@@ -3890,6 +3890,12 @@ class ExecutionModel(BaseModel):
         default_factory=WorkflowInputSnapshotDescriptorModel,
         alias="taskInputSnapshot",
     )
+    omnigent_execution_plan: dict[str, Any] | None = Field(
+        None, alias="omnigentExecutionPlan"
+    )
+    omnigent_runtime_binding: dict[str, Any] | None = Field(
+        None, alias="omnigentRuntimeBinding"
+    )
     target_runtime: Optional[str] = Field(None, alias="targetRuntime")
     target_skill: Optional[str] = Field(None, alias="targetSkill")
     model: Optional[str] = Field(None, alias="model")

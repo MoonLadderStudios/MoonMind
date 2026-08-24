@@ -10,7 +10,11 @@ from temporalio.testing import ActivityEnvironment
 from moonmind.omnigent import execute as omnigent_execute_module
 from moonmind.omnigent.bridge_artifacts import LocalOmnigentArtifactGateway
 from moonmind.omnigent.bridge_store import OmnigentBridgeSessionStore
-from moonmind.schemas.agent_runtime_models import AgentExecutionRequest, AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentExecutionRequest,
+    AgentRunResult,
+    OmnigentExecutionPlanBinding,
+)
 from moonmind.workflows.temporal.activities import (
     omnigent_activities as omnigent_activities_module,
 )
@@ -19,8 +23,78 @@ from moonmind.workflows.temporal.activities.omnigent_activities import (
     _checkpoint_recovery_decision,
     _checkpoint_recovery_from_request,
     _resolve_live_recovery_authority,
+    _try_generic_realizer_dispatch,
     omnigent_execute_activity,
 )
+
+
+@pytest.mark.asyncio
+async def test_generic_dispatch_loads_persisted_plan_and_invokes_selected_realizer() -> None:
+    from tests.unit.omnigent.test_generic_platform_production_services import _plan
+
+    plan = _plan("opencode-go/model")
+
+    class PlanStore:
+        async def load(self, plan_ref):
+            assert plan_ref == plan.planRef
+            return plan
+
+        async def persist(self, _plan):
+            raise AssertionError("unchanged admitted authority must not be re-persisted")
+
+    class Realizer:
+        async def execute(self, request, admitted):
+            assert admitted == plan
+            assert request.parameters["executionPlanRef"] == plan.planRef
+            return AgentRunResult(summary="generic done")
+
+    class Registry:
+        def require(self, ref):
+            assert ref == "generic-omnigent-host@1"
+            return Realizer()
+
+    result = await _try_generic_realizer_dispatch(
+        AgentExecutionRequest(
+            agentKind="external",
+            agentId="omnigent",
+            correlationId="workflow-generic",
+            idempotencyKey="step-generic",
+            resolvedSkillsetRef="artifact:skills",
+            parameters={"executionPlanRef": plan.planRef},
+        ),
+        plan_store=PlanStore(),
+        realizer_registry=Registry(),
+    )
+
+    assert result == AgentRunResult(summary="generic done")
+
+
+@pytest.mark.asyncio
+async def test_generic_profile_selection_fails_typed_when_host_plane_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "false")
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        correlationId="workflow-disabled",
+        idempotencyKey="step-disabled",
+        parameters={
+            "omnigent": {
+                "agentProfileRef": {
+                    "profileId": "omnigent-opencode-default",
+                    "version": 1,
+                    "digest": "sha256:" + "1" * 64,
+                }
+            }
+        },
+    )
+
+    result = await _try_generic_realizer_dispatch(request)
+
+    assert result is not None
+    assert result.failure_class == "configuration_error"
+    assert result.provider_error_code == "OMNIGENT_GENERIC_REALIZER_NOT_READY"
 
 
 @pytest.mark.parametrize(
@@ -209,6 +283,71 @@ async def test_omnigent_execute_activity_delegates(
     )
 
 
+@pytest.mark.asyncio
+async def test_plan_bound_execute_dispatches_only_recorded_codex_realizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
+    plan = SimpleNamespace(
+        planRef=plan_ref,
+        payload=SimpleNamespace(executionRealizerRef="codex-profile-bound@1"),
+    )
+    calls: list[str] = []
+
+    class PlanStore:
+        def __init__(self, _session_factory):
+            pass
+
+        async def load(self, loaded_ref: str):
+            assert loaded_ref == plan_ref
+            return plan
+
+    class RecordedCodexRealizer:
+        async def execute(self, request, loaded_plan):
+            calls.append("codex-profile-bound@1")
+            assert loaded_plan is plan
+            return AgentRunResult(summary="recorded Codex realizer completed")
+
+    class Registry:
+        def require(self, realizer_ref: str):
+            calls.append(f"require:{realizer_ref}")
+            assert realizer_ref == "codex-profile-bound@1"
+            return RecordedCodexRealizer()
+
+    from moonmind.omnigent.harness_platform import stores
+    from moonmind.omnigent.realizers import registry
+
+    monkeypatch.setattr(stores, "DbExecutionPlanStore", PlanStore)
+    monkeypatch.setattr(registry, "get_default_registry", lambda: Registry())
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef="provider-codex",
+        correlationId="workflow-codex",
+        idempotencyKey="step-codex",
+        omnigentExecutionPlan=OmnigentExecutionPlanBinding(
+            planRef=plan_ref,
+            planDigest="sha256:" + "a" * 64,
+            planArtifactRef="art-plan-codex",
+            taskInputSnapshotRef="art-task-codex",
+            taskInputSnapshotDigest="sha256:" + "b" * 64,
+        ),
+    )
+
+    result = await omnigent_activities_module._try_generic_realizer_dispatch(
+        request,
+        artifact_gateway=object(),
+        run_store=object(),
+    )
+
+    assert result is not None
+    assert result.summary == "recorded Codex realizer completed"
+    assert calls == [
+        "require:codex-profile-bound@1",
+        "codex-profile-bound@1",
+    ]
+
+
 def test_omnigent_execution_path_does_not_use_managed_github_broker() -> None:
     """Omnigent is an external-agent adapter, not a managed runtime launcher."""
 
@@ -257,6 +396,63 @@ def test_checkpoint_recovery_request_builds_validated_candidate_workspace() -> N
     )
     assert candidate.head_ref == checkpoint.head_ref
     assert candidate.checkpoint_ref == checkpoint.workspace_checkpoint_ref
+
+
+def test_checkpoint_recovery_requires_the_admitted_execution_plan() -> None:
+    from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
+
+    plan_ref = "omnigent-execution-plan:sha256:" + "a" * 64
+    checkpoint = _checkpoint().model_copy(
+        update={
+            "execution_plan_ref": plan_ref,
+            "runtime_binding_ref": (
+                "omnigent-runtime-binding:sha256:" + "b" * 64
+            ),
+            "runtime_binding_revision": 2,
+            "runtime_binding_fencing_generation": 3,
+        }
+    )
+    checkpoint_payload = checkpoint.model_dump(
+        by_alias=True, mode="json", exclude_none=True
+    )
+    binding = OmnigentExecutionPlanBinding(
+        planRef=plan_ref,
+        planDigest="sha256:" + "a" * 64,
+        planArtifactRef="art-plan",
+        taskInputSnapshotRef="art-input",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+    request = AgentExecutionRequest(
+        agentKind="external",
+        agentId="omnigent",
+        executionProfileRef=checkpoint.provider_profile_id,
+        correlationId="recovery-workflow",
+        idempotencyKey="recovery-step",
+        omnigentExecutionPlan=binding,
+        checkpointRecovery={"omnigentCheckpoint": checkpoint_payload},
+    )
+
+    parsed = _checkpoint_recovery_from_request(request)
+    assert parsed is not None
+    assert parsed[0].execution_plan_ref == plan_ref
+
+    mismatched = request.model_copy(
+        update={
+            "omnigent_execution_plan": binding.model_copy(
+                update={
+                    "plan_ref": (
+                        "omnigent-execution-plan:sha256:" + "d" * 64
+                    ),
+                    "plan_digest": "sha256:" + "d" * 64,
+                }
+            )
+        }
+    )
+    with pytest.raises(
+        ValueError,
+        match="checkpoint execution plan does not match the admitted request",
+    ):
+        _checkpoint_recovery_from_request(mismatched)
 
 
 def test_checkpoint_branch_request_requires_explicit_action_and_new_boundary() -> None:
@@ -349,7 +545,9 @@ def test_checkpoint_branch_request_rejects_source_idempotency_boundary() -> None
 
 
 @pytest.mark.asyncio
-async def test_live_recovery_authority_requires_matching_current_records() -> None:
+async def test_live_recovery_authority_requires_matching_current_records(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from tests.unit.omnigent.test_oauth_profile_lifecycle import _checkpoint
 
     checkpoint = _checkpoint().model_copy(
@@ -361,6 +559,14 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
             "last_bridge_event_cursor": "4",
             "first_message_id": "message-1",
             "first_message_digest": "sha256:" + "a" * 64,
+            "execution_plan_ref": (
+                "omnigent-execution-plan:sha256:" + "b" * 64
+            ),
+            "runtime_binding_ref": (
+                "omnigent-runtime-binding:sha256:" + "c" * 64
+            ),
+            "runtime_binding_revision": 4,
+            "runtime_binding_fencing_generation": 5,
         }
     )
     provider = SimpleNamespace(credential_generation=checkpoint.credential_generation)
@@ -422,6 +628,37 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
         first_message_pending_id=None,
         first_message_state="posted",
     )
+
+    provider_authority = SimpleNamespace(
+        providerProfileRef=checkpoint.provider_profile_id,
+        providerLeaseRef=checkpoint.provider_lease_ref,
+        credentialGeneration=checkpoint.credential_generation,
+    )
+    runtime_state = SimpleNamespace(
+        binding=SimpleNamespace(
+            executionPlanRef=checkpoint.execution_plan_ref,
+            runtimeBindingRef=checkpoint.runtime_binding_ref,
+            hostBindingRef=checkpoint.host_binding_ref,
+            hostLeaseRef=checkpoint.host_lease_ref,
+            omnigentHostId=checkpoint.omnigent_host_id,
+            omnigentSessionId=checkpoint.omnigent_session_id,
+            providerLeases={"primary-model": provider_authority},
+        ),
+        revision=checkpoint.runtime_binding_revision,
+        fencing_generation=checkpoint.runtime_binding_fencing_generation,
+    )
+
+    class RuntimeBindingStore:
+        def __init__(self, _session_factory):
+            pass
+
+        async def get_state(self, binding_ref):
+            assert binding_ref == checkpoint.runtime_binding_ref
+            return runtime_state
+
+    from moonmind.omnigent.harness_platform import stores
+
+    monkeypatch.setattr(stores, "DbRuntimeBindingStore", RuntimeBindingStore)
     authority = await _resolve_live_recovery_authority(
         checkpoint=checkpoint,
         session_factory=Session,
@@ -437,10 +674,28 @@ async def test_live_recovery_authority_requires_matching_current_records() -> No
     assert authority["host_registered"] is True
     assert authority["session_valid"] is True
     assert authority["first_message_consistent"] is True
+    assert authority["runtime_binding_current"] is True
     assert (
         authority["current_credential_generation"]
         == checkpoint.credential_generation
     )
+
+    runtime_state.revision += 1
+    stale_authority = await _resolve_live_recovery_authority(
+        checkpoint=checkpoint,
+        session_factory=Session,
+        host_repository=SimpleNamespace(
+            get_host_lease=lambda _lease_id: _async_value(host)
+        ),
+        run_store=SimpleNamespace(
+            get_bridge_session=lambda _bridge_id: _async_value(bridge)
+        ),
+    )
+
+    assert stale_authority["runtime_binding_current"] is False
+    assert stale_authority["host_registered"] is False
+    assert stale_authority["session_valid"] is False
+    assert stale_authority["first_message_consistent"] is False
 
 
 @pytest.mark.asyncio

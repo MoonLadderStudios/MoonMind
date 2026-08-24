@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from api_service.db.models import (
+    ManagedAgentProviderProfile,
     OmnigentAgentProfile,
     OmnigentAgentProfileVersion,
     OmnigentOAuthHostBindingRecord,
@@ -402,9 +403,16 @@ def _dispatch_error_from_temporal_action(action: object | None) -> str | None:
 class RecurringWorkflowsService:
     """CRUD and dispatch helpers for recurring definitions."""
 
-    def __init__(self, session: AsyncSession, *, temporal_client_adapter: TemporalClientAdapter | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        temporal_client_adapter: TemporalClientAdapter | None = None,
+        artifact_service: Any | None = None,
+    ) -> None:
         self._session = session
         self._adapter = temporal_client_adapter or TemporalClientAdapter()
+        self._artifact_service = artifact_service
 
     async def _lock_definition_for_update(
         self,
@@ -650,6 +658,14 @@ class RecurringWorkflowsService:
 
         target = dict(definition.target or {})
         initial_parameters = dict(target.get("initialParameters") or {})
+        if isinstance(
+            initial_parameters.get("omnigentExecutionPlan"), Mapping
+        ):
+            return await self._refresh_omnigent_execution_plan_target(
+                definition,
+                target=target,
+                initial_parameters=initial_parameters,
+            )
         previous = initial_parameters.get("agentProfileSnapshot")
         if (
             not isinstance(previous, Mapping)
@@ -729,6 +745,109 @@ class RecurringWorkflowsService:
         target["initialParameters"] = refreshed
         target["agentProfile"] = dict(refreshed["agentProfile"])
         target["agentProfileSnapshot"] = dict(refreshed["agentProfileSnapshot"])
+        definition.target = target
+        definition.updated_at = datetime.now(UTC)
+        definition.version = int(definition.version or 0) + 1
+        await self._session.flush()
+        return True
+
+    async def _refresh_omnigent_execution_plan_target(
+        self,
+        definition: RecurringWorkflowDefinition,
+        *,
+        target: dict[str, Any],
+        initial_parameters: dict[str, Any],
+    ) -> bool:
+        """Atomically advance time-limited admission evidence for a schedule."""
+
+        from api_service.services.omnigent_execution_plan_service import (
+            compile_and_persist_execution_plan,
+        )
+        from moonmind.omnigent.harness_platform.stores import (
+            SessionExecutionPlanStore,
+        )
+        from moonmind.schemas.agent_runtime_models import (
+            OmnigentExecutionPlanBinding,
+        )
+        from moonmind.workflows.temporal.artifacts import (
+            TemporalArtifactRepository,
+            TemporalArtifactService,
+        )
+
+        try:
+            current_binding = OmnigentExecutionPlanBinding.model_validate(
+                initial_parameters["omnigentExecutionPlan"]
+            )
+        except Exception as exc:
+            raise RecurringWorkflowValidationError(
+                "scheduled Omnigent execution-plan authority is invalid"
+            ) from exc
+        snapshot = target.get("agentProfileSnapshot")
+        if not isinstance(snapshot, Mapping):
+            raise RecurringWorkflowValidationError(
+                "scheduled Omnigent Agent Profile snapshot is unavailable"
+            )
+        provider_profile_ref = str(snapshot.get("providerProfileRef") or "").strip()
+        provider_profile = await self._session.get(
+            ManagedAgentProviderProfile,
+            provider_profile_ref,
+        )
+        if provider_profile is None:
+            raise RecurringWorkflowValidationError(
+                "scheduled Omnigent Provider Profile is unavailable"
+            )
+        actor = (
+            await self._session.get(User, definition.owner_user_id)
+            if definition.owner_user_id is not None
+            else None
+        )
+        principal = str(getattr(actor, "id", "") or "system")
+        artifact_service = self._artifact_service or TemporalArtifactService(
+            TemporalArtifactRepository(self._session)
+        )
+        compilation_parameters = dict(initial_parameters)
+        compilation_parameters.pop("omnigentExecutionPlan", None)
+        compilation_parameters.pop("resolvedSkillsetRef", None)
+        try:
+            persisted_plan = await compile_and_persist_execution_plan(
+                session_factory=None,
+                execution_plan_store=SessionExecutionPlanStore(self._session),
+                artifact_service=artifact_service,
+                principal=principal,
+                workflow_id=f"mm-schedule:{definition.id}",
+                agent_profile_snapshot=dict(snapshot),
+                provider_profile=provider_profile,
+                initial_parameters=compilation_parameters,
+                authored_request_ref=current_binding.task_input_snapshot_ref,
+                authored_request_digest=(
+                    current_binding.task_input_snapshot_digest
+                ),
+                task_input_snapshot_ref=current_binding.task_input_snapshot_ref,
+                task_input_snapshot_digest=(
+                    current_binding.task_input_snapshot_digest
+                ),
+                db_session=self._session,
+            )
+        except Exception as exc:
+            raise RecurringWorkflowValidationError(
+                f"could not refresh scheduled Omnigent authority: {exc}"
+            ) from exc
+        if persisted_plan.binding == current_binding:
+            return False
+
+        initial_parameters["omnigentExecutionPlan"] = (
+            persisted_plan.binding.model_dump(
+                mode="json", by_alias=True, exclude_none=True
+            )
+        )
+        initial_parameters["resolvedSkillsetRef"] = (
+            persisted_plan.resolved_skillset_ref
+        )
+        target["initialParameters"] = initial_parameters
+        target["omnigentAuthorityArtifactRefs"] = [
+            current_binding.task_input_snapshot_ref,
+            *persisted_plan.artifact_refs,
+        ]
         definition.target = target
         definition.updated_at = datetime.now(UTC)
         definition.version = int(definition.version or 0) + 1
@@ -868,6 +987,86 @@ class RecurringWorkflowsService:
                 initial_parameters,
                 snapshot=snapshot,
             )
+            target_runtime = str(
+                initial_parameters.get("targetRuntime") or ""
+            ).strip().lower()
+            if target_runtime != "omnigent":
+                raise RecurringWorkflowValidationError(
+                    "agent profile schedules require targetRuntime='omnigent'"
+                )
+            from api_service.services.omnigent_execution_plan_service import (
+                compile_and_persist_execution_plan,
+                persist_json_artifact,
+            )
+            from moonmind.omnigent.harness_platform.stores import (
+                SessionExecutionPlanStore,
+            )
+            from moonmind.workflows.temporal.artifacts import (
+                TemporalArtifactRepository,
+                TemporalArtifactService,
+            )
+
+            provider_profile = await self._session.get(
+                ManagedAgentProviderProfile,
+                str(snapshot["providerProfileRef"]),
+            )
+            if provider_profile is None:
+                raise RecurringWorkflowValidationError(
+                    "selected Provider Profile disappeared before plan compilation"
+                )
+            principal = str(getattr(actor, "id", "") or "system")
+            artifact_service = self._artifact_service or TemporalArtifactService(
+                TemporalArtifactRepository(self._session)
+            )
+            task_snapshot = {
+                "snapshotVersion": "original-task-input/v1",
+                "source": {
+                    "kind": "schedule",
+                    "definitionId": str(definition_id),
+                },
+                "target": {
+                    **definition.target,
+                    "initialParameters": initial_parameters,
+                },
+            }
+            task_input_snapshot_ref, task_input_snapshot_digest = (
+                await persist_json_artifact(
+                    artifact_service=artifact_service,
+                    principal=principal,
+                    artifact_class="original_task_input_snapshot",
+                    payload=task_snapshot,
+                )
+            )
+            try:
+                persisted_plan = await compile_and_persist_execution_plan(
+                    session_factory=None,
+                    execution_plan_store=SessionExecutionPlanStore(
+                        self._session
+                    ),
+                    artifact_service=artifact_service,
+                    principal=principal,
+                    workflow_id=f"mm-schedule:{definition_id}",
+                    agent_profile_snapshot=snapshot,
+                    provider_profile=provider_profile,
+                    initial_parameters=initial_parameters,
+                    authored_request_ref=task_input_snapshot_ref,
+                    authored_request_digest=task_input_snapshot_digest,
+                    task_input_snapshot_ref=task_input_snapshot_ref,
+                    task_input_snapshot_digest=task_input_snapshot_digest,
+                    db_session=self._session,
+                )
+            except Exception as exc:
+                raise RecurringWorkflowValidationError(
+                    f"invalid Omnigent schedule authority: {exc}"
+                ) from exc
+            initial_parameters["omnigentExecutionPlan"] = (
+                persisted_plan.binding.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                )
+            )
+            initial_parameters["resolvedSkillsetRef"] = (
+                persisted_plan.resolved_skillset_ref
+            )
             definition.target = {
                 **definition.target,
                 "agentProfile": {
@@ -877,6 +1076,10 @@ class RecurringWorkflowsService:
                 },
                 "agentProfileSnapshot": snapshot,
                 "initialParameters": initial_parameters,
+                "omnigentAuthorityArtifactRefs": [
+                    task_input_snapshot_ref,
+                    *persisted_plan.artifact_refs,
+                ],
             }
             await self._session.flush()
 
@@ -958,10 +1161,26 @@ class RecurringWorkflowsService:
             definition.timezone = validate_timezone_name(timezone)
             changed_schedule = True
         if target is not None:
-            definition.target = _normalize_target(
+            normalized_target = _normalize_target(
                 _json_object(target, field_name="target")
             )
-        
+            current_parameters = dict(
+                (definition.target or {}).get("initialParameters") or {}
+            )
+            current_plan = current_parameters.get("omnigentExecutionPlan")
+            next_parameters = dict(
+                normalized_target.get("initialParameters") or {}
+            )
+            if (
+                isinstance(current_plan, Mapping)
+                and next_parameters.get("omnigentExecutionPlan") != current_plan
+            ):
+                raise RecurringWorkflowValidationError(
+                    "editing an admitted Omnigent schedule requires an "
+                    "explicit replacement plan"
+                )
+            definition.target = normalized_target
+
         policy_obj = None
         if policy is not None:
             normalized_policy_payload = _json_object(policy, field_name="policy")
