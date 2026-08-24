@@ -2461,14 +2461,14 @@ xlrd = ">=2.0.1,<3"
 
 [[package]]
 name = "llama-index-readers-file"
-version = "0.5.6"
+version = "0.6.0"
 description = "llama-index readers file integration"
 optional = false
-python-versions = "<4.0,>=3.9"
+python-versions = "<4.0,>=3.10"
 groups = ["main"]
 files = [
-    {file = "llama_index_readers_file-0.5.6-py3-none-any.whl", hash = "sha256:32e83f9adb4e4803e6c7cef746c44fa0949013b1cb76f06f422e9491d198dbda"},
-    {file = "llama_index_readers_file-0.5.6.tar.gz", hash = "sha256:1c08b14facc2dfe933622aaa26dc7d2a7a6023c42d3db896a2c948789edaf1ea"},
+    {file = "llama_index_readers_file-0.6.0-py3-none-any.whl", hash = "sha256:1026d94f2d5902152373bc2c3b7caa7e216d956620b22d510e516850b6a7440d"},
+    {file = "llama_index_readers_file-0.6.0.tar.gz", hash = "sha256:ff366d6ff5ecb7119275ac859310d8b672d8b6b3261afae02f4084fce9076bd0"},
 ]
 
 [package.dependencies]
@@ -6542,4 +6542,4 @@ tests = ["pytest", "pytest-asyncio", "pytest-mock", "pytest-timeout", "pytest-xd
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.10,<3.14"
-content-hash = "8e686f4b84792143e219d65d14120500e838e8998e91f0e10f31f98a977f4078"
+content-hash = "8f898058e22e40cca5e05925eda9f18f6e04009141dbcc53cc4527f277a1c182"
