@@ -101,7 +101,10 @@ async def test_materializer_clones_missing_sandbox_workspace_via_daemon(
     assert f"{materializer._workspace_volume}:/work" in argv
     assert "/work/" + workspace_id + "/repo" in argv
     joined = " ".join(argv)
-    assert "https://github.com/MoonLadderStudios/MoonMind.git" in joined
+    # The clone runs in a one-shot container with no credential helper, so the
+    # remote carries launch-time GitHub auth. Assert the authenticated form.
+    assert "https://x-access-token:" in joined
+    assert "@github.com/MoonLadderStudios/MoonMind.git" in joined
     assert "dependabot/npm_and_yarn/multi-2181bdc769" in joined
 
 
