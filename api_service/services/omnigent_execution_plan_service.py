@@ -689,6 +689,10 @@ async def compile_and_persist_execution_plan(
                     _latest_cat.snapshot.omnigentVersion
                 )
         except Exception:
+            # The catalog lookup only sharpens the reported Omnigent version.
+            # Planning authority comes from the profile document, so an
+            # unavailable catalog keeps the documented default rather than
+            # failing a plan that is otherwise fully attested.
             pass
     provider_profile_ref = str(
         getattr(provider_profile, "profile_id", None)

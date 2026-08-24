@@ -15,6 +15,9 @@ from api_service.db.models import (
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
+from api_service.services import (
+    omnigent_agent_profile_selection as selection_module,
+)
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
@@ -243,8 +246,6 @@ async def test_resolver_counts_active_managed_secrets_toward_launch_readiness(
 ):
     """DB-encrypted credentials must be checked against real secret status."""
 
-    import api_service.services.omnigent_agent_profile_selection as selection_module
-
     observed = {}
 
     async def fake_statuses(*, session, rows):
@@ -288,8 +289,6 @@ async def test_resolver_counts_active_managed_secrets_toward_launch_readiness(
 async def test_resolver_rejects_secret_backed_profile_without_active_secret(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    import api_service.services.omnigent_agent_profile_selection as selection_module
-
     async def fake_statuses(*, session, rows):
         return {}
 

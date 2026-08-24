@@ -167,6 +167,7 @@ def build_generic_omnigent_execution_services(
     session_factory: Any,
     artifact_gateway: Any | None = None,
     run_store: Any | None = None,
+    catalog_observation_overlay: Any | None = None,
 ) -> GenericOmnigentExecutionServices:
     """Build a complete registry or fail before the worker handles a request."""
 
@@ -291,6 +292,7 @@ def build_generic_omnigent_execution_services(
             repository=catalogs,
             endpoint_ref="default",
             omnigent_build_digest=_server_build_digest(),
+            observation_overlay=catalog_observation_overlay,
         ),
         runtime_binding_store=runtime_bindings,
         host_lease_repository=host_leases,

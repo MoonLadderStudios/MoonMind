@@ -276,14 +276,14 @@ def build_daemon_git_clone_argv(
     return argv
 
 
-_SAFE_ENV_KEY = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
-
-
 def _rmdir_if_empty(path: Path) -> None:
     try:
         if path.is_dir() and not any(path.iterdir()):
             path.rmdir()
     except OSError:
+        # Best-effort cleanup of an empty workspace directory. A concurrent
+        # writer, a race with another cleanup, or a read-only mount must not
+        # fail the caller: the directory is left in place for the next sweep.
         pass
 
 

@@ -1,182 +1,82 @@
 [
   {
-    "id": "3834838609",
+    "id": 3838061903,
     "disposition": "not-applicable",
-    "rationale": "The commented migration was removed when the branch incorporated main; Alembic revision metadata remains framework-required in the current migration."
+    "rationale": "'revision' is a required Alembic module contract identifier read by the migration runner, not dead code."
   },
   {
-    "id": "3834838614",
+    "id": 3838061910,
     "disposition": "not-applicable",
-    "rationale": "The commented migration was removed when the branch incorporated main; Alembic down_revision metadata remains framework-required in the current migration."
+    "rationale": "'down_revision' is a required Alembic module contract identifier read by the migration runner, not dead code."
   },
   {
-    "id": "3834838617",
+    "id": 3838061913,
     "disposition": "not-applicable",
-    "rationale": "branch_labels is Alembic module metadata consumed by migration discovery, not an unused application variable."
+    "rationale": "'branch_labels' is a required Alembic module contract identifier read by the migration runner, not dead code."
   },
   {
-    "id": "3834838619",
+    "id": 3838061914,
     "disposition": "not-applicable",
-    "rationale": "depends_on is Alembic module metadata consumed by migration discovery, not an unused application variable."
+    "rationale": "'depends_on' is a required Alembic module contract identifier read by the migration runner, not dead code."
   },
   {
-    "id": "3834838625",
+    "id": 3838067607,
     "disposition": "addressed",
-    "rationale": "Removed the duplicate import form and now references ControlPlaneOutcome through the existing module alias."
+    "rationale": "downgrade() now counts duplicate (endpoint_ref, source_digest) observations and raises an actionable RuntimeError instead of failing on constraint creation. Catalog snapshots are immutable evidence pinned by trust records and profile versions, so consolidating them would destroy authority live profiles still bind; the repo's 355_checkpoint_blob_dedup precedent is followed."
   },
   {
-    "id": "3834838632",
+    "id": 3838067612,
+    "disposition": "addressed",
+    "rationale": "_reconcile_omnigent_bootstrap_once now returns per-leg OmnigentBootstrapReadiness and the maintenance loop derives refresh_images from policies_ready only, so a catalog-only outage no longer re-pulls images on every retry. Covered by test_catalog_outage_does_not_retry_registry_image_refresh and test_image_policy_outage_keeps_retrying_registry_refresh."
+  },
+  {
+    "id": 3838067614,
+    "disposition": "addressed",
+    "rationale": "OmnigentHarnessCatalogService now accepts observation_overlay and applies it before persist, so synchronize() publishes exactly one immutable overlaid row and readers can never select an overlay-free latest(). The post-persist second write and its observedAt offset were removed. Covered by test_catalog_sync_publishes_only_the_overlaid_observation."
+  },
+  {
+    "id": 3838067617,
+    "disposition": "addressed",
+    "rationale": "The overlay source digest now hashes the synthetic harness row (including implementation identity) and the synthetic agent identity alongside the prior digest, so a changed overlay produces a new digest. Covered by test_overlay_digest_tracks_synthetic_overlay_authority."
+  },
+  {
+    "id": 3838067621,
     "disposition": "not-applicable",
-    "rationale": "The target integration test was removed by the merge from main and no effectless statement exists in the current branch."
+    "rationale": "GitHub reports this review thread as outdated against the current diff and the pr-resolver comment classifier marks it non-actionable (thread_outdated); the thread is deliberately left unresolved. Changing built-in profile equality from the inventory digest to per-harness authority is an authority-sensitive redesign outside this PR's bounded scope and is reported to the PR author for separate follow-up."
   },
   {
-    "id": "4998696944",
+    "id": 3838111454,
+    "disposition": "addressed",
+    "rationale": "The two local 'import api_service.services.omnigent_agent_profile_selection as selection_module' statements were replaced by one module-level 'from api_service.services import ... as selection_module', so the module uses a single import form."
+  },
+  {
+    "id": 3838111460,
+    "disposition": "addressed",
+    "rationale": "Same fix as the line 246 occurrence: the duplicate local 'import' statement was removed in favor of the single module-level import-from."
+  },
+  {
+    "id": 3839952562,
     "disposition": "not-applicable",
-    "rationale": "This is the automated review summary and contains no separate actionable request."
+    "rationale": "Thread is already resolved on GitHub; the pr-resolver classifier marks it non-actionable (thread_resolved)."
   },
   {
-    "id": "3834853390",
+    "id": 3839952568,
     "disposition": "addressed",
-    "rationale": "The compact handoff now carries execution-specific instruction and input references with SHA-256 digests, and reconstruction verifies and preserves them."
+    "rationale": "_rmdir_if_empty's 'except OSError: pass' now carries an explanatory comment describing why best-effort cleanup of an empty workspace directory must not fail the caller."
   },
   {
-    "id": "3834853394",
+    "id": 3847506256,
     "disposition": "addressed",
-    "rationale": "Plan-bound reconstruction now projects startingBranch and targetBranch from the frozen workflow.git snapshot."
+    "rationale": "The unused _SAFE_ENV_KEY regex had no remaining references anywhere in the repo and was deleted."
   },
   {
-    "id": "3834853398",
+    "id": 3848188403,
+    "disposition": "addressed",
+    "rationale": "The best-effort catalog version lookup's 'except Exception: pass' now carries an explanatory comment: the lookup only sharpens the reported Omnigent version, and planning authority comes from the profile document."
+  },
+  {
+    "id": 5001986459,
     "disposition": "not-applicable",
-    "rationale": "The reviewed deployment path was superseded by the merge from main; the replacement generic realizer persists cleanup authority before launch and performs lifecycle cleanup."
-  },
-  {
-    "id": "3834853401",
-    "disposition": "addressed",
-    "rationale": "Plan-bound reconstruction now enforces the frozen model and effort and projects them into the nested Omnigent session fields."
-  },
-  {
-    "id": "3834853407",
-    "disposition": "addressed",
-    "rationale": "The continuation route validates that any candidate execution plan exactly matches the canonical source binding before creating the continuation."
-  },
-  {
-    "id": "3834853412",
-    "disposition": "addressed",
-    "rationale": "Managed schedule refresh now recompiles admitted plan authority against current evidence and atomically replaces the scheduled action input."
-  },
-  {
-    "id": "3834853413",
-    "disposition": "addressed",
-    "rationale": "Failures before durable session ownership now release the acquired provider-profile lease; after binding, session metadata durably owns the lease."
-  },
-  {
-    "id": "3834853416",
-    "disposition": "not-applicable",
-    "rationale": "The current generic execution path passes the execution plan, runtime binding, host class, launch policy, and realizer snapshot into bridge authorization binding."
-  },
-  {
-    "id": "3834853420",
-    "disposition": "addressed",
-    "rationale": "Reconstruction now discriminates agent sources, selects importedAgentId for bundles, and fails when the required identity is absent."
-  },
-  {
-    "id": "3834853421",
-    "disposition": "not-applicable",
-    "rationale": "The reviewed adapter was superseded by the merge from main; the current default registry supports omnigent-provider-config@1 through DockerOmnigentProviderConfigMaterializer."
-  },
-  {
-    "id": "3834939667",
-    "disposition": "not-applicable",
-    "rationale": "revision is required Alembic discovery metadata."
-  },
-  {
-    "id": "3834939682",
-    "disposition": "not-applicable",
-    "rationale": "down_revision is required Alembic migration-chain metadata."
-  },
-  {
-    "id": "3834939686",
-    "disposition": "not-applicable",
-    "rationale": "branch_labels is required Alembic discovery metadata."
-  },
-  {
-    "id": "3834939693",
-    "disposition": "not-applicable",
-    "rationale": "depends_on is required Alembic discovery metadata."
-  },
-  {
-    "id": 3836685124,
-    "disposition": "addressed",
-    "rationale": "Server-owned defaultRuntime now omnigent via settings.workflow.default_runtime, DEFAULT_WORKFLOW_RUNTIME, and build_runtime_config; client fallback documented as authoritative server value."
-  },
-  {
-    "id": 3836685133,
-    "disposition": "addressed",
-    "rationale": "Pinned OpenCode image validation now fails closed on Unable to find image without substituting mutable tag; preserves digest authority."
-  },
-  {
-    "id": 3836685141,
-    "disposition": "addressed",
-    "rationale": "Resolved opencode host image now propagated to process env and HostClassSelector via merged_env and os.environ; _ensure_provider_profile falls back to resolved state."
-  },
-  {
-    "id": 3836685142,
-    "disposition": "addressed",
-    "rationale": "Synthetic opencode policy now deep-replaces every Codex identity (harness, profileRef, agentIdentities, compatibleProviders) and re-asserts after deep sweep."
-  },
-  {
-    "id": 3836685150,
-    "disposition": "addressed",
-    "rationale": "Deployment evidence generation and validation now enforce featureGeneration/replayCompatibilityVersion/rollbackPolicyVersion at both validate_deployment_evidence and assert_deployment_evidence_matches_plan."
-  },
-  {
-    "id": 3837672052,
-    "disposition": "addressed",
-    "rationale": "Removed redundant json/hashlib imports in synthetic fallback; reuses top-level imports."
-  },
-  {
-    "id": 3837672053,
-    "disposition": "addressed",
-    "rationale": "Added explanatory comment to empty except at controller.py:249 (best-effort catalog fallback)."
-  },
-  {
-    "id": 3837672055,
-    "disposition": "addressed",
-    "rationale": "Added explanatory comment to empty except at controller.py:798 (best-effort resolved state load)."
-  },
-  {
-    "id": 3837672057,
-    "disposition": "addressed",
-    "rationale": "Added explanatory comment to empty except at deployment_evidence.py:155 (volume write best-effort)."
-  },
-  {
-    "id": 3837672059,
-    "disposition": "addressed",
-    "rationale": "Added explanatory comment to empty except at deployment_evidence.py:157 (key persistence best-effort)."
-  },
-  {
-    "id": 3837672064,
-    "disposition": "addressed",
-    "rationale": "Added explanatory comment to empty except at evidence.py:93 (compose volume best-effort)."
-  },
-  {
-    "id": 3837672070,
-    "disposition": "addressed",
-    "rationale": "Added explanatory comment to empty except at image_resolution.py:58 (docker inspect JSON decode)."
-  },
-  {
-    "id": 3837672073,
-    "disposition": "addressed",
-    "rationale": "Added explanatory comment to empty except at production.py:112 (resolved state best-effort)."
-  },
-  {
-    "id": 3837672077,
-    "disposition": "addressed",
-    "rationale": "Added explanatory comment to empty except at production.py:133 (docker inspect best-effort)."
-  },
-  {
-    "id": 3837672079,
-    "disposition": "addressed",
-    "rationale": "Added explanatory comment to empty except at store.py:54 (alternate mount best-effort)."
+    "rationale": "Informational Codex review summary body with no requested change; the classifier marks it non-actionable (bot_comment_excluded)."
   }
 ]

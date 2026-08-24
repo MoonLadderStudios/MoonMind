@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)  # Get logger after configuration
 import os  # For path operations
 import time
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -372,10 +373,34 @@ async def _sync_omnigent_harness_catalog() -> bool:
         return False
 
 
+@dataclass(frozen=True)
+class OmnigentBootstrapReadiness:
+    """Per-leg outcome of one bootstrap reconciliation pass.
+
+    Retry policy differs per leg: only the image-policy leg may re-acquire
+    images from the registry, so its readiness is tracked separately from the
+    aggregate readiness that drives the backoff schedule.
+    """
+
+    policies_ready: bool
+    agent_ready: bool
+    catalog_ready: bool
+    schedules_ready: bool
+
+    @property
+    def ready(self) -> bool:
+        return (
+            self.policies_ready
+            and self.agent_ready
+            and self.catalog_ready
+            and self.schedules_ready
+        )
+
+
 async def _reconcile_omnigent_bootstrap_once(
     *,
     refresh_images: bool,
-) -> bool:
+) -> OmnigentBootstrapReadiness:
     policies_ready = await _sync_omnigent_bootstrap_policies(
         refresh_images=refresh_images
     )
@@ -386,7 +411,12 @@ async def _reconcile_omnigent_bootstrap_once(
         if policies_ready and agent_ready
         else False
     )
-    return policies_ready and agent_ready and catalog_ready and schedules_ready
+    return OmnigentBootstrapReadiness(
+        policies_ready=policies_ready,
+        agent_ready=agent_ready,
+        catalog_ready=catalog_ready,
+        schedules_ready=schedules_ready,
+    )
 
 
 async def _maintain_omnigent_bootstrap_reconciliation(
@@ -396,13 +426,17 @@ async def _maintain_omnigent_bootstrap_reconciliation(
 
     ready = initial_ready
     retry_delay_seconds = 5
+    # Registry-acquiring image refresh is bound to image-policy readiness
+    # alone. An unrelated catalog or schedule outage must not re-pull images
+    # on every bounded retry just because aggregate readiness is false.
     refresh_images = True
     while True:
         await asyncio.sleep(120 if ready else retry_delay_seconds)
-        ready = await _reconcile_omnigent_bootstrap_once(
-            refresh_images=refresh_images or not ready
+        outcome = await _reconcile_omnigent_bootstrap_once(
+            refresh_images=refresh_images
         )
-        refresh_images = False
+        ready = outcome.ready
+        refresh_images = not outcome.policies_ready
         if ready:
             retry_delay_seconds = 5
         else:
@@ -1741,9 +1775,9 @@ async def startup_event():
     await _sync_preset_seed_catalog()
     # Readiness uses only bounded local image inspection. Registry refresh runs
     # in the lifespan-owned reconciler after the API can serve health checks.
-    omnigent_bootstrap_ready = await _reconcile_omnigent_bootstrap_once(
-        refresh_images=False
-    )
+    omnigent_bootstrap_ready = (
+        await _reconcile_omnigent_bootstrap_once(refresh_images=False)
+    ).ready
     app.state.omnigent_bootstrap_initial_ready = omnigent_bootstrap_ready
     await _sync_env_managed_secrets()
     # Embedded mode is an authority-sensitive enablement boundary. Evidence

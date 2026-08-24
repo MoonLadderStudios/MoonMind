@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import op
 
 
@@ -35,6 +36,34 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Re-observation is the point of this migration, so unchanged inventory
+    # legitimately produces several rows per (endpoint_ref, source_digest).
+    # Catalog snapshots are immutable evidence pinned by trust records and
+    # Agent Profile versions, so consolidating them to satisfy the old
+    # constraint would destroy authority that live profiles still bind.
+    # Fail fast with an actionable error instead of silently deleting it.
+    duplicate_observations = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                """
+            SELECT COUNT(*)
+            FROM (
+                SELECT endpoint_ref, source_digest
+                FROM omnigent_harness_catalog_snapshots
+                GROUP BY endpoint_ref, source_digest
+                HAVING COUNT(*) > 1
+            ) AS repeated_observations
+            """
+            )
+        )
+        .scalar_one()
+    )
+    if duplicate_observations:
+        raise RuntimeError(
+            "362_omnigent_catalog_reobserve is irreversible after unchanged "
+            "Omnigent inventory has been observed more than once"
+        )
     op.create_unique_constraint(
         "uq_omnigent_catalog_endpoint_source",
         "omnigent_harness_catalog_snapshots",

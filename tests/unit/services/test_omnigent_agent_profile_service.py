@@ -144,8 +144,9 @@ async def test_synchronize_omnigent_harness_catalog_is_one_canonical_path(
 
     built_with = {}
 
-    def fake_build(*, session_factory):
+    def fake_build(*, session_factory, catalog_observation_overlay=None):
         built_with["session_factory"] = session_factory
+        built_with["catalog_observation_overlay"] = catalog_observation_overlay
         return SimpleNamespace(catalog_service=_CatalogService())
 
     inventory_calls = []
@@ -179,6 +180,12 @@ async def test_synchronize_omnigent_harness_catalog_is_one_canonical_path(
     )
 
     assert built_with["session_factory"] is sentinel_factory
+    # The overlay is bound to the catalog service so the observation is
+    # published once, already overlaid.
+    assert (
+        built_with["catalog_observation_overlay"]
+        is service_module._overlay_synthetic_opencode
+    )
     assert summary == {
         "catalogRef": "cat-1",
         "observedAt": _Snapshot.observedAt,
@@ -258,7 +265,9 @@ def test_overlay_adds_stable_opencode_identity_when_endpoint_lacks_it():
         and record.trustState.value == "core_trusted"
         for record in merged.trust_records
     )
-    assert merged.snapshot.observedAt > real.snapshot.observedAt
+    # The overlay is persisted as the only observation for this sync, so it
+    # keeps the authenticated observation time instead of an offset.
+    assert merged.snapshot.observedAt == real.snapshot.observedAt
     agents = merged.diagnostics["agents"]
     assert {
         "id": "opencode-native-ui",
@@ -324,3 +333,125 @@ def test_overlay_skips_when_harness_present_or_support_disabled(
     monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "false")
     empty = _result_with([])
     assert _overlay_synthetic_opencode(empty) is empty
+
+
+def test_overlay_digest_tracks_synthetic_overlay_authority(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A changed synthetic identity must change the observation source digest."""
+
+    from datetime import UTC, datetime
+
+    from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        HarnessCatalogSyncResult,
+    )
+
+    from api_service.services import omnigent_agent_profile_service as service_module
+
+    real = HarnessCatalogSyncResult(
+        snapshot=create_catalog_snapshot(
+            endpointRef="default",
+            omnigentVersion="0.10.0",
+            omnigentBuildDigest="sha256:" + "c" * 64,
+            sourceDigest="sha256:" + "d" * 64,
+            harnesses=[],
+            observedAt=datetime(2026, 8, 23, tzinfo=UTC),
+        ),
+        trust_records=(),
+        diagnostics={"agents": []},
+    )
+
+    baseline = service_module._overlay_synthetic_opencode(real)
+
+    monkeypatch.setattr(service_module, "_OPENCODE_NATIVE_UI_VERSION", "2")
+    changed_agent = service_module._overlay_synthetic_opencode(real)
+    assert changed_agent.snapshot.sourceDigest != baseline.snapshot.sourceDigest
+
+    monkeypatch.setattr(service_module, "_OPENCODE_NATIVE_UI_VERSION", "1")
+    original_row = service_module._synthetic_opencode_harness_row
+
+    def _relabelled_row():
+        row = original_row()
+        row["implementation"] = {
+            **row["implementation"],
+            "digest": "sha256:" + "b" * 64,
+        }
+        return row
+
+    monkeypatch.setattr(
+        service_module, "_synthetic_opencode_harness_row", _relabelled_row
+    )
+    changed_harness = service_module._overlay_synthetic_opencode(real)
+    assert changed_harness.snapshot.sourceDigest != baseline.snapshot.sourceDigest
+
+
+@pytest.mark.asyncio
+async def test_catalog_sync_publishes_only_the_overlaid_observation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Readers must never see an overlay-free intermediate observation."""
+
+    from datetime import UTC, datetime
+
+    from moonmind.omnigent.harness_platform.catalog import create_catalog_snapshot
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        HarnessCatalogSyncResult,
+        OmnigentHarnessCatalogService,
+    )
+
+    persisted: list[HarnessCatalogSyncResult] = []
+
+    class _Repository:
+        async def persist(self, result):
+            persisted.append(result)
+            return result
+
+        async def load(self, catalog_ref):
+            return None
+
+        async def latest(self, endpoint_ref):
+            return persisted[-1] if persisted else None
+
+    class _Client:
+        async def get_version(self):
+            return "0.10.0"
+
+        async def list_harnesses(self):
+            return []
+
+        async def list_agents(self):
+            return []
+
+        async def list_hosts(self):
+            return []
+
+    def _overlay(result):
+        return HarnessCatalogSyncResult(
+            snapshot=create_catalog_snapshot(
+                endpointRef=result.snapshot.endpointRef,
+                omnigentVersion=result.snapshot.omnigentVersion,
+                omnigentBuildDigest=result.snapshot.omnigentBuildDigest,
+                sourceDigest="sha256:" + "f" * 64,
+                harnesses=[],
+                observedAt=result.snapshot.observedAt,
+            ),
+            trust_records=(),
+            diagnostics={**dict(result.diagnostics), "syntheticOpencodeOverlay": True},
+        )
+
+    service = OmnigentHarnessCatalogService(
+        client=_Client(),
+        repository=_Repository(),
+        endpoint_ref="default",
+        omnigent_build_digest="sha256:" + "c" * 64,
+        clock=lambda: datetime(2026, 8, 23, tzinfo=UTC),
+        observation_overlay=_overlay,
+    )
+
+    returned = await service.synchronize()
+
+    assert len(persisted) == 1
+    assert persisted[0] is returned
+    assert returned.diagnostics["syntheticOpencodeOverlay"] is True
+    assert returned.snapshot.sourceDigest == "sha256:" + "f" * 64

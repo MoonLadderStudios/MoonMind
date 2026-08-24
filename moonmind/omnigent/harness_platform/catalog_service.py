@@ -198,6 +198,9 @@ class OmnigentHarnessCatalogService:
         omnigent_build_digest: str,
         trust_policy: Callable[[HarnessRecord], TrustState] | None = None,
         clock: Callable[[], datetime] | None = None,
+        observation_overlay: (
+            Callable[[HarnessCatalogSyncResult], HarnessCatalogSyncResult] | None
+        ) = None,
     ) -> None:
         if (
             not omnigent_build_digest.startswith("sha256:")
@@ -210,6 +213,10 @@ class OmnigentHarnessCatalogService:
         self._build_digest = omnigent_build_digest
         self._trust_policy = trust_policy or self._default_trust_policy
         self._clock = clock or (lambda: datetime.now(UTC))
+        # Applied to the composed observation before it is persisted, so a
+        # deployment-local overlay publishes exactly one immutable row and
+        # readers can never select an intermediate, overlay-free snapshot.
+        self._observation_overlay = observation_overlay
 
     @staticmethod
     def _default_trust_policy(record: HarnessRecord) -> TrustState:
@@ -292,6 +299,8 @@ class OmnigentHarnessCatalogService:
                 "hosts": host_rows,
             },
         )
+        if self._observation_overlay is not None:
+            result = self._observation_overlay(result)
         return await self._repository.persist(result)
 
 

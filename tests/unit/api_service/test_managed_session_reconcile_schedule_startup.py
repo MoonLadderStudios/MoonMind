@@ -22,9 +22,15 @@ async def test_omnigent_bootstrap_retries_with_capped_backoff_and_maintains_inve
         if len(delays) == 4:
             raise asyncio.CancelledError
 
-    async def reconcile_once(*, refresh_images: bool) -> bool:
+    async def reconcile_once(*, refresh_images: bool):
         reconciliations.append(refresh_images)
-        return len(reconciliations) > 1
+        ready = len(reconciliations) > 1
+        return api_main.OmnigentBootstrapReadiness(
+            policies_ready=ready,
+            agent_ready=ready,
+            catalog_ready=ready,
+            schedules_ready=ready,
+        )
 
     async def refresh_inventory() -> bool:
         inventory_refreshes.append(True)
@@ -108,7 +114,9 @@ async def test_bootstrap_reconciliation_refreshes_recurring_schedule_authority(
         schedules,
     )
 
-    assert await api_main._reconcile_omnigent_bootstrap_once(refresh_images=True)
+    assert (
+        await api_main._reconcile_omnigent_bootstrap_once(refresh_images=True)
+    ).ready
     assert calls == ["policies:True", "agent", "catalog", "schedules"]
 
 
@@ -143,7 +151,9 @@ async def test_harness_catalog_sync_runs_on_bootstrap_reconciliation(
         schedules,
     )
 
-    assert await api_main._reconcile_omnigent_bootstrap_once(refresh_images=False)
+    assert (
+        await api_main._reconcile_omnigent_bootstrap_once(refresh_images=False)
+    ).ready
     assert syncs == [True]
 
 
@@ -353,3 +363,97 @@ async def test_mm948_api_startup_cleanup_schedule_failure_is_best_effort(
         await api_main.ensure_managed_runtime_workspace_cleanup_schedule_started()
 
     assert "Failed to ensure managed runtime workspace cleanup schedule" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_catalog_outage_does_not_retry_registry_image_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only image-policy readiness may re-acquire images from the registry."""
+
+    delays: list[int] = []
+    image_refreshes: list[bool] = []
+
+    async def fake_sleep(delay_seconds: int) -> None:
+        delays.append(delay_seconds)
+        if len(delays) == 4:
+            raise asyncio.CancelledError
+
+    async def policies(*, refresh_images: bool) -> bool:
+        image_refreshes.append(refresh_images)
+        return True
+
+    async def agent() -> bool:
+        return True
+
+    async def catalog() -> bool:
+        # The catalog endpoint alone is unavailable for every retry.
+        return False
+
+    async def schedules() -> bool:
+        return True
+
+    monkeypatch.setattr(api_main.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_policies", policies)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_agent_profile", agent)
+    monkeypatch.setattr(api_main, "_sync_omnigent_harness_catalog", catalog)
+    monkeypatch.setattr(
+        api_main,
+        "_sync_managed_bootstrap_recurring_schedules",
+        schedules,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await api_main._maintain_omnigent_bootstrap_reconciliation(
+            initial_ready=False
+        )
+
+    # Aggregate readiness stays false, so the loop keeps retrying with capped
+    # backoff, but images are refreshed only on the first pass.
+    assert delays == [5, 10, 20, 40]
+    assert image_refreshes == [True, False, False]
+
+
+@pytest.mark.asyncio
+async def test_image_policy_outage_keeps_retrying_registry_refresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unready image policy must keep re-acquiring images."""
+
+    delays: list[int] = []
+    image_refreshes: list[bool] = []
+
+    async def fake_sleep(delay_seconds: int) -> None:
+        delays.append(delay_seconds)
+        if len(delays) == 3:
+            raise asyncio.CancelledError
+
+    async def policies(*, refresh_images: bool) -> bool:
+        image_refreshes.append(refresh_images)
+        return False
+
+    async def agent() -> bool:
+        return True
+
+    async def catalog() -> bool:
+        return True
+
+    async def schedules() -> bool:
+        return True
+
+    monkeypatch.setattr(api_main.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_policies", policies)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_agent_profile", agent)
+    monkeypatch.setattr(api_main, "_sync_omnigent_harness_catalog", catalog)
+    monkeypatch.setattr(
+        api_main,
+        "_sync_managed_bootstrap_recurring_schedules",
+        schedules,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await api_main._maintain_omnigent_bootstrap_reconciliation(
+            initial_ready=False
+        )
+
+    assert image_refreshes == [True, True]

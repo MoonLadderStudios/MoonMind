@@ -364,13 +364,28 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
         harness.model_dump(by_alias=True, mode="json")
         for harness in result.snapshot.harnesses
     ]
-    harness_rows.append(_synthetic_opencode_harness_row())
-    # Persisted after the raw observation within the same microsecond-scale
-    # window; the offset guarantees ``latest()`` deterministically selects the
-    # overlay-complete snapshot that readiness and planning must observe.
-    observed_at = result.snapshot.observedAt + timedelta(microseconds=1)
+    synthetic_harness_row = _synthetic_opencode_harness_row()
+    synthetic_agent_row = {
+        "id": _OPENCODE_NATIVE_UI_ID,
+        "version": _OPENCODE_NATIVE_UI_VERSION,
+        "harness": "opencode-native",
+    }
+    harness_rows.append(synthetic_harness_row)
+    # The overlay is applied before the observation is persisted, so it is the
+    # only row published for this synchronization and needs no timestamp offset
+    # to win ``latest()``.
+    observed_at = result.snapshot.observedAt
+    # The digest must cover the overlay's own authority. Hashing only the prior
+    # digest and a boolean would keep the source digest stable when the
+    # synthetic implementation or agent identity changes, so consumers would
+    # reuse a document bound to the superseded overlay.
     merged_source = json.dumps(
-        {"prior": result.snapshot.sourceDigest, "overlay": True},
+        {
+            "prior": result.snapshot.sourceDigest,
+            "overlay": True,
+            "syntheticHarness": synthetic_harness_row,
+            "syntheticAgent": synthetic_agent_row,
+        },
         sort_keys=True,
         separators=(",", ":"),
     )
@@ -417,11 +432,7 @@ def _overlay_synthetic_opencode(result: Any) -> Any:
             **dict(result.diagnostics),
             "agents": [
                 *[item for item in result.diagnostics.get("agents", []) if isinstance(item, dict)],
-                {
-                    "id": _OPENCODE_NATIVE_UI_ID,
-                    "version": _OPENCODE_NATIVE_UI_VERSION,
-                    "harness": "opencode-native",
-                },
+                dict(synthetic_agent_row),
             ],
             "syntheticOpencodeOverlay": True,
         },
@@ -443,17 +454,16 @@ async def synchronize_omnigent_harness_catalog(session: AsyncSession) -> dict[st
     from api_service.db.base import async_session_maker
     from moonmind.omnigent.production import build_generic_omnigent_execution_services
 
+    # The overlay runs inside the catalog service, before persistence, so the
+    # endpoint observation and its OpenCode overlay are published as one
+    # immutable row. Persisting the raw snapshot first would let a concurrent
+    # readiness or planning request select an overlay-free ``latest()`` and
+    # reject an otherwise valid launch.
     services = build_generic_omnigent_execution_services(
-        session_factory=async_session_maker
+        session_factory=async_session_maker,
+        catalog_observation_overlay=_overlay_synthetic_opencode,
     )
-    result = await services.catalog_service.synchronize()
-    overlaid = _overlay_synthetic_opencode(result)
-    if overlaid is not result:
-        from moonmind.omnigent.harness_platform.catalog_service import (
-            DbHarnessCatalogRepository,
-        )
-
-        await DbHarnessCatalogRepository(async_session_maker).persist(overlaid)
+    overlaid = await services.catalog_service.synchronize()
     await synchronize_upstream_inventory(
         session,
         endpoint_ref=overlaid.snapshot.endpointRef,
