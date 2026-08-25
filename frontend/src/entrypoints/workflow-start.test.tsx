@@ -15253,6 +15253,46 @@ describe("Task Create MM-641 authoring validation", () => {
             }),
           } as Response);
         }
+        // Rerun source whose run already authored context retrieval, used to
+        // prove the Advanced mode disclosure never hides an inherited policy.
+        if (url === "/api/executions/mm%3Aretrieval-rerun?source=temporal") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              workflowId: "mm:retrieval-rerun",
+              workflowType: "MoonMind.UserWorkflow",
+              state: "completed",
+              targetRuntime: "codex_cli",
+              repository: "MoonLadderStudios/MoonMind",
+              startingBranch: "main",
+              publishMode: "pr",
+              inputParameters: {
+                targetRuntime: "codex_cli",
+                rag: { collections: ["docs"], required: true },
+                followUpRetrieval: { enabled: true, collections: ["docs"] },
+                workflow: {
+                  instructions: "Rerun a run that authored context retrieval.",
+                  runtime: { mode: "codex_cli" },
+                  git: { startingBranch: "main" },
+                  publish: { mode: "pr" },
+                },
+              },
+              actions: { canUpdateInputs: false, canRerun: true },
+            }),
+          } as Response);
+        }
+        if (url === "/api/executions/mm%3Aretrieval-rerun/update") {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({
+              accepted: true,
+              applied: "continue_as_new",
+              message: "Rerun requested. New execution created.",
+              execution: { workflowId: "mm:retrieval-rerun-created" },
+              continueAsNewCause: "manual_rerun",
+            }),
+          } as Response);
+        }
         if (url === "/api/executions") {
           return Promise.resolve({
             ok: true,
@@ -15555,6 +15595,245 @@ describe("Task Create MM-641 authoring validation", () => {
     const request = latestCreateRequest();
     expect(request.priority).toBe(0);
     expect(request.maxAttempts).toBe(3);
+  });
+
+  it("hides the Context retrieval (RAG) controls behind the Advanced mode toggle", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    await screen.findByLabelText("Instructions");
+    const executionControls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    );
+    expect(executionControls).not.toBeNull();
+    const controls = executionControls as HTMLElement;
+
+    expect(within(controls).queryByText("Context retrieval (RAG)")).toBeNull();
+    expect(
+      document.querySelector('[data-testid="context-retrieval-controls"]'),
+    ).toBeNull();
+
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(within(controls).getByText("Context retrieval (RAG)")).toBeTruthy();
+    expect(
+      document.querySelector('[data-testid="context-retrieval-controls"]'),
+    ).not.toBeNull();
+
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(within(controls).queryByText("Context retrieval (RAG)")).toBeNull();
+    expect(
+      document.querySelector('[data-testid="context-retrieval-controls"]'),
+    ).toBeNull();
+  });
+
+  it("submits authored Context retrieval (RAG) values while Advanced mode is on", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run with narrowed retrieval." },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+
+    const controls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    ) as HTMLElement;
+    expect(controls).not.toBeNull();
+
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(
+      screen.getByLabelText(
+        "Require initial context (fail the step if unavailable)",
+      ),
+    );
+    fireEvent.click(
+      screen.getByLabelText(
+        "Allow the session to request additional context during the run",
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect(payload.rag).toEqual({ required: true });
+    expect(payload.followUpRetrieval).toMatchObject({ enabled: true });
+  });
+
+  it("ignores hidden Context retrieval (RAG) authoring when Advanced mode is off", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run with deployment retrieval policy." },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+
+    const controls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    ) as HTMLElement;
+    expect(controls).not.toBeNull();
+
+    // Author retrieval in Advanced mode, then hide the controls again before
+    // submitting.
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(
+      screen.getByLabelText(
+        "Require initial context (fail the step if unavailable)",
+      ),
+    );
+    fireEvent.click(
+      screen.getByLabelText(
+        "Allow the session to request additional context during the run",
+      ),
+    );
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    expect(
+      document.querySelector('[data-testid="context-retrieval-controls"]'),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    // The hidden authoring is dropped, so the run uses deployment retrieval
+    // policy instead of a value the operator can no longer see.
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect("rag" in payload).toBe(false);
+    expect("followUpRetrieval" in payload).toBe(false);
+  });
+
+  it("does not restore cleared Context retrieval (RAG) authoring when Advanced mode is re-enabled", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run after clearing retrieval authoring." },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+
+    const controls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    ) as HTMLElement;
+    expect(controls).not.toBeNull();
+
+    // Author retrieval, turn Advanced mode off to clear it, then turn it back
+    // on to adjust an unrelated advanced control.
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(
+      screen.getByLabelText(
+        "Require initial context (fail the step if unavailable)",
+      ),
+    );
+    fireEvent.click(
+      screen.getByLabelText(
+        "Allow the session to request additional context during the run",
+      ),
+    );
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+
+    // The reopened controls are unauthored again instead of showing the values
+    // the operator already cleared.
+    expect(
+      (
+        screen.getByLabelText(
+          "Require initial context (fail the step if unavailable)",
+        ) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+    expect(
+      (
+        screen.getByLabelText(
+          "Allow the session to request additional context during the run",
+        ) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    // Reopening Advanced mode cannot resubmit the cleared retrieval policy.
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect("rag" in payload).toBe(false);
+    expect("followUpRetrieval" in payload).toBe(false);
+  });
+  it("reveals Advanced mode so an inherited rerun retrieval policy stays visible and resubmitted", async () => {
+    window.history.pushState(
+      {},
+      "Task Rerun",
+      "/workflows/new?rerunExecutionId=mm%3Aretrieval-rerun",
+    );
+
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    const instructions = (await screen.findByLabelText(
+      "Instructions",
+    )) as HTMLTextAreaElement;
+    await waitFor(() => {
+      expect(instructions.value).toBe(
+        "Rerun a run that authored context retrieval.",
+      );
+    });
+
+    const controls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    ) as HTMLElement;
+    expect(controls).not.toBeNull();
+    expect(
+      (within(controls).getByLabelText("Advanced mode") as HTMLInputElement)
+        .checked,
+    ).toBe(true);
+    expect(within(controls).getByText("Context retrieval (RAG)")).toBeTruthy();
+
+    fireEvent.change(instructions, {
+      target: { value: "Rerun with the inherited retrieval policy." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start New Run" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions/mm%3Aretrieval-rerun/update",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    const updateCall = fetchSpy.mock.calls
+      .filter(
+        ([url]) =>
+          String(url) === "/api/executions/mm%3Aretrieval-rerun/update",
+      )
+      .at(-1);
+    const request = JSON.parse(String(updateCall?.[1]?.body)) as {
+      parametersPatch: Record<string, unknown>;
+    };
+    expect(request.parametersPatch.rag).toEqual({
+      collections: ["docs"],
+      required: true,
+    });
+    expect(request.parametersPatch.followUpRetrieval).toMatchObject({
+      enabled: true,
+      collections: ["docs"],
+    });
   });
 
   it("does not serialize the primary Skill onto blank added steps", async () => {

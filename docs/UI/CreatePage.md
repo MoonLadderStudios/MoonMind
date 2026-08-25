@@ -390,6 +390,31 @@ Branch behavior:
 - Allow manual branch entry as an advanced fallback.
 - Show generated publish branch names before submission when relevant.
 
+## Context Retrieval Controls
+
+Context retrieval (RAG) authoring is an advanced control. The guided path relies
+on deployment retrieval policy, so the **Context retrieval (RAG)** disclosure in
+Execution controls renders only while **Advanced mode** is enabled, alongside the
+other advanced controls (optional Skill inputs, skill args, required
+capabilities, worker routing, Priority, Max Attempts).
+
+The disclosure rule must never make an operator-authored retrieval policy
+invisible:
+
+- While the controls are hidden, submission carries the unauthored default so
+  deployment retrieval policy applies, rather than a value the operator can no
+  longer see (the same rule as Priority and Max Attempts).
+- Reconstructing a rerun/edit source or importing a remediation draft that
+  already authored `rag` / `followUpRetrieval` enables Advanced mode, so the
+  inherited policy stays visible, editable, and resubmitted.
+- Turning Advanced mode off is therefore an explicit clear of that authoring, in
+  the same way as clearing the controls by hand: the retained retrieval
+  authoring resets to the unauthored default, so re-enabling Advanced mode for
+  an unrelated control cannot restore a policy the operator already cleared.
+
+These controls only narrow within deployment ceilings; the server re-clamps every
+submitted value.
+
 ## Remediation Prefill
 
 When Workflow Detail opens `/workflows/new?intent=remediate&draftId=…`, the
