@@ -26,10 +26,12 @@ async def test_omnigent_bootstrap_retries_with_capped_backoff_and_maintains_inve
         reconciliations.append(refresh_images)
         ready = len(reconciliations) > 1
         return api_main.OmnigentBootstrapReadiness(
+            images_ready=ready,
             policies_ready=ready,
             agent_ready=ready,
             catalog_ready=ready,
             schedules_ready=ready,
+            provider_ready=ready,
         )
 
     async def refresh_inventory() -> bool:
@@ -61,14 +63,16 @@ async def test_api_startup_bootstrap_uses_only_local_image_evidence(
     from api_service.services import omnigent_policies
 
     observed_resolver = None
+    observed_env = None
 
     @asynccontextmanager
     async def session_context():
         yield object()
 
-    async def seed(_session, *, image_resolver):
-        nonlocal observed_resolver
+    async def seed(_session, *, image_resolver, env=None):
+        nonlocal observed_resolver, observed_env
         observed_resolver = image_resolver
+        observed_env = env
 
     async def ready(_session) -> bool:
         return True
@@ -81,6 +85,9 @@ async def test_api_startup_bootstrap_uses_only_local_image_evidence(
         refresh_images=False
     )
     assert observed_resolver is omnigent_policies.resolve_local_bootstrap_image_ref
+    # The registry-acquiring leg keys on the configured refs, so it must read the
+    # operator's own configuration rather than a digest publication exported.
+    assert observed_env is not None
 
 
 @pytest.mark.asyncio
@@ -105,6 +112,15 @@ async def test_bootstrap_reconciliation_refreshes_recurring_schedule_authority(
         calls.append("schedules")
         return True
 
+    async def images() -> bool:
+        calls.append("images")
+        return True
+
+    async def provider(*, allow_enrollment: bool) -> bool:
+        calls.append(f"provider:{allow_enrollment}")
+        return True
+
+    monkeypatch.setattr(api_main, "_sync_omnigent_deployment_images", images)
     monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_policies", policies)
     monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_agent_profile", agent)
     monkeypatch.setattr(api_main, "_sync_omnigent_harness_catalog", catalog)
@@ -113,11 +129,25 @@ async def test_bootstrap_reconciliation_refreshes_recurring_schedule_authority(
         "_sync_managed_bootstrap_recurring_schedules",
         schedules,
     )
+    monkeypatch.setattr(
+        api_main,
+        "_sync_omnigent_provider_readiness",
+        provider,
+    )
 
     assert (
         await api_main._reconcile_omnigent_bootstrap_once(refresh_images=True)
     ).ready
-    assert calls == ["policies:True", "agent", "catalog", "schedules"]
+    # Image identities are exported before any leg that selects a Host Class or
+    # validates a credential against one.
+    assert calls == [
+        "images",
+        "policies:True",
+        "agent",
+        "catalog",
+        "schedules",
+        "provider:True",
+    ]
 
 
 @pytest.mark.asyncio
@@ -142,6 +172,14 @@ async def test_harness_catalog_sync_runs_on_bootstrap_reconciliation(
     async def schedules() -> bool:
         return True
 
+    async def images() -> bool:
+        return True
+
+    async def provider(*, allow_enrollment: bool) -> bool:
+        del allow_enrollment
+        return True
+
+    monkeypatch.setattr(api_main, "_sync_omnigent_deployment_images", images)
     monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_policies", policies)
     monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_agent_profile", agent)
     monkeypatch.setattr(api_main, "_sync_omnigent_harness_catalog", catalog)
@@ -149,6 +187,11 @@ async def test_harness_catalog_sync_runs_on_bootstrap_reconciliation(
         api_main,
         "_sync_managed_bootstrap_recurring_schedules",
         schedules,
+    )
+    monkeypatch.setattr(
+        api_main,
+        "_sync_omnigent_provider_readiness",
+        provider,
     )
 
     assert (
@@ -457,3 +500,92 @@ async def test_image_policy_outage_keeps_retrying_registry_refresh(
         )
 
     assert image_refreshes == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_enrollment_waits_for_image_and_catalog_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First-time enrollment gets one attempt, so it must not race the catalog."""
+
+    observed: list[bool] = []
+
+    async def policies(*, refresh_images: bool) -> bool:
+        del refresh_images
+        return True
+
+    async def agent() -> bool:
+        return True
+
+    async def schedules() -> bool:
+        return True
+
+    async def images() -> bool:
+        return True
+
+    async def catalog() -> bool:
+        return False
+
+    async def provider(*, allow_enrollment: bool) -> bool:
+        observed.append(allow_enrollment)
+        return True
+
+    monkeypatch.setattr(api_main, "_sync_omnigent_deployment_images", images)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_policies", policies)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_agent_profile", agent)
+    monkeypatch.setattr(api_main, "_sync_omnigent_harness_catalog", catalog)
+    monkeypatch.setattr(
+        api_main, "_sync_managed_bootstrap_recurring_schedules", schedules
+    )
+    monkeypatch.setattr(api_main, "_sync_omnigent_provider_readiness", provider)
+
+    outcome = await api_main._reconcile_omnigent_bootstrap_once(refresh_images=False)
+
+    assert observed == [False]
+    assert outcome.ready is False
+
+
+@pytest.mark.asyncio
+async def test_provider_readiness_is_skipped_without_resolved_images(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing validates a credential against an image the deployment lacks."""
+
+    called = False
+
+    async def policies(*, refresh_images: bool) -> bool:
+        del refresh_images
+        return True
+
+    async def agent() -> bool:
+        return True
+
+    async def catalog() -> bool:
+        return True
+
+    async def schedules() -> bool:
+        return True
+
+    async def images() -> bool:
+        return False
+
+    async def provider(*, allow_enrollment: bool) -> bool:
+        nonlocal called
+        del allow_enrollment
+        called = True
+        return True
+
+    monkeypatch.setattr(api_main, "_sync_omnigent_deployment_images", images)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_policies", policies)
+    monkeypatch.setattr(api_main, "_sync_omnigent_bootstrap_agent_profile", agent)
+    monkeypatch.setattr(api_main, "_sync_omnigent_harness_catalog", catalog)
+    monkeypatch.setattr(
+        api_main, "_sync_managed_bootstrap_recurring_schedules", schedules
+    )
+    monkeypatch.setattr(api_main, "_sync_omnigent_provider_readiness", provider)
+
+    outcome = await api_main._reconcile_omnigent_bootstrap_once(refresh_images=False)
+
+    assert called is False
+    assert outcome.provider_ready is False
+    assert outcome.ready is False

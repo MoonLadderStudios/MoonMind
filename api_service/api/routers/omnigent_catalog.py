@@ -388,6 +388,11 @@ _REASONS: dict[str, tuple[str, str]] = {
         "Connect and validate a compatible Provider Profile.",
         "/settings#provider-profiles",
     ),
+    "provider_runtime_revalidation_pending": (
+        "MoonMind is re-validating this Provider Profile against the updated "
+        "pinned host image. This finishes automatically; retry shortly.",
+        "/settings#provider-profiles",
+    ),
     "model_catalog_unavailable": (
         "Run runtime-backed Provider Profile validation to discover models.",
         "/settings#provider-profiles",
@@ -402,6 +407,36 @@ _REASONS: dict[str, tuple[str, str]] = {
 def _reason(code: str) -> GateReason:
     message, href = _REASONS[code]
     return GateReason(code=code, message=message, remediationHref=href)
+
+
+def _revalidation_is_exhausted(provider: Any, selected_classes: Any) -> bool:
+    """Report whether re-validation gave up on this credential and image.
+
+    Re-validation preserves the enrolled credential and its prior evidence when
+    the pinned runtime rejects it, so a revoked or incompatible credential looks
+    exactly like an attempt in flight. The reconciler records its bounded
+    outcome, and reading it here is what keeps readiness from promising forever
+    that the wait "finishes automatically".
+    """
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        REVALIDATION_FAILURE_KEY,
+    )
+
+    behavior = getattr(provider, "command_behavior", None) or {}
+    record = behavior.get(REVALIDATION_FAILURE_KEY)
+    if not isinstance(record, dict) or record.get("exhausted") is not True:
+        return False
+    try:
+        generation = int(record.get("credentialGeneration") or 0)
+    except (TypeError, ValueError):
+        return False
+    if generation != int(provider.credential_generation):
+        # A rotated credential has not been attempted yet.
+        return False
+    return str(record.get("imageRef") or "") in {
+        item.imageRef for item in selected_classes
+    }
 
 
 def _valid_server_url(value: str) -> bool:
@@ -1636,6 +1671,7 @@ async def get_omnigent_execution_readiness(
         compatible: list[dict[str, Any]] = []
         host_classes: set[str] = set()
         models: set[str] = set()
+        revalidating: list[str] = []
         for provider in visible_providers:
             state = getattr(provider.auth_state, "value", provider.auth_state)
             if (
@@ -1674,6 +1710,15 @@ async def get_omnigent_execution_readiness(
             if evidence_generation != int(provider.credential_generation) or str(
                 evidence.get("imageRef") or ""
             ) not in {item.imageRef for item in selected_classes}:
+                if evidence and not _revalidation_is_exhausted(
+                    provider, selected_classes
+                ):
+                    # The credential is enrolled and connected; only its
+                    # runtime-backed evidence trails the currently pinned host
+                    # image or credential generation. The bootstrap reconciler
+                    # re-validates it against the exact selected image, so this
+                    # is a bounded wait rather than a reconnect.
+                    revalidating.append(provider.profile_id)
                 continue
             observed_models = {
                 model
@@ -1691,7 +1736,13 @@ async def get_omnigent_execution_readiness(
             host_classes.update(item.ref for item in selected_classes)
             models.update(observed_models)
         if not compatible:
-            reasons.append(_reason("compatible_provider_profile_unavailable"))
+            reasons.append(
+                _reason(
+                    "provider_runtime_revalidation_pending"
+                    if revalidating
+                    else "compatible_provider_profile_unavailable"
+                )
+            )
         if not host_classes:
             reasons.append(_reason("host_class_unavailable"))
         if not models:
