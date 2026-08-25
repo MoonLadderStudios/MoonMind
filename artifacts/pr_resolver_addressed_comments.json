@@ -1,82 +1,12 @@
 [
   {
-    "id": 3838061903,
+    "id": 3851089921,
+    "disposition": "addressed",
+    "rationale": "Advanced mode toggling off now resets contextRetrieval to defaultContextRetrievalAuthoring(), so re-enabling Advanced mode for an unrelated control cannot resubmit a cleared rag/followUpRetrieval policy; covered by a new regression test that fails without the fix."
+  },
+  {
+    "id": 5016710221,
     "disposition": "not-applicable",
-    "rationale": "'revision' is a required Alembic module contract identifier read by the migration runner, not dead code."
-  },
-  {
-    "id": 3838061910,
-    "disposition": "not-applicable",
-    "rationale": "'down_revision' is a required Alembic module contract identifier read by the migration runner, not dead code."
-  },
-  {
-    "id": 3838061913,
-    "disposition": "not-applicable",
-    "rationale": "'branch_labels' is a required Alembic module contract identifier read by the migration runner, not dead code."
-  },
-  {
-    "id": 3838061914,
-    "disposition": "not-applicable",
-    "rationale": "'depends_on' is a required Alembic module contract identifier read by the migration runner, not dead code."
-  },
-  {
-    "id": 3838067607,
-    "disposition": "addressed",
-    "rationale": "downgrade() now counts duplicate (endpoint_ref, source_digest) observations and raises an actionable RuntimeError instead of failing on constraint creation. Catalog snapshots are immutable evidence pinned by trust records and profile versions, so consolidating them would destroy authority live profiles still bind; the repo's 355_checkpoint_blob_dedup precedent is followed."
-  },
-  {
-    "id": 3838067612,
-    "disposition": "addressed",
-    "rationale": "_reconcile_omnigent_bootstrap_once now returns per-leg OmnigentBootstrapReadiness and the maintenance loop derives refresh_images from policies_ready only, so a catalog-only outage no longer re-pulls images on every retry. Covered by test_catalog_outage_does_not_retry_registry_image_refresh and test_image_policy_outage_keeps_retrying_registry_refresh."
-  },
-  {
-    "id": 3838067614,
-    "disposition": "addressed",
-    "rationale": "OmnigentHarnessCatalogService now accepts observation_overlay and applies it before persist, so synchronize() publishes exactly one immutable overlaid row and readers can never select an overlay-free latest(). The post-persist second write and its observedAt offset were removed. Covered by test_catalog_sync_publishes_only_the_overlaid_observation."
-  },
-  {
-    "id": 3838067617,
-    "disposition": "addressed",
-    "rationale": "The overlay source digest now hashes the synthetic harness row (including implementation identity) and the synthetic agent identity alongside the prior digest, so a changed overlay produces a new digest. Covered by test_overlay_digest_tracks_synthetic_overlay_authority."
-  },
-  {
-    "id": 3838067621,
-    "disposition": "not-applicable",
-    "rationale": "GitHub reports this review thread as outdated against the current diff and the pr-resolver comment classifier marks it non-actionable (thread_outdated); the thread is deliberately left unresolved. Changing built-in profile equality from the inventory digest to per-harness authority is an authority-sensitive redesign outside this PR's bounded scope and is reported to the PR author for separate follow-up."
-  },
-  {
-    "id": 3838111454,
-    "disposition": "addressed",
-    "rationale": "The two local 'import api_service.services.omnigent_agent_profile_selection as selection_module' statements were replaced by one module-level 'from api_service.services import ... as selection_module', so the module uses a single import form."
-  },
-  {
-    "id": 3838111460,
-    "disposition": "addressed",
-    "rationale": "Same fix as the line 246 occurrence: the duplicate local 'import' statement was removed in favor of the single module-level import-from."
-  },
-  {
-    "id": 3839952562,
-    "disposition": "not-applicable",
-    "rationale": "Thread is already resolved on GitHub; the pr-resolver classifier marks it non-actionable (thread_resolved)."
-  },
-  {
-    "id": 3839952568,
-    "disposition": "addressed",
-    "rationale": "_rmdir_if_empty's 'except OSError: pass' now carries an explanatory comment describing why best-effort cleanup of an empty workspace directory must not fail the caller."
-  },
-  {
-    "id": 3847506256,
-    "disposition": "addressed",
-    "rationale": "The unused _SAFE_ENV_KEY regex had no remaining references anywhere in the repo and was deleted."
-  },
-  {
-    "id": 3848188403,
-    "disposition": "addressed",
-    "rationale": "The best-effort catalog version lookup's 'except Exception: pass' now carries an explanatory comment: the lookup only sharpens the reported Omnigent version, and planning authority comes from the profile document."
-  },
-  {
-    "id": 5001986459,
-    "disposition": "not-applicable",
-    "rationale": "Informational Codex review summary body with no requested change; the classifier marks it non-actionable (bot_comment_excluded)."
+    "rationale": "Codex review container body with no actionable request; its only finding is the line comment tracked above."
   }
 ]

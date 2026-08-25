@@ -408,7 +408,9 @@ invisible:
   already authored `rag` / `followUpRetrieval` enables Advanced mode, so the
   inherited policy stays visible, editable, and resubmitted.
 - Turning Advanced mode off is therefore an explicit clear of that authoring, in
-  the same way as clearing the controls by hand.
+  the same way as clearing the controls by hand: the retained retrieval
+  authoring resets to the unauthored default, so re-enabling Advanced mode for
+  an unrelated control cannot restore a policy the operator already cleared.
 
 These controls only narrow within deployment ceilings; the server re-clamps every
 submitted value.

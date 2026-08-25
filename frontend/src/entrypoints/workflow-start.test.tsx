@@ -15715,6 +15715,68 @@ describe("Task Create MM-641 authoring validation", () => {
     expect("followUpRetrieval" in payload).toBe(false);
   });
 
+  it("does not restore cleared Context retrieval (RAG) authoring when Advanced mode is re-enabled", async () => {
+    renderWithClient(<WorkflowStartPage payload={withAttachmentPolicy()} />);
+
+    fireEvent.change(await screen.findByLabelText("Instructions"), {
+      target: { value: "Run after clearing retrieval authoring." },
+    });
+    fireEvent.change(screen.getByLabelText(/GitHub Repo/), {
+      target: { value: "MoonLadderStudios/MoonMind" },
+    });
+
+    const controls = document.querySelector<HTMLElement>(
+      '[data-canonical-create-section="Execution controls"]',
+    ) as HTMLElement;
+    expect(controls).not.toBeNull();
+
+    // Author retrieval, turn Advanced mode off to clear it, then turn it back
+    // on to adjust an unrelated advanced control.
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(
+      screen.getByLabelText(
+        "Require initial context (fail the step if unavailable)",
+      ),
+    );
+    fireEvent.click(
+      screen.getByLabelText(
+        "Allow the session to request additional context during the run",
+      ),
+    );
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+    fireEvent.click(within(controls).getByLabelText("Advanced mode"));
+
+    // The reopened controls are unauthored again instead of showing the values
+    // the operator already cleared.
+    expect(
+      (
+        screen.getByLabelText(
+          "Require initial context (fail the step if unavailable)",
+        ) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+    expect(
+      (
+        screen.getByLabelText(
+          "Allow the session to request additional context during the run",
+        ) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+
+    // Reopening Advanced mode cannot resubmit the cleared retrieval policy.
+    const payload = latestCreateRequest().payload as Record<string, unknown>;
+    expect("rag" in payload).toBe(false);
+    expect("followUpRetrieval" in payload).toBe(false);
+  });
   it("reveals Advanced mode so an inherited rerun retrieval policy stays visible and resubmitted", async () => {
     window.history.pushState(
       {},

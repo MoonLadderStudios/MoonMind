@@ -13769,9 +13769,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
               type="checkbox"
               checked={showAdvancedStepOptions}
               onChange={(event) => {
-                setShowAdvancedStepOptions(event.target.checked);
+                const advancedEnabled = event.target.checked;
+                setShowAdvancedStepOptions(advancedEnabled);
+                if (!advancedEnabled) {
+                  // Turning Advanced mode off clears context retrieval (RAG)
+                  // authoring, the same way hiding skill args clears them, so
+                  // the retained state matches the unauthored policy that is
+                  // actually submitted. Re-enabling the toggle then cannot
+                  // silently restore a retrieval policy the operator can no
+                  // longer see.
+                  setContextRetrieval(defaultContextRetrievalAuthoring());
+                }
                 updateDashboardPreferences({
-                  createExpertMode: event.target.checked,
+                  createExpertMode: advancedEnabled,
                 });
               }}
             />
