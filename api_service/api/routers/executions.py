@@ -8839,13 +8839,16 @@ async def _apply_preset_workflow_publish(
 ) -> None:
     """Re-apply an applied preset's workflow-level publish policy server-side.
 
-    Clients expand and edit preset steps, but workflow-level publish policy —
-    including the merge automation gate a review-and-merge preset owns — stays
-    server-resolved so it cannot be dropped on the way to submission.
+    Clients expand and edit preset *steps*, but workflow-level publish policy is
+    resolved again from the stored template at submission time.
+
+    A client that omits ``publish`` entirely gets the template's policy. A client
+    that sends its own ``publish`` keeps it, except for the merge-automation
+    gate: when the stored template declares one, that block is restored. The
+    gate decides whether MoonMind may push, request reviews, and merge on the
+    operator's behalf, so it is not a field a submission may quietly rewrite.
     """
 
-    if isinstance(task_payload.get("publish"), Mapping):
-        return
     applied_templates = task_payload.get("appliedStepTemplates")
     applied_template = (
         applied_templates[0]
@@ -8904,8 +8907,23 @@ async def _apply_preset_workflow_publish(
         return
     except PresetValidationError as exc:
         raise _invalid_workflow_request(str(exc)) from exc
-    if isinstance(workflow_publish, Mapping) and workflow_publish:
+    if not isinstance(workflow_publish, Mapping) or not workflow_publish:
+        return
+
+    submitted_publish = task_payload.get("publish")
+    if not isinstance(submitted_publish, Mapping):
         task_payload["publish"] = dict(workflow_publish)
+        return
+
+    template_gate = workflow_publish.get("mergeAutomation") or workflow_publish.get(
+        "merge_automation"
+    )
+    if not isinstance(template_gate, Mapping):
+        return
+    merged_publish = dict(submitted_publish)
+    merged_publish.pop("merge_automation", None)
+    merged_publish["mergeAutomation"] = dict(template_gate)
+    task_payload["publish"] = merged_publish
 
 
 async def _expand_goal_preset_for_workflow_submission(
