@@ -6653,14 +6653,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       );
     }
     setProduceReport(draft.reportOutputEnabled);
-    setContextRetrieval(
-      parseContextRetrievalParameters(
-        recordValue(temporalDraftQuery.data.execution.inputParameters),
-      ),
+    const reconstructedContextRetrieval = parseContextRetrievalParameters(
+      recordValue(temporalDraftQuery.data.execution.inputParameters),
     );
+    setContextRetrieval(reconstructedContextRetrieval);
     const reconstructedSteps = createStepStateEntriesFromTemporalDraft(draft);
     setSteps(reconstructedSteps);
-    setShowAdvancedStepOptions(hasAdvancedStepOptionValues(reconstructedSteps));
+    // Context retrieval authoring is only visible in Advanced mode, so a source
+    // run that already authored it reveals the controls instead of resubmitting
+    // an invisible retrieval policy.
+    setShowAdvancedStepOptions(
+      hasAdvancedStepOptionValues(reconstructedSteps) ||
+        hasAuthoredContextRetrieval(reconstructedContextRetrieval),
+    );
     setNextStepNumber(reconstructedSteps.length + 1);
     setPersistedObjectiveAttachments(
       draft.inputAttachments.map(stepAttachmentRefFromTemporal),
@@ -6730,6 +6735,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     }
     if (draft.contextRetrieval) {
       setContextRetrieval(draft.contextRetrieval);
+      // The imported draft's retrieval policy stays visible and editable; the
+      // controls only render in Advanced mode.
+      if (hasAuthoredContextRetrieval(draft.contextRetrieval)) {
+        setShowAdvancedStepOptions(true);
+      }
     }
     if (draft.runtime?.mode) {
       prevRuntimeRef.current = draft.runtime.mode;
@@ -10081,6 +10091,16 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       ? maxAttempts
       : DEFAULT_MAX_ATTEMPTS;
 
+    // Context retrieval (RAG) authoring lives behind the same Advanced mode
+    // toggle. While the controls are hidden the submission carries the
+    // unauthored default so deployment retrieval policy applies, instead of a
+    // stale value the operator can no longer see. Inherited authored retrieval
+    // is never silently dropped: the rerun/edit and remediation reconstruction
+    // paths turn Advanced mode on whenever the source already authored it.
+    const effectiveContextRetrieval = showAdvancedStepOptions
+      ? contextRetrieval
+      : defaultContextRetrievalAuthoring();
+
     if (!Number.isInteger(effectivePriority)) {
       setSubmitMessage("Priority must be an integer.");
       clearSubmitBusy();
@@ -11180,9 +11200,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     // Context retrieval (RAG) authoring (#3514). Placed at the payload level so
     // `rag` / `followUpRetrieval` are lifted into the run's initial parameters
     // (and, for scheduled runs, into target.initialParameters) server-side.
-    if (hasAuthoredContextRetrieval(contextRetrieval)) {
+    if (hasAuthoredContextRetrieval(effectiveContextRetrieval)) {
       const compiledRetrieval =
-        compileContextRetrievalParameters(contextRetrieval);
+        compileContextRetrievalParameters(effectiveContextRetrieval);
       const submittedRetrievalPayload = requestBody.payload as Record<
         string,
         unknown
@@ -11283,8 +11303,10 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       // only changes retrieval controls is classified as unchanged and its
       // `parametersPatch` is dropped to null. Compare the compiled submission
       // against the compiled source parameters.
-      const submittedRetrievalConfig = hasAuthoredContextRetrieval(contextRetrieval)
-        ? compileContextRetrievalParameters(contextRetrieval)
+      const submittedRetrievalConfig = hasAuthoredContextRetrieval(
+        effectiveContextRetrieval,
+      )
+        ? compileContextRetrievalParameters(effectiveContextRetrieval)
         : {};
       const sourceRetrievalAuthoring = parseContextRetrievalParameters(
         recordValue(temporalDraftData?.execution?.inputParameters),
@@ -13775,20 +13797,31 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           >
             <p className="small">
               Shows optional Skill inputs, skill args, required capabilities,
-              and worker routing overrides. Runtime, publish mode, skills, and
-              presets already add common capabilities automatically.
+              worker routing overrides, and context retrieval (RAG). Runtime,
+              publish mode, skills, and presets already add common capabilities
+              automatically.
             </p>
           </div>
         ) : null}
-        <details className="queue-context-retrieval-disclosure">
-          <summary>Context retrieval (RAG)</summary>
-          <ContextRetrievalControls
-            value={contextRetrieval}
-            onChange={setContextRetrieval}
-            ceilings={retrievalCeilings}
-            description="Choose which collections the run may search and whether the session may request additional context during the run. Requests are always bounded by deployment policy."
-          />
-        </details>
+        {/*
+          Context retrieval (RAG) authoring is an advanced control: the guided
+          path relies on deployment retrieval policy, so the disclosure only
+          appears in Advanced mode. Submission mirrors Priority / Max Attempts
+          and uses the unauthored default while the controls are hidden; the
+          rerun/edit and remediation reconstruction paths reveal Advanced mode
+          whenever an inherited source already carries authored retrieval.
+        */}
+        {showAdvancedStepOptions ? (
+          <details className="queue-context-retrieval-disclosure">
+            <summary>Context retrieval (RAG)</summary>
+            <ContextRetrievalControls
+              value={contextRetrieval}
+              onChange={setContextRetrieval}
+              ceilings={retrievalCeilings}
+              description="Choose which collections the run may search and whether the session may request additional context during the run. Requests are always bounded by deployment policy."
+            />
+          </details>
+        ) : null}
         </section>
 
         {pageMode.mode === "create" ? (
