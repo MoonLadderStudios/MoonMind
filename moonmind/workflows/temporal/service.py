@@ -229,6 +229,17 @@ _MERGE_AUTOMATION_PR_TARGET_KEYS = (
 )
 
 
+def _names_a_pull_request(target: object) -> bool:
+    """Return whether *target* identifies a pull request that already exists."""
+
+    if isinstance(target, Mapping):
+        return any(
+            str(target.get(key) or "").strip()
+            for key in _MERGE_AUTOMATION_PR_TARGET_KEYS
+        )
+    return bool(str(target or "").strip())
+
+
 def _merge_automation_selected(parameters: Mapping[str, Any]) -> bool:
     """Return whether this submission needs the merge-automation worker group.
 
@@ -265,13 +276,9 @@ def _merge_automation_selected(parameters: Mapping[str, Any]) -> bool:
             continue
         if publish_mode == "pr":
             return True
-        target = candidate.get("pullRequest") or candidate.get("pull_request")
-        if isinstance(target, Mapping) and any(
-            str(target.get(key) or "").strip()
-            for key in _MERGE_AUTOMATION_PR_TARGET_KEYS
+        if _names_a_pull_request(
+            candidate.get("pullRequest") or candidate.get("pull_request")
         ):
-            return True
-        if str(target or "").strip() and not isinstance(target, Mapping):
             return True
         if _truthy_enabled(
             _mapping_payload(
