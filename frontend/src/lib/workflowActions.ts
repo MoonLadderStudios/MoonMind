@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from "zod";
 
 /**
  * Shared workflow-action contracts used by both the Workflow Detail page and the
@@ -25,11 +25,13 @@ export const ExecutionActionsSchema = z
   })
   .passthrough();
 
-export type ExecutionActionCapabilities = z.infer<typeof ExecutionActionsSchema>;
+export type ExecutionActionCapabilities = z.infer<
+  typeof ExecutionActionsSchema
+>;
 
-export const DEFAULT_REMEDIATION_MODE = 'snapshot_then_follow';
-export const DEFAULT_REMEDIATION_AUTHORITY = 'approval_gated';
-export const DEFAULT_REMEDIATION_ACTION_POLICY = 'admin_healer_default';
+export const DEFAULT_REMEDIATION_MODE = "snapshot_then_follow";
+export const DEFAULT_REMEDIATION_AUTHORITY = "approval_gated";
+export const DEFAULT_REMEDIATION_ACTION_POLICY = "admin_healer_default";
 
 export type WorkflowActionMenuItem = {
   id: string;
@@ -101,7 +103,7 @@ export function buildWorkflowActionMenuItems(
     actionsOn,
     actions,
     busy,
-    busyDisabledReason = 'action pending',
+    busyDisabledReason = "action pending",
     taskEditingOn,
     disabledReason,
     editHref,
@@ -134,14 +136,18 @@ export function buildWorkflowActionMenuItems(
     danger?: boolean;
     onSelect: () => void;
   }) => {
-    const effectiveDisabledReason = available ? pendingActionReason : itemDisabledReason ?? null;
+    const effectiveDisabledReason = available
+      ? pendingActionReason
+      : (itemDisabledReason ?? null);
     if (available) {
       items.push({
         id,
         label,
         ...(danger ? { danger: true } : {}),
         onSelect,
-        ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
+        ...(effectiveDisabledReason
+          ? { disabledReason: effectiveDisabledReason }
+          : {}),
       });
     } else if (effectiveDisabledReason) {
       items.push({
@@ -167,14 +173,18 @@ export function buildWorkflowActionMenuItems(
     disabledReason?: string | null;
     onSelect: () => void;
   }) => {
-    const effectiveDisabledReason = available ? pendingActionReason : itemDisabledReason ?? null;
+    const effectiveDisabledReason = available
+      ? pendingActionReason
+      : (itemDisabledReason ?? null);
     if (available && href) {
       items.push({
         id,
         label,
         href,
         onSelect,
-        ...(effectiveDisabledReason ? { disabledReason: effectiveDisabledReason } : {}),
+        ...(effectiveDisabledReason
+          ? { disabledReason: effectiveDisabledReason }
+          : {}),
       });
     } else if (effectiveDisabledReason) {
       items.push({
@@ -188,33 +198,33 @@ export function buildWorkflowActionMenuItems(
   // Commonly used actions are surfaced at the top of the menu so operators can
   // reach them without scanning the full list.
   addButton({
-    id: 'bypass-dependency-wait',
-    label: 'Bypass Dependencies',
+    id: "bypass-dependency-wait",
+    label: "Bypass Dependencies",
     available: Boolean(actions.canBypassDependencies),
-    disabledReason: disabledReason('canBypassDependencies'),
+    disabledReason: disabledReason("canBypassDependencies"),
     danger: true,
     onSelect: handlers.onBypassDependencies,
   });
   addButton({
-    id: 'cancel',
-    label: 'Cancel',
+    id: "cancel",
+    label: "Cancel",
     available: Boolean(actions.canCancel),
-    disabledReason: disabledReason('canCancel'),
+    disabledReason: disabledReason("canCancel"),
     danger: true,
     onSelect: handlers.onCancel,
   });
   addButton({
-    id: 'force-cancel',
-    label: 'Force cancel',
+    id: "force-cancel",
+    label: "Force cancel",
     available: Boolean(actions.canCancel),
-    disabledReason: disabledReason('canCancel'),
+    disabledReason: disabledReason("canCancel"),
     danger: true,
     onSelect: handlers.onForceCancel,
   });
   if (taskEditingOn) {
     addLink({
-      id: 'edit-task',
-      label: 'Edit',
+      id: "edit-task",
+      label: "Edit",
       href: editHref,
       available: Boolean(canShowEditWorkflow && editHref),
       disabledReason: editTaskDisabledReason,
@@ -222,89 +232,91 @@ export function buildWorkflowActionMenuItems(
     });
   }
   addButton({
-    id: 'create-remediation-task',
-    label: 'Remediate',
+    id: "create-remediation-task",
+    label: "Remediate",
     available: canCreateRemediation,
-    disabledReason: null,
+    disabledReason:
+      "Available for failed, stuck, or intervention-required workflows.",
     onSelect: handlers.onCreateRemediation,
   });
   if (taskEditingOn) {
     addButton({
-      id: 'rerun',
-      label: 'Rerun',
+      id: "rerun",
+      label: "Rerun",
       available: Boolean(actions.canRerun),
       disabledReason: rerunDisabledReason,
       onSelect: handlers.onRerun,
     });
     addButton({
-      id: 'resume-from-failed-step',
-      label: 'Resume from failed step',
+      id: "resume-from-failed-step",
+      label: "Resume from failed step",
       available: Boolean(actions.canResumeFromFailedStep),
-      disabledReason: disabledReason('canResumeFromFailedStep'),
+      disabledReason: disabledReason("canResumeFromFailedStep"),
       onSelect: handlers.onResumeFromFailedStep,
     });
     if (actions.canResumeFromFailedStep && selectedRecoveryOptionCount > 0) {
       addButton({
-        id: 'recover-from-selected-step',
-        label: 'Recover from selected step',
+        id: "recover-from-selected-step",
+        label: "Recover from selected step",
         available: selectedRecoveryStepEligible,
-        disabledReason: selectedRecoveryStepDisabledReason ?? 'selected step is not eligible',
+        disabledReason:
+          selectedRecoveryStepDisabledReason ?? "selected step is not eligible",
         onSelect: handlers.onRecoverFromSelectedStep,
       });
     }
   }
   // Remaining, less commonly used actions follow.
   addButton({
-    id: 'rename',
-    label: 'Rename',
+    id: "rename",
+    label: "Rename",
     available: Boolean(actions.canSetTitle),
-    disabledReason: disabledReason('canSetTitle'),
+    disabledReason: disabledReason("canSetTitle"),
     onSelect: handlers.onRename,
   });
   if (taskEditingOn) {
     addLink({
-      id: 'compare-run',
-      label: 'Compare run',
+      id: "compare-run",
+      label: "Compare run",
       href: compareHref,
       available: Boolean(compareHref),
-      disabledReason: disabledReason('canEditForRerun'),
+      disabledReason: disabledReason("canEditForRerun"),
       onSelect: handlers.onCompareRun,
     });
   }
   addButton({
-    id: 'pause',
-    label: 'Pause',
+    id: "pause",
+    label: "Pause",
     available: Boolean(actions.canPause),
-    disabledReason: disabledReason('canPause'),
+    disabledReason: disabledReason("canPause"),
     onSelect: handlers.onPause,
   });
   addButton({
-    id: 'resume',
-    label: 'Resume',
+    id: "resume",
+    label: "Resume",
     available: Boolean(actions.canResume),
-    disabledReason: disabledReason('canResume'),
+    disabledReason: disabledReason("canResume"),
     onSelect: handlers.onResume,
   });
   addButton({
-    id: 'approve',
-    label: 'Approve',
+    id: "approve",
+    label: "Approve",
     available: Boolean(actions.canApprove),
-    disabledReason: disabledReason('canApprove'),
+    disabledReason: disabledReason("canApprove"),
     onSelect: handlers.onApprove,
   });
   addButton({
-    id: 'reject',
-    label: 'Reject',
+    id: "reject",
+    label: "Reject",
     available: Boolean(actions.canReject),
-    disabledReason: disabledReason('canReject'),
+    disabledReason: disabledReason("canReject"),
     danger: true,
     onSelect: handlers.onReject,
   });
   addButton({
-    id: 'send-message',
-    label: 'Send Message',
+    id: "send-message",
+    label: "Send Message",
     available: Boolean(actions.canSendMessage),
-    disabledReason: disabledReason('canSendMessage'),
+    disabledReason: disabledReason("canSendMessage"),
     onSelect: handlers.onSendMessage,
   });
   return items;
@@ -312,12 +324,12 @@ export function buildWorkflowActionMenuItems(
 
 function coalesceString(...values: unknown[]): string {
   for (const value of values) {
-    const normalized = String(value ?? '').trim();
+    const normalized = String(value ?? "").trim();
     if (normalized) {
       return normalized;
     }
   }
-  return '';
+  return "";
 }
 
 export type RemediationRuntimeInput = {
@@ -334,7 +346,11 @@ export function buildRemediationRuntimeRequestFields(
 ): Record<string, unknown> {
   const mode = coalesceString(input?.targetRuntime);
   const profileId = coalesceString(input?.profileId);
-  const model = coalesceString(input?.model, input?.resolvedModel, input?.requestedModel);
+  const model = coalesceString(
+    input?.model,
+    input?.resolvedModel,
+    input?.requestedModel,
+  );
   const effort = coalesceString(input?.effort);
   const runtime: Record<string, string> = {};
   if (mode) runtime.mode = mode;
@@ -358,12 +374,17 @@ export type RemediationEligibilityInput = {
 export function isRemediationEligibleTarget(
   input: RemediationEligibilityInput,
 ): boolean {
-  const state = (input.rawState || input.state || input.status || '').toLowerCase();
+  const state = (
+    input.rawState ||
+    input.state ||
+    input.status ||
+    ""
+  ).toLowerCase();
   return (
     input.attentionRequired === true ||
     Boolean(input.waitingReason) ||
-    state.includes('failed') ||
-    state.includes('stuck') ||
-    state === 'awaiting_external'
+    state.includes("failed") ||
+    state.includes("stuck") ||
+    state === "awaiting_external"
   );
 }

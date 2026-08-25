@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { z } from "zod";
 
 import { DashboardActionDialog } from "./DashboardActionDialog";
+import { WorkflowActionsMenu } from "./WorkflowActionsMenu";
 import { useDashboardToast } from "./dashboard/DashboardToast";
 import { formatStatusLabel } from "../utils/formatters";
 import { navigateTo } from "../lib/navigation";
@@ -61,6 +62,12 @@ const RowActionsExecutionSchema = z
 
 type RowActionsExecution = z.infer<typeof RowActionsExecutionSchema>;
 type RowActionDialogKind = "rename" | "send-message";
+
+const INLINE_ACTION_IDS = new Set([
+  "cancel",
+  "rerun",
+  "create-remediation-task",
+]);
 
 const ACTION_AVAILABILITY_PENDING_REASON = "Checking availability…";
 const DEFAULT_WORKFLOW_ACTION_ERROR =
@@ -520,6 +527,9 @@ export function WorkflowRowActionsMenu({
     workflowSubject,
   ]);
 
+  const inlineItems = items.filter((item) => INLINE_ACTION_IDS.has(item.id));
+  const menuItems = items.filter((item) => !INLINE_ACTION_IDS.has(item.id));
+
   const subject = workflowSubject;
   const closeDialog = () => {
     setActiveDialog(null);
@@ -547,17 +557,25 @@ export function WorkflowRowActionsMenu({
 
   return (
     <div className="workflow-row-actions">
-      {items.map((item) => (
+      {inlineItems.map((item) => (
         <button
-          key={item.label}
+          key={item.id}
           type="button"
           className="secondary"
           onClick={item.onSelect}
           disabled={Boolean(item.disabledReason)}
+          title={item.disabledReason || undefined}
         >
           {item.label}
         </button>
       ))}
+      <WorkflowActionsMenu
+        items={menuItems}
+        triggerContent="…"
+        triggerAriaLabel="More workflow actions"
+        triggerClassName="secondary td-workflow-actions-trigger td-workflow-actions-trigger-compact"
+        menuAriaLabel="More workflow actions"
+      />
       <DashboardActionDialog
         open={activeDialog === "rename"}
         title="Rename workflow"
