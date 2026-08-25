@@ -147,7 +147,16 @@ def test_opencode_version_supported_range():
     assert exc.value.code == HarnessPlatformFailure.OMNIGENT_VENDOR_RUNTIME_MISMATCH
 
 
-def test_opencode_image_ref_fail_closed():
+def test_opencode_image_ref_fail_closed(monkeypatch):
+    # Selection now falls back to the deployment's persisted resolved state so
+    # execution workers can select a Host Class the API resolved. That is a
+    # second *source*, not a second contract: no source may synthesize a digest
+    # from a mutable tag or accept a placeholder. Isolate the persisted source
+    # here so the environment-only rules below are what is under test.
+    from moonmind.omnigent.bootstrap import store
+
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+
     # Missing REF must fail closed (no synthetic digest from image:tag)
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE", None)
@@ -169,6 +178,24 @@ def test_opencode_image_ref_fail_closed():
     with pytest.raises(HarnessPlatformError):
         get_opencode_host_image_ref()
     os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
+    # A mutable tag or placeholder reaching selection through the persisted
+    # resolved state fails closed exactly like the environment value does.
+    os.environ.pop("OMNIGENT_OPENCODE_HOST_IMAGE_REF", None)
+    for unusable in (
+        "ghcr.io/moonladderstudios/omnigent-host-opencode:1.18.11",
+        "ghcr.io/moonladderstudios/omnigent-host-opencode@sha256:" + "0" * 64,
+    ):
+        monkeypatch.setattr(
+            store,
+            "load_resolved_state",
+            lambda ref=unusable: SimpleNamespace(
+                opencode_host_image_ref=ref, pi_host_image_ref=None
+            ),
+        )
+        with pytest.raises(HarnessPlatformError):
+            get_opencode_host_image_ref()
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+
     # Mutable tag fails closed
     os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = (
         "ghcr.io/moonladderstudios/omnigent-host-opencode:latest"

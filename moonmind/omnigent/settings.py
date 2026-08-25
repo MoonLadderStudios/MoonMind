@@ -86,6 +86,10 @@ def is_omnigent_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
     return build_omnigent_gate(env=env).enabled
 
 
+OPENCODE_API_KEY_ENV = "OPENCODE_API_KEY"
+OPENCODE_CONTRIBUTOR_DATA_USE_ENV = "OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE"
+
+
 def _parse_bool_with_default(
     value: object | None, *, default: bool
 ) -> bool:
@@ -129,6 +133,35 @@ def opencode_support_enabled(*, env: Mapping[str, Any] | None = None) -> bool:
     source = env if env is not None else os.environ
     return _parse_bool_with_default(
         source.get(OMNIGENT_OPENCODE_ENABLED_ENV), default=True
+    )
+
+
+def resolved_opencode_api_key(*, env: Mapping[str, Any] | None = None) -> str:
+    """Return the deployment-configured OpenCode Go API key, if any.
+
+    Presence of this value is what makes the default Compose path launchable
+    without a separate console action: the bootstrap reconciler enrolls and
+    runtime-validates the OpenCode Provider Profile from it.
+    """
+
+    source = env if env is not None else os.environ
+    return _clean(source.get(OPENCODE_API_KEY_ENV))
+
+
+def opencode_contributor_data_use_accepted(
+    *, env: Mapping[str, Any] | None = None
+) -> bool:
+    """Return whether the operator accepts OpenCode contributor data use.
+
+    The stock OpenCode Go model is a contributor tier whose enrollment requires
+    an explicit data-use acknowledgement. It defaults to accepted so the
+    documented one-value setup completes, and stays an explicit, documented
+    switch an operator can set to ``false``.
+    """
+
+    source = env if env is not None else os.environ
+    return _parse_bool_with_default(
+        source.get(OPENCODE_CONTRIBUTOR_DATA_USE_ENV), default=True
     )
 
 
@@ -258,6 +291,10 @@ __all__ = [
     "is_omnigent_enabled",
     "generic_host_enabled",
     "opencode_support_enabled",
+    "opencode_contributor_data_use_accepted",
+    "resolved_opencode_api_key",
+    "OPENCODE_API_KEY_ENV",
+    "OPENCODE_CONTRIBUTOR_DATA_USE_ENV",
     "omnigent_evidence_policy",
     "OMNIGENT_GENERIC_HOST_ENABLED_ENV",
     "OMNIGENT_OPENCODE_ENABLED_ENV",
