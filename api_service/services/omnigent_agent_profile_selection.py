@@ -24,6 +24,9 @@ from api_service.services.omnigent_agent_profile_service import (
 from api_service.services.provider_profile_readiness import (
     provider_profile_launch_ready,
 )
+from api_service.services.provider_profile_service import (
+    _managed_secret_statuses_for_profiles,
+)
 
 _OVERRIDABLE_SECTIONS = frozenset({"model", "capture", "rag", "publish"})
 
@@ -376,7 +379,12 @@ async def resolve_agent_profile_snapshot(
             status.HTTP_409_CONFLICT,
             "selected Provider Profile is not enabled or compatible",
         )
-    if not provider_profile_launch_ready(compatible_provider):
+    secret_statuses = await _managed_secret_statuses_for_profiles(
+        session=session, rows=[compatible_provider]
+    )
+    if not provider_profile_launch_ready(
+        compatible_provider, managed_secret_statuses=secret_statuses
+    ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "selected Provider Profile is not launch ready or has no capacity",
@@ -407,6 +415,19 @@ async def resolve_agent_profile_snapshot(
         )
     launch_policy_ref = requested_launch_policy or allowed_launch_policies[0]
 
+    # Generic (v2) profiles do not carry an execution-profile declaration of
+    # their own; the launch policy owns that identity. Derive the canonical
+    # per-harness ref so the compiled plan can verify profile/policy agreement.
+    v2_execution_profile_ref = ""
+    if is_v2:
+        harness_id = str(
+            ((document.get("harness") or {}).get("id") or "")
+        ).strip()
+        if harness_id:
+            v2_execution_profile_ref = (
+                f"omnigent-{harness_id.removesuffix('-native')}@1"
+            )
+
     snapshot = {
         "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
         "profileId": profile_id,
@@ -415,7 +436,7 @@ async def resolve_agent_profile_snapshot(
         "document": document,
         "providerProfileRef": compatible_provider.profile_id,
         "executionProfileRef": (
-            "generic-omnigent-host@1"
+            v2_execution_profile_ref
             if is_v2
             else document["execution"]["defaultExecutionProfileRef"]
         ),
@@ -541,8 +562,17 @@ async def resolve_default_agent_profile_snapshot(
                 )
             )
         candidates = list((await session.scalars(query)).all())
+        candidate_statuses = await _managed_secret_statuses_for_profiles(
+            session=session, rows=candidates
+        )
         selected = next(
-            (item for item in candidates if provider_profile_launch_ready(item)),
+            (
+                item
+                for item in candidates
+                if provider_profile_launch_ready(
+                    item, managed_secret_statuses=candidate_statuses
+                )
+            ),
             None,
         )
         if selected is None:

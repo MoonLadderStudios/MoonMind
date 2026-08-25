@@ -40,6 +40,9 @@ from api_service.services.omnigent_agent_profile_service import (
     projection_readiness,
 )
 from api_service.services.provider_profile_readiness import provider_profile_launch_ready
+from api_service.services.provider_profile_service import (
+    _managed_secret_statuses_for_profiles,
+)
 from moonmind.security.outbound_scan import scan_outbound_text
 
 SMOKE_SCHEMA_VERSION = "moonmind.omnigent-agent-profile-smoke.v1"
@@ -212,8 +215,13 @@ async def run_profile_readiness_checks(
             )
         ).scalars()
     )
+    provider_statuses = await _managed_secret_statuses_for_profiles(
+        session=session, rows=providers
+    )
     compatible_provider = any(
-        provider_profile_launch_ready(row)
+        provider_profile_launch_ready(
+            row, managed_secret_statuses=provider_statuses
+        )
         and row.credential_source.value == requirements["credentialSource"]
         and row.runtime_materialization_mode.value == requirements["materializationMode"]
         and (
@@ -450,10 +458,15 @@ async def _run_v2_profile_readiness_checks(
         for slot in profile.credentialSlots
         for provider_id in slot.acceptedProviderIds
     }
+    provider_statuses = await _managed_secret_statuses_for_profiles(
+        session=session, rows=providers
+    )
     compatible_provider = False
     for provider in providers:
         if (
-            not provider_profile_launch_ready(provider)
+            not provider_profile_launch_ready(
+                provider, managed_secret_statuses=provider_statuses
+            )
             or accepted_ids
             and provider.provider_id not in accepted_ids
             or harness is None

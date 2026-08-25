@@ -167,13 +167,18 @@ def get_or_create_signing_key() -> bytes:
 
 def sign_deployment_evidence(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Sign a deployment evidence payload (without signature) and return full doc."""
-    # Normalize any datetime values to isoformat for consistent canonicalization
+    # Canonicalize datetime values exactly the way pydantic's JSON mode
+    # renders them on the verification side (``_signing_payload``), otherwise
+    # the two canonical forms disagree (e.g. "+00:00" vs "Z") and every
+    # freshly signed document fails its own HMAC check.
     def _normalize(value: Any) -> Any:
         if isinstance(value, datetime):
-            # Ensure timezone-aware isoformat consistent with pydantic json mode
             if value.tzinfo is None:
                 value = value.replace(tzinfo=UTC)
-            return value.isoformat()
+            return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        if isinstance(value, str):
+            # Datetimes already rendered as strings keep one canonical shape.
+            return value.replace("+00:00", "Z") if "+00:00" in value else value
         if isinstance(value, dict):
             return {k: _normalize(v) for k, v in value.items()}
         if isinstance(value, list):
@@ -183,11 +188,7 @@ def sign_deployment_evidence(payload: Mapping[str, Any]) -> dict[str, Any]:
     normalized = _normalize(dict(payload))
     canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
     sig = _compute_signature(canonical)
-    signed = dict(payload)
-    # Ensure signed payload also has normalized datetimes for validation consistency
-    for key in ("generatedAt", "expiresAt"):
-        if key in signed and isinstance(signed[key], datetime):
-            signed[key] = signed[key].isoformat()
+    signed = dict(normalized)
     signed["signature"] = {
         "algorithm": "hmac-sha256",
         "keyId": DEPLOYMENT_EVIDENCE_KEY_ID,

@@ -5055,6 +5055,109 @@ def test_create_execution_rejects_agent_profile_execution_target_mismatch(
     service.create_execution.assert_not_awaited()
 
 
+def test_create_execution_accepts_generic_v2_profile_identity_as_target_ref(
+    client: tuple[TestClient, AsyncMock, SimpleNamespace],
+) -> None:
+    """Generic v2 targets advertise ``profileId@version``, not the realizer."""
+
+    test_client, temporal_service, _user = client
+
+    async def create_execution(**_kwargs):
+        return _build_execution_record()
+
+    temporal_service.create_execution.side_effect = create_execution
+    provider_profile = SimpleNamespace(
+        profile_id="opencode-go-default", provider_id="opencode-go"
+    )
+    db_session = SimpleNamespace(
+        get=AsyncMock(side_effect=[provider_profile, None]),
+        commit=AsyncMock(),
+        refresh=AsyncMock(),
+    )
+    test_client.app.dependency_overrides[get_async_session] = lambda: db_session
+    snapshot = {
+        "schemaVersion": "moonmind.omnigent-agent-profile-snapshot.v1",
+        "profileId": "omnigent-opencode-default",
+        "version": 2,
+        "digest": "sha256:" + "a" * 64,
+        "providerProfileRef": "opencode-go-default",
+        # The compiled plan carries the host realizer ref, which is distinct
+        # from the readiness target identity the UI authors.
+        "executionProfileRef": "generic-omnigent-host@1",
+        "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+        "launchPolicyRef": "omnigent-on-demand@1",
+        "agentId": "opencode-native-ui",
+        "policyRef": "omnigent-on-demand@1",
+        "document": {
+            "model": {"settings": {}},
+            "rag": {},
+            "capture": {"stream": True},
+            "workspace": {"mutation": "allowed"},
+        },
+    }
+    plan_binding = OmnigentExecutionPlanBinding(
+        planRef="omnigent-execution-plan:sha256:" + "b" * 64,
+        planDigest="sha256:" + "b" * 64,
+        planArtifactRef="art_plan",
+        taskInputSnapshotRef="art_task",
+        taskInputSnapshotDigest="sha256:" + "c" * 64,
+    )
+
+    with (
+        patch(
+            "api_service.api.routers.executions.resolve_agent_profile_snapshot",
+            new=AsyncMock(return_value=snapshot),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.persist_json_artifact",
+            new=AsyncMock(return_value=("art_task", "sha256:" + "c" * 64)),
+        ),
+        patch(
+            "api_service.services.omnigent_execution_plan_service.compile_and_persist_execution_plan",
+            new=AsyncMock(
+                return_value=SimpleNamespace(
+                    binding=plan_binding,
+                    artifact_refs=("art_profile", "art_skills", "art_plan"),
+                    resolved_skillset_ref="art_skills",
+                )
+            ),
+        ),
+        patch(
+            "api_service.api.routers.executions.get_temporal_artifact_service",
+            return_value=SimpleNamespace(),
+        ),
+    ):
+        response = test_client.post(
+            "/api/executions",
+            json={
+                "type": "workflow",
+                "payload": {
+                    "targetRuntime": "omnigent",
+                    "agentProfile": {
+                        "profileId": "omnigent-opencode-default",
+                        "version": 2,
+                        "digest": "sha256:" + "a" * 64,
+                        "providerProfileRef": "opencode-go-default",
+                        "launchPolicyRef": "omnigent-on-demand@1",
+                    },
+                    "omnigent": {
+                        "executionTargetRef": (
+                            "omnigent-opencode-default@2"
+                        ),
+                        "launchPolicyRef": "omnigent-on-demand@1",
+                    },
+                    "workflow": {
+                        "instructions": "Run the selected agent profile.",
+                        "runtime": {"mode": "omnigent"},
+                    },
+                },
+            },
+        )
+
+    assert response.status_code == 201, response.text
+    temporal_service.create_execution.assert_awaited_once()
+
+
 def test_create_task_shaped_execution_rejects_unsupported_step_runtime(
     client: tuple[TestClient, AsyncMock, SimpleNamespace],
 ) -> None:

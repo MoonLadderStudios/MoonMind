@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -148,6 +148,12 @@ class AdmissionAuthority(BaseModel):
 
     supportEvidenceRef: str = Field(alias="supportEvidenceRef")
     supportEvidenceDigest: str = Field(alias="supportEvidenceDigest")
+    # Which evidence tier backs admission. Plans persisted before this field
+    # existed always carried protected-tier evidence, so the default preserves
+    # their in-flight interpretation.
+    supportTier: Literal["supported", "deployment_qualified"] = Field(
+        default="supported", alias="supportTier"
+    )
     featureGeneration: str = Field(alias="featureGeneration")
     replayCompatibilityVersion: str = Field(alias="replayCompatibilityVersion")
     rollbackPolicyVersion: str = Field(alias="rollbackPolicyVersion")

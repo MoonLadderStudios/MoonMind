@@ -231,7 +231,6 @@ class DockerOmnigentHostLauncher:
             container_name,
             "--network",
             spec.networkRef,
-            "--read-only",
             "--cap-drop",
             "ALL",
             "--security-opt",
@@ -244,6 +243,12 @@ class DockerOmnigentHostLauncher:
             str(launch_policy.limits["cpuMillis"] / 1000),
             "--tmpfs",
             f"/tmp:rw,noexec,nosuid,nodev,size={launch_policy.limits['temporaryStorageMiB']}m",
+            # Harness CLIs need a writable HOME (~/.local, ~/.config etc).
+            # The image's /home/app is root-owned; a tmpfs here gives the
+            # runtime user a writable base while credential and state
+            # volumes mount over their exact subdirectories.
+            "--tmpfs",
+            f"/home/app:rw,nosuid,nodev,size=256m,uid={host_class.runtime.get('uid', 1000)},gid={host_class.runtime.get('gid', 1000)}",
             "--user",
             f"{host_class.runtime.get('uid', 1000)}:{host_class.runtime.get('gid', 1000)}",
         ]
@@ -254,6 +259,21 @@ class DockerOmnigentHostLauncher:
             "OMNIGENT_HOST_ID": container_name,
             "OMNIGENT_HOST_NAME": container_name,
         }
+        # The upstream Omnigent CLI treats managed-host launches as
+        # (host_id, host_name) pairs: setting only one crashes identity
+        # loading. Derive a stable per-lease host id.
+        import uuid as _uuid
+
+        environment["OMNIGENT_HOST_ID"] = str(
+            _uuid.uuid5(_uuid.NAMESPACE_URL, spec.hostLeaseRef)
+        )
+        # The root filesystem is read-only; HOME must point at the image's
+        # app home so both the Omnigent CLI (~/.omnigent backed by the state
+        # volume) and harness credentials (~/.local/share/opencode/auth.json
+        # backed by credential volumes) resolve inside writable mounts.
+        # Without an explicit HOME the Python CLI resolves ~ to "/" and
+        # crashes trying to mkdir /.omnigent on the read-only root.
+        environment["HOME"] = "/home/app"
         for value in omnigent_proxy_env():
             key, _, item = value.partition("=")
             environment[key] = item

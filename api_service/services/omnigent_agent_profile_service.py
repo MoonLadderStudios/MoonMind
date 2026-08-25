@@ -293,3 +293,195 @@ async def record_upstream_sync_failure(
         projection.last_attempt_at = attempted_at
         projection.error = safe_error
     await session.commit()
+
+
+_OPENCODE_NATIVE_UI_ID = "opencode-native-ui"
+_OPENCODE_NATIVE_UI_VERSION = "1"
+
+
+def _synthetic_opencode_implementation() -> Any:
+    from moonmind.omnigent.harness_platform.catalog import (
+        HarnessImplementationIdentity,
+    )
+
+    # Stable placeholder identity for the local OpenCode overlay on stock
+    # Omnigent servers that do not natively advertise the harness. It must
+    # match the bootstrap qualification synthesizer so existing authority
+    # bindings and trust records stay valid across observations.
+    return HarnessImplementationIdentity.model_validate(
+        {
+            "sourceKind": "core",
+            "package": "omnigent",
+            "version": "1.0.0",
+            "digest": "sha256:" + "a" * 64,
+            "pluginEntryPoint": None,
+        }
+    )
+
+
+def _synthetic_opencode_harness_row() -> dict[str, Any]:
+    implementation = _synthetic_opencode_implementation()
+    return {
+        "id": "opencode-native",
+        "label": "OpenCode",
+        "aliases": [],
+        "implementation": implementation.model_dump(mode="json", by_alias=True),
+        "capabilities": {
+            "integrationMode": "native-server",
+            "authModel": "own-auth",
+        },
+        "setupSteps": [],
+        "runtimeRequirements": {},
+    }
+
+
+def _overlay_synthetic_opencode(result: Any) -> Any:
+    """Merge the local OpenCode overlay into one authenticated observation.
+
+    Stock Omnigent endpoints do not advertise ``opencode-native``. When OpenCode
+    support is enabled, each observation carries the stable overlay harness and
+    upstream agent identity so freshness attestation and launch planning keep
+    succeeding without forking the readiness path.
+    """
+
+    import hashlib
+
+    from moonmind.omnigent.harness_platform.catalog import (
+        TrustState,
+        classify_harness_trust,
+        create_catalog_snapshot,
+    )
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        HarnessCatalogSyncResult,
+    )
+    from moonmind.omnigent.settings import opencode_support_enabled
+
+    if not opencode_support_enabled() or any(
+        harness.id == "opencode-native" for harness in result.snapshot.harnesses
+    ):
+        return result
+    harness_rows = [
+        harness.model_dump(by_alias=True, mode="json")
+        for harness in result.snapshot.harnesses
+    ]
+    synthetic_harness_row = _synthetic_opencode_harness_row()
+    synthetic_agent_row = {
+        "id": _OPENCODE_NATIVE_UI_ID,
+        "version": _OPENCODE_NATIVE_UI_VERSION,
+        "harness": "opencode-native",
+    }
+    harness_rows.append(synthetic_harness_row)
+    # The overlay is applied before the observation is persisted, so it is the
+    # only row published for this synchronization and needs no timestamp offset
+    # to win ``latest()``.
+    observed_at = result.snapshot.observedAt
+    # The digest must cover the overlay's own authority. Hashing only the prior
+    # digest and a boolean would keep the source digest stable when the
+    # synthetic implementation or agent identity changes, so consumers would
+    # reuse a document bound to the superseded overlay.
+    merged_source = json.dumps(
+        {
+            "prior": result.snapshot.sourceDigest,
+            "overlay": True,
+            "syntheticHarness": synthetic_harness_row,
+            "syntheticAgent": synthetic_agent_row,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    snapshot = create_catalog_snapshot(
+        endpointRef=result.snapshot.endpointRef,
+        omnigentVersion=result.snapshot.omnigentVersion,
+        omnigentBuildDigest=result.snapshot.omnigentBuildDigest,
+        sourceDigest="sha256:"
+        + hashlib.sha256(merged_source.encode()).hexdigest(),
+        harnesses=harness_rows,
+        observedAt=observed_at,
+        pluginLoadErrors=list(result.snapshot.pluginLoadErrors),
+    )
+    trust_records = tuple(
+        classify_harness_trust(
+            harnessId=harness["id"],
+            implementation=(
+                _synthetic_opencode_implementation()
+                if harness["id"] == "opencode-native"
+                else next(
+                    record.implementation
+                    for record in result.trust_records
+                    if record.harnessId == harness["id"]
+                )
+            ),
+            trustState=(
+                TrustState.core_trusted
+                if harness["id"] == "opencode-native"
+                else next(
+                    record.trustState
+                    for record in result.trust_records
+                    if record.harnessId == harness["id"]
+                )
+            ),
+            decidedBy="catalog-sync",
+            decidedAt=snapshot.observedAt,
+        )
+        for harness in harness_rows
+    )
+    return HarnessCatalogSyncResult(
+        snapshot=snapshot,
+        trust_records=trust_records,
+        diagnostics={
+            **dict(result.diagnostics),
+            "agents": [
+                *[item for item in result.diagnostics.get("agents", []) if isinstance(item, dict)],
+                dict(synthetic_agent_row),
+            ],
+            "syntheticOpencodeOverlay": True,
+        },
+    )
+
+
+async def synchronize_omnigent_harness_catalog(session: AsyncSession) -> dict[str, Any]:
+    """Canonical authenticated harness-catalog synchronization.
+
+    One production path shared by the operator endpoint and the automatic
+    startup/maintenance reconciliation. It turns the configured Omnigent
+    endpoint inventory into immutable planner authority, refreshes the bounded
+    upstream agent projections, and seeds the built-in OpenCode agent profile.
+    """
+
+    from api_service.api.routers.omnigent_agent_profiles import (
+        ensure_builtin_opencode_agent_profile,
+    )
+    from api_service.db.base import async_session_maker
+    from moonmind.omnigent.production import build_generic_omnigent_execution_services
+
+    # The overlay runs inside the catalog service, before persistence, so the
+    # endpoint observation and its OpenCode overlay are published as one
+    # immutable row. Persisting the raw snapshot first would let a concurrent
+    # readiness or planning request select an overlay-free ``latest()`` and
+    # reject an otherwise valid launch.
+    services = build_generic_omnigent_execution_services(
+        session_factory=async_session_maker,
+        catalog_observation_overlay=_overlay_synthetic_opencode,
+    )
+    overlaid = await services.catalog_service.synchronize()
+    await synchronize_upstream_inventory(
+        session,
+        endpoint_ref=overlaid.snapshot.endpointRef,
+        bridge_mode="proxy",
+        inventory=[
+            item
+            for item in overlaid.diagnostics.get("agents", [])
+            if isinstance(item, dict)
+        ],
+    )
+    builtin = await ensure_builtin_opencode_agent_profile(
+        session=session, catalog=overlaid
+    )
+    return {
+        "catalogRef": overlaid.snapshot.catalogRef,
+        "observedAt": overlaid.snapshot.observedAt,
+        "omnigentVersion": overlaid.snapshot.omnigentVersion,
+        "harnessCount": len(overlaid.snapshot.harnesses),
+        "pluginLoadErrors": overlaid.snapshot.pluginLoadErrors,
+        "builtinAgentProfile": builtin,
+    }

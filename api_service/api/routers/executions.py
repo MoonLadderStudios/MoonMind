@@ -11254,9 +11254,17 @@ async def _create_execution_from_workflow_request(
         resolved_execution_target_ref = str(
             profile_snapshot.get("executionProfileRef") or ""
         ).strip()
+        # Generic (v2) Agent Profiles advertise readiness targets as the
+        # profile identity (`profileId@version`), while their compiled plan
+        # carries the host realizer ref. Legacy profiles advertise the
+        # execution-profile ref directly. Both forms resolve unambiguously.
+        resolved_target_refs = {
+            resolved_execution_target_ref,
+            f"{profile_snapshot.get('profileId')}@{profile_snapshot.get('version')}",
+        }
         if (
             authored_execution_target_ref
-            and authored_execution_target_ref != resolved_execution_target_ref
+            and authored_execution_target_ref not in resolved_target_refs
         ):
             raise _invalid_workflow_request(
                 "omnigent.executionTargetRef must match the selected "

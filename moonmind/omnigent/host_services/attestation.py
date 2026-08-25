@@ -150,8 +150,15 @@ class DockerOmnigentHostAttestor:
                 code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
             )
         _code, omnigent_version, _err = await self._backend.run(
-            ["docker", "exec", launch_result["containerName"], "omnigent", "--version"],
+            ["docker", "exec", launch_result["containerName"],
+             "/opt/venv/bin/omnigent", "--version"],
             failure_code=HarnessPlatformFailure.OMNIGENT_HARNESS_BUILD_MISMATCH,
+        )
+        import logging
+        logging.getLogger(__name__).info(
+            "omnigent --version probe: expected=%r got=%r",
+            host_class.omnigentVersion,
+            omnigent_version.strip()[:200],
         )
         if host_class.omnigentVersion not in omnigent_version:
             raise HarnessPlatformError(

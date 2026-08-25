@@ -758,10 +758,6 @@ async def _validate_plan_admission_authority(persisted: Any) -> None:
     if admission_authority is None:
         return
 
-    from moonmind.omnigent.execution_support_evidence import (
-        assert_protected_evidence_matches_plan,
-        validate_protected_execution_support_evidence,
-    )
     from moonmind.omnigent.session_supervisor_rollback import (
         SUPERVISOR_ROLLBACK_POLICY_VERSION,
     )
@@ -789,6 +785,25 @@ async def _validate_plan_admission_authority(persisted: Any) -> None:
         admission_authority.supportEvidenceDigest
     ):
         raise ValueError("execution support evidence digest conflicts with the plan")
+    if admission_authority.supportTier == "deployment_qualified":
+        # Deployment-qualified plans carry locally-signed deployment evidence;
+        # validating it against the protected schema would fail closed on the
+        # very evidence admission accepted.
+        from moonmind.omnigent.deployment_evidence import (
+            assert_deployment_evidence_matches_plan,
+            validate_deployment_evidence,
+        )
+
+        deployment_evidence = validate_deployment_evidence(support_evidence)
+        assert_deployment_evidence_matches_plan(
+            deployment_evidence, persisted.payload
+        )
+        return
+    from moonmind.omnigent.execution_support_evidence import (
+        assert_protected_evidence_matches_plan,
+        validate_protected_execution_support_evidence,
+    )
+
     protected_evidence = validate_protected_execution_support_evidence(
         support_evidence,
         expected_source_commit=(
@@ -842,7 +857,11 @@ async def _load_verified_execution_plan(binding: OmnigentExecutionPlanBinding):
     }
     if str(profile_snapshot.get("providerProfileRef") or "") not in planned_profiles:
         raise ValueError("Agent Profile artifact conflicts with Provider Profile plan")
-    snapshot_harness = str(profile_document.get("harness") or "").strip().lower()
+    raw_snapshot_harness = profile_document.get("harness")
+    if isinstance(raw_snapshot_harness, Mapping):
+        # Generic (v2) documents carry the harness as an object with its id.
+        raw_snapshot_harness = raw_snapshot_harness.get("id")
+    snapshot_harness = str(raw_snapshot_harness or "").strip().lower()
     snapshot_harness = {
         "codex": "codex-native",
         "opencode": "opencode-native",

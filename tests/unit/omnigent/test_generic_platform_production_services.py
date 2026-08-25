@@ -643,7 +643,10 @@ async def test_opencode_volume_materialization_transports_secret_only_on_stdin()
     }
     assert secrets.values == {}
     assert handle.credentialGeneration == 4
-    assert handle.attachments[0].targetPath == "/home/app/.local/share/opencode"
+    # Credentials mount read-only into a staging directory; the runtime script
+    # copies auth.json into the writable OpenCode data home so OpenCode can
+    # still create repos/ and cache/ beside it.
+    assert handle.attachments[0].targetPath == "/run/mm-credentials/opencode"
     assert handle.attachments[0].accessMode == "read-only"
 
     cleanup = await materializer.cleanup(handle, 4)

@@ -15,6 +15,9 @@ from api_service.db.models import (
     ProviderProfileAuthState,
     RuntimeMaterializationMode,
 )
+from api_service.services import (
+    omnigent_agent_profile_selection as selection_module,
+)
 from api_service.services.omnigent_agent_profile_selection import (
     compile_agent_profile_snapshot_parameters,
     refresh_managed_bootstrap_snapshot,
@@ -235,6 +238,92 @@ async def test_default_resolver_freezes_default_and_explicit_provider_at_admissi
     assert snapshot["profileId"] == "team-codex"
     assert snapshot["providerProfileRef"] == "oauth-team"
     assert snapshot["launchPolicyRef"] == "on-demand@1"
+
+
+@pytest.mark.asyncio
+async def test_resolver_counts_active_managed_secrets_toward_launch_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """DB-encrypted credentials must be checked against real secret status."""
+
+    observed = {}
+
+    async def fake_statuses(*, session, rows):
+        observed["rows"] = [row.profile_id for row in rows]
+        return {"team-codex-key": "active"}
+
+    monkeypatch.setattr(
+        selection_module,
+        "_managed_secret_statuses_for_profiles",
+        fake_statuses,
+    )
+    session = _Session()
+    session.provider = SimpleNamespace(
+        **{
+            **vars(session.provider),
+            "credential_source": ProviderCredentialSource.SECRET_REF,
+            "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "secret_refs": {"api_key": "db://team-codex-key"},
+        }
+    )
+
+    snapshot = await resolve_agent_profile_snapshot(
+        session,
+        selection={
+            "profileId": "team-codex",
+            "version": 2,
+            "providerProfileRef": "oauth-team",
+        },
+        consumer_type="workflow",
+        consumer_id="workflow-secrets-1",
+        user=SimpleNamespace(id=uuid4()),
+    )
+
+    assert observed["rows"] == ["oauth-team"]
+    assert snapshot["providerProfileRef"] == "oauth-team"
+
+
+@pytest.mark.asyncio
+async def test_resolver_rejects_secret_backed_profile_without_active_secret(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    async def fake_statuses(*, session, rows):
+        return {}
+
+    monkeypatch.setattr(
+        selection_module,
+        "_managed_secret_statuses_for_profiles",
+        fake_statuses,
+    )
+    session = _Session()
+    session.provider = SimpleNamespace(
+        **{
+            **vars(session.provider),
+            "credential_source": ProviderCredentialSource.SECRET_REF,
+            "runtime_materialization_mode": RuntimeMaterializationMode.COMPOSITE,
+            "volume_ref": None,
+            "volume_mount_path": None,
+            "secret_refs": {"api_key": "db://team-codex-key"},
+        }
+    )
+
+    with pytest.raises(
+        HTTPException, match="not launch ready or has no capacity"
+    ) as caught:
+        await resolve_agent_profile_snapshot(
+            session,
+            selection={
+                "profileId": "team-codex",
+                "version": 2,
+                "providerProfileRef": "oauth-team",
+            },
+            consumer_type="workflow",
+            consumer_id="workflow-secrets-2",
+            user=SimpleNamespace(id=uuid4()),
+        )
+    assert caught.value.status_code == 409
 
 
 @pytest.mark.asyncio
