@@ -53,13 +53,14 @@ This also aligns with the Temporal-side lifecycle model: workflows orchestrate, 
 - Introduce merge automation as a separate top-level workflow dependency model.
 - Replace `pr-resolver` with a brand-new merge engine.
 - Make merge automation editable mid-flight in v1.
-- Generalize this document to non-PR publish modes.
+- Generalize this document to publish modes other than creating a pull
+  request or adopting an existing one (see §9.1.1).
 
 ---
 
 ## 5. Summary of the Strategy
 
-When PR publishing is enabled (`publishMode = "pr"` in `MoonMind.UserWorkflow` parameters) and merge automation is enabled:
+When merge automation is enabled and the run either publishes a pull request (`publishMode = "pr"` in `MoonMind.UserWorkflow` parameters) or adopts an existing one (§9.1.1):
 
 1. The original `MoonMind.UserWorkflow` performs its normal implementation work.
 2. The publish step creates or updates the PR and emits a durable `PublishContext`.
@@ -198,6 +199,39 @@ Merge automation is configured in the normalized `MoonMind.UserWorkflow` paramet
   }
 }
 ```
+
+### 9.1.1 Entry points: publishing a PR versus adopting one
+
+Merge automation has two entry points, and both reach the same gate.
+
+**Publish a new pull request.** The run implements a change, the publish step
+creates the PR, and `PublishContext` carries its URL and head SHA. This is the
+`publishMode = "pr"` path described throughout this document.
+
+**Adopt a pull request that already exists.** The run implements nothing and
+publishes nothing of its own (`publishMode = "none"`). A trusted tool step
+resolves the target through `github.resolve_pull_request_target` and emits the
+same durable identity a publish step would: `pullRequestUrl`, exact `headSha`,
+head branch, and base branch. The gate then owns every commit, review request,
+and merge from that revision onward. `pr-review-resolve` is the preset for this
+path.
+
+Two consequences follow, and both are load-bearing:
+
+- **Publish mode alone cannot decide the task queue.** Merge automation runs on
+  a dedicated worker group. A submission is routed there when merge automation
+  is enabled *and* either publish mode is `pr` or the request names an existing
+  pull request — directly, or by enabling the review loop. Routing on
+  `publishMode = "pr"` alone would strand an adopt-an-existing-PR run on the
+  default queue, where the gate never starts.
+- **Workflow-level publish policy is re-resolved server-side.** Clients expand
+  and edit preset *steps*, but the `workflowPublish` annotation — including the
+  merge-automation gate a review-and-merge preset owns — is resolved again from
+  the stored template at submission time. A client that drops or rewrites it
+  cannot disable the gate on the way in.
+
+A run that publishes nothing and enables no merge automation is unaffected: it
+keeps the default queue and starts no gate.
 
 ### 9.2 Parent publish output
 
