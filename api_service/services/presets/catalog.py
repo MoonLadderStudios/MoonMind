@@ -2640,6 +2640,49 @@ class PresetCatalogService:
             expanded_payload["checkpointBranching"] = dict(checkpoint_branching)
         return expanded_payload
 
+    async def resolve_workflow_publish(
+        self,
+        *,
+        slug: str,
+        scope: str,
+        scope_ref: str | None,
+        inputs: Mapping[str, Any] | None = None,
+        context: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Return the preset's workflow-level publish policy rendered for *inputs*.
+
+        Steps can be authored and edited in the client, but workflow-level
+        publish policy stays server-resolved so a preset that owns merge
+        automation cannot lose its gate on the way to submission.
+        """
+
+        normalized_scope = _normalize_scope(scope)
+        normalized_scope_ref = _normalize_scope_ref(normalized_scope, scope_ref)
+        template = await self._get_template_for_scope(
+            slug=slug,
+            scope=normalized_scope,
+            scope_ref=normalized_scope_ref,
+        )
+        workflow_publish = (template.annotations or {}).get("workflowPublish")
+        if not isinstance(workflow_publish, Mapping):
+            return None
+        validated_inputs = self._resolve_inputs(
+            schema=list(template.inputs_schema or []),
+            submitted=dict(inputs or {}),
+        )
+        variables = {
+            "inputs": validated_inputs,
+            "context": dict(context or {}),
+            "now": datetime.now(UTC).isoformat(),
+            "iso_today": datetime.now(UTC).date().isoformat(),
+        }
+        rendered = _render_value(
+            self._template_env,
+            dict(workflow_publish),
+            variables=variables,
+        )
+        return dict(rendered) if isinstance(rendered, Mapping) else None
+
     def _resolve_inputs(
         self,
         *,

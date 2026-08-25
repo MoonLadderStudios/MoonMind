@@ -217,7 +217,28 @@ def _blocked_send_message_reason(diagnostics: list[str]) -> str:
     return f"Blocked outbound content at {SEND_MESSAGE_SCAN_LOCATION}"
 
 
-def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
+_MERGE_AUTOMATION_PR_TARGET_KEYS = (
+    "selector",
+    "number",
+    "prNumber",
+    "pr_number",
+    "url",
+    "prUrl",
+    "pr_url",
+    "branch",
+)
+
+
+def _merge_automation_selected(parameters: Mapping[str, Any]) -> bool:
+    """Return whether this submission needs the merge-automation worker group.
+
+    Merge automation is selected either by publishing a pull request with the
+    gate enabled, or by targeting an existing pull request directly. A preset
+    that resolves an existing PR publishes nothing of its own (``mode: none``)
+    because the gate owns every commit, review request, and merge, so publish
+    mode alone cannot decide the task queue.
+    """
+
     task_payload = _workflow_payload(parameters)
     task_publish = _mapping_payload(task_payload.get("publish"))
     publish_payload = _mapping_payload(parameters.get("publish"))
@@ -229,8 +250,6 @@ def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
         or publish_payload.get("mode")
         or ""
     ).strip().lower()
-    if publish_mode != "pr":
-        return False
 
     candidates = (
         publish_payload.get("mergeAutomation")
@@ -239,15 +258,32 @@ def _merge_automation_publish_selected(parameters: Mapping[str, Any]) -> bool:
         task_publish.get("mergeAutomation") or task_publish.get("merge_automation"),
         parameters.get("mergeAutomation") or parameters.get("merge_automation"),
     )
-    return any(
-        isinstance(candidate, Mapping)
-        and _truthy_enabled(candidate.get("enabled"))
-        for candidate in candidates
-    )
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping) or not _truthy_enabled(
+            candidate.get("enabled")
+        ):
+            continue
+        if publish_mode == "pr":
+            return True
+        target = candidate.get("pullRequest") or candidate.get("pull_request")
+        if isinstance(target, Mapping) and any(
+            str(target.get(key) or "").strip()
+            for key in _MERGE_AUTOMATION_PR_TARGET_KEYS
+        ):
+            return True
+        if str(target or "").strip() and not isinstance(target, Mapping):
+            return True
+        if _truthy_enabled(
+            _mapping_payload(
+                candidate.get("reviewLoop") or candidate.get("review_loop")
+            ).get("enabled")
+        ):
+            return True
+    return False
 
 
 def _workflow_start_task_queue(parameters: Mapping[str, Any]) -> str | None:
-    if not _merge_automation_publish_selected(parameters):
+    if not _merge_automation_selected(parameters):
         return None
     return settings.temporal.merge_automation_workflow_task_queue
 

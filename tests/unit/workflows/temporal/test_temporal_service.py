@@ -650,6 +650,149 @@ async def test_create_execution_routes_pr_merge_automation_workflows_to_dedicate
 
 
 @pytest.mark.asyncio
+async def test_create_execution_routes_review_loop_runs_that_publish_nothing(
+    tmp_path,
+    mock_client_adapter,
+    monkeypatch,
+):
+    """A preset that targets an existing PR still needs the gate's worker group.
+
+    ``pr-review-resolve`` publishes nothing of its own: the durable merge
+    automation gate owns every commit, review request, and merge. Deciding the
+    task queue from publish mode alone would strand the whole review loop on the
+    default queue.
+    """
+
+    temporal_settings = settings.temporal.model_copy(
+        update={
+            "merge_automation_workflow_task_queue": "mm.workflow.merge_automation.test"
+        }
+    )
+    monkeypatch.setattr(settings, "temporal", temporal_settings)
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Review, fix, and merge PR",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "publishMode": "none",
+                "workflow": {
+                    "instructions": "Resolve the target pull request.",
+                    "publish": {
+                        "mode": "none",
+                        "mergeAutomation": {
+                            "enabled": True,
+                            "reviewLoop": {"enabled": True, "provider": "codex"},
+                        },
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["task_queue"] == "mm.workflow.merge_automation.test"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_routes_runs_that_name_an_existing_pull_request(
+    tmp_path,
+    mock_client_adapter,
+    monkeypatch,
+):
+    temporal_settings = settings.temporal.model_copy(
+        update={
+            "merge_automation_workflow_task_queue": "mm.workflow.merge_automation.test"
+        }
+    )
+    monkeypatch.setattr(settings, "temporal", temporal_settings)
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Merge an existing PR",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "publishMode": "none",
+                "workflow": {
+                    "instructions": "Merge the pull request.",
+                    "publish": {
+                        "mode": "none",
+                        "mergeAutomation": {
+                            "enabled": True,
+                            "pullRequest": {"number": "3771"},
+                        },
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["task_queue"] == "mm.workflow.merge_automation.test"
+
+
+@pytest.mark.asyncio
+async def test_create_execution_keeps_default_queue_when_merge_automation_is_off(
+    tmp_path,
+    mock_client_adapter,
+):
+    """Publishing nothing is not by itself a merge-automation selection."""
+
+    async with temporal_db(tmp_path) as session:
+        service = TemporalExecutionService(
+            session,
+            client_adapter=mock_client_adapter,
+        )
+
+        await service.create_execution(
+            workflow_type="MoonMind.UserWorkflow",
+            owner_id=uuid4(),
+            title="Plain non-publishing run",
+            input_artifact_ref=None,
+            plan_artifact_ref=None,
+            manifest_artifact_ref=None,
+            failure_policy=None,
+            initial_parameters={
+                "publishMode": "none",
+                "workflow": {
+                    "instructions": "Investigate something.",
+                    "publish": {
+                        "mode": "none",
+                        "mergeAutomation": {
+                            "enabled": False,
+                            "reviewLoop": {"enabled": True},
+                        },
+                    },
+                },
+            },
+            idempotency_key=None,
+        )
+
+        start_kwargs = mock_client_adapter.start_workflow.await_args.kwargs
+        assert start_kwargs["task_queue"] is None
+
+
+@pytest.mark.asyncio
 async def test_create_execution_keeps_default_priority_without_merge_automation(
     tmp_path,
     mock_client_adapter,
