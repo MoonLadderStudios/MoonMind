@@ -147,7 +147,7 @@ def test_selectors_fall_back_to_persisted_state_for_worker_processes(
         host_classes.get_opencode_host_image_ref()
 
     # Workers mount the same resolved-state file the API writes.
-    monkeypatch.setattr(store, "load_resolved_state", lambda: _state())
+    monkeypatch.setattr(store, "load_resolved_state", _state)
     assert host_classes.get_opencode_host_image_ref() == HOST_REF
 
     # A placeholder digest in persisted state still fails closed.
