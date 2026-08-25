@@ -82,6 +82,38 @@ OPENAI_API_KEY, ANTHROPIC_API_KEY
 
 Never use `OPENCODE_AUTH_CONTENT`, CLI arguments, labels, generated environment files, or ordinary Docker environment variables for the production secret path. The execution plan, runtime binding, Temporal payloads, Docker inspection data, and cleanup handles contain only references and generations.
 
+## Deployment setup
+
+The canonical local path needs one value. Set `OPENCODE_API_KEY` in `.env` and
+start Docker Compose; the Omnigent bootstrap reconciliation does the rest on
+startup and on its ongoing cadence:
+
+1. resolve the configured OpenCode host image and tag to an immutable digest and
+   export it, so Host Class selection and launch policy compilation have an
+   authority to select (`OMNIGENT_OPENCODE_HOST_IMAGE_REF` stays optional and
+   overrides the resolution when set);
+2. synchronize the authenticated harness catalog and seed the built-in
+   `omnigent-opencode-default` Agent Profile;
+3. enroll the `opencode-go-default` Provider Profile from `OPENCODE_API_KEY`,
+   running the same pinned-runtime validation as the console action; and
+4. keep that profile's model catalog evidence current as the host image is
+   re-resolved.
+
+`OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE` defaults to `true` because the stock
+OpenCode Go model is a contributor tier whose enrollment records a data-use
+acknowledgement. Set it to `false` to decline; enrollment then stops with an
+actionable failure instead of acknowledging on the operator's behalf.
+
+Enrollment runs the full bootstrap, so it waits for the immutable image and
+harness catalog authorities it depends on, and it is attempted once per distinct
+configuration. Correcting the credential or the acknowledgement produces a new
+configuration and retries; so does restarting the service. Re-validating an
+already-enrolled credential is separate and repeats on every pass.
+
+Console enrollment through **Settings → Provider Profiles** remains available and
+is the path for a deployment that does not carry the credential in its
+environment.
+
 ## Provider Profile: OpenCode Go
 
 Create in **Settings → Provider Profiles**:
@@ -107,6 +139,24 @@ Validation (Settings → Validate):
 6. Persist only normalized model metadata, image/runtime identity, and validation evidence
 
 Raw key is never returned after submission.
+
+### Automatic re-validation after a host image change
+
+Model catalog evidence is bound to the exact digest-pinned host image that
+produced it and to the credential generation that was active at the time.
+Readiness, planning, and smoke admission all reject evidence that belongs to any
+other image or generation, so re-pulling or rebuilding the OpenCode host image
+invalidates every previously validated Provider Profile.
+
+MoonMind therefore re-validates automatically. The Omnigent bootstrap
+reconciliation pass re-runs the pinned-runtime validation above for every
+enabled, connected OpenCode Provider Profile whose evidence no longer matches
+the currently pinned image, using the already-enrolled `opencode_api_key`
+SecretRef. No new credential is requested, no image is substituted, and a
+credential the runtime rejects keeps its previous evidence and stays connected.
+While a profile is waiting for that pass, Workflow Create reports
+`provider_runtime_revalidation_pending` rather than asking the operator to
+reconnect a profile that is already connected.
 
 ## Agent Profile
 

@@ -182,6 +182,35 @@ async def resolve_omnigent_images() -> ResolvedOmnigentDeploymentState:
     return state
 
 
+async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
+    """Resolve, persist, and export the deployment's immutable image identities.
+
+    Host Class selection, launch policy compilation, and Provider Profile
+    runtime validation all read the digest-pinned refs straight from the process
+    environment, and the canonical Compose path leaves
+    ``OMNIGENT_OPENCODE_HOST_IMAGE_REF`` unset so the deployment can resolve its
+    own digests. This is the single boundary that turns the configured
+    image/tag into those exported digests, so every caller observes one
+    authority instead of resolving separately.
+    """
+
+    from moonmind.omnigent.bootstrap.store import save_resolved_state
+
+    state = await resolve_omnigent_images()
+    save_resolved_state(state)
+    exported = {
+        "OMNIGENT_IMAGE_REF": state.server_image_ref,
+        "OMNIGENT_BUILD_DIGEST": state.omnigent_build_digest,
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF": state.opencode_host_image_ref,
+        "OMNIGENT_PI_HOST_IMAGE_REF": state.pi_host_image_ref,
+    }
+    for key, value in exported.items():
+        cleaned = str(value or "").strip()
+        if cleaned:
+            os.environ[key] = cleaned
+    return state
+
+
 def resolved_server_image_ref(state: ResolvedOmnigentDeploymentState | None) -> str:
     if state and state.server_image_ref:
         return state.server_image_ref

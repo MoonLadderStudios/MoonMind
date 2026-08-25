@@ -400,6 +400,163 @@ async def test_generic_readiness_requires_both_feature_gates_and_real_launch_dat
     assert enabled_target.models == ["opencode-go/test-model"]
 
 
+@pytest.mark.asyncio
+async def test_stale_host_image_evidence_reports_revalidation_instead_of_reconnect(
+    monkeypatch,
+):
+    """A connected profile awaiting re-validation must not read as unconnected."""
+
+    from moonmind.omnigent.harness_platform import catalog_service
+    from moonmind.omnigent.harness_platform.catalog import (
+        TrustState,
+        classify_harness_trust,
+        create_catalog_snapshot,
+    )
+    from moonmind.omnigent.harness_platform.catalog_service import (
+        HarnessCatalogSyncResult,
+    )
+
+    implementation = {
+        "sourceKind": "core",
+        "package": "omnigent",
+        "version": "0.11.0",
+        "digest": "sha256:" + "3" * 64,
+    }
+    snapshot = create_catalog_snapshot(
+        endpointRef="default",
+        omnigentVersion="0.11.0",
+        omnigentBuildDigest="sha256:" + "4" * 64,
+        sourceDigest="sha256:" + "5" * 64,
+        harnesses=[
+            {
+                "id": "opencode-native",
+                "label": "OpenCode",
+                "implementation": implementation,
+                "capabilities": {"integrationMode": "native-server"},
+            }
+        ],
+    )
+    harness = snapshot.harnesses[0]
+    catalog_result = HarnessCatalogSyncResult(
+        snapshot,
+        (
+            classify_harness_trust(
+                harnessId=harness.id,
+                implementation=harness.implementation,
+                trustState=TrustState.core_trusted,
+            ),
+        ),
+        {},
+    )
+
+    class Repository:
+        def __init__(self, _session_factory):
+            pass
+
+        async def load(self, _catalog_ref):
+            return catalog_result
+
+        async def latest(self, _endpoint_ref):
+            return catalog_result
+
+    monkeypatch.setattr(catalog_service, "DbHarnessCatalogRepository", Repository)
+    monkeypatch.setattr(
+        catalog, "_require_provider_profile_permission", lambda *_: None
+    )
+    monkeypatch.setattr(catalog, "_can_view_profile", lambda *_: True)
+    monkeypatch.setenv("MOONMIND_OMNIGENT_GENERIC_HOST_ENABLED", "true")
+    monkeypatch.setenv("MOONMIND_OMNIGENT_OPENCODE_ENABLED", "true")
+    monkeypatch.setenv(
+        "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        "registry.test/opencode@sha256:" + "6" * 64,
+    )
+
+    profile_row = SimpleNamespace(
+        profile_id="omnigent-opencode-default",
+        active_version=1,
+        visibility="public",
+        owner_id=None,
+    )
+    version = SimpleNamespace(
+        version=1,
+        digest="sha256:" + "8" * 64,
+        document={
+            "schemaVersion": "moonmind.omnigent-agent-profile.v2",
+            "endpointRef": "default",
+            "source": {
+                "kind": "upstream",
+                "upstreamId": "opencode-native-ui",
+                "upstreamVersion": "1",
+                "upstreamSnapshotDigest": "sha256:" + "7" * 64,
+            },
+            "harness": {
+                "id": harness.id,
+                "catalogRef": snapshot.catalogRef,
+                "implementationRef": harness.implementation.implementation_ref(),
+            },
+            "credentialSlots": [
+                {"id": "primary-model", "acceptedProviderIds": ["opencode-go"]}
+            ],
+            "allowedLaunchPolicyRefs": ["omnigent-on-demand@1"],
+        },
+        validation_result={"ready": True},
+    )
+    # Connected and enrolled, but the pinned host image moved on since the last
+    # runtime-backed validation.
+    stale_provider = SimpleNamespace(
+        profile_id="opencode-go-primary",
+        account_label="OpenCode Go",
+        provider_id="opencode-go",
+        runtime_id="opencode",
+        enabled=True,
+        auth_state=SimpleNamespace(value="connected"),
+        credential_generation=4,
+        model_catalog_evidence_json={
+            "credentialGeneration": 4,
+            "imageRef": "registry.test/opencode@sha256:" + "9" * 64,
+            "models": ["opencode-go/test-model"],
+        },
+    )
+
+    class Session:
+        def __init__(self, provider):
+            self._results = iter((_Result([profile_row]), _Result([provider])))
+
+        async def execute(self, _statement):
+            return next(self._results)
+
+        async def scalar(self, _statement):
+            return version
+
+    current_user = SimpleNamespace(id=None, is_superuser=True)
+    stale = await catalog.get_omnigent_execution_readiness(
+        session=Session(stale_provider), current_user=current_user
+    )
+    stale_target = stale.execution_targets[0]
+    assert stale_target.available is False
+    codes = {reason.code for reason in stale_target.gate_reasons}
+    assert "provider_runtime_revalidation_pending" in codes
+    assert "compatible_provider_profile_unavailable" not in codes
+
+    # A profile that was never runtime-validated still needs an operator action.
+    never_validated = SimpleNamespace(
+        profile_id="opencode-go-new",
+        account_label="OpenCode Go",
+        provider_id="opencode-go",
+        runtime_id="opencode",
+        enabled=True,
+        auth_state=SimpleNamespace(value="connected"),
+        credential_generation=1,
+        model_catalog_evidence_json=None,
+    )
+    fresh = await catalog.get_omnigent_execution_readiness(
+        session=Session(never_validated), current_user=current_user
+    )
+    fresh_codes = {reason.code for reason in fresh.execution_targets[0].gate_reasons}
+    assert "compatible_provider_profile_unavailable" in fresh_codes
+    assert "provider_runtime_revalidation_pending" not in fresh_codes
+
+
 def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch):
     profiles = [
         _profile(),

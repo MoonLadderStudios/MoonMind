@@ -1,0 +1,476 @@
+"""Deployment-configured OpenCode credential readiness.
+
+Two things must hold before an OpenCode target is launchable: a connected
+Provider Profile must exist, and its model catalog evidence must have been
+observed on the exact digest-pinned host image the deployment selects. These
+tests pin the self-healing contract for both — enrollment straight from
+``OPENCODE_API_KEY``, and re-validation after the pinned image moves — plus the
+boundaries that must not be crossed to get there.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from moonmind.omnigent.bootstrap.provider_revalidation import (
+    ProviderReconcileOutcome,
+    evidence_is_current,
+    reconcile_opencode_provider_readiness,
+    reset_enrollment_attempts,
+)
+
+CURRENT_IMAGE = "ghcr.io/moonmind/omnigent-host-opencode@sha256:" + "a" * 64
+PREVIOUS_IMAGE = "ghcr.io/moonmind/omnigent-host-opencode@sha256:" + "b" * 64
+API_KEY = "sk-" + "z" * 40
+
+
+@pytest.fixture(autouse=True)
+def _clear_enrollment_latch():
+    reset_enrollment_attempts()
+    yield
+    reset_enrollment_attempts()
+
+
+def _profile(
+    *,
+    profile_id: str = "opencode-go-default",
+    generation: int = 3,
+    evidence_image: str | None = PREVIOUS_IMAGE,
+    evidence_generation: int | None = None,
+    enabled: bool = True,
+    auth_state: str = "connected",
+    secret_refs: dict[str, str] | None = None,
+) -> SimpleNamespace:
+    evidence = None
+    if evidence_image is not None:
+        evidence = {
+            "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+            "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
+            "imageRef": evidence_image,
+            "credentialGeneration": (
+                generation if evidence_generation is None else evidence_generation
+            ),
+        }
+    return SimpleNamespace(
+        profile_id=profile_id,
+        runtime_id="opencode",
+        provider_id="opencode-go",
+        enabled=enabled,
+        auth_state=auth_state,
+        credential_generation=generation,
+        capacity_scope_ref=None,
+        default_model="opencode-go/muse-spark-1.2-contributor",
+        command_behavior={},
+        secret_refs=(
+            {"opencode_api_key": "db://opencode-key"}
+            if secret_refs is None
+            else secret_refs
+        ),
+        model_catalog_evidence_json=evidence,
+    )
+
+
+class _Result:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def scalars(self):
+        return iter(self._rows)
+
+
+class _Session:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def execute(self, _statement):
+        return _Result(self._rows)
+
+    async def get(self, _model, key):
+        return next((row for row in self._rows if row.profile_id == key), None)
+
+    async def commit(self):
+        return None
+
+
+def _session_factory(rows):
+    return lambda: _Session(rows)
+
+
+def _install_stubs(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    validate=None,
+    image_ref: str | None = CURRENT_IMAGE,
+    releases: list[str] | None = None,
+    acquire_error: Exception | None = None,
+):
+    """Stub the pinned image, credential lease, and runtime validation substrate."""
+
+    def _image() -> str:
+        if image_ref is None:
+            raise RuntimeError("OMNIGENT_OPENCODE_HOST_IMAGE_REF must be set")
+        return image_ref
+
+    class _Guard:
+        def __init__(self, profile_id: str) -> None:
+            self.lease = SimpleNamespace(lease_id=f"lease-{profile_id}")
+            self._profile_id = profile_id
+
+        async def release(self) -> None:
+            if releases is not None:
+                releases.append(self._profile_id)
+
+    async def acquire(*, runtime_id, profile_id, purpose, operation_id, metadata=None):
+        del runtime_id, purpose, operation_id, metadata
+        if acquire_error is not None:
+            raise acquire_error
+        return _Guard(profile_id)
+
+    class _ValidationService:
+        def __init__(self, *, session_factory, resolver, image_ref):
+            del session_factory, resolver
+            self.image_ref = image_ref
+
+        async def validate(self, *, profile, lease, **kwargs):
+            assert validate is not None, "validation must not run in this scenario"
+            return await validate(profile, self.image_ref, lease, kwargs)
+
+    monkeypatch.setattr(
+        "moonmind.omnigent.harness_platform.host_classes.get_opencode_host_image_ref",
+        _image,
+    )
+    monkeypatch.setattr(
+        "moonmind.provider_profiles.maintenance.acquire_credential_maintenance_guard",
+        acquire,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.opencode_runtime_validation."
+        "OpenCodeProviderRuntimeValidationService",
+        _ValidationService,
+    )
+    monkeypatch.setattr(
+        "moonmind.omnigent.production.build_omnigent_secret_resolver",
+        lambda *args, **kwargs: object(),
+    )
+
+
+class _Controller:
+    """Records what the canonical bootstrap was asked to enroll."""
+
+    def __init__(self, *, state: str = "ready", error: Exception | None = None) -> None:
+        self.calls: list[dict[str, object]] = []
+        self._state = state
+        self._error = error
+
+    async def configure_opencode(self, **kwargs):
+        self.calls.append(kwargs)
+        if self._error is not None:
+            raise self._error
+        return SimpleNamespace(
+            state=SimpleNamespace(value=self._state),
+            provider_profile_ref="opencode-go-default",
+            failure=None if self._state == "ready" else {"message": "rejected"},
+        )
+
+
+def test_evidence_is_current_requires_generation_and_pinned_image() -> None:
+    assert evidence_is_current(
+        _profile(evidence_image=CURRENT_IMAGE), image_ref=CURRENT_IMAGE
+    )
+    assert not evidence_is_current(_profile(), image_ref=CURRENT_IMAGE)
+    assert not evidence_is_current(
+        _profile(evidence_image=CURRENT_IMAGE, evidence_generation=2),
+        image_ref=CURRENT_IMAGE,
+    )
+    assert not evidence_is_current(
+        _profile(evidence_image=None), image_ref=CURRENT_IMAGE
+    )
+
+
+@pytest.mark.asyncio
+async def test_configured_api_key_enrolls_the_profile_on_a_cold_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OPENCODE_API_KEY alone must produce a launchable Provider Profile."""
+
+    _install_stubs(monkeypatch)
+    monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
+    monkeypatch.delenv("OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE", raising=False)
+    controller = _Controller()
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([]),
+        controller=controller,
+    )
+
+    assert outcome.ready is True
+    assert outcome.enrolled is True
+    # The contributor acknowledgement defaults to accepted so the documented
+    # one-value setup completes without a console action.
+    assert controller.calls == [
+        {"api_key": API_KEY, "accept_contributor_data_use": True}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_declined_contributor_acknowledgement_is_not_overridden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_stubs(monkeypatch)
+    monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
+    monkeypatch.setenv("OPENCODE_ACCEPT_CONTRIBUTOR_DATA_USE", "false")
+    controller = _Controller()
+
+    await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([]),
+        controller=controller,
+    )
+
+    assert controller.calls[0]["accept_contributor_data_use"] is False
+
+
+@pytest.mark.asyncio
+async def test_enrollment_waits_for_image_and_catalog_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A first-boot race must not consume this configuration's one attempt."""
+
+    _install_stubs(monkeypatch)
+    monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
+    controller = _Controller()
+
+    deferred = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([]),
+        allow_enrollment=False,
+        controller=controller,
+    )
+    assert deferred.ready is False
+    assert controller.calls == []
+
+    # Once the authorities land, the attempt is still available.
+    allowed = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([]),
+        controller=controller,
+    )
+    assert allowed.enrolled is True
+    assert len(controller.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_enrollment_is_not_retried_for_the_same_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected configuration must not re-run the full bootstrap every pass."""
+
+    _install_stubs(monkeypatch)
+    monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
+    controller = _Controller(state="failed")
+
+    first = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([]), controller=controller
+    )
+    second = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([]), controller=controller
+    )
+
+    assert first.ready is False
+    assert second.ready is False
+    assert len(controller.calls) == 1
+
+    # Correcting the credential produces a new configuration and retries.
+    monkeypatch.setenv("OPENCODE_API_KEY", "sk-" + "y" * 40)
+    third = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([]), controller=controller
+    )
+    assert len(controller.calls) == 2
+    assert third.ready is False
+
+
+@pytest.mark.asyncio
+async def test_no_configured_credential_leaves_console_enrollment_to_the_operator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_stubs(monkeypatch)
+    monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+    controller = _Controller()
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([]), controller=controller
+    )
+
+    assert outcome.ready is True
+    assert outcome.enrolled is False
+    assert controller.calls == []
+
+
+@pytest.mark.asyncio
+async def test_current_evidence_is_left_untouched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_stubs(monkeypatch)
+    controller = _Controller()
+    rows = [_profile(evidence_image=CURRENT_IMAGE)]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=controller
+    )
+
+    assert outcome == ProviderReconcileOutcome(ready=True, checked=1)
+    assert controller.calls == []
+
+
+@pytest.mark.asyncio
+async def test_stale_host_image_evidence_is_revalidated_and_refreshed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The connected credential re-qualifies itself against the pinned image."""
+
+    observed: list[tuple[str, str, dict]] = []
+    releases: list[str] = []
+
+    async def validate(profile, image_ref, lease, kwargs):
+        observed.append((profile.profile_id, image_ref, kwargs))
+        assert lease.lease_id == "lease-opencode-go-default"
+        return {
+            "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+            "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
+            "imageRef": image_ref,
+            "runtimeVersions": {"opencode": "1.18.11"},
+            "validatedAt": "2026-08-25T01:00:00+00:00",
+            "credentialGeneration": profile.credential_generation,
+        }
+
+    _install_stubs(monkeypatch, validate=validate, releases=releases)
+    controller = _Controller()
+    rows = [_profile()]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=controller
+    )
+
+    assert outcome.ready is True
+    assert outcome.refreshed == ("opencode-go-default",)
+    assert outcome.deferred == ()
+    # An enrolled profile is refreshed in place, never re-bootstrapped.
+    assert controller.calls == []
+    # No candidate secret is supplied: the enrolled SecretRef stays authoritative.
+    assert observed == [("opencode-go-default", CURRENT_IMAGE, {})]
+    assert releases == ["opencode-go-default"]
+    assert rows[0].model_catalog_evidence_json["imageRef"] == CURRENT_IMAGE
+    assert rows[0].command_behavior["runtime_validation"]["image_ref"] == CURRENT_IMAGE
+    assert evidence_is_current(rows[0], image_ref=CURRENT_IMAGE)
+
+
+@pytest.mark.asyncio
+async def test_rejected_credential_defers_without_downgrading_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def validate(*_args, **_kwargs):
+        raise RuntimeError("pinned OpenCode runtime rejected the Provider Profile")
+
+    releases: list[str] = []
+    _install_stubs(monkeypatch, validate=validate, releases=releases)
+    rows = [_profile()]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert outcome.ready is False
+    assert outcome.deferred == ("opencode-go-default",)
+    assert outcome.refreshed == ()
+    assert rows[0].model_catalog_evidence_json["imageRef"] == PREVIOUS_IMAGE
+    assert rows[0].enabled is True
+    assert rows[0].auth_state == "connected"
+    assert releases == ["opencode-go-default"]
+
+
+@pytest.mark.asyncio
+async def test_unavailable_maintenance_lease_defers_the_pass(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_stubs(monkeypatch, acquire_error=RuntimeError("profile is busy"))
+    rows = [_profile()]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert outcome.ready is False
+    assert outcome.deferred == ("opencode-go-default",)
+    assert rows[0].model_catalog_evidence_json["imageRef"] == PREVIOUS_IMAGE
+
+
+@pytest.mark.asyncio
+async def test_missing_pinned_image_defers_instead_of_recording_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_stubs(monkeypatch, image_ref=None)
+    rows = [_profile()]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert outcome.ready is False
+    assert outcome.reason == "pinned OpenCode host image unavailable"
+    assert rows[0].model_catalog_evidence_json["imageRef"] == PREVIOUS_IMAGE
+
+
+@pytest.mark.asyncio
+async def test_unenrolled_profile_rows_are_re_enrolled_from_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A row that exists but never connected is not mistaken for an enrollment."""
+
+    _install_stubs(monkeypatch)
+    monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
+    controller = _Controller()
+    rows = [
+        _profile(profile_id="never-connected", auth_state="api_key_pending"),
+        _profile(profile_id="disabled", enabled=False),
+        _profile(profile_id="no-secret", secret_refs={}),
+    ]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=controller
+    )
+
+    assert outcome.enrolled is True
+    assert outcome.checked == 3
+    assert len(controller.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_credential_rotation_during_validation_keeps_rotation_authoritative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A generation that moved mid-flight owns its own evidence."""
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        # The rotation lands while the pinned runtime check is in flight.
+        profile.credential_generation = 4
+        return {
+            "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+            "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
+            "imageRef": image_ref,
+            "validatedAt": "2026-08-25T01:00:00+00:00",
+            "credentialGeneration": 3,
+        }
+
+    _install_stubs(monkeypatch, validate=validate)
+    rows = [_profile()]
+
+    await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert rows[0].model_catalog_evidence_json["imageRef"] == PREVIOUS_IMAGE

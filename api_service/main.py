@@ -373,6 +373,115 @@ async def _sync_omnigent_harness_catalog() -> bool:
         return False
 
 
+async def _sync_omnigent_deployment_images() -> bool:
+    """Resolve and export the deployment's digest-pinned Omnigent images.
+
+    Host Class selection, launch policy compilation, and Provider Profile
+    runtime validation all read digest-pinned refs from the process environment,
+    and the canonical Compose path deliberately leaves
+    ``OMNIGENT_OPENCODE_HOST_IMAGE_REF`` unset so the deployment resolves its own
+    digests from the configured image and tag. Without this leg those digests
+    only ever existed inside a console bootstrap request, so a restart left Host
+    Class selection with nothing to select.
+    """
+
+    try:
+        from moonmind.omnigent.bootstrap.image_resolution import (
+            publish_resolved_omnigent_images,
+        )
+        from moonmind.omnigent.settings import (
+            build_omnigent_gate,
+            generic_host_enabled,
+        )
+
+        if not build_omnigent_gate().enabled or not generic_host_enabled():
+            return True
+
+        state = await publish_resolved_omnigent_images()
+        if not state.opencode_host_image_ref:
+            logger.warning(
+                "Omnigent image resolution incomplete: no digest-pinned OpenCode "
+                "host image is available for the configured image and tag",
+            )
+            return False
+        logger.info(
+            "Resolved Omnigent deployment images: serverImageRef=%s "
+            "opencodeHostImageRef=%s",
+            state.server_image_ref,
+            state.opencode_host_image_ref,
+        )
+        return True
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning("Omnigent image resolution deferred: %s", exc)
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning("Omnigent image resolution deferred: %s", exc)
+        return False
+
+
+async def _sync_omnigent_provider_readiness(*, allow_enrollment: bool) -> bool:
+    """Keep the deployment-configured OpenCode credential launchable.
+
+    Two failures used to require a console action. A configured
+    ``OPENCODE_API_KEY`` was never enrolled, and evidence recorded against an
+    earlier host image was never refreshed after the deployment re-resolved that
+    image. Either one strands the operator behind a "connect and validate a
+    compatible Provider Profile" gate for a deployment that already has
+    everything it needs.
+    """
+
+    try:
+        from api_service.db.base import async_session_maker
+        from moonmind.omnigent.bootstrap.provider_revalidation import (
+            reconcile_opencode_provider_readiness,
+        )
+        from moonmind.omnigent.settings import (
+            build_omnigent_gate,
+            generic_host_enabled,
+            opencode_support_enabled,
+        )
+
+        if (
+            not build_omnigent_gate().enabled
+            or not generic_host_enabled()
+            or not opencode_support_enabled()
+        ):
+            # No OpenCode execution plane means no credential to keep current.
+            return True
+
+        outcome = await reconcile_opencode_provider_readiness(
+            session_factory=async_session_maker,
+            allow_enrollment=allow_enrollment,
+        )
+        if outcome.enrolled:
+            logger.info(
+                "Enrolled the deployment-configured OpenCode Provider Profile",
+            )
+        if outcome.refreshed:
+            logger.info(
+                "Refreshed OpenCode Provider Profile model evidence: profiles=%s",
+                ",".join(outcome.refreshed),
+            )
+        if not outcome.ready and outcome.reason:
+            logger.warning(
+                "OpenCode Provider Profile readiness deferred: %s",
+                outcome.reason,
+            )
+        return outcome.ready
+    except (OperationalError, ProgrammingError, SQLAlchemyError, OSError) as exc:
+        logger.warning(
+            "OpenCode Provider Profile readiness deferred: %s",
+            exc,
+        )
+        return False
+    except Exception as exc:  # pragma: no cover - bounded startup reconciliation
+        logger.warning(
+            "OpenCode Provider Profile readiness deferred: %s",
+            exc,
+        )
+        return False
+
+
 @dataclass(frozen=True)
 class OmnigentBootstrapReadiness:
     """Per-leg outcome of one bootstrap reconciliation pass.
@@ -382,18 +491,22 @@ class OmnigentBootstrapReadiness:
     aggregate readiness that drives the backoff schedule.
     """
 
+    images_ready: bool
     policies_ready: bool
     agent_ready: bool
     catalog_ready: bool
     schedules_ready: bool
+    provider_ready: bool
 
     @property
     def ready(self) -> bool:
         return (
-            self.policies_ready
+            self.images_ready
+            and self.policies_ready
             and self.agent_ready
             and self.catalog_ready
             and self.schedules_ready
+            and self.provider_ready
         )
 
 
@@ -401,6 +514,9 @@ async def _reconcile_omnigent_bootstrap_once(
     *,
     refresh_images: bool,
 ) -> OmnigentBootstrapReadiness:
+    # Image identities come first: every downstream leg selects Host Classes and
+    # validates credentials against the digests this leg exports.
+    images_ready = await _sync_omnigent_deployment_images()
     policies_ready = await _sync_omnigent_bootstrap_policies(
         refresh_images=refresh_images
     )
@@ -411,11 +527,24 @@ async def _reconcile_omnigent_bootstrap_once(
         if policies_ready and agent_ready
         else False
     )
+    # First-time enrollment runs the full bootstrap and gets one attempt per
+    # configuration, so it waits for the image and catalog authorities it depends
+    # on. Re-validating an already-enrolled credential only needs the pinned
+    # image.
+    provider_ready = (
+        await _sync_omnigent_provider_readiness(
+            allow_enrollment=images_ready and catalog_ready
+        )
+        if images_ready
+        else False
+    )
     return OmnigentBootstrapReadiness(
+        images_ready=images_ready,
         policies_ready=policies_ready,
         agent_ready=agent_ready,
         catalog_ready=catalog_ready,
         schedules_ready=schedules_ready,
+        provider_ready=provider_ready,
     )
 
 

@@ -6,7 +6,9 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
-from moonmind.omnigent.bootstrap.image_resolution import resolve_omnigent_images
+from moonmind.omnigent.bootstrap.image_resolution import (
+    publish_resolved_omnigent_images,
+)
 from moonmind.omnigent.bootstrap.models import (
     BootstrapDesired,
     BootstrapRecord,
@@ -21,7 +23,6 @@ from moonmind.omnigent.bootstrap.opencode import (
 from moonmind.omnigent.bootstrap.store import (
     load_bootstrap_record,
     save_bootstrap_record,
-    save_resolved_state,
 )
 from moonmind.omnigent.harness_platform.support import (
     compute_support_combination_key,
@@ -88,17 +89,11 @@ class BootstrapController:
             # 1. Resolve images
             record = record.model_copy(update={"state": BootstrapState.resolving_images})
             save_bootstrap_record(record)
-            resolved = await resolve_omnigent_images()
-            save_resolved_state(resolved)
-            # Propagate resolved digests into process environment so downstream selectors
-            # and `get_opencode_host_image_ref()` see the authoritative pinned refs even
-            # when the operator did not export them (default Compose path).
-            if resolved.opencode_host_image_ref:
-                os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] = resolved.opencode_host_image_ref
-            if resolved.server_image_ref:
-                os.environ["OMNIGENT_IMAGE_REF"] = resolved.server_image_ref
-            if resolved.omnigent_build_digest:
-                os.environ["OMNIGENT_BUILD_DIGEST"] = resolved.omnigent_build_digest
+            # One boundary resolves, persists, and exports the pinned digests so
+            # downstream selectors and `get_opencode_host_image_ref()` observe the
+            # authoritative refs even when the operator did not export them
+            # (default Compose path).
+            resolved = await publish_resolved_omnigent_images()
             # Ensure image refs are available; if not, try fallback to existing env host image or build
             if not resolved.opencode_host_image_ref:
                 # Try to build locally if missing
@@ -205,50 +200,28 @@ class BootstrapController:
             raise
 
     async def _sync_catalog(self, resolved: Any) -> None:
+        """Synchronize the harness catalog through the one canonical boundary.
+
+        The canonical service applies the synthetic OpenCode overlay before
+        persisting, so the snapshot it publishes is the one that carries the
+        ``opencode-native`` harness and its trust record. Synchronizing
+        separately would publish an overlay-free snapshot as ``latest()`` and
+        make the profile this bootstrap just enrolled fail the harness-catalog
+        attestation, which is exactly the readiness gate bootstrap exists to
+        satisfy.
+        """
+
+        del resolved
+
         from api_service.db.base import async_session_maker
-        from moonmind.omnigent.production import (
-            build_generic_omnigent_execution_services,
+        from api_service.services.omnigent_agent_profile_service import (
+            synchronize_omnigent_harness_catalog,
         )
 
-        # Use production services to sync
         try:
-            services = build_generic_omnigent_execution_services(
-                session_factory=async_session_maker
-            )
-            result = await services.catalog_service.synchronize()
-            # Ensure built-in profile
-            from api_service.api.routers.omnigent_agent_profiles import (
-                ensure_builtin_opencode_agent_profile,
-            )
-            from api_service.db.base import async_session_maker as asm
-
-            async with asm() as session:
-                await ensure_builtin_opencode_agent_profile(session=session, catalog=result)
+            async with async_session_maker() as session:
+                await synchronize_omnigent_harness_catalog(session)
         except Exception as exc:
-            # If duplicate source digest, treat as already synchronized
-            err_text = str(exc).lower()
-            if "duplicate" in err_text and "uq_omnigent_catalog" in err_text:
-                # Load existing catalog
-                from api_service.api.routers.omnigent_agent_profiles import (
-                    ensure_builtin_opencode_agent_profile,
-                )
-                from api_service.db.base import async_session_maker as asm2
-                from moonmind.omnigent.harness_platform.catalog_service import (
-                    DbHarnessCatalogRepository,
-                )
-
-                try:
-                    async with asm2() as session:
-                        repo = DbHarnessCatalogRepository(asm2)
-                        latest = await repo.latest("default")
-                        if latest is not None:
-                            await ensure_builtin_opencode_agent_profile(
-                                session=session, catalog=latest
-                            )
-                            return
-                except Exception:
-                    # Best-effort fallback already attempted; propagate original catalog sync error
-                    pass
             raise RuntimeError(f"catalog synchronization failed: {exc}") from exc
 
     async def _ensure_provider_profile(
@@ -785,7 +758,7 @@ class BootstrapController:
             # Override catalog for support identity build digest to use synthetic
             catalog = type("obj", (), {"snapshot": synth_catalog})()
         # Feed resolved host image into selection via explicit environment dict.
-        # Ensure resolve_omnigent_images() was called upstream; if the passed
+        # Ensure publish_resolved_omnigent_images() ran upstream; if the passed
         # resolved state is empty, try the persisted resolved state before failing.
         if not resolved or not getattr(resolved, "opencode_host_image_ref", None):
             try:
@@ -807,7 +780,7 @@ class BootstrapController:
         if not resolved_image or "@sha256:" not in resolved_image:
             raise RuntimeError(
                 "resolved opencode host image is missing or not digest-pinned; "
-                "ensure resolve_omnigent_images() succeeded before host class selection and that OMNIGENT_OPENCODE_HOST_IMAGE_REF is digest-pinned"
+                "ensure publish_resolved_omnigent_images() succeeded before host class selection and that OMNIGENT_OPENCODE_HOST_IMAGE_REF is digest-pinned"
             )
         selector_env = {
             "OMNIGENT_OPENCODE_HOST_IMAGE_REF": resolved_image,
