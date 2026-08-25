@@ -7,6 +7,7 @@ import json
 import os
 import re
 from datetime import UTC, datetime
+from typing import Mapping
 
 from moonmind.omnigent.bootstrap.models import ResolvedOmnigentDeploymentState
 
@@ -72,16 +73,22 @@ async def _resolve_via_docker_pull(image: str, tag: str) -> str | None:
     return await _resolve_via_docker_inspect(ref)
 
 
-async def _resolve_image(image_env: str, tag_env: str, ref_env: str) -> tuple[str | None, str | None]:
+async def _resolve_image(
+    image_env: str,
+    tag_env: str,
+    ref_env: str,
+    env: Mapping[str, str] | None = None,
+) -> tuple[str | None, str | None]:
     """Resolve one image to digest-pinned ref. Returns (pinned_ref, build_digest)."""
-    pinned = os.getenv(ref_env, "").strip()
+    source = os.environ if env is None else env
+    pinned = str(source.get(ref_env) or "").strip()
     if pinned and _is_digest_pinned(pinned) and not pinned.endswith("0" * 64) and not pinned.endswith("c" * 64):
         # Valid pinned ref
         build_digest = _extract_digest(pinned)
         return pinned, build_digest
     # Need to resolve from image+tag
-    image = os.getenv(image_env, "").strip()
-    tag = os.getenv(tag_env, "").strip() or "latest"
+    image = str(source.get(image_env) or "").strip()
+    tag = str(source.get(tag_env) or "").strip() or "latest"
     if not image:
         return None, None
     # Try inspect existing local image without pull
@@ -104,22 +111,30 @@ async def _resolve_image(image_env: str, tag_env: str, ref_env: str) -> tuple[st
     return None, None
 
 
-async def resolve_omnigent_images() -> ResolvedOmnigentDeploymentState:
+async def resolve_omnigent_images(
+    env: Mapping[str, str] | None = None,
+) -> ResolvedOmnigentDeploymentState:
     """Resolve server and OpenCode host images to immutable digests.
 
     This is best-effort: if docker is unavailable or images cannot be pulled,
     returns whatever is configured via env or previously persisted state.
+
+    ``env`` exists so callers can resolve against the deployment's own image
+    configuration rather than a digest a previous pass published. Resolving
+    against a self-published digest would make every configured mutable tag look
+    explicitly pinned and silently disable tag refresh.
     """
     from moonmind.omnigent.bootstrap.store import load_resolved_state
 
+    source = os.environ if env is None else env
     previous = load_resolved_state()
 
     # Server image
     server_ref, server_digest = await _resolve_image(
-        "OMNIGENT_IMAGE", "OMNIGENT_IMAGE_TAG", "OMNIGENT_IMAGE_REF"
+        "OMNIGENT_IMAGE", "OMNIGENT_IMAGE_TAG", "OMNIGENT_IMAGE_REF", source
     )
     # Also check OMNIGENT_BUILD_DIGEST directly
-    build_digest = os.getenv("OMNIGENT_BUILD_DIGEST", "").strip()
+    build_digest = str(source.get("OMNIGENT_BUILD_DIGEST") or "").strip()
     if build_digest and _SHA256_RE.fullmatch(build_digest):
         server_digest = build_digest
     elif server_ref:
@@ -130,11 +145,15 @@ async def resolve_omnigent_images() -> ResolvedOmnigentDeploymentState:
         "OMNIGENT_OPENCODE_HOST_IMAGE",
         "OMNIGENT_OPENCODE_HOST_IMAGE_TAG",
         "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+        source,
     )
 
     # Pi host (optional)
     pi_ref, _ = await _resolve_image(
-        "OMNIGENT_PI_HOST_IMAGE", "OMNIGENT_PI_HOST_IMAGE_TAG", "OMNIGENT_PI_HOST_IMAGE_REF"
+        "OMNIGENT_PI_HOST_IMAGE",
+        "OMNIGENT_PI_HOST_IMAGE_TAG",
+        "OMNIGENT_PI_HOST_IMAGE_REF",
+        source,
     )
     # Fall back to previous if still None
     if not server_ref and previous and previous.server_image_ref:
@@ -182,6 +201,54 @@ async def resolve_omnigent_images() -> ResolvedOmnigentDeploymentState:
     return state
 
 
+# The digests published below are written back into the process environment so
+# every selector observes one authority. That export must never become an input
+# to resolution or to registry acquisition: a self-published digest is
+# indistinguishable from an operator pin, and treating it as one would disable
+# refresh for every configured mutable tag. These are the keys publication
+# writes, captured once at their operator-supplied values.
+_PUBLISHED_IMAGE_KEYS = (
+    "OMNIGENT_IMAGE_REF",
+    "OMNIGENT_BUILD_DIGEST",
+    "OMNIGENT_OPENCODE_HOST_IMAGE_REF",
+    "OMNIGENT_PI_HOST_IMAGE_REF",
+)
+_operator_image_baseline: dict[str, str] | None = None
+
+
+def operator_image_configuration(
+    *, env: Mapping[str, str] | None = None
+) -> Mapping[str, str]:
+    """Return the deployment's own image configuration, free of published digests.
+
+    Callers that resolve or acquire images must read this instead of the live
+    environment so tag refresh keeps working across passes. Callers that only
+    consume an already-resolved identity should keep reading the environment.
+    """
+
+    global _operator_image_baseline
+
+    source = os.environ if env is None else env
+    if _operator_image_baseline is None:
+        _operator_image_baseline = {
+            key: str(source.get(key) or "").strip() for key in _PUBLISHED_IMAGE_KEYS
+        }
+    merged = dict(source)
+    for key, value in _operator_image_baseline.items():
+        if value:
+            merged[key] = value
+        else:
+            merged.pop(key, None)
+    return merged
+
+
+def reset_operator_image_configuration() -> None:
+    """Forget the captured baseline (tests only)."""
+
+    global _operator_image_baseline
+    _operator_image_baseline = None
+
+
 async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
     """Resolve, persist, and export the deployment's immutable image identities.
 
@@ -192,11 +259,15 @@ async def publish_resolved_omnigent_images() -> ResolvedOmnigentDeploymentState:
     own digests. This is the single boundary that turns the configured
     image/tag into those exported digests, so every caller observes one
     authority instead of resolving separately.
+
+    Resolution always reads :func:`operator_image_configuration`, never the
+    digests this function exports, so a configured mutable tag stays refreshable
+    on every pass.
     """
 
     from moonmind.omnigent.bootstrap.store import save_resolved_state
 
-    state = await resolve_omnigent_images()
+    state = await resolve_omnigent_images(operator_image_configuration())
     save_resolved_state(state)
     exported = {
         "OMNIGENT_IMAGE_REF": state.server_image_ref,

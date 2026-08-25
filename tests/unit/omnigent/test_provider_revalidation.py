@@ -42,6 +42,7 @@ def _profile(
     enabled: bool = True,
     auth_state: str = "connected",
     secret_refs: dict[str, str] | None = None,
+    command_behavior: dict | None = None,
 ) -> SimpleNamespace:
     evidence = None
     if evidence_image is not None:
@@ -62,7 +63,7 @@ def _profile(
         credential_generation=generation,
         capacity_scope_ref=None,
         default_model="opencode-go/muse-spark-1.2-contributor",
-        command_behavior={},
+        command_behavior=dict(command_behavior or {}),
         secret_refs=(
             {"opencode_api_key": "db://opencode-key"}
             if secret_refs is None
@@ -265,14 +266,50 @@ async def test_enrollment_waits_for_image_and_catalog_authority(
 
 
 @pytest.mark.asyncio
-async def test_failed_enrollment_is_not_retried_for_the_same_configuration(
+async def test_transient_enrollment_failures_stay_retryable_within_a_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A rejected configuration must not re-run the full bootstrap every pass."""
+    """Temporal, Docker, and the database are startup dependencies."""
+
+    from moonmind.omnigent.bootstrap import provider_revalidation
 
     _install_stubs(monkeypatch)
     monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
-    controller = _Controller(state="failed")
+    controller = _Controller(error=RuntimeError("temporal is unavailable"))
+
+    budget = provider_revalidation._MAX_ENROLLMENT_ATTEMPTS
+    for _ in range(budget):
+        outcome = await reconcile_opencode_provider_readiness(
+            session_factory=_session_factory([]), controller=controller
+        )
+        assert outcome.ready is False
+    # A transient failure keeps retrying rather than latching on the first pass.
+    assert len(controller.calls) == budget
+
+    exhausted = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([]), controller=controller
+    )
+    assert exhausted.ready is False
+    assert "exhausted its attempts" in (exhausted.reason or "")
+    assert len(controller.calls) == budget
+
+    # Correcting the credential produces a new configuration with a new budget.
+    monkeypatch.setenv("OPENCODE_API_KEY", "sk-" + "y" * 40)
+    await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory([]), controller=controller
+    )
+    assert len(controller.calls) == budget + 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_configuration_consumes_the_whole_budget_at_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retrying cannot fix a malformed key or a declined acknowledgement."""
+
+    _install_stubs(monkeypatch)
+    monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
+    controller = _Controller(error=ValueError("API key appears invalid"))
 
     first = await reconcile_opencode_provider_readiness(
         session_factory=_session_factory([]), controller=controller
@@ -281,17 +318,9 @@ async def test_failed_enrollment_is_not_retried_for_the_same_configuration(
         session_factory=_session_factory([]), controller=controller
     )
 
-    assert first.ready is False
+    assert "configuration is invalid" in (first.reason or "")
     assert second.ready is False
     assert len(controller.calls) == 1
-
-    # Correcting the credential produces a new configuration and retries.
-    monkeypatch.setenv("OPENCODE_API_KEY", "sk-" + "y" * 40)
-    third = await reconcile_opencode_provider_readiness(
-        session_factory=_session_factory([]), controller=controller
-    )
-    assert len(controller.calls) == 2
-    assert third.ready is False
 
 
 @pytest.mark.asyncio
@@ -436,7 +465,6 @@ async def test_unenrolled_profile_rows_are_re_enrolled_from_configuration(
     controller = _Controller()
     rows = [
         _profile(profile_id="never-connected", auth_state="api_key_pending"),
-        _profile(profile_id="disabled", enabled=False),
         _profile(profile_id="no-secret", secret_refs={}),
     ]
 
@@ -445,8 +473,32 @@ async def test_unenrolled_profile_rows_are_re_enrolled_from_configuration(
     )
 
     assert outcome.enrolled is True
-    assert outcome.checked == 3
+    assert outcome.checked == 2
     assert len(controller.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_operator_disabled_profile_is_never_re_enabled_by_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enrollment applies enabled=True, so a disabled profile must be left alone."""
+
+    _install_stubs(monkeypatch)
+    monkeypatch.setenv("OPENCODE_API_KEY", API_KEY)
+    controller = _Controller()
+    # Connected and enrolled, but the operator turned it off. Its evidence is
+    # also stale, which must not become a reason to touch it either.
+    rows = [_profile(enabled=False)]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=controller
+    )
+
+    assert controller.calls == []
+    assert outcome.enrolled is False
+    assert outcome.refreshed == ()
+    assert outcome.ready is True
+    assert rows[0].enabled is False
 
 
 @pytest.mark.asyncio
@@ -469,8 +521,83 @@ async def test_credential_rotation_during_validation_keeps_rotation_authoritativ
     _install_stubs(monkeypatch, validate=validate)
     rows = [_profile()]
 
-    await reconcile_opencode_provider_readiness(
+    outcome = await reconcile_opencode_provider_readiness(
         session_factory=_session_factory(rows), controller=_Controller()
     )
 
     assert rows[0].model_catalog_evidence_json["imageRef"] == PREVIOUS_IMAGE
+    # The write did not land, so the pass must not claim the profile refreshed.
+    assert outcome.refreshed == ()
+    assert outcome.deferred == ("opencode-go-default",)
+    assert outcome.ready is False
+
+
+@pytest.mark.asyncio
+async def test_repeated_rejection_is_recorded_and_marked_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A revoked credential must become distinguishable from a wait in flight."""
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        MAX_REVALIDATION_ATTEMPTS,
+        REVALIDATION_FAILURE_KEY,
+    )
+
+    async def validate(*_args, **_kwargs):
+        raise RuntimeError("pinned OpenCode runtime rejected the Provider Profile")
+
+    _install_stubs(monkeypatch, validate=validate)
+    rows = [_profile()]
+
+    for _ in range(MAX_REVALIDATION_ATTEMPTS):
+        await reconcile_opencode_provider_readiness(
+            session_factory=_session_factory(rows), controller=_Controller()
+        )
+
+    record = rows[0].command_behavior[REVALIDATION_FAILURE_KEY]
+    assert record["attempts"] == MAX_REVALIDATION_ATTEMPTS
+    assert record["exhausted"] is True
+    assert record["imageRef"] == CURRENT_IMAGE
+    assert record["credentialGeneration"] == 3
+    # The credential itself is untouched; only an operator can reconnect it.
+    assert rows[0].auth_state == "connected"
+    assert rows[0].model_catalog_evidence_json["imageRef"] == PREVIOUS_IMAGE
+
+
+@pytest.mark.asyncio
+async def test_a_successful_refresh_clears_a_recorded_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        REVALIDATION_FAILURE_KEY,
+    )
+
+    async def validate(profile, image_ref, _lease, _kwargs):
+        return {
+            "schemaVersion": "moonmind.provider-model-catalog-evidence.v1",
+            "models": [{"qualifiedId": "opencode-go/muse-spark-1.2-contributor"}],
+            "imageRef": image_ref,
+            "validatedAt": "2026-08-25T01:00:00+00:00",
+            "credentialGeneration": profile.credential_generation,
+        }
+
+    _install_stubs(monkeypatch, validate=validate)
+    rows = [
+        _profile(
+            command_behavior={
+                REVALIDATION_FAILURE_KEY: {
+                    "imageRef": CURRENT_IMAGE,
+                    "credentialGeneration": 3,
+                    "attempts": 3,
+                    "exhausted": True,
+                }
+            }
+        )
+    ]
+
+    outcome = await reconcile_opencode_provider_readiness(
+        session_factory=_session_factory(rows), controller=_Controller()
+    )
+
+    assert outcome.refreshed == ("opencode-go-default",)
+    assert REVALIDATION_FAILURE_KEY not in rows[0].command_behavior

@@ -29,8 +29,39 @@ OPENCODE_PINNED_VERSION = "1.18.11"
 OPENCODE_SUPPORTED_RANGE = ">=1.17.7,<1.19.0"
 
 
+def _persisted_image_ref(key: str) -> str:
+    """Return the digest this deployment already resolved for ``key``.
+
+    Only the API process resolves images, but every process that launches a host
+    selects a Host Class. Execution workers start with the runtime-pack refs
+    unset on the canonical Compose path and read the same persisted resolved
+    state, so consulting it here is what keeps an advertised target launchable
+    on the worker that actually runs it. The value is still validated as a
+    digest-pinned ref below, and an operator-supplied environment value always
+    wins.
+    """
+
+    try:
+        from moonmind.omnigent.bootstrap.store import load_resolved_state
+
+        state = load_resolved_state()
+    except Exception:
+        return ""
+    if state is None:
+        return ""
+    attribute = {
+        OMNIGENT_OPENCODE_HOST_IMAGE_ENV: "opencode_host_image_ref",
+        OMNIGENT_PI_HOST_IMAGE_ENV: "pi_host_image_ref",
+    }.get(key)
+    if attribute is None:
+        return ""
+    return str(getattr(state, attribute, "") or "").strip()
+
+
 def _require_image_ref(environment: Mapping[str, str], key: str) -> str:
     raw = str(environment.get(key) or "").strip()
+    if not raw:
+        raw = _persisted_image_ref(key)
     if not raw or not _IMAGE_RE.fullmatch(raw):
         raise HarnessPlatformError(
             f"{key} must be set to a digest-pinned image ref",

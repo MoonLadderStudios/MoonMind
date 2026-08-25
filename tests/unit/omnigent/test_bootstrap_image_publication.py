@@ -46,11 +46,13 @@ async def test_publication_exports_resolved_digests_and_persists_state(
 
     saved: list[ResolvedOmnigentDeploymentState] = []
 
-    async def resolve() -> ResolvedOmnigentDeploymentState:
+    async def resolve(env=None) -> ResolvedOmnigentDeploymentState:
+        del env
         return _state()
 
     monkeypatch.setattr(image_resolution, "resolve_omnigent_images", resolve)
     monkeypatch.setattr(store, "save_resolved_state", saved.append)
+    image_resolution.reset_operator_image_configuration()
     # The default Compose path ships these unset.
     for key in (
         "OMNIGENT_IMAGE_REF",
@@ -69,6 +71,96 @@ async def test_publication_exports_resolved_digests_and_persists_state(
 
 
 @pytest.mark.asyncio
+async def test_resolution_never_reads_a_digest_publication_exported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A published digest must not masquerade as an operator pin.
+
+    ``_resolve_image`` short-circuits on an explicitly pinned ref, and the
+    registry-acquiring policy leg keys on the same variables, so resolving
+    against a self-published digest would permanently disable tag refresh for
+    every configured mutable tag.
+    """
+
+    from moonmind.omnigent.bootstrap import store
+
+    observed: list[str] = []
+
+    async def resolve(env=None):
+        source = env if env is not None else {}
+        observed.append(str(source.get("OMNIGENT_OPENCODE_HOST_IMAGE_REF") or ""))
+        return _state()
+
+    monkeypatch.setattr(image_resolution, "resolve_omnigent_images", resolve)
+    monkeypatch.setattr(store, "save_resolved_state", lambda _state: None)
+    image_resolution.reset_operator_image_configuration()
+    monkeypatch.delenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", raising=False)
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE", "ghcr.io/example/host")
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_TAG", "1.18.11")
+
+    await image_resolution.publish_resolved_omnigent_images()
+    # Publication exported the digest into the live environment...
+    import os
+
+    assert os.environ["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] == HOST_REF
+    await image_resolution.publish_resolved_omnigent_images()
+
+    # ...but the second pass still resolved from the unset operator baseline.
+    assert observed == ["", ""]
+    image_resolution.reset_operator_image_configuration()
+
+
+def test_operator_pin_is_preserved_as_resolution_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit operator pin stays authoritative over the tag."""
+
+    pinned = "ghcr.io/example/host@sha256:" + "7" * 64
+    image_resolution.reset_operator_image_configuration()
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", pinned)
+
+    configuration = image_resolution.operator_image_configuration()
+    assert configuration["OMNIGENT_OPENCODE_HOST_IMAGE_REF"] == pinned
+
+    # Even after publication overwrites the live value, the baseline is the pin.
+    monkeypatch.setenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", HOST_REF)
+    assert (
+        image_resolution.operator_image_configuration()[
+            "OMNIGENT_OPENCODE_HOST_IMAGE_REF"
+        ]
+        == pinned
+    )
+    image_resolution.reset_operator_image_configuration()
+
+
+def test_selectors_fall_back_to_persisted_state_for_worker_processes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the API resolves images; every host-launching process selects one."""
+
+    from moonmind.omnigent.bootstrap import store
+    from moonmind.omnigent.harness_platform import host_classes
+
+    monkeypatch.delenv("OMNIGENT_OPENCODE_HOST_IMAGE_REF", raising=False)
+    monkeypatch.setattr(store, "load_resolved_state", lambda: None)
+    with pytest.raises(Exception):
+        host_classes.get_opencode_host_image_ref()
+
+    # Workers mount the same resolved-state file the API writes.
+    monkeypatch.setattr(store, "load_resolved_state", lambda: _state())
+    assert host_classes.get_opencode_host_image_ref() == HOST_REF
+
+    # A placeholder digest in persisted state still fails closed.
+    monkeypatch.setattr(
+        store,
+        "load_resolved_state",
+        lambda: _state(opencodeHostImageRef="ghcr.io/x/y@sha256:" + "0" * 64),
+    )
+    with pytest.raises(Exception):
+        host_classes.get_opencode_host_image_ref()
+
+
+@pytest.mark.asyncio
 async def test_publication_never_clears_an_operator_pinned_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -76,12 +168,14 @@ async def test_publication_never_clears_an_operator_pinned_ref(
 
     from moonmind.omnigent.bootstrap import store
 
-    async def resolve() -> ResolvedOmnigentDeploymentState:
+    async def resolve(env=None) -> ResolvedOmnigentDeploymentState:
+        del env
         return _state(piHostImageRef=None)
 
     pinned_pi = "ghcr.io/moonladderstudios/omnigent-host-pi@sha256:" + "4" * 64
     monkeypatch.setattr(image_resolution, "resolve_omnigent_images", resolve)
     monkeypatch.setattr(store, "save_resolved_state", lambda _state: None)
+    image_resolution.reset_operator_image_configuration()
     monkeypatch.setenv("OMNIGENT_PI_HOST_IMAGE_REF", pinned_pi)
 
     await image_resolution.publish_resolved_omnigent_images()

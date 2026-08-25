@@ -63,14 +63,16 @@ async def test_api_startup_bootstrap_uses_only_local_image_evidence(
     from api_service.services import omnigent_policies
 
     observed_resolver = None
+    observed_env = None
 
     @asynccontextmanager
     async def session_context():
         yield object()
 
-    async def seed(_session, *, image_resolver):
-        nonlocal observed_resolver
+    async def seed(_session, *, image_resolver, env=None):
+        nonlocal observed_resolver, observed_env
         observed_resolver = image_resolver
+        observed_env = env
 
     async def ready(_session) -> bool:
         return True
@@ -83,6 +85,9 @@ async def test_api_startup_bootstrap_uses_only_local_image_evidence(
         refresh_images=False
     )
     assert observed_resolver is omnigent_policies.resolve_local_bootstrap_image_ref
+    # The registry-acquiring leg keys on the configured refs, so it must read the
+    # operator's own configuration rather than a digest publication exported.
+    assert observed_env is not None
 
 
 @pytest.mark.asyncio

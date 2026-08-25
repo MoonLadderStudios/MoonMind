@@ -42,13 +42,25 @@ OPENCODE_RUNTIME_ID = "opencode"
 OPENCODE_PROVIDER_ID = "opencode-go"
 OPENCODE_SECRET_ROLE = "opencode_api_key"
 
+# Readiness reads this ``command_behavior`` entry to distinguish a bounded
+# re-validation attempt in flight from a credential the pinned runtime keeps
+# rejecting, which only an operator can fix.
+REVALIDATION_FAILURE_KEY = "runtime_revalidation_failure"
+MAX_REVALIDATION_ATTEMPTS = 3
+
 # Enrollment runs the full bootstrap (image acquisition, catalog sync, pinned
-# runtime validation, qualification). Repeating that every reconciliation pass
-# for configuration the runtime already rejected would burn the deployment's
-# Docker and provider budget with no new information, so an attempt is made once
-# per distinct configuration. Changing the key, the acknowledgement, or the
-# resolved host image produces a new fingerprint and retries; so does a restart.
-_ATTEMPTED_ENROLLMENTS: set[str] = set()
+# runtime validation, qualification). Repeating that forever for configuration
+# the provider has definitively rejected would burn the deployment's Docker and
+# provider budget with no new information, so attempts per distinct
+# configuration are bounded rather than unlimited. They are not limited to one:
+# Temporal, Docker, and the database are all startup dependencies whose
+# transient unavailability must stay retryable through the caller's existing
+# backoff. A configuration the deployment states incorrectly -- a malformed key,
+# or a declined acknowledgement -- is terminal on the first attempt because no
+# amount of retrying changes it. Changing the key, the acknowledgement, or the
+# resolved host image produces a new fingerprint; so does a restart.
+_MAX_ENROLLMENT_ATTEMPTS = 5
+_ENROLLMENT_ATTEMPTS: dict[str, int] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,9 +76,9 @@ class ProviderReconcileOutcome:
 
 
 def reset_enrollment_attempts() -> None:
-    """Clear the per-configuration enrollment latch (tests and operator retry)."""
+    """Clear the per-configuration attempt budget (tests and operator retry)."""
 
-    _ATTEMPTED_ENROLLMENTS.clear()
+    _ENROLLMENT_ATTEMPTS.clear()
 
 
 def evidence_is_current(profile: Any, *, image_ref: str) -> bool:
@@ -89,15 +101,21 @@ def evidence_is_current(profile: Any, *, image_ref: str) -> bool:
     return str(evidence.get("imageRef") or "") == image_ref
 
 
-def _is_enrolled(profile: Any) -> bool:
-    """Report whether this profile already carries a usable enrolled credential."""
+def _has_enrolled_credential(profile: Any) -> bool:
+    """Report whether this profile already carries an enrolled credential.
+
+    Deliberately independent of ``enabled``. Enrollment applies API-key setup
+    with ``enabled=True``, so treating a disabled-but-connected profile as
+    absent would let deployment configuration silently undo an operator's
+    decision to disable it. The credential identity is what enrollment owns;
+    ``enabled`` belongs to the operator.
+    """
 
     from api_service.db.models import ProviderProfileAuthState
 
     state = getattr(profile.auth_state, "value", profile.auth_state)
     return (
-        bool(profile.enabled)
-        and state == ProviderProfileAuthState.CONNECTED.value
+        state == ProviderProfileAuthState.CONNECTED.value
         and OPENCODE_SECRET_ROLE in (profile.secret_refs or {})
     )
 
@@ -164,7 +182,11 @@ async def reconcile_opencode_provider_readiness(
 
     image_ref = _pinned_image_ref()
     profiles = await _opencode_profiles(session_factory)
-    enrolled = [profile for profile in profiles if _is_enrolled(profile)]
+    enrolled = [profile for profile in profiles if _has_enrolled_credential(profile)]
+    # A disabled profile cannot launch, and re-validating it would neither help
+    # nor honor the operator. Its credential still counts as enrolled above, so
+    # deployment configuration never re-enables it.
+    launchable = [profile for profile in enrolled if profile.enabled]
 
     if not enrolled:
         api_key = resolved_opencode_api_key(env=env)
@@ -191,6 +213,12 @@ async def reconcile_opencode_provider_readiness(
             controller=controller,
         )
 
+    if not launchable:
+        return ProviderReconcileOutcome(
+            ready=True,
+            checked=len(profiles),
+            reason="every enrolled OpenCode Provider Profile is disabled",
+        )
     if image_ref is None:
         # The image-policy leg owns acquiring the pinned image. Defer rather
         # than record evidence for an image the deployment does not select.
@@ -201,7 +229,7 @@ async def reconcile_opencode_provider_readiness(
         )
     return await _revalidate_stale_evidence(
         session_factory=session_factory,
-        profiles=enrolled,
+        profiles=launchable,
         checked=len(profiles),
         image_ref=image_ref,
     )
@@ -224,16 +252,17 @@ async def _enroll_from_deployment_config(
     fingerprint = _enrollment_fingerprint(
         api_key=api_key, accepted=accepted, image_ref=image_ref
     )
-    if fingerprint in _ATTEMPTED_ENROLLMENTS:
+    attempts = _ENROLLMENT_ATTEMPTS.get(fingerprint, 0)
+    if attempts >= _MAX_ENROLLMENT_ATTEMPTS:
         return ProviderReconcileOutcome(
             ready=False,
             checked=checked,
             reason=(
-                "OpenCode enrollment already failed for this configuration; "
-                "correct the credential or acknowledgement and restart"
+                "OpenCode enrollment exhausted its attempts for this "
+                "configuration; correct the credential or acknowledgement"
             ),
         )
-    _ATTEMPTED_ENROLLMENTS.add(fingerprint)
+    _ENROLLMENT_ATTEMPTS[fingerprint] = attempts + 1
 
     active = controller or BootstrapController(session_factory=session_factory)
     try:
@@ -241,9 +270,27 @@ async def _enroll_from_deployment_config(
             api_key=api_key,
             accept_contributor_data_use=accepted,
         )
+    except ValueError as exc:
+        # The deployment stated its configuration incorrectly: a malformed key,
+        # or a declined contributor acknowledgement. Retrying cannot change the
+        # outcome, so this consumes the whole budget instead of one attempt.
+        _ENROLLMENT_ATTEMPTS[fingerprint] = _MAX_ENROLLMENT_ATTEMPTS
+        logger.warning("OpenCode enrollment configuration is invalid: %s", exc)
+        return ProviderReconcileOutcome(
+            ready=False,
+            checked=checked,
+            reason=f"OpenCode enrollment configuration is invalid: {exc}",
+        )
     except Exception as exc:
+        # Temporal, Docker, the registry, and the database are all startup
+        # dependencies. Their transient unavailability keeps the remaining
+        # attempts and defers to the caller's bounded backoff.
         logger.warning(
-            "OpenCode enrollment from deployment configuration failed: %s", exc
+            "OpenCode enrollment from deployment configuration failed "
+            "(attempt %s of %s): %s",
+            attempts + 1,
+            _MAX_ENROLLMENT_ATTEMPTS,
+            exc,
         )
         return ProviderReconcileOutcome(
             ready=False, checked=checked, reason=f"OpenCode enrollment failed: {exc}"
@@ -253,7 +300,10 @@ async def _enroll_from_deployment_config(
     if state != BootstrapState.ready.value:
         failure = (record.failure or {}).get("message") or state
         logger.warning(
-            "OpenCode enrollment from deployment configuration did not complete: %s",
+            "OpenCode enrollment from deployment configuration did not complete "
+            "(attempt %s of %s): %s",
+            attempts + 1,
+            _MAX_ENROLLMENT_ATTEMPTS,
             failure,
         )
         return ProviderReconcileOutcome(
@@ -262,7 +312,7 @@ async def _enroll_from_deployment_config(
             reason=f"OpenCode enrollment did not complete: {failure}",
         )
 
-    _ATTEMPTED_ENROLLMENTS.discard(fingerprint)
+    _ENROLLMENT_ATTEMPTS.pop(fingerprint, None)
     logger.info(
         "Enrolled the deployment-configured OpenCode Provider Profile: profile_id=%s",
         record.provider_profile_ref,
@@ -345,13 +395,30 @@ async def _revalidate_stale_evidence(
                         exc_info=True,
                     )
         if evidence is None:
+            await _record_revalidation_failure(
+                session_factory=session_factory,
+                profile_id=profile_id,
+                image_ref=image_ref,
+            )
             continue
 
-        await _persist_evidence(
+        committed = await _persist_evidence(
             session_factory=session_factory,
             profile_id=profile_id,
             evidence=evidence,
         )
+        if not committed:
+            # The authority handoff did not land, so readiness and planning still
+            # reject this profile. Reporting it refreshed would let the startup
+            # coordinator record a successful pass over an unlaunchable profile.
+            deferred.append(profile_id)
+            logger.warning(
+                "OpenCode Provider Profile evidence was not committed: "
+                "profile_id=%s image_ref=%s",
+                profile_id,
+                image_ref,
+            )
+            continue
         refreshed.append(profile_id)
         logger.info(
             "Refreshed OpenCode Provider Profile model evidence: "
@@ -374,21 +441,25 @@ async def _persist_evidence(
     session_factory: Any,
     profile_id: str,
     evidence: dict[str, Any],
-) -> None:
-    """Record refreshed evidence without touching enrolled credential identity."""
+) -> bool:
+    """Record refreshed evidence without touching enrolled credential identity.
+
+    Returns whether this pass actually committed launchable evidence, so the
+    caller never reports a profile refreshed that readiness still rejects.
+    """
 
     from api_service.db.models import ManagedAgentProviderProfile
 
     async with session_factory() as session:
         profile = await session.get(ManagedAgentProviderProfile, profile_id)
         if profile is None:
-            return
+            return False
         if int(evidence.get("credentialGeneration") or 0) != int(
             profile.credential_generation
         ):
             # The credential rotated while validation ran; that rotation owns
             # the authoritative evidence for its own generation.
-            return
+            return False
         models = [
             str(item.get("qualifiedId") or "")
             for item in evidence.get("models", [])
@@ -405,14 +476,62 @@ async def _persist_evidence(
             "runtime_versions": evidence.get("runtimeVersions"),
             "model_count": len(models),
         }
+        behavior.pop(REVALIDATION_FAILURE_KEY, None)
+        profile.command_behavior = behavior
+        await session.commit()
+        return True
+
+
+async def _record_revalidation_failure(
+    *,
+    session_factory: Any,
+    profile_id: str,
+    image_ref: str,
+) -> None:
+    """Count a failed re-validation so readiness can stop promising a retry.
+
+    Re-validation deliberately preserves the enrolled credential and its prior
+    evidence when the pinned runtime rejects it, which is indistinguishable from
+    an in-flight attempt unless the outcome is recorded. Readiness reads this to
+    tell "MoonMind is re-validating" apart from "this credential needs an
+    operator".
+    """
+
+    from api_service.db.models import ManagedAgentProviderProfile
+
+    async with session_factory() as session:
+        profile = await session.get(ManagedAgentProviderProfile, profile_id)
+        if profile is None:
+            return
+        behavior = dict(profile.command_behavior or {})
+        previous = behavior.get(REVALIDATION_FAILURE_KEY)
+        attempts = 0
+        if isinstance(previous, dict) and str(
+            previous.get("imageRef") or ""
+        ) == image_ref and int(previous.get("credentialGeneration") or 0) == int(
+            profile.credential_generation
+        ):
+            try:
+                attempts = int(previous.get("attempts") or 0)
+            except (TypeError, ValueError):
+                attempts = 0
+        behavior[REVALIDATION_FAILURE_KEY] = {
+            "imageRef": image_ref,
+            "credentialGeneration": int(profile.credential_generation),
+            "attempts": attempts + 1,
+            "exhausted": attempts + 1 >= MAX_REVALIDATION_ATTEMPTS,
+            "lastAttemptAt": datetime.now(UTC).isoformat(),
+        }
         profile.command_behavior = behavior
         await session.commit()
 
 
 __all__ = [
+    "MAX_REVALIDATION_ATTEMPTS",
     "OPENCODE_PROVIDER_ID",
     "OPENCODE_RUNTIME_ID",
     "OPENCODE_SECRET_ROLE",
+    "REVALIDATION_FAILURE_KEY",
     "ProviderReconcileOutcome",
     "evidence_is_current",
     "reconcile_opencode_provider_readiness",

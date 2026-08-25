@@ -281,13 +281,22 @@ async def _sync_omnigent_bootstrap_policies(
             resolve_local_bootstrap_image_ref,
             seed_bootstrap_policies,
         )
+        from moonmind.omnigent.bootstrap.image_resolution import (
+            operator_image_configuration,
+        )
 
+        # This is the only leg allowed to acquire images from the registry, and
+        # it keys on the configured refs. Reading the live environment would
+        # hand it a digest the image leg published, which is indistinguishable
+        # from an operator pin and would silently disable tag refresh.
+        configuration = operator_image_configuration()
         async with get_async_session_context() as session:
             if refresh_images:
-                await seed_bootstrap_policies(session)
+                await seed_bootstrap_policies(session, env=configuration)
             else:
                 await seed_bootstrap_policies(
                     session,
+                    env=configuration,
                     image_resolver=resolve_local_bootstrap_image_ref,
                 )
             return await bootstrap_policies_ready(session)
@@ -392,13 +401,18 @@ async def _sync_omnigent_deployment_images() -> bool:
         from moonmind.omnigent.settings import (
             build_omnigent_gate,
             generic_host_enabled,
+            opencode_support_enabled,
         )
 
         if not build_omnigent_gate().enabled or not generic_host_enabled():
             return True
 
         state = await publish_resolved_omnigent_images()
-        if not state.opencode_host_image_ref:
+        if not state.opencode_host_image_ref and opencode_support_enabled():
+            # Only a deployment that actually runs OpenCode depends on this
+            # digest. An operator who turned the harness off must not inherit
+            # its registry dependency, or the kill switch would leave bootstrap
+            # readiness retrying forever on an image nothing will launch.
             logger.warning(
                 "Omnigent image resolution incomplete: no digest-pinned OpenCode "
                 "host image is available for the configured image and tag",

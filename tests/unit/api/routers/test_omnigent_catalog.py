@@ -556,6 +556,43 @@ async def test_stale_host_image_evidence_reports_revalidation_instead_of_reconne
     assert "compatible_provider_profile_unavailable" in fresh_codes
     assert "provider_runtime_revalidation_pending" not in fresh_codes
 
+    # A credential the pinned runtime keeps rejecting needs an operator, so the
+    # bounded-wait message must stop once re-validation has given up on it.
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        REVALIDATION_FAILURE_KEY,
+    )
+
+    exhausted_provider = SimpleNamespace(
+        profile_id="opencode-go-revoked",
+        account_label="OpenCode Go",
+        provider_id="opencode-go",
+        runtime_id="opencode",
+        enabled=True,
+        auth_state=SimpleNamespace(value="connected"),
+        credential_generation=4,
+        command_behavior={
+            REVALIDATION_FAILURE_KEY: {
+                "imageRef": "registry.test/opencode@sha256:" + "6" * 64,
+                "credentialGeneration": 4,
+                "attempts": 3,
+                "exhausted": True,
+            }
+        },
+        model_catalog_evidence_json={
+            "credentialGeneration": 4,
+            "imageRef": "registry.test/opencode@sha256:" + "9" * 64,
+            "models": ["opencode-go/test-model"],
+        },
+    )
+    exhausted = await catalog.get_omnigent_execution_readiness(
+        session=Session(exhausted_provider), current_user=current_user
+    )
+    exhausted_codes = {
+        reason.code for reason in exhausted.execution_targets[0].gate_reasons
+    }
+    assert "compatible_provider_profile_unavailable" in exhausted_codes
+    assert "provider_runtime_revalidation_pending" not in exhausted_codes
+
 
 def test_ready_catalog_lists_only_launch_ready_codex_oauth_profiles(monkeypatch):
     profiles = [

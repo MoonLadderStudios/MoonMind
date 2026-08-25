@@ -409,6 +409,36 @@ def _reason(code: str) -> GateReason:
     return GateReason(code=code, message=message, remediationHref=href)
 
 
+def _revalidation_is_exhausted(provider: Any, selected_classes: Any) -> bool:
+    """Report whether re-validation gave up on this credential and image.
+
+    Re-validation preserves the enrolled credential and its prior evidence when
+    the pinned runtime rejects it, so a revoked or incompatible credential looks
+    exactly like an attempt in flight. The reconciler records its bounded
+    outcome, and reading it here is what keeps readiness from promising forever
+    that the wait "finishes automatically".
+    """
+
+    from moonmind.omnigent.bootstrap.provider_revalidation import (
+        REVALIDATION_FAILURE_KEY,
+    )
+
+    behavior = getattr(provider, "command_behavior", None) or {}
+    record = behavior.get(REVALIDATION_FAILURE_KEY)
+    if not isinstance(record, dict) or record.get("exhausted") is not True:
+        return False
+    try:
+        generation = int(record.get("credentialGeneration") or 0)
+    except (TypeError, ValueError):
+        return False
+    if generation != int(provider.credential_generation):
+        # A rotated credential has not been attempted yet.
+        return False
+    return str(record.get("imageRef") or "") in {
+        item.imageRef for item in selected_classes
+    }
+
+
 def _valid_server_url(value: str) -> bool:
     try:
         url = httpx.URL(value)
@@ -1680,7 +1710,9 @@ async def get_omnigent_execution_readiness(
             if evidence_generation != int(provider.credential_generation) or str(
                 evidence.get("imageRef") or ""
             ) not in {item.imageRef for item in selected_classes}:
-                if evidence:
+                if evidence and not _revalidation_is_exhausted(
+                    provider, selected_classes
+                ):
                     # The credential is enrolled and connected; only its
                     # runtime-backed evidence trails the currently pinned host
                     # image or credential generation. The bootstrap reconciler
