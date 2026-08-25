@@ -1631,6 +1631,7 @@ def test_finalize_snapshot_refresh_failure_is_blocked_retryable(
         _snapshot_script: Path,
         _pr: str | None,
         _snapshot_path: Path,
+        **_review_kwargs: object,
     ) -> None:
         raise subprocess.CalledProcessError(
             returncode=1,
@@ -1726,6 +1727,7 @@ def test_finalize_snapshot_auth_failure_reports_publish_unavailable(
         _snapshot_script: Path,
         _pr: str | None,
         _snapshot_path: Path,
+        **_review_kwargs: object,
     ) -> None:
         raise subprocess.CalledProcessError(
             returncode=pr_resolve_finalize_module["EXIT_CODE_FAILED"],
@@ -1901,6 +1903,7 @@ def test_finalize_merge_request_waits_for_authoritative_merged_state(
         _snapshot_script: Path,
         _pr: str | None,
         snapshot_path: Path,
+        **_review_kwargs: object,
     ) -> None:
         snapshot_path.parent.mkdir(parents=True, exist_ok=True)
         snapshot_path.write_text(json.dumps(snapshot), encoding="utf-8")
@@ -1960,6 +1963,7 @@ def test_finalize_pr_not_found_but_merged_succeeds(
         _snapshot_script: Path,
         _pr: str | None,
         _snapshot_path: Path,
+        **_review_kwargs: object,
     ) -> None:
         raise _subprocess.CalledProcessError(
             returncode=int(exit_code_failed),

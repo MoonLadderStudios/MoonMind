@@ -283,7 +283,13 @@ def test_core_has_no_host_or_side_effect_imports() -> None:
         "requests",
         "httpx",
     }
-    for module_name in ("models", "normalize", "classify", "transition"):
+    for module_name in (
+        "models",
+        "normalize",
+        "classify",
+        "transition",
+        "review_providers",
+    ):
         module = __import__(f"pr_resolver_core.{module_name}", fromlist=[module_name])
         tree = ast.parse(inspect.getsource(module))
         imports = {
@@ -303,7 +309,13 @@ def test_core_exports_immutable_identity() -> None:
     core_root = Path(inspect.getfile(classify_snapshot)).parent
     semantic_bytes = b"".join(
         (core_root / name).read_bytes()
-        for name in ("models.py", "normalize.py", "classify.py", "transition.py")
+        for name in (
+            "models.py",
+            "normalize.py",
+            "classify.py",
+            "transition.py",
+            "review_providers.py",
+        )
     )
     assert RESOLVER_CORE_DIGEST == (
         "sha256:" + hashlib.sha256(semantic_bytes).hexdigest()

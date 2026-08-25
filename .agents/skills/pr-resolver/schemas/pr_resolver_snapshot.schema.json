@@ -9,37 +9,65 @@
     "ci": {
       "type": "object",
       "properties": {
-        "isRunning": { "type": "boolean" },
-        "hasFailures": { "type": "boolean" },
-        "totalCheckCount": { "type": "integer" },
-        "securityCheckCount": { "type": "integer" },
-        "nonSecurityCheckCount": { "type": "integer" },
+        "isRunning": {
+          "type": "boolean"
+        },
+        "hasFailures": {
+          "type": "boolean"
+        },
+        "totalCheckCount": {
+          "type": "integer"
+        },
+        "securityCheckCount": {
+          "type": "integer"
+        },
+        "nonSecurityCheckCount": {
+          "type": "integer"
+        },
         "checkNames": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
-        "signalQuality": { "type": "string" },
+        "signalQuality": {
+          "type": "string"
+        },
         "degradedReasons": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
-        "requiredChecksKnown": { "type": "boolean" },
+        "requiredChecksKnown": {
+          "type": "boolean"
+        },
         "requiredChecks": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "missingRequiredChecks": {
           "type": "array",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "failedChecks": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "name": { "type": "string" },
-              "state": { "type": "string" },
-              "url": { "type": "string" }
+              "name": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
             }
           }
         }
@@ -62,31 +90,60 @@
     "commentsFetch": {
       "type": "object",
       "properties": {
-        "succeeded": { "type": "boolean" },
-        "source": { "type": "string" }
+        "succeeded": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string"
+        }
       },
-      "required": ["succeeded", "source"]
+      "required": [
+        "succeeded",
+        "source"
+      ]
     },
     "commentsSummary": {
       "type": "object",
       "properties": {
-        "classificationVersion": { "type": "integer" },
-        "total": { "type": "integer" },
-        "reviewCommentCount": { "type": "integer" },
-        "issueCommentCount": { "type": "integer" },
-        "reviewBodyCount": { "type": "integer" },
-        "actionableCommentCount": { "type": "integer" },
-        "includeBotReviewComments": { "type": "boolean" },
-        "humanCommentCount": { "type": "integer" },
-        "botCommentCount": { "type": "integer" },
-        "hasActionableComments": { "type": "boolean" },
+        "classificationVersion": {
+          "type": "integer"
+        },
+        "total": {
+          "type": "integer"
+        },
+        "reviewCommentCount": {
+          "type": "integer"
+        },
+        "issueCommentCount": {
+          "type": "integer"
+        },
+        "reviewBodyCount": {
+          "type": "integer"
+        },
+        "actionableCommentCount": {
+          "type": "integer"
+        },
+        "includeBotReviewComments": {
+          "type": "boolean"
+        },
+        "humanCommentCount": {
+          "type": "integer"
+        },
+        "botCommentCount": {
+          "type": "integer"
+        },
+        "hasActionableComments": {
+          "type": "boolean"
+        },
         "actionableCommentIds": {
           "type": "array",
           "items": {}
         },
         "nonActionableReasonCounts": {
           "type": "object",
-          "additionalProperties": { "type": "integer" }
+          "additionalProperties": {
+            "type": "integer"
+          }
         },
         "classifiedComments": {
           "type": "array",
@@ -94,16 +151,60 @@
             "type": "object",
             "properties": {
               "id": {},
-              "type": { "type": ["string", "null"] },
-              "user": { "type": ["string", "null"] },
-              "url": { "type": ["string", "null"] },
-              "path": { "type": ["string", "null"] },
-              "line": { "type": ["integer", "null"] },
-              "actionable": { "type": "boolean" },
-              "reason": { "type": "string" }
+              "type": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "user": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "line": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "actionable": {
+                "type": "boolean"
+              },
+              "reason": {
+                "type": "string"
+              }
             },
-            "required": ["actionable", "reason"]
+            "required": [
+              "actionable",
+              "reason"
+            ]
           }
+        },
+        "deferredCommentIds": {
+          "type": "array",
+          "items": {
+            "type": [
+              "integer",
+              "string"
+            ]
+          }
+        },
+        "hasDeferredComments": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -124,8 +225,98 @@
     },
     "comments": {
       "type": "array",
-      "items": { "type": "object" }
+      "items": {
+        "type": "object"
+      }
+    },
+    "repository": {
+      "type": "string"
+    },
+    "progressSignature": {
+      "type": "string",
+      "description": "Stable signature of head SHA + outstanding actionable/deferred comment IDs. Consumed by the owning gate to detect no-progress cycles."
+    },
+    "automatedReview": {
+      "type": "object",
+      "description": "Portable evidence about the configured automated reviewer for the current head SHA.",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "reviewerLogins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headSha": {
+          "type": "string"
+        },
+        "freshReviewForHead": {
+          "type": "boolean"
+        },
+        "requestPending": {
+          "type": "boolean"
+        },
+        "requestCommentId": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "requestedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "headCommittedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completionKind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completionId": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "completedAt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "latestProviderReview": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "enabled"
+      ]
     }
   },
-  "required": ["pr", "ci", "commentsFetch", "comments", "commentsSummary"]
+  "required": [
+    "pr",
+    "ci",
+    "commentsFetch",
+    "comments",
+    "commentsSummary"
+  ]
 }

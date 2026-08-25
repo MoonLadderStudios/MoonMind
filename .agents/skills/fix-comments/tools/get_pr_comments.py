@@ -369,6 +369,9 @@ def normalize_review(review: dict[str, Any]) -> dict[str, Any]:
         "id": review.get("id"),
         "user": (review.get("user") or {}).get("login"),
         "state": review.get("state"),
+        # The reviewed commit binds a review to one exact head SHA, which is how
+        # callers tell a fresh review from a stale one after a new push.
+        "commit_id": review.get("commit_id"),
         "body": review.get("body", ""),
         "created_at": review.get("submitted_at") or review.get("created_at"),
         "updated_at": review.get("submitted_at") or review.get("updated_at"),

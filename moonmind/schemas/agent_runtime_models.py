@@ -689,7 +689,9 @@ class AgentTerminalContinuationAuthority(BaseModel):
     owner_workflow_type: Literal["MoonMind.MergeAutomation"] = Field(
         "MoonMind.MergeAutomation", alias="ownerWorkflowType"
     )
-    allowed_actions: list[Literal["reenter_gate"]] = Field(alias="allowedActions")
+    allowed_actions: list[Literal["reenter_gate", "request_review"]] = Field(
+        alias="allowedActions"
+    )
     source: Literal["validated_temporal_parent"]
 
     def allows(

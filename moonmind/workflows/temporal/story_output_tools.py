@@ -44,6 +44,7 @@ JIRA_UPDATE_ISSUE_STATUS_TOOL_NAME = "jira.update_issue_status"
 GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME = "github.load_issue_preset_brief"
 GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME = "github.check_issue_blockers"
 GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME = "github.update_issue_status"
+GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME = "github.resolve_pull_request_target"
 # The status tool runs inside a 60-second activity. One fetch plus the PATCH and
 # optional comment must leave enough time for the activity to classify results.
 _GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS = 10.0
@@ -4568,6 +4569,157 @@ async def check_github_issue_blockers(
     )
 
 
+async def resolve_pull_request_target(
+    inputs: Mapping[str, Any],
+    _context: Mapping[str, Any] | None = None,
+    *,
+    github_service_factory: Callable[[], GitHubService] = GitHubService,
+) -> ToolResult:
+    """Resolve one existing pull request into canonical publish-context values.
+
+    Workflows that operate on an already published pull request (rather than
+    creating one) need the same durable identity a publish step would emit:
+    URL, exact head SHA, head branch, and base branch. Emitting them from a
+    trusted tool keeps merge automation head-SHA-sensitive from the first cycle.
+    """
+
+    repository = _github_repository_slug(
+        inputs.get("repository") or inputs.get("repo")
+    )
+    selector = _string(inputs.get("pullRequest") or inputs.get("pull_request"))
+    if not repository or not selector:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "summary": (
+                    "Pull request target resolution requires a repository and a "
+                    "pull request number, URL, or head branch."
+                ),
+            },
+        )
+
+    service = github_service_factory()
+    resolution = await service.resolve_pull_request_selector(
+        repo=repository,
+        selector=selector,
+    )
+    if not resolution.resolved or not resolution.pr_number:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "reasonCode": resolution.reason_code,
+                "summary": resolution.summary,
+            },
+        )
+
+    token, resolution_error = await service.resolve_github_token(repo=repository)
+    if not token:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": resolution_error
+                or "GitHub auth is not configured for pull request resolution.",
+            },
+        )
+    headers = service._github_headers(token)
+    async with httpx.AsyncClient(timeout=_GITHUB_ISSUE_FETCH_TIMEOUT_SECONDS) as client:
+        try:
+            response = await client.get(
+                f"https://api.github.com/repos/{repository}/pulls/{resolution.pr_number}",
+                headers=headers,
+            )
+            response.raise_for_status()
+            pr_data = response.json()
+        except httpx.HTTPStatusError as exc:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "repository": repository,
+                    "prNumber": resolution.pr_number,
+                    "summary": (
+                        "GitHub pull request fetch failed with HTTP "
+                        f"{exc.response.status_code}."
+                    ),
+                },
+            )
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            return ToolResult(
+                status="FAILED",
+                outputs={
+                    "repository": repository,
+                    "prNumber": resolution.pr_number,
+                    "summary": (
+                        "GitHub pull request fetch failed: "
+                        f"{exc.__class__.__name__}."
+                    ),
+                },
+            )
+
+    if not isinstance(pr_data, dict):
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": "GitHub returned an unexpected pull request payload.",
+            },
+        )
+    head = pr_data.get("head") if isinstance(pr_data.get("head"), dict) else {}
+    base = pr_data.get("base") if isinstance(pr_data.get("base"), dict) else {}
+    head_sha = _string(head.get("sha"))
+    if not head_sha:
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "summary": "GitHub pull request payload has no head SHA.",
+            },
+        )
+    state = _string(pr_data.get("state")).lower()
+    merged = bool(pr_data.get("merged"))
+    pr_url = _string(pr_data.get("html_url")) or (resolution.pr_url or "")
+    if merged or state != "open":
+        return ToolResult(
+            status="FAILED",
+            outputs={
+                "repository": repository,
+                "prNumber": resolution.pr_number,
+                "pullRequestUrl": pr_url,
+                "prState": "merged" if merged else state,
+                "summary": (
+                    f"Pull request {repository}#{resolution.pr_number} is not open; "
+                    "there is nothing to review and merge."
+                ),
+            },
+        )
+
+    return ToolResult(
+        status="COMPLETED",
+        outputs={
+            "repository": repository,
+            "prNumber": resolution.pr_number,
+            "pull_request_url": pr_url,
+            "pullRequestUrl": pr_url,
+            "head_sha": head_sha,
+            "headSha": head_sha,
+            "branch": _string(head.get("ref")),
+            "push_base_ref": _string(base.get("ref")),
+            "prState": state,
+            "isDraft": bool(pr_data.get("draft")),
+            "operator_summary": (
+                f"Targeting pull request {pr_url} at head {head_sha[:12]}."
+            ),
+            "summary": (
+                f"Resolved {repository}#{resolution.pr_number} at head {head_sha}."
+            ),
+        },
+    )
+
+
 _GITHUB_STATUS_ACTIONS = {
     "start": {"labelsToAdd": ["status: in-progress"], "labelsToRemove": ["status: todo"], "comment": True},
     "in_progress": {"labelsToAdd": ["status: in-progress"], "labelsToRemove": ["status: todo"], "comment": True},
@@ -5854,6 +6006,17 @@ def register_story_output_tool_handlers(
         handler=_update_github_issue_status,
     )
 
+    async def _resolve_pull_request_target(
+        inputs: Mapping[str, Any],
+        context: Mapping[str, Any] | None = None,
+    ) -> ToolResult:
+        return await resolve_pull_request_target(inputs, context)
+
+    dispatcher.register_skill(
+        skill_name=GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME,
+        handler=_resolve_pull_request_target,
+    )
+
     async def _discover_documents(
         inputs: Mapping[str, Any],
         context: Mapping[str, Any] | None = None,
@@ -5892,6 +6055,8 @@ __all__ = [
     "GITHUB_LOAD_ISSUE_PRESET_BRIEF_TOOL_NAME",
     "GITHUB_CHECK_ISSUE_BLOCKERS_TOOL_NAME",
     "GITHUB_UPDATE_ISSUE_STATUS_TOOL_NAME",
+    "GITHUB_RESOLVE_PULL_REQUEST_TARGET_TOOL_NAME",
+    "resolve_pull_request_target",
     "GITHUB_STORY_TOOL_NAMES",
     "JIRA_ORCHESTRATE_TASKS_TOOL_NAME",
     "JIRA_STORY_TOOL_NAMES",

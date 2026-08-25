@@ -1,0 +1,168 @@
+slug: pr-review-resolve
+title: Review, Fix, and Merge PR
+description: Run an automated review, fix every actionable comment, request a fresh
+  review for each new head, and merge the pull request when the latest review is
+  clean.
+scope: global
+tags:
+- github
+- pull-request
+- review
+- merge-automation
+requiredCapabilities:
+- git
+- gh
+annotations:
+  sourceSkill: pr-resolver
+  output: merged-pull-request
+  # The workflow itself publishes nothing: `pr-resolver` owns every commit, push,
+  # and merge, and the parent-owned MoonMind.MergeAutomation child owns the
+  # review request side effect and the durable wait for its result.
+  workflowPublish:
+    mode: none
+    mergeAutomation:
+      enabled: true
+      checks: required
+      automatedReview: required
+      mergeMethod: '{{ inputs.merge_method }}'
+      reviewLoop:
+        enabled: true
+        provider: '{{ inputs.review_provider }}'
+        requestMode: pr_comment
+        requireFreshReviewForEveryHead: true
+        requestAfterRemediation: true
+        maxCycles: '{{ inputs.max_review_cycles }}'
+        maxConsecutiveNoProgressCycles: 2
+      timeouts:
+        fallbackPollSeconds: 60
+        expireAfterSeconds: '{{ inputs.expire_after_seconds }}'
+  inputSchema:
+    type: object
+    required:
+    - pull_request
+    properties:
+      repository:
+        type: string
+        title: Repository
+        description: Repository that owns the pull request, in owner/repo form. Defaults
+          to the repository selected for this workflow execution.
+      pull_request:
+        type: string
+        title: Pull request
+        description: Pull request number, pull request URL, or head branch name.
+      review_provider:
+        type: string
+        title: Automated review provider
+        description: Automated reviewer that must review every head SHA before merge.
+        enum:
+        - codex
+        default: codex
+      merge_method:
+        type: string
+        title: Merge method
+        enum:
+        - squash
+        - merge
+        - rebase
+        default: squash
+      advanced_options:
+        type: boolean
+        title: Advanced options
+        description: Show the review-cycle budget and expiry controls.
+        default: false
+      max_review_cycles:
+        type: integer
+        title: Review cycle budget
+        description: Maximum request/remediate/request cycles before stopping for
+          manual review.
+        default: 5
+        minimum: 1
+        maximum: 50
+      expire_after_seconds:
+        type: integer
+        title: Expire after (seconds)
+        description: Hard deadline for the whole review-and-merge loop.
+        default: 86400
+        minimum: 600
+        maximum: 2592000
+  uiSchema:
+    pull_request:
+      placeholder: '123, a pull request URL, or a head branch'
+    review_provider:
+      widget: select
+    merge_method:
+      widget: select
+    advanced_options:
+      widget: checkbox
+    max_review_cycles:
+      widget: number
+      visibleWhen:
+        field: advanced_options
+        equals: true
+    expire_after_seconds:
+      widget: number
+      visibleWhen:
+        field: advanced_options
+        equals: true
+  defaults:
+    review_provider: codex
+    merge_method: squash
+    advanced_options: false
+    max_review_cycles: 5
+    expire_after_seconds: 86400
+inputs:
+- name: repository
+  label: Repository
+  type: text
+  required: false
+  default: ''
+- name: pull_request
+  label: Pull Request
+  type: text
+  required: true
+- name: review_provider
+  label: Automated Review Provider
+  type: text
+  required: false
+  default: codex
+- name: merge_method
+  label: Merge Method
+  type: text
+  required: false
+  default: squash
+- name: advanced_options
+  label: Advanced Options
+  type: boolean
+  required: false
+  default: false
+- name: max_review_cycles
+  label: Review Cycle Budget
+  type: text
+  required: false
+  default: '5'
+- name: expire_after_seconds
+  label: Expire After (Seconds)
+  type: text
+  required: false
+  default: '86400'
+steps:
+- title: Resolve target pull request
+  type: tool
+  repositoryOperation: read
+  instructions: 'Resolve {{ inputs.pull_request }} in {{ inputs.repository or context.get(''repository'', '''') }}
+    to one canonical open pull request through the deterministic trusted GitHub tool
+    surface.
+
+
+    Record the pull request URL, the exact current head SHA, the head branch, and
+    the base branch so merge automation is bound to that exact revision from its
+    first gate evaluation. If the pull request is closed, merged, or cannot be
+    resolved to exactly one open pull request, stop and report the blocker instead
+    of guessing a target.'
+  tool:
+    id: github.resolve_pull_request_target
+    requiredCapabilities:
+    - gh
+    inputs:
+      repository: '{{ inputs.repository or context.get(''repository'', '''') }}'
+      pullRequest: '{{ inputs.pull_request }}'

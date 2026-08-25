@@ -8,11 +8,12 @@ from typing import Any
 
 IMPLEMENTATION_CONTRACT = "pr-resolver-core/v1"
 RESOLVER_CORE_VERSION = "1.0.0"
-# SHA-256 over models.py + normalize.py + classify.py + transition.py in that
-# order. It is deliberately embedded in the immutable package so workflow code
-# never reads mutable filesystem state during replay.
+# SHA-256 over models.py + normalize.py + classify.py + transition.py +
+# review_providers.py in that order. It is deliberately embedded in the
+# immutable package so workflow code never reads mutable filesystem state
+# during replay.
 RESOLVER_CORE_DIGEST = (
-    "sha256:f750e88697a446f0c1a43696e89b04c7d40b85cbc53f6a3190bd0a6db95c3536"
+    "sha256:dd0d41ce00529e4ac5752e699a4c0450af4b8a3cb7aaed7d64b9b912a7b46a4d"
 )
 
 

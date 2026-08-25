@@ -13,6 +13,7 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from moonmind.schemas.temporal_models import (
+        MergeAutomationReviewLoopModel,
         MergeAutomationStartInput,
         PullRequestRefModel,
         ReadinessBlockerModel,
@@ -291,6 +292,18 @@ def legacy_resolver_idempotency_key(
     # Preserve the exact pre-hash child workflow id for workflow replay.
     return f"resolver:{parent_workflow_id}:pr:{pr_number}:head:{head_sha}"
 
+def _parsed_review_loop(
+    review_loop: Mapping[str, Any] | MergeAutomationReviewLoopModel | None,
+) -> MergeAutomationReviewLoopModel | None:
+    if review_loop is None:
+        return None
+    if isinstance(review_loop, MergeAutomationReviewLoopModel):
+        return review_loop
+    if isinstance(review_loop, Mapping):
+        return MergeAutomationReviewLoopModel.model_validate(dict(review_loop))
+    return None
+
+
 def build_resolver_run_request(
     *,
     parent_workflow_id: str,
@@ -298,6 +311,7 @@ def build_resolver_run_request(
     jira_issue_key: str | None,
     merge_method: str,
     resolver_template: Mapping[str, Any] | None = None,
+    review_loop: Mapping[str, Any] | MergeAutomationReviewLoopModel | None = None,
 ) -> dict[str, Any]:
     pr = (
         pull_request
@@ -323,6 +337,15 @@ def build_resolver_run_request(
         args["branch"] = pr.head_branch
     if jira_issue_key:
         args["jiraIssueKey"] = jira_issue_key
+    parsed_review_loop = _parsed_review_loop(review_loop)
+    review_loop_enabled = bool(
+        parsed_review_loop is not None
+        and parsed_review_loop.enabled
+        and parsed_review_loop.require_fresh_review_for_every_head
+    )
+    if review_loop_enabled:
+        args["reviewProvider"] = parsed_review_loop.provider
+        args["requireFreshReview"] = True
     title = f"Resolve PR #{pr.number}"
     runtime_payload: dict[str, Any] = {"mode": target_runtime}
     if provider_profile:
@@ -348,6 +371,14 @@ def build_resolver_run_request(
             "instructions": (
                 f"Resolve and merge pull request {pr.url}. "
                 "Use pr-resolver and do not create another pull request."
+                + (
+                    " This run is owned by a merge-automation review loop: pass "
+                    f"--review-provider {parsed_review_loop.provider} and "
+                    "--require-fresh-review to every pr_resolve_finalize.py "
+                    "invocation, and never post the review request yourself."
+                    if review_loop_enabled
+                    else ""
+                )
             ),
             "tool": {"type": "skill", "name": "pr-resolver"},
             "skill": {"id": "pr-resolver", "args": args},
@@ -384,6 +415,8 @@ def build_continue_as_new_input(
     resolver_history: list[Mapping[str, Any]] | list[ResolverRunRefModel],
     latest_head_sha: str,
     expire_at: str | None,
+    review_cycles: list[Mapping[str, Any]] | None = None,
+    active_review_request: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     parsed = (
         start_input
@@ -411,6 +444,10 @@ def build_continue_as_new_input(
         )
         for ref in resolver_history
     ]
+    if review_cycles is not None:
+        payload["reviewCycles"] = [dict(cycle) for cycle in review_cycles]
+    if active_review_request is not None:
+        payload["activeReviewRequest"] = dict(active_review_request)
     payload["expireAt"] = expire_at
     return payload
 

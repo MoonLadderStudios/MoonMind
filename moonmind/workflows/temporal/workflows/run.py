@@ -630,10 +630,23 @@ RUN_TERMINAL_CONTRACT_RETRY_DECISION_PATCH = "run-terminal-contract-retry-decisi
 # when a MoonMind.MergeAutomation gate re-enters and finalizes the merge. A
 # standalone (ungated) resolver run that ends in one of these states has not
 # resolved the PR and must not be reported as a success.
-MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS = frozenset({"reenter_gate"})
+MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS = frozenset(
+    {"reenter_gate", "request_review"}
+)
+# Gated-continuation contract versions MoonMind can validate. Anything else is
+# normalized to v1 so replayed histories keep their recorded shape.
+SUPPORTED_GATED_CONTINUATION_SCHEMA_VERSIONS = frozenset(
+    {"gated-continuation/v1", "gated-continuation/v2"}
+)
 GATED_CONTINUATION_GATE_REGISTRY: Mapping[str, frozenset[str]] = {
     "merge_automation": MERGE_AUTOMATION_CONTINUATION_DISPOSITIONS,
 }
+# Advertise the automated-review request action to gated pr-resolver children.
+# Histories recorded before the review loop keep their original single-action
+# authority payload.
+RUN_PR_RESOLVER_REVIEW_REQUEST_AUTHORITY_PATCH = (
+    "run-pr-resolver-review-request-authority-v1"
+)
 RUN_PUBLISH_REPAIR_FEEDBACK_PATCH = "run-publish-repair-feedback-v1"
 RUN_PREPUBLICATION_FAILURE_BLOCKS_REPAIR_PATCH = (
     "run-prepublication-failure-blocks-repair-v1"
@@ -17293,6 +17306,16 @@ class MoonMindRunWorkflow:
                 raw_request.get("headSha") or raw_request.get("head_sha"),
                 max_chars=64,
             )
+            schema_version = self._coerce_text(
+                raw_request.get("schemaVersion") or raw_request.get("schema_version"),
+                max_chars=64,
+            )
+            provider = self._coerce_text(raw_request.get("provider"), max_chars=64)
+            progress_signature = self._coerce_text(
+                raw_request.get("progressSignature")
+                or raw_request.get("progress_signature"),
+                max_chars=400,
+            )
         else:
             legacy_disposition = self._coerce_text(
                 outputs.get("mergeAutomationDisposition")
@@ -17318,11 +17341,16 @@ class MoonMindRunWorkflow:
             retry_after_seconds = None
             execution_ref = None
             head_sha = self._coerce_text(outputs.get("headSha"), max_chars=64)
+            schema_version = None
+            provider = None
+            progress_signature = None
 
         gate_type = self._normalize_gate_type(raw_gate_type)
         action = self._normalize_gate_type(raw_action)
+        if schema_version not in SUPPORTED_GATED_CONTINUATION_SCHEMA_VERSIONS:
+            schema_version = "gated-continuation/v1"
         continuation: dict[str, Any] = {
-            "schemaVersion": "gated-continuation/v1",
+            "schemaVersion": schema_version,
             "source": request_source,
             "logicalStepId": node_id,
             "gateType": gate_type,
@@ -17346,6 +17374,10 @@ class MoonMindRunWorkflow:
             continuation["executionRef"] = execution_ref
         if head_sha:
             continuation["headSha"] = head_sha
+        if provider:
+            continuation["provider"] = provider
+        if progress_signature:
+            continuation["progressSignature"] = progress_signature
 
         allowed_actions = GATED_CONTINUATION_GATE_REGISTRY.get(gate_type)
         if allowed_actions is None:
@@ -17751,6 +17783,12 @@ class MoonMindRunWorkflow:
             if effective_jira_issue_key and "required" not in post_merge_jira:
                 post_merge_jira["required"] = True
             post_merge_jira.setdefault("strategy", "done_category")
+            raw_review_loop = candidate.get("reviewLoop") or candidate.get(
+                "review_loop"
+            )
+            review_loop = (
+                dict(raw_review_loop) if isinstance(raw_review_loop, Mapping) else {}
+            )
             raw_post_merge_github = candidate.get("postMergeGithub") or candidate.get(
                 "post_merge_github"
             )
@@ -17788,6 +17826,7 @@ class MoonMindRunWorkflow:
                 "jiraIssueKey": effective_jira_issue_key,
                 "postMergeJira": post_merge_jira,
                 "postMergeGithub": post_merge_github,
+                "reviewLoop": review_loop,
                 "fallbackPollSeconds": (
                     candidate.get("fallbackPollSeconds")
                     or candidate.get("fallback_poll_seconds")
@@ -18107,6 +18146,7 @@ class MoonMindRunWorkflow:
                 "timeouts": timeouts,
                 "postMergeJira": request.get("postMergeJira") or {},
                 "postMergeGithub": request.get("postMergeGithub") or {},
+                "reviewLoop": request.get("reviewLoop") or {},
             },
             "resolverTemplate": resolver_template,
             "idempotencyKey": (
@@ -18186,6 +18226,9 @@ class MoonMindRunWorkflow:
         post_merge_github = result_map.get("postMergeGithub")
         if isinstance(post_merge_github, Mapping):
             summary["postMergeGithub"] = dict(post_merge_github)
+        review_loop = result_map.get("reviewLoop")
+        if isinstance(review_loop, Mapping):
+            summary["reviewLoop"] = dict(review_loop)
         return summary
 
     async def _complete_already_implemented_jira_if_needed(
@@ -20299,13 +20342,16 @@ class MoonMindRunWorkflow:
             and workflow.patched(RUN_PR_RESOLVER_OWNED_CONTINUATION_PATCH)
         ):
             parent_info = workflow.info().parent
+            allowed_continuation_actions = ["reenter_gate"]
+            if workflow.patched(RUN_PR_RESOLVER_REVIEW_REQUEST_AUTHORITY_PATCH):
+                allowed_continuation_actions.append("request_review")
             terminal_continuation_authority = {
                 "schemaVersion": "terminal-continuation-authority/v1",
                 "gateType": "merge_automation",
                 "ownerWorkflowId": parent_info.workflow_id,
                 "ownerRunId": parent_info.run_id,
                 "ownerWorkflowType": "MoonMind.MergeAutomation",
-                "allowedActions": ["reenter_gate"],
+                "allowedActions": allowed_continuation_actions,
                 "source": "validated_temporal_parent",
             }
 

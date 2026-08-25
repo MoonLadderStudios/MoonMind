@@ -4663,3 +4663,70 @@ class OmnigentExecutionPlanUsageRecord(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class MergeAutomationReviewRequestRecord(Base):
+    """Durable side-effect ledger for one automated-review request.
+
+    GitHub comment creation carries no idempotency key of its own, so a lost
+    response after a successful POST would otherwise look like "never posted".
+    This ledger binds one logical request identity (parent workflow + repository
+    + PR + head SHA + provider) to at most one posted comment, and records the
+    instant the request attempt started so a retry can reconcile against
+    comments created by the configured identity after that instant instead of
+    posting a second request.
+    """
+
+    __tablename__ = "merge_automation_review_requests"
+    __table_args__ = (
+        UniqueConstraint(
+            "request_key",
+            name="uq_merge_automation_review_requests_request_key",
+        ),
+        Index(
+            "ix_merge_automation_review_requests_pr",
+            "repository",
+            "pr_number",
+        ),
+        Index(
+            "ix_merge_automation_review_requests_parent",
+            "parent_workflow_id",
+        ),
+    )
+
+    request_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    parent_workflow_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    repository: Mapped[str] = mapped_column(String(255), nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    command: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="pending", server_default="pending"
+    )
+    request_comment_id: Mapped[Optional[int]] = mapped_column(
+        BigInteger, nullable=True
+    )
+    request_comment_url: Mapped[Optional[str]] = mapped_column(
+        String(1024), nullable=True
+    )
+    actor: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    reconciled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    failure_reason: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    attempt_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    requested_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )

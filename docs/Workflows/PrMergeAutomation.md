@@ -71,6 +71,10 @@ When PR publishing is enabled (`publishMode = "pr"` in `MoonMind.UserWorkflow` p
 6. When the gate opens, `MoonMind.MergeAutomation` starts a **child `MoonMind.UserWorkflow`** dedicated to `pr-resolver`.
 7. The resolver child run attempts to remediate and merge.
 8. If resolver pushes a new commit and external review/check signal must be re-established, control returns to the gate.
+8a. When the automated **review loop** is configured, the resolver may instead
+   return `request_review`. `MoonMind.MergeAutomation` posts exactly one review
+   request for that exact head SHA, waits for the result of *that* request, and
+   then runs the next resolver child.
 9. If the run is Jira-backed and post-merge Jira completion is enabled, `MoonMind.MergeAutomation` completes the selected Jira issue through the trusted Jira activity path after `merged` or `already_merged`.
 10. If the run is GitHub-issue-backed and post-merge GitHub completion is enabled, `MoonMind.MergeAutomation` applies the configured Done issue update and confirms the issue is closed after `merged` or `already_merged`.
 11. The parent workflow reaches terminal success only when merge automation returns `merged` or `already_merged` after every required post-merge issue completion succeeds or no-ops.
@@ -449,6 +453,166 @@ No new `mm_state` is required for v1.
 
 ---
 
+## 11.3 Automated review loop
+
+### 11.3.1 Purpose
+
+A pull request is only safe to merge when the automated reviewer has reviewed
+the revision that is actually being merged. Every commit MoonMind pushes
+invalidates the previous review, so a merge gate that accepts *any* historical
+provider result would merge unreviewed code immediately after remediation.
+
+The review loop makes each review explicit and head-bound:
+
+```text
+Run pr-resolver for head H
+  |- Existing actionable comments
+  |    `- run fix-comments -> push new head H2 -> return request_review(H2)
+  |- No actionable comments, but no fresh review for H
+  |    `- return request_review(H)
+  `- Fresh review exists for H, no actionable comments, checks pass
+       `- merge
+```
+
+`fix-comments` stays a single bounded remediation pass. It never requests a
+review and never waits for one. `pr-resolver` decides **what semantic transition
+is required**; `MoonMind.MergeAutomation` performs and durably supervises the
+external side effect.
+
+### 11.3.2 Configuration
+
+`mergeAutomationConfig.reviewLoop` is additive:
+
+```json
+{
+  "reviewLoop": {
+    "enabled": true,
+    "provider": "codex",
+    "requestMode": "pr_comment",
+    "requireFreshReviewForEveryHead": true,
+    "requestAfterRemediation": true,
+    "maxCycles": 5,
+    "maxConsecutiveNoProgressCycles": 2
+  }
+}
+```
+
+`provider` is provider-neutral. The exact request command and the reviewer
+identities that satisfy it come from the trusted
+`pr_resolver_core.review_providers` registry, never from a child run. An explicit
+`command` is allowed only as an exact restatement of the registered provider
+command; any other value fails validation.
+
+When `reviewLoop.enabled` is true, `MoonMind.MergeAutomation` passes
+`reviewProvider` and `requireFreshReview` to the resolver child's Skill args so
+the Skill collects the same head-bound evidence outside MoonMind.
+
+### 11.3.3 Request side effect
+
+`merge_automation.request_automated_review` is the only path that posts a review
+request. Its input is:
+
+```json
+{
+  "parentWorkflowId": "merge-automation:mm-parent",
+  "repository": "MoonLadderStudios/MoonMind",
+  "prNumber": 123,
+  "expectedHeadSha": "abc123...",
+  "provider": "codex",
+  "requestKey": "sha256(parentWorkflowId|repository|prNumber|headSha|provider)"
+}
+```
+
+The activity:
+
+1. claims `requestKey` in the durable review-request ledger, recording when the
+   attempt started;
+2. re-reads the pull request and confirms it is open at exactly
+   `expectedHeadSha`;
+3. returns the previously recorded comment on retry or replay;
+4. otherwise reconciles against comments created by the configured MoonMind
+   identity after the attempt started;
+5. otherwise posts exactly the registered provider command;
+6. persists the GitHub comment ID, creation time, actor, head SHA, and request
+   key.
+
+GitHub comment creation has no native idempotency key, so a lost response after
+a successful POST is indistinguishable from "never posted". The ledger plus
+after-the-attempt reconciliation is what makes "exactly one request per head
+SHA" enforceable. A retryable failure re-runs the activity against the *original*
+attempt window rather than posting a second request. A settled `requested` row is
+never downgraded by a later failure.
+
+### 11.3.4 Binding the result to the request
+
+Readiness evaluation becomes request-aware. With `reviewLoop.enabled`:
+
+- **no active request** — the automated-review gate does not block, so the first
+  resolver pass can run and decide whether a review is needed;
+- **active request** — only that request's own result opens the gate.
+
+A provider result is valid only when all of the following hold:
+
+1. the current PR head is still the requested SHA;
+2. the author is the configured provider identity;
+3. the completion happened after `requestedAt`;
+4. a submitted review names the requested commit whenever GitHub supplies a
+   commit ID;
+5. a clean-review reaction is attached to the exact request comment, or — when
+   that signal is unavailable — occurred after the request while the head is
+   unchanged;
+6. no older review or reaction is used as a fallback.
+
+If the head changes while MoonMind is waiting, the pending request is stale. The
+workflow adopts the new head, invalidates the request, and begins a new cycle.
+
+Each cycle is recorded:
+
+```json
+{
+  "cycle": 1,
+  "provider": "codex",
+  "headSha": "abc123...",
+  "requestKey": "...",
+  "requestCommentId": 98765,
+  "requestedAt": "2026-08-24T22:15:00Z",
+  "completionKind": "review",
+  "completionId": 45678,
+  "completedAt": "2026-08-24T22:19:00Z",
+  "status": "completed"
+}
+```
+
+### 11.3.5 No-progress and termination rules
+
+Cycle count alone is not enough. The Skill emits a **progress signature** — head
+SHA plus the sorted outstanding actionable and deferred comment IDs — and merge
+automation compares consecutive signatures.
+
+MoonMind stops for manual review when:
+
+- the same actionable comments remain on the same head after remediation
+  (`review_loop_no_progress`);
+- `fix-comments` reports deferred or unfixable comments (the Skill returns
+  `manual_review` with reason `deferred_comments`);
+- two consecutive cycles produce the same progress signature;
+- the review-cycle budget is exhausted (`review_cycle_budget_exhausted`);
+- the provider never returns before the workflow expiry (`expired`);
+- posting the review request cannot be proven successful
+  (`automated_review_request_failed`);
+- another actor changes the PR so ownership or expected-head guarantees no longer
+  hold.
+
+A no-op `fix-comments` pass is not automatically success. It is success only when
+the latest requested review covers the current head and the structured comment
+ledger reports no actionable comments remaining.
+
+The parent workflow continues through automatic merge rather than terminating at
+"review clean": the original workflow stays nonterminal until merge automation
+returns `merged` or `already_merged`.
+
+---
+
 ## 12. Merge Gate Evaluation
 
 The merge gate decides **when resolver is allowed to start**. It does not replace resolver logic.
@@ -576,6 +740,7 @@ Allowed values:
 - `merged`
 - `already_merged`
 - `reenter_gate`
+- `request_review`
 
 For `reenter_gate`, a successful resolver child result means the child satisfied
 its durable handoff contract; it does not mean the pull request merged. The
@@ -590,6 +755,12 @@ recompute or extend it. Authorization may clear only the synthetic
 rate-limit, infrastructure, timeout, cancellation, stale-evidence, and
 malformed-evidence failures remain failures even when continuation metadata is
 present.
+
+For `request_review`, the child returns a `gated-continuation/v2` payload that
+names only the configured provider, the exact head SHA, the step execution
+reference, and a progress signature. It never supplies comment text. The parent
+rejects a provider that is not the configured one, so a child run can never
+widen the request into an arbitrary comment.
 
 The parent validates `childRunId` and `executionRef` against the corresponding
 authoritative fields returned by the resolver child, in addition to owner ID,
@@ -770,6 +941,7 @@ This follows MoonMind's existing child-workflow cancellation posture.
 
 On Continue-As-New it MUST preserve:
 
+- automated review cycle records and the active review request
 - parent workflow id
 - publish context ref
 - current PR number / URL
@@ -806,6 +978,7 @@ The parent workflow detail should show a **Merge Automation** panel with:
 - `reports/merge_automation_summary.json`
 - `artifacts/merge_automation/gate_snapshots/<cycle>.json`
 - `artifacts/merge_automation/resolver_attempts/<attempt>.json`
+- `artifacts/merge_automation/review_cycles/<cycle>.json`
 
 ### 20.3 Root terminal summary
 
@@ -839,6 +1012,31 @@ The dashboard SHOULD expose this under PR publish settings as:
 
 This feature should not appear as a separate dependency or scheduling surface.
 
+### 21.1 `pr-review-resolve` preset
+
+Operators who start from an **existing** pull request use the provider-neutral
+`pr-review-resolve` preset ("Review, Fix, and Merge PR"). It is deliberately
+named around the protocol, not around Codex, because the same request/result
+protocol can carry another automated reviewer.
+
+The preset:
+
+- collects a repository (defaulting to the workflow's repository) and a pull
+  request number, URL, or head branch;
+- resolves that selector to one canonical **open** pull request through the
+  trusted `github.resolve_pull_request_target` tool, which emits the pull request
+  URL, exact head SHA, head branch, and base branch as durable publish context;
+- sets `publish.mode = none`, because `pr-resolver` owns every commit, push, and
+  merge;
+- enables merge automation with `reviewLoop.enabled = true` and
+  `reviewLoop.provider = codex` by default;
+- exposes merge method, review-cycle budget, and expiry as progressive-disclosure
+  controls.
+
+Omitted values use the same production path as their explicit equivalents: the
+defaults expand into a complete `mergeAutomationConfig` and require no hidden
+enablement.
+
 ---
 
 ## 22. Rejected Alternatives
@@ -870,4 +1068,5 @@ This design is complete when:
 7. a resolver-generated push can return control to the gate,
 8. downstream workflow executions depending on the parent workflow naturally wait for merge automation completion,
 9. non-success merge-automation terminal outcomes fail the parent workflow except `canceled`, which cancels the parent workflow,
-10. root and child artifacts expose enough state for the dashboard to explain why a workflow execution is waiting or failed.
+10. root and child artifacts expose enough state for the dashboard to explain why a workflow execution is waiting or failed,
+11. with `reviewLoop` enabled, exactly one automated review request is posted per head SHA, only that request's own result opens the gate, and the loop terminates on a clean review + merge, an exhausted cycle budget, repeated no-progress signatures, deferred comments, an unprovable request, or expiry.

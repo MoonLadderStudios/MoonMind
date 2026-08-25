@@ -37,6 +37,19 @@ inputSchema:
       description: >-
         PR head branch. MoonMind requires either this value or a PR number or
         URL so the resolver cannot target the wrong PR.
+    reviewProvider:
+      type: string
+      title: Automated review provider
+      description: >-
+        Provider-neutral name of the automated reviewer that must review every
+        head SHA before merge (for example "codex"). Empty or "none" disables
+        the review loop.
+    requireFreshReview:
+      type: boolean
+      title: Require a fresh review for every head
+      description: >-
+        When true, the resolver refuses to merge a head SHA that has no fresh
+        review from reviewProvider and asks its owning gate to request one.
   anyOf:
     - required:
         - pr
@@ -58,6 +71,8 @@ The task is not complete until the target PR is merged or is proven already merg
 - inputs.pr (optional)
 - inputs.branch (optional)
 - inputs.mergeMethod (merge|squash|rebase)
+- inputs.reviewProvider (default empty; `codex` enables the Codex review loop)
+- inputs.requireFreshReview (default false; true requires a fresh review per head)
 - inputs.maxIterations (default 5, full remediation cap per cycle)
 - inputs.finalizeMaxRetries (default 60)
 - inputs.finalizeBackoffSeconds (default 30)
@@ -109,15 +124,24 @@ metadata flag.
    ACTIVE_SKILLS_DIR="${MOONMIND_ACTIVE_SKILLS_DIR:-$(dirname "$PR_RESOLVER_SKILL_DIR")}"
    test -n "$PR_RESOLVER_SKILL_DIR" && test -f "$PR_RESOLVER_SKILL_DIR/SKILL.md"
    ```
-2. Run the finalize gate checker. It refreshes PR metadata, CI, and the complete
-   comment inventory before deciding whether merge is allowed:
+2. Run the finalize gate checker. It refreshes PR metadata, CI, the complete
+   comment inventory, and automated-review evidence for the exact head SHA
+   before deciding whether merge is allowed. Always pass the review-loop inputs
+   exactly as supplied; omitting them silently disables the fresh-review
+   requirement:
 
    ```bash
    python3 "$PR_RESOLVER_SKILL_DIR/bin/pr_resolve_finalize.py" \
      --pr <pr_number_or_branch> \
      --merge-method <merge|squash|rebase> \
+     --review-provider <inputs.reviewProvider or ""> \
+     --require-fresh-review \
      --strict-exit-codes
    ```
+
+   Use `--no-require-fresh-review` when `inputs.requireFreshReview` is false or
+   absent. `PR_RESOLVER_REVIEW_PROVIDER` and `PR_RESOLVER_REQUIRE_FRESH_REVIEW`
+   are equivalent environment defaults for non-agent automation.
 
 3. Read `var/pr_resolver/result.json` and perform exactly the indicated action:
    - `merged` or independently verified `already_merged`: publish terminal
@@ -131,6 +155,17 @@ metadata flag.
    - `actionable_comments`: follow `fix-comments` completely, including fresh
      comment retrieval, its disposition ledger, push verification, and resolving
      handled current review threads on GitHub.
+   - `fresh_review_required_after_remediation`: the current head SHA has no
+     fresh review from the configured provider and none has been requested for
+     it. Publish `mergeAutomationDisposition=request_review` with the typed
+     `gatedContinuation` and stop. Never post the review request yourself: the
+     owning gate owns that side effect and the durable wait for its result.
+   - `automated_review_wait`: a request for this head already exists and its
+     result has not arrived. Return control to the owning gate with
+     `reenter_gate`.
+   - `deferred_comments`: the comment ledger deferred or could not fix at least
+     one comment that is still present. Publish `manual_review` and stop; a
+     repeated remediation pass cannot clear a deferred disposition.
    - `ci_running`, `codex_review_grace_wait`, or another documented transient:
      wait with the bounded backoff configured by the Skill inputs, then return to
      step 2.
@@ -153,6 +188,14 @@ Allowed successful terminal states:
 Every terminal `var/pr_resolver/result.json` MUST include `mergeAutomationDisposition`:
 - `merged`: the resolver merged the PR.
 - `already_merged`: the PR was independently confirmed as already merged.
+- `request_review`: the current head SHA needs one fresh automated review from
+  the configured provider before merge is allowed. Include a
+  `gated-continuation/v2` `gatedContinuation` naming only the provider, the
+  exact head SHA, and the execution reference. The Skill never supplies request
+  text and never posts the request; the validated
+  `MoonMind.MergeAutomation` parent translates the provider into its configured
+  exact command, performs the request idempotently, and owns the wait.
+  Standalone resolvers cannot use this disposition successfully.
 - `reenter_gate`: the current resolver child completed a typed handoff to its
   validated `MoonMind.MergeAutomation` parent. Include `gatedContinuation` with
   the reason and an absolute UTC `notBefore` deadline when the next cycle must
@@ -195,6 +238,8 @@ When a delegated remediation step cannot publish, overwrite `var/pr_resolver/res
   `fix-merge-conflicts` once.
 - `ci_failures` selects `fix-ci` once.
 - `actionable_comments` selects `fix-comments` once.
+- `fresh_review_required_after_remediation` never launches a remediation turn;
+  it is a typed request to the owning gate.
 - Transient waits and unknown/manual blockers never launch an agent remediation turn.
 
 After a specialized Skill finishes, `pr-resolver` independently re-runs its

@@ -13,6 +13,7 @@ class ResolverAction(str, Enum):
     ATTEMPT_MERGE = "attempt_merge"
     PUBLISH_TERMINAL = "publish_terminal"
     STOP_MANUAL_REVIEW = "stop_manual_review"
+    REQUEST_REVIEW = "request_review"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,15 @@ class CanonicalPullRequestSnapshot:
     comments_available: bool = True
     comment_policy_enforced: bool = True
     automated_review_pending: bool = False
+    # Automated review loop evidence. ``review_loop_enabled`` means the caller
+    # asked for a fresh provider review on every head; the remaining fields are
+    # the portable evidence collected for the current head SHA.
+    review_loop_enabled: bool = False
+    automated_review_provider: str = ""
+    fresh_automated_review: bool = False
+    automated_review_requested: bool = False
+    deferred_comments: bool = False
+    progress_signature: str = ""
     publish_available: bool = True
     malformed: bool = False
     unknown_blocker: bool = False

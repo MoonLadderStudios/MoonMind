@@ -19,6 +19,11 @@ with workflow.unsafe.imports_passed_through():
         ReadinessBlockerModel,
     )
     from moonmind.schemas.temporal_activity_models import ArtifactWriteCompleteInput
+    from moonmind.workflows.merge_automation_review import (
+        REVIEW_REQUEST_POSTED_STATUSES,
+        REVIEW_REQUEST_RETRY_GATE_STATUSES,
+        build_review_request_key,
+    )
     from moonmind.workflows.temporal.activity_catalog import (
         ARTIFACTS_TASK_QUEUE,
         INTEGRATIONS_TASK_QUEUE,
@@ -45,6 +50,7 @@ STATE_EXPIRED = "expired"
 STATE_FAILED = "failed"
 STATE_CANCELED = "canceled"
 DISPOSITION_REENTER_GATE = "reenter_gate"
+DISPOSITION_REQUEST_REVIEW = "request_review"
 DISPOSITION_MERGED = "merged"
 DISPOSITION_ALREADY_MERGED = "already_merged"
 DISPOSITION_MANUAL_REVIEW = "manual_review"
@@ -52,7 +58,8 @@ DISPOSITION_FAILED = "failed"
 SUCCESS_DISPOSITIONS = frozenset({DISPOSITION_MERGED, DISPOSITION_ALREADY_MERGED})
 NON_SUCCESS_DISPOSITIONS = frozenset({DISPOSITION_MANUAL_REVIEW, DISPOSITION_FAILED})
 ALLOWED_DISPOSITIONS = SUCCESS_DISPOSITIONS | NON_SUCCESS_DISPOSITIONS | {
-    DISPOSITION_REENTER_GATE
+    DISPOSITION_REENTER_GATE,
+    DISPOSITION_REQUEST_REVIEW,
 }
 MAX_PUBLISHED_ARTIFACT_REFS = 20
 MERGE_AUTOMATION_WORKFLOW_CHILD_TASK_QUEUE_V2_PATCH = (
@@ -73,6 +80,11 @@ MERGE_AUTOMATION_STRICT_CONTINUATION_IDENTITY_PATCH = (
 MERGE_AUTOMATION_CONTINUATION_OBSERVABILITY_PATCH = (
     "merge-automation-continuation-observability-v1"
 )
+# Request/remediate/request loop for one configured automated review provider.
+# Guarded so histories recorded before the loop existed keep replaying their
+# original gate decisions.
+MERGE_AUTOMATION_REVIEW_LOOP_PATCH = "merge-automation-review-loop-v1"
+MAX_PUBLISHED_REVIEW_CYCLES = 20
 RESOLVER_ISSUE_RECOVERY_NONE = "none"
 RESOLVER_ISSUE_RECOVERY_COMPLETED = "completed"
 RESOLVER_ISSUE_RECOVERY_REENTER_GATE = "reenter_gate"
@@ -117,6 +129,11 @@ class MoonMindMergeAutomationWorkflow:
             "legacy_continuation_fallback_used": 0,
         }
         self._refresh_tracked_head_sha_on_next_evaluation = False
+        self._review_loop_enabled = False
+        self._review_cycles: list[dict[str, Any]] = []
+        self._active_review_request: dict[str, Any] | None = None
+        self._last_progress_signature: str | None = None
+        self._no_progress_cycles = 0
         self._summary: str | None = None
 
     def _summary_payload(self) -> dict[str, Any]:
@@ -151,6 +168,23 @@ class MoonMindMergeAutomationWorkflow:
             ],
             "artifactRefs": artifact_refs,
         }
+        if self._review_loop_active():
+            payload["reviewLoop"] = {
+                "enabled": True,
+                "provider": self._review_loop_config().provider,
+                "cycles": len(self._review_cycles),
+                "maxCycles": self._review_loop_config().max_cycles,
+                "noProgressCycles": self._no_progress_cycles,
+                "activeRequest": (
+                    dict(self._active_review_request)
+                    if self._active_review_request
+                    else None
+                ),
+                "cycleRecords": [
+                    dict(cycle)
+                    for cycle in self._review_cycles[-MAX_PUBLISHED_REVIEW_CYCLES:]
+                ],
+            }
         if self._continuation_observability_enabled:
             payload["continuationCounters"] = dict(self._continuation_counters)
         if self._summary:
@@ -718,6 +752,301 @@ class MoonMindMergeAutomationWorkflow:
             resolver_disposition=resolver_disposition
         )
 
+    def _review_loop_config(self) -> Any:
+        return self._input.config.review_loop
+
+    def _review_loop_active(self) -> bool:
+        if self._input is None:
+            return False
+        return bool(self._review_loop_enabled and self._review_loop_config().enabled)
+
+    def _review_request_continuation(
+        self,
+        resolver_result: Mapping[str, Any],
+        *,
+        resolver_workflow_id: str,
+    ) -> dict[str, Any]:
+        """Validate the child's typed request for one fresh automated review."""
+
+        raw = resolver_result.get("gatedContinuation")
+        if not isinstance(raw, Mapping):
+            raise ValueError("missing gated continuation contract")
+        if (
+            resolver_result.get("completionDisposition") != "gated_continuation"
+            or raw.get("schemaVersion") != "gated-continuation/v2"
+            or raw.get("gateType") != "merge_automation"
+            or raw.get("action") != DISPOSITION_REQUEST_REVIEW
+        ):
+            raise ValueError("invalid review request continuation contract")
+        required_text = (
+            "reason",
+            "provider",
+            "executionRef",
+            "headSha",
+            "ownerWorkflowId",
+            "ownerRunId",
+            "ownerWorkflowType",
+            "childWorkflowId",
+            "childRunId",
+        )
+        if any(not str(raw.get(key) or "").strip() for key in required_text):
+            raise ValueError("incomplete review request continuation contract")
+        info = workflow.info()
+        if (
+            raw.get("ownerWorkflowId") != info.workflow_id
+            or raw.get("ownerRunId") != info.run_id
+            or raw.get("ownerWorkflowType") != WORKFLOW_NAME
+            or raw.get("childWorkflowId") != resolver_workflow_id
+        ):
+            raise ValueError("review request continuation ownership mismatch")
+        if (
+            raw.get("childRunId") != resolver_result.get("childRunId")
+            or raw.get("executionRef") != resolver_result.get("executionRef")
+        ):
+            raise ValueError("review request continuation identity mismatch")
+        head_sha = str(raw.get("headSha") or "").strip().lower()
+        if not (7 <= len(head_sha) <= 64) or any(
+            c not in "0123456789abcdef" for c in head_sha
+        ):
+            raise ValueError("invalid review request continuation headSha")
+        expected_head = str(resolver_result.get("headSha") or "").strip().lower()
+        if expected_head and expected_head != head_sha:
+            raise ValueError("review request continuation headSha mismatch")
+        provider = str(raw.get("provider") or "").strip().lower()
+        if provider != self._review_loop_config().provider:
+            # The child may only ask for the *configured* provider; it never
+            # supplies request text and never selects a different reviewer.
+            raise ValueError("review request continuation provider not configured")
+        return {
+            "provider": provider,
+            "headSha": head_sha,
+            "reason": str(raw.get("reason") or "").strip(),
+            "executionRef": str(raw.get("executionRef") or "").strip(),
+            "progressSignature": str(raw.get("progressSignature") or "").strip()
+            or None,
+        }
+
+    def _register_progress_signature(self, signature: str | None) -> bool:
+        """Record a cycle signature and report whether progress was made."""
+
+        normalized = str(signature or "").strip()
+        if not normalized:
+            # No signature is not evidence of progress, but it is also not
+            # evidence of a stall; treat it as neutral.
+            return True
+        if normalized == self._last_progress_signature:
+            self._no_progress_cycles += 1
+            return False
+        self._last_progress_signature = normalized
+        self._no_progress_cycles = 0
+        return True
+
+    async def _write_review_cycle_artifact(self, cycle: Mapping[str, Any]) -> None:
+        await self._write_json_artifact(
+            name=(
+                "artifacts/merge_automation/review_cycles/"
+                f"{cycle.get('cycle')}.json"
+            ),
+            payload={"status": self._status, "cycle": dict(cycle)},
+        )
+
+    async def _blocked_review_summary(
+        self,
+        *,
+        summary: str,
+        blocker_kind: str,
+    ) -> dict[str, Any]:
+        self._status = STATE_BLOCKED
+        self._summary = summary
+        self._blockers = [
+            ReadinessBlockerModel.model_validate(
+                {
+                    "kind": blocker_kind,
+                    "summary": summary,
+                    "retryable": False,
+                    "source": "merge_automation",
+                }
+            )
+        ]
+        self._publish_visibility()
+        return await self._finish()
+
+    async def _request_automated_review(
+        self,
+        *,
+        resolver_result: Mapping[str, Any],
+        resolver_workflow_id: str,
+    ) -> dict[str, Any] | None:
+        """Own the review request side effect; return a terminal payload or None.
+
+        ``None`` means "keep looping": the gate re-opens and either waits for the
+        request result or adopts a newly observed head.
+        """
+
+        if self._input is None:
+            return None
+        if not self._review_loop_active():
+            return await self._failed_resolver_summary(
+                summary=(
+                    "pr-resolver requested an automated review, but no review "
+                    "loop is configured for this merge automation run."
+                ),
+                blocker_kind="resolver_continuation_invalid",
+            )
+        try:
+            continuation = self._review_request_continuation(
+                resolver_result,
+                resolver_workflow_id=resolver_workflow_id,
+            )
+        except (TypeError, ValueError):
+            if self._continuation_observability_enabled:
+                self._continuation_counters["continuation_rejected_schema"] += 1
+            return await self._failed_resolver_summary(
+                summary="pr-resolver returned an invalid review request continuation.",
+                blocker_kind="resolver_continuation_invalid",
+            )
+
+        config = self._review_loop_config()
+        head_sha = continuation["headSha"]
+        self._input.pull_request.head_sha = head_sha
+        made_progress = self._register_progress_signature(
+            continuation.get("progressSignature")
+        )
+        if (
+            not made_progress
+            and self._no_progress_cycles >= config.max_consecutive_no_progress_cycles
+        ):
+            return await self._blocked_review_summary(
+                summary=(
+                    "Automated review loop stopped: "
+                    f"{self._no_progress_cycles} consecutive cycles produced the "
+                    "same outstanding work on the same head SHA."
+                ),
+                blocker_kind="review_loop_no_progress",
+            )
+        if len(self._review_cycles) >= config.max_cycles:
+            return await self._blocked_review_summary(
+                summary=(
+                    "Automated review loop stopped: the configured budget of "
+                    f"{config.max_cycles} review cycles is exhausted."
+                ),
+                blocker_kind="review_cycle_budget_exhausted",
+            )
+
+        request_key = build_review_request_key(
+            parent_workflow_id=self._resolver_parent_workflow_id(),
+            repository=self._input.pull_request.repo,
+            pr_number=self._input.pull_request.number,
+            head_sha=head_sha,
+            provider=config.provider,
+        )
+        try:
+            outcome = await workflow.execute_activity(
+                "merge_automation.request_automated_review",
+                {
+                    "parentWorkflowId": self._resolver_parent_workflow_id(),
+                    "repository": self._input.pull_request.repo,
+                    "prNumber": self._input.pull_request.number,
+                    "expectedHeadSha": head_sha,
+                    "provider": config.provider,
+                    "requestKey": request_key,
+                },
+                start_to_close_timeout=timedelta(minutes=2),
+                task_queue=INTEGRATIONS_TASK_QUEUE,
+                retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
+                cancellation_type=ActivityCancellationType.TRY_CANCEL,
+            )
+        except CancelledError:
+            raise
+        except Exception:
+            return await self._blocked_review_summary(
+                summary=(
+                    "Automated review request could not be proven successful for "
+                    f"head {head_sha}."
+                ),
+                blocker_kind="automated_review_request_failed",
+            )
+
+        outcome_map = dict(outcome) if isinstance(outcome, Mapping) else {}
+        status = str(outcome_map.get("status") or "").strip()
+        if status not in REVIEW_REQUEST_POSTED_STATUSES:
+            if status in REVIEW_REQUEST_RETRY_GATE_STATUSES:
+                observed = str(outcome_map.get("observedHeadSha") or "").strip()
+                if observed and observed != head_sha:
+                    self._input.pull_request.head_sha = observed
+                else:
+                    self._refresh_tracked_head_sha_on_next_evaluation = True
+                self._active_review_request = None
+                self._status = STATE_WAITING
+                self._summary = (
+                    "Automated review request skipped; the pull request changed "
+                    "before the request was posted."
+                )
+                self._publish_visibility()
+                return None
+            return await self._blocked_review_summary(
+                summary=(
+                    "Automated review request could not be proven successful: "
+                    f"{outcome_map.get('summary') or status or 'unknown outcome'}"
+                ),
+                blocker_kind="automated_review_request_failed",
+            )
+
+        request_comment_id = outcome_map.get("requestCommentId")
+        cycle = {
+            "cycle": len(self._review_cycles) + 1,
+            "provider": config.provider,
+            "headSha": head_sha,
+            "requestKey": request_key,
+            "requestCommentId": request_comment_id,
+            "requestedAt": outcome_map.get("requestedAt"),
+            "completionKind": None,
+            "completionId": None,
+            "completedAt": None,
+            "status": "requested",
+            "progressSignature": continuation.get("progressSignature"),
+        }
+        self._review_cycles.append(cycle)
+        self._active_review_request = {
+            "provider": config.provider,
+            "headSha": head_sha,
+            "requestKey": request_key,
+            "requestCommentId": request_comment_id,
+            "requestedAt": outcome_map.get("requestedAt"),
+        }
+        self._status = STATE_WAITING
+        self._summary = (
+            f"Requested a fresh {config.provider} review for head {head_sha}."
+        )
+        self._publish_visibility()
+        await self._write_review_cycle_artifact(cycle)
+        return None
+
+    def _settle_active_review_request(self, evaluation: Any) -> None:
+        """Bind an observed review result (or staleness) to the active request."""
+
+        if not self._active_review_request or not isinstance(evaluation, Mapping):
+            return
+        cycle = self._review_cycles[-1] if self._review_cycles else None
+        if evaluation.get("automatedReviewComplete") is True:
+            if cycle is not None:
+                cycle["completionKind"] = evaluation.get(
+                    "automatedReviewCompletionKind"
+                )
+                cycle["completionId"] = evaluation.get("automatedReviewCompletionId")
+                cycle["completedAt"] = evaluation.get("automatedReviewCompletedAt")
+                cycle["status"] = "completed"
+            self._active_review_request = None
+            return
+        if evaluation.get("automatedReviewRequestStale") is True:
+            # The head moved while waiting: the pending request can no longer
+            # answer for the current revision, so it is invalidated and the next
+            # cycle starts from the new head.
+            if cycle is not None:
+                cycle["status"] = "stale"
+            self._active_review_request = None
+            self._refresh_tracked_head_sha_on_next_evaluation = True
+
     async def _evaluate_readiness_once(self) -> tuple[Any, Any]:
         if self._input is None:
             evaluation: dict[str, Any] = {}
@@ -726,14 +1055,24 @@ class MoonMindMergeAutomationWorkflow:
                 tracked_head_sha="",
                 actionable_merge_conflicts=self._actionable_merge_conflicts_enabled(),
             )
+        readiness_payload = self._input.model_dump(by_alias=True, mode="json")
+        # Always publish the *live* request state so a restored input can never
+        # make a settled request look active again.
+        readiness_payload["activeReviewRequest"] = (
+            dict(self._active_review_request) if self._active_review_request else None
+        )
         evaluation = await workflow.execute_activity(
             "merge_automation.evaluate_readiness",
-            self._input.model_dump(by_alias=True, mode="json"),
+            readiness_payload,
             start_to_close_timeout=timedelta(minutes=2),
             task_queue=INTEGRATIONS_TASK_QUEUE,
             retry_policy=DEFAULT_ACTIVITY_RETRY_POLICY,
             cancellation_type=ActivityCancellationType.TRY_CANCEL,
         )
+        if self._review_loop_active():
+            self._settle_active_review_request(
+                evaluation if isinstance(evaluation, Mapping) else {}
+            )
         evidence = classify_readiness(
             evaluation if isinstance(evaluation, Mapping) else {},
             tracked_head_sha=self._input.pull_request.head_sha,
@@ -796,6 +1135,18 @@ class MoonMindMergeAutomationWorkflow:
         self._continuation_observability_enabled = workflow.patched(
             MERGE_AUTOMATION_CONTINUATION_OBSERVABILITY_PATCH
         )
+        self._review_loop_enabled = workflow.patched(
+            MERGE_AUTOMATION_REVIEW_LOOP_PATCH
+        )
+        self._review_cycles = [
+            cycle.model_dump(by_alias=True, mode="json")
+            for cycle in self._input.review_cycles
+        ]
+        self._active_review_request = (
+            self._input.active_review_request.model_dump(by_alias=True, mode="json")
+            if self._input.active_review_request is not None
+            else None
+        )
         self._status = STATE_WAITING
         expire_at = _effective_expire_at(self._input, started_at=workflow.now())
         self._publish_visibility()
@@ -857,6 +1208,11 @@ class MoonMindMergeAutomationWorkflow:
                     jira_issue_key=self._input.jira_issue_key,
                     merge_method=self._input.config.resolver.merge_method,
                     resolver_template=self._input.resolver_template,
+                    review_loop=(
+                        self._review_loop_config()
+                        if self._review_loop_active()
+                        else None
+                    ),
                 )
                 resolver_workflow_id_factory = (
                     deterministic_resolver_idempotency_key
@@ -955,6 +1311,21 @@ class MoonMindMergeAutomationWorkflow:
                         ),
                         blocker_kind="resolver_disposition_invalid",
                     )
+                if resolver_disposition == DISPOSITION_REQUEST_REVIEW:
+                    if self._continuation_observability_enabled:
+                        self._continuation_counters["continuation_requested"] += 1
+                    terminal = await self._request_automated_review(
+                        resolver_result=resolver_result
+                        if isinstance(resolver_result, Mapping)
+                        else {},
+                        resolver_workflow_id=resolver_workflow_id,
+                    )
+                    if terminal is not None:
+                        return terminal
+                    if self._continuation_observability_enabled:
+                        self._continuation_counters["continuation_accepted"] += 1
+                        self._continuation_counters["continuation_cycle_completed"] += 1
+                    continue
                 if (
                     resolver_disposition == DISPOSITION_REENTER_GATE
                 ):
