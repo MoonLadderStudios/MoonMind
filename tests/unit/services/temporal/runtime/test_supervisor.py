@@ -11,6 +11,7 @@ import sys
 from moonmind.schemas.agent_runtime_models import (
     MANAGED_PROCESS_LOST_DURING_RECONCILIATION,
     ManagedRunRecord,
+    resolve_execution_budget,
 )
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.log_streamer import RuntimeLogStreamer
@@ -92,7 +93,7 @@ async def test_success_exit_classification(supervisor_env):
     )
 
     record = await supervisor.supervise(
-        run_id="run-1", process=process, timeout_seconds=30
+        run_id="run-1", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
     )
 
     assert record.status == "completed"
@@ -123,7 +124,7 @@ async def test_supervise_terminates_descendant_before_waiting_for_stream_eof(
 
     record = await asyncio.wait_for(
         supervisor.supervise(
-            run_id="run-descendant", process=process, timeout_seconds=30
+            run_id="run-descendant", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
         ),
         timeout=5,
     )
@@ -143,7 +144,7 @@ async def test_failure_exit_classification(supervisor_env):
     )
 
     record = await supervisor.supervise(
-        run_id="run-1", process=process, timeout_seconds=30
+        run_id="run-1", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
     )
 
     assert record.status == "failed"
@@ -164,7 +165,7 @@ async def test_timeout_exit_classification(supervisor_env):
     )
 
     record = await supervisor.supervise(
-        run_id="run-1", process=process, timeout_seconds=1
+        run_id="run-1", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 1})
     )
 
     assert record.status == "timed_out"
@@ -207,7 +208,7 @@ async def test_supervise_terminates_stalled_runtime_progress(supervisor_env):
                 result = await supervisor.supervise(
                     run_id="run-stalled-progress",
                     process=process,
-                    timeout_seconds=30,
+                    budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
                 )
 
     assert result.status == "failed"
@@ -275,7 +276,7 @@ async def test_supervise_uses_record_started_at_for_progress_probe(supervisor_en
                     result = await supervisor.supervise(
                         run_id="run-started-at",
                         process=process,
-                        timeout_seconds=30,
+                        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
                     )
 
     assert result.status == "failed"
@@ -331,7 +332,7 @@ async def test_stalled_progress_does_not_override_clean_exit_without_termination
                     result = await supervisor.supervise(
                         run_id="run-stall-race",
                         process=process,
-                        timeout_seconds=30,
+                        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
                     )
 
     assert result.status == "completed"
@@ -367,7 +368,7 @@ async def test_exit_code_file_is_authoritative(supervisor_env, tmp_path):
     record = await supervisor.supervise(
         run_id="run-exit-file",
         process=process,
-        timeout_seconds=30,
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
         exit_code_path=str(exit_code_path),
         cleanup_paths=[str(exit_code_path)],
     )
@@ -405,7 +406,7 @@ async def test_missing_exit_code_file_fails_closed(supervisor_env, tmp_path):
     record = await supervisor.supervise(
         run_id="run-missing-exit",
         process=process,
-        timeout_seconds=30,
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
         exit_code_path=str(exit_code_path),
         cleanup_paths=[str(exit_code_path)],
     )
@@ -433,7 +434,7 @@ async def test_timeout_ignores_exit_code_file_and_cleans_it(
     record = await supervisor.supervise(
         run_id="run-timeout-exit",
         process=process,
-        timeout_seconds=1,
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 1}),
         exit_code_path=str(exit_code_path),
         cleanup_paths=[str(exit_code_path)],
     )
@@ -457,7 +458,7 @@ async def test_supervise_limits_repeated_warning_annotations(supervisor_env):
     )
 
     record = await supervisor.supervise(
-        run_id="run-warning", process=process, timeout_seconds=30
+        run_id="run-warning", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
     )
 
     diagnostics_path = _resolve_diagnostics_path(artifact_storage, record)
@@ -485,21 +486,25 @@ async def test_supervise_debounces_no_output_interval(supervisor_env):
     store, artifact_storage, _, supervisor = supervisor_env
     _make_record(store, "run-no-output", "launching")
 
-    async def _fake_heartbeat_and_wait_with_timeout(
+    async def _fake_heartbeat_and_wait_within_budget(
         self,
         run_id: str,
         process: asyncio.subprocess.Process,
-        timeout_seconds: int,
+        budget,
+        *,
+        started_at,
+        idle_progress_seconds,
         no_output_callback=None,
         progress_snapshot=None,
-    ) -> tuple[int | None, bool]:
+        on_budget_extended=None,
+    ) -> tuple[int | None, str]:
         base_time = datetime.now(tz=UTC)
         if no_output_callback is None:
-            return 0, False
+            return 0, "continue"
         await no_output_callback(base_time + timedelta(seconds=2.5))
         await no_output_callback(base_time + timedelta(seconds=4.9))
         await no_output_callback(base_time + timedelta(seconds=5.0))
-        return 0, False
+        return 0, "continue"
 
     process = await asyncio.create_subprocess_exec(
         "true",
@@ -510,8 +515,8 @@ async def test_supervise_debounces_no_output_interval(supervisor_env):
 
     with patch.object(
         ManagedRunSupervisor,
-        "_heartbeat_and_wait_with_timeout",
-        _fake_heartbeat_and_wait_with_timeout,
+        "_heartbeat_and_wait_within_budget",
+        _fake_heartbeat_and_wait_within_budget,
     ):
         with patch(
             "moonmind.workflows.temporal.runtime.supervisor.NO_OUTPUT_ANNOTATION_INTERVAL_SECONDS",
@@ -520,7 +525,7 @@ async def test_supervise_debounces_no_output_interval(supervisor_env):
             record = await supervisor.supervise(
                 run_id="run-no-output",
                 process=process,
-                timeout_seconds=30,
+                budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
             )
 
     diagnostics_path = _resolve_diagnostics_path(artifact_storage, record)
@@ -604,7 +609,7 @@ async def test_supervise_preserves_deferred_cleanup_until_explicit_release(
     record = await supervisor.supervise(
         run_id="run-deferred-cleanup",
         process=process,
-        timeout_seconds=30,
+        budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
         deferred_cleanup_paths=[str(deferred_cleanup_path)],
     )
 
@@ -687,7 +692,7 @@ async def test_heartbeat_updates(supervisor_env):
     # mixed import style (import + from-import of same module).
     with patch('moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL', 1):
         record = await supervisor.supervise(
-            run_id="run-1", process=process, timeout_seconds=30
+            run_id="run-1", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
         )
 
     assert record.status == "completed"
@@ -742,7 +747,7 @@ async def test_heartbeat_persists_output_progress(supervisor_env):
     ):
         with patch.object(store, "update_status", side_effect=_spy_update):
             result = await supervisor.supervise(
-                run_id="run-1", process=process, timeout_seconds=30
+                run_id="run-1", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
             )
 
     assert result.status == "completed"
@@ -805,7 +810,7 @@ async def test_heartbeat_persists_claude_pr_resolver_artifact_progress(
     ):
         with patch.object(store, "update_status", side_effect=_spy_update):
             result = await supervisor.supervise(
-                run_id="run-1", process=process, timeout_seconds=30
+                run_id="run-1", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
             )
     writer_result = await progress_writer
     assert writer_result is None
@@ -860,7 +865,7 @@ async def test_heartbeat_persists_claude_workspace_file_progress(
     ):
         with patch.object(store, "update_status", side_effect=_spy_update):
             result = await supervisor.supervise(
-                run_id="run-1", process=process, timeout_seconds=30
+                run_id="run-1", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
             )
     writer_result = await progress_writer
     assert writer_result is None
@@ -894,7 +899,7 @@ async def test_completion_callback_called_on_success(supervisor_env):
     )
 
     record = await supervisor.supervise(
-        run_id="run-cb-ok", process=process, timeout_seconds=30
+        run_id="run-cb-ok", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
     )
 
     assert record.status == "completed"
@@ -926,7 +931,7 @@ async def test_completion_callback_called_on_failure(supervisor_env):
     )
 
     record = await supervisor.supervise(
-        run_id="run-cb-fail", process=process, timeout_seconds=30
+        run_id="run-cb-fail", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
     )
 
     assert record.status == "failed"
@@ -956,7 +961,7 @@ async def test_completion_callback_error_does_not_crash_supervisor(supervisor_en
 
     # Should NOT raise despite the callback failure
     record = await supervisor.supervise(
-        run_id="run-cb-err", process=process, timeout_seconds=30
+        run_id="run-cb-err", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
     )
     assert record.status == "completed"
 
@@ -986,7 +991,7 @@ async def test_supervise_uses_output_parser_from_strategy(supervisor_env, tmp_pa
     )
 
     result = await supervisor.supervise(
-        run_id="run-claude-parser", process=process, timeout_seconds=30
+        run_id="run-claude-parser", process=process, budget=resolve_execution_budget(timeout_policy={"timeout_seconds": 30})
     )
 
     # Read the diagnostics artifact and verify parsed_output is present
@@ -995,3 +1000,132 @@ async def test_supervise_uses_output_parser_from_strategy(supervisor_env, tmp_pa
     assert "parsed_output" in diag
     po = diag["parsed_output"]
     assert po["rate_limited"] is True
+
+
+# ---------------------------------------------------------------------------
+# Progress-aware execution budget (MoonLadderStudios/MoonMind#3771)
+#
+# The regression: a managed run was killed at its flat budget while it was
+# actively working. It wrote nothing to stdout because ``claude -p`` buffers
+# until the turn ends, and its last 23 minutes of work touched only ignored
+# directories, so the only evidence it was alive was that its process tree was
+# burning CPU. These tests drive real processes through the real supervisor.
+# ---------------------------------------------------------------------------
+
+
+def _budget(**policy) -> object:
+    return resolve_execution_budget(timeout_policy=policy)
+
+
+def _annotation_types(artifact_storage, record) -> list[str]:
+    diagnostics_path = _resolve_diagnostics_path(artifact_storage, record)
+    assert diagnostics_path is not None
+    payload = json.loads(
+        artifact_storage.resolve_storage_path(diagnostics_path).read_text(
+            encoding="utf-8"
+        )
+    )
+    return [
+        str(entry.get("annotation_type"))
+        for entry in payload.get("annotations", [])
+    ]
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="progress evidence from CPU activity requires /proc",
+)
+@pytest.mark.asyncio
+async def test_silent_but_working_process_outlives_its_base_budget(supervisor_env):
+    """A busy, silent process is extended past the base budget to the ceiling.
+
+    Before this behaviour existed the process died at ``timeout_seconds`` and the
+    run was reported as having made no observable progress.
+    """
+
+    store, artifact_storage, _, supervisor = supervisor_env
+    _make_record(store, "run-busy", "launching")
+
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-c",
+        # Burns CPU and prints nothing: byte-for-byte indistinguishable from a
+        # wedged process on stdout alone.
+        "x = 0\nwhile True: x += 1",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+
+    # Heartbeats carry the progress observation, so they must tick several times
+    # inside this compressed budget.
+    with patch(
+        "moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL", 0.2
+    ):
+        record = await supervisor.supervise(
+            run_id="run-busy",
+            process=process,
+            budget=_budget(
+                timeout_seconds=2,
+                max_timeout_seconds=5,
+                progress_stall_seconds=2,
+            ),
+        )
+
+    assert record.status == "timed_out"
+    # Survived the base budget it would previously have died at, and stopped at
+    # the ceiling instead.
+    assert "maximum execution budget" in (record.error_message or "")
+    # The message reports the real elapsed time, not the base window it
+    # was extended past.
+    assert "after 2s" not in (record.error_message or "")
+    assert "execution_budget_extended_for_progress" in _annotation_types(
+        artifact_storage, record
+    )
+
+
+@pytest.mark.skipif(
+    not sys.platform.startswith("linux"),
+    reason="progress evidence from CPU activity requires /proc",
+)
+@pytest.mark.asyncio
+async def test_wedged_process_is_still_killed_at_its_base_budget(supervisor_env):
+    """The containment half: no progress means no extension.
+
+    A process that consumes no CPU, writes nothing, and touches no files is
+    exactly the case the budget is supposed to end.
+    """
+
+    store, artifact_storage, _, supervisor = supervisor_env
+    _make_record(store, "run-wedged", "launching")
+
+    process = await asyncio.create_subprocess_exec(
+        "sleep",
+        "60",
+        stdin=asyncio.subprocess.DEVNULL,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+    )
+
+    with patch(
+        "moonmind.workflows.temporal.runtime.supervisor.HEARTBEAT_INTERVAL", 0.2
+    ):
+        record = await supervisor.supervise(
+            run_id="run-wedged",
+            process=process,
+            budget=_budget(
+                timeout_seconds=2,
+                max_timeout_seconds=30,
+                progress_stall_seconds=1,
+            ),
+        )
+
+    assert record.status == "timed_out"
+    assert "no observable progress" in (record.error_message or "")
+    assert "execution_budget_extended_for_progress" not in _annotation_types(
+        artifact_storage, record
+    )
+    # Ended at the base budget, nowhere near the 30s ceiling.
+    assert (record.finished_at - record.started_at).total_seconds() < 15

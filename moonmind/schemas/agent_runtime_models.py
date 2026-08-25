@@ -41,44 +41,166 @@ MANAGED_PROCESS_LOST_DURING_RECONCILIATION = (
 # value. Previously the workflow defaulted managed runs one way while
 # ``agent_runtime.launch`` independently defaulted the supervisor to 3600s, so an
 # explicitly requested larger budget could not take effect — the process was
-# still killed at one hour. A run needing more than the default requests it
-# explicitly through ``timeoutPolicy.timeout_seconds`` instead of widening the
-# fallback for every managed run.
+# still killed at one hour.
+#
+# The budget is progress-aware. ``timeout_seconds`` is the *base* budget: the
+# point at which a run that cannot demonstrate progress is terminated. A run that
+# is still making observable progress when the base budget expires keeps running
+# until either progress goes stale for ``progress_stall_seconds`` or the hard
+# ceiling ``max_timeout_seconds`` is reached. Wall-clock alone is not evidence of
+# a stuck run: a one-shot runtime such as ``claude -p`` emits nothing until it
+# finishes, so terminating on elapsed time alone destroys healthy long runs
+# (MoonLadderStudios/MoonMind#3771 — an hour of uncommitted work discarded from a
+# run that was writing files three seconds before the kill).
 DEFAULT_MANAGED_TIMEOUT_SECONDS = 3600  # 1 hour
 DEFAULT_EXTERNAL_TIMEOUT_SECONDS = 21600  # 6 hours
+# How far progress may carry a run past its base budget, as a multiple of that
+# budget. Deriving the ceiling from the base rather than fixing it absolutely
+# keeps an explicit budget meaningful: asking for a tight 60s budget yields a
+# tight ceiling, not a six-hour one. An operator who wants a specific ceiling
+# sets ``max_timeout_seconds`` directly.
+DEFAULT_PROGRESS_EXTENSION_FACTOR = 6
+# Absolute safety cap. No budget, however configured, lets one agent run hold a
+# provider slot longer than this.
+MAX_EXECUTION_BUDGET_SECONDS = 86400  # 24 hours
+# How long observable progress may go stale before an over-base run is treated as
+# stuck. Wide enough to cover a long provider call or a quiet compile/test
+# stretch, short enough that a genuinely wedged process is not carried to the
+# ceiling. Never longer than the base budget itself — a run is not given more
+# time to prove it is alive than it was originally given to finish.
+DEFAULT_PROGRESS_STALL_SECONDS = 900  # 15 minutes
+
+# Outcome of one execution-budget evaluation.
+#   ``continue``            -- the run may keep executing
+#   ``expired_no_progress`` -- base budget elapsed and progress is stale/absent
+#   ``expired_max_budget``  -- the hard ceiling was reached
+ExecutionBudgetVerdict = Literal[
+    "continue",
+    "expired_no_progress",
+    "expired_max_budget",
+]
 
 
-def resolve_execution_timeout_seconds(
-    *,
-    agent_kind: str = "managed",
-    timeout_policy: Mapping[str, Any] | Any | None = None,
-) -> int:
-    """Return the effective execution budget in seconds for one agent run.
+class ExecutionBudget(BaseModel):
+    """The resolved, progress-aware execution budget for one agent run.
 
-    An explicit ``timeout_seconds`` in the request's timeout policy always wins;
-    otherwise the kind-specific default applies. Both the workflow budget and the
-    process supervisor call this so the two deadlines cannot diverge.
+    Every boundary that can end a run for exceeding its time — the AgentRun
+    workflow loop and the managed process supervisor — resolves this from the
+    same ``timeout_policy`` and applies :func:`evaluate_execution_budget` to the
+    same progress evidence, so the two deadlines cannot diverge.
     """
 
-    default_seconds = (
-        DEFAULT_EXTERNAL_TIMEOUT_SECONDS
-        if agent_kind == "external"
-        else DEFAULT_MANAGED_TIMEOUT_SECONDS
-    )
+    model_config = ConfigDict(populate_by_name=True, frozen=True)
+
+    base_seconds: int = Field(alias="baseSeconds")
+    max_seconds: int = Field(alias="maxSeconds")
+    progress_stall_seconds: int = Field(alias="progressStallSeconds")
+
+    def as_timeout_policy(self) -> dict[str, int]:
+        """Return the policy mapping that republishes this budget to callees.
+
+        The workflow publishes this into the launch request so the supervisor
+        enforces the identical budget. Keys match the snake_case names read by
+        :func:`resolve_execution_budget`.
+        """
+
+        return {
+            "timeout_seconds": self.base_seconds,
+            "max_timeout_seconds": self.max_seconds,
+            "progress_stall_seconds": self.progress_stall_seconds,
+        }
+
+
+def _read_timeout_policy_value(
+    timeout_policy: Mapping[str, Any] | Any | None,
+    key: str,
+) -> int | None:
+    """Read one positive integer from a mapping-or-object timeout policy."""
+
     if timeout_policy is None:
-        return default_seconds
+        return None
     if isinstance(timeout_policy, Mapping):
-        requested = timeout_policy.get("timeout_seconds")
+        requested = timeout_policy.get(key)
     else:
-        requested = getattr(timeout_policy, "timeout_seconds", None)
+        requested = getattr(timeout_policy, key, None)
     if requested is None:
-        return default_seconds
+        return None
     try:
         seconds = int(requested)
     except (TypeError, ValueError):
-        return default_seconds
-    return seconds if seconds > 0 else default_seconds
+        return None
+    return seconds if seconds > 0 else None
 
+
+def resolve_execution_budget(
+    *,
+    agent_kind: str = "managed",
+    timeout_policy: Mapping[str, Any] | Any | None = None,
+) -> ExecutionBudget:
+    """Return the effective progress-aware execution budget for one agent run.
+
+    Explicit ``timeout_seconds`` / ``max_timeout_seconds`` /
+    ``progress_stall_seconds`` values in the request's timeout policy win;
+    otherwise the kind-specific defaults apply. A degraded or partially populated
+    policy falls back per-field rather than failing, so an in-flight run whose
+    payload predates the progress-aware fields still resolves a valid budget.
+
+    The ceiling is never below the base budget: an explicit ``timeout_seconds``
+    larger than the default ceiling raises the ceiling with it, so asking for a
+    bigger budget never silently shortens the run.
+    """
+
+    is_external = agent_kind == "external"
+    base_seconds = _read_timeout_policy_value(timeout_policy, "timeout_seconds") or (
+        DEFAULT_EXTERNAL_TIMEOUT_SECONDS
+        if is_external
+        else DEFAULT_MANAGED_TIMEOUT_SECONDS
+    )
+    max_seconds = _read_timeout_policy_value(
+        timeout_policy, "max_timeout_seconds"
+    ) or (base_seconds * DEFAULT_PROGRESS_EXTENSION_FACTOR)
+    progress_stall_seconds = _read_timeout_policy_value(
+        timeout_policy, "progress_stall_seconds"
+    ) or min(DEFAULT_PROGRESS_STALL_SECONDS, base_seconds)
+    return ExecutionBudget(
+        base_seconds=base_seconds,
+        # The ceiling is never below the base (asking for a bigger budget must
+        # not shorten the run) and never above the absolute cap.
+        max_seconds=min(
+            MAX_EXECUTION_BUDGET_SECONDS,
+            max(max_seconds, base_seconds),
+        ),
+        progress_stall_seconds=progress_stall_seconds,
+    )
+
+
+def evaluate_execution_budget(
+    *,
+    budget: ExecutionBudget,
+    elapsed_seconds: float,
+    idle_progress_seconds: float | None,
+) -> ExecutionBudgetVerdict:
+    """Decide whether a run may continue under its progress-aware budget.
+
+    ``idle_progress_seconds`` is how long ago the last *observable progress* was
+    seen — file mutation in the workspace, runtime output, or process-tree CPU
+    activity. ``None`` means no progress has ever been observed for this run, which
+    is not evidence of health: such a run is terminated at the base budget exactly
+    as before.
+
+    The hard ceiling is checked first so a runtime that livelocks while still
+    emitting progress signals cannot extend itself indefinitely.
+    """
+
+    if elapsed_seconds >= budget.max_seconds:
+        return "expired_max_budget"
+    if elapsed_seconds < budget.base_seconds:
+        return "continue"
+    if idle_progress_seconds is None:
+        return "expired_no_progress"
+    if idle_progress_seconds < budget.progress_stall_seconds:
+        return "continue"
+    return "expired_no_progress"
 
 AgentRunState = Literal[
     "queued",
@@ -2062,7 +2184,13 @@ def build_canonical_result(payload: dict[str, Any]) -> AgentRunResult:
 __all__ = [
     "DEFAULT_EXTERNAL_TIMEOUT_SECONDS",
     "DEFAULT_MANAGED_TIMEOUT_SECONDS",
-    "resolve_execution_timeout_seconds",
+    "DEFAULT_PROGRESS_EXTENSION_FACTOR",
+    "DEFAULT_PROGRESS_STALL_SECONDS",
+    "MAX_EXECUTION_BUDGET_SECONDS",
+    "ExecutionBudget",
+    "ExecutionBudgetVerdict",
+    "evaluate_execution_budget",
+    "resolve_execution_budget",
     "AgentExecutionRequest",
     "OmnigentExecutionPlanBinding",
     "AgentKind",

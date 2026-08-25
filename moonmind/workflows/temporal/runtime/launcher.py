@@ -25,7 +25,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
     TERMINAL_AGENT_RUN_STATES,
-    resolve_execution_timeout_seconds,
+    resolve_execution_budget,
 )
 from moonmind.security.execution_fanout_capabilities import (
     EXECUTION_FANOUT_REQUIRED_CAPABILITY,
@@ -993,10 +993,14 @@ class ManagedRuntimeLauncher:
                 session_id=run_id,
                 runtime_id=normalized_runtime_id,
                 source_kind="managed_process",
-                lifetime_seconds=resolve_execution_timeout_seconds(
+                # Size the capability to the budget's hard ceiling, not the base
+                # window: a run that keeps making progress outlives the base
+                # budget, and a token minted for the base window would strand it
+                # without fanout authority partway through.
+                lifetime_seconds=resolve_execution_budget(
                     agent_kind=request.agent_kind,
                     timeout_policy=request.timeout_policy,
-                ),
+                ).max_seconds,
             )
         )
 

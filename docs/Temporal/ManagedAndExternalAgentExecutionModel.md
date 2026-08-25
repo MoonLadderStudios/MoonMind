@@ -587,6 +587,76 @@ A detached process or provider job is not considered ongoing MoonMind-managed wo
 
 ---
 
+## 15.1 Execution budget
+
+An agent run has one execution budget, resolved from `timeoutPolicy` by a single
+authority and applied identically at both boundaries that can end a run for
+taking too long: the `MoonMind.AgentRun` poll loop and the managed process
+supervisor. The two deadlines cannot diverge, because the workflow publishes the
+resolved budget back into the launch request and the supervisor resolves the
+same values from it.
+
+The budget has three fields:
+
+| Field | Meaning |
+|---|---|
+| `timeout_seconds` | Base window. A run that cannot demonstrate progress ends here. |
+| `max_timeout_seconds` | Hard ceiling. No observed progress extends a run past this. |
+| `progress_stall_seconds` | How long observed progress may go stale before an over-base run is treated as stuck. |
+
+Omitted fields resolve to kind-specific defaults. The ceiling defaults to a
+multiple of the base window rather than an absolute constant, so an explicitly
+requested tight budget keeps a tight ceiling, and the stall window never exceeds
+the base window — a run is not given more time to prove it is alive than it was
+given to finish.
+
+**Elapsed wall-clock alone is not evidence that a run is stuck.** A run is
+terminated for exceeding its budget only when one of two things is true:
+
+- the base window has elapsed **and** no progress has been observed within
+  `progress_stall_seconds` (or no progress has ever been observed); or
+- the hard ceiling has been reached.
+
+A run that is still making observable progress when its base window elapses
+continues until progress goes stale or the ceiling is reached. The two outcomes
+are reported distinctly: a run stopped at the ceiling is never described as
+having made no progress, because the operator responses differ — raise the
+ceiling versus investigate a wedged runtime. The terminal result records the
+budget the decision was made against and which of the two conditions ended it.
+
+### Progress evidence
+
+Progress is observed evidence, never a heuristic derived from elapsed time. The
+supervisor takes the most recent of three independent signals and publishes it
+as `last_log_at`, which the workflow reads through canonical status metadata:
+
+- **runtime output** — bytes on stdout or stderr;
+- **workspace mutation** — the newest meaningful file mtime under the run
+  workspace;
+- **process-tree CPU activity** — cumulative CPU time consumed by the supervised
+  session.
+
+No single signal is sufficient, which is why the newest of all three is
+authoritative. A one-shot CLI launched in print mode emits nothing until its turn
+completes, so output stays silent for the whole run. An agent running a test
+suite or compiler writes only into ignored directories, so workspace mutation
+goes quiet for tens of minutes. CPU activity covers both, including work done
+only by descendants of the launched process, and distinguishes them from a
+process blocked forever on a dead socket, awaiting input, or deadlocked, which
+consumes none.
+
+A runtime that livelocks does consume CPU and therefore reads as progress. That
+is contained by the hard ceiling, which no amount of observed progress extends.
+The same observation drives the no-progress watchdog, so the watchdog and the
+budget cannot disagree about whether a run is progressing.
+
+Callers that provision resources which must outlive the whole run — credential
+lifetimes, broker sockets, activity `ScheduleToClose` timeouts — size them from
+the ceiling, never from the base window. Sizing them from the base window would
+strand an extended run without the authority it was granted.
+
+---
+
 ## 16. Retry, replay, and reconciliation
 
 ### 16.1 Activity retry

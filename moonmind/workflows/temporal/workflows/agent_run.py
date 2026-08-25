@@ -25,8 +25,11 @@ with workflow.unsafe.imports_passed_through():
         AgentRunHandle,
         AgentRunResult,
         AgentRunStatus as AgentRunStatusModel,
+        ExecutionBudget,
+        ExecutionBudgetVerdict,
         ProfileSelector,
-        resolve_execution_timeout_seconds,
+        evaluate_execution_budget,
+        resolve_execution_budget,
         _MAX_SUMMARY_CHARS,
     )
     from moonmind.schemas.managed_session_models import (
@@ -319,6 +322,18 @@ AGENT_RUN_MANAGED_NO_PROGRESS_CANCEL_FETCH_PATCH_ID = (
 # patch keep the launch payload they already dispatched.
 AGENT_RUN_SHARED_EXECUTION_BUDGET_PATCH_ID = (
     "agent-run-shared-execution-budget-v1"
+)
+# Makes the execution budget progress-aware. Elapsed wall-clock alone is not
+# evidence that a run is stuck: a one-shot runtime such as ``claude -p`` emits
+# nothing until its turn completes, so the flat budget terminated runs that were
+# actively working — MoonLadderStudios/MoonMind#3771 discarded an hour of
+# uncommitted work from a run that wrote files three seconds before the kill, and
+# reported it as "no observable progress". With this patch the base budget only
+# ends a run whose observed progress has gone stale; a progressing run continues
+# to the budget's hard ceiling. In-flight runs keep the flat deadline they were
+# started with so their recorded decisions replay unchanged.
+AGENT_RUN_PROGRESS_AWARE_EXECUTION_BUDGET_PATCH_ID = (
+    "agent-run-progress-aware-execution-budget-v1"
 )
 MANAGED_SESSION_START_AFTER_SLOT_PATCH_ID = (
     "agent-run-managed-session-start-after-slot-v1"
@@ -1251,6 +1266,155 @@ class MoonMindAgentRun:
         return max(0, int(policy.get("noProgressGraceSeconds") or 0))
 
     @staticmethod
+    def _effective_deadline_seconds(
+        *,
+        budget: ExecutionBudget,
+        elapsed_seconds: float,
+        idle_progress_seconds: float | None,
+    ) -> float:
+        """Seconds-from-start at which the run must stop, given current progress.
+
+        Below the base window this is the base window. Once the base window has
+        elapsed while progress is still fresh, the deadline rolls forward to the
+        moment progress *would* go stale, capped at the hard ceiling.
+
+        Every remaining-time computation in the poll loop derives from this, so a
+        run that has earned an extension is not cut short by a poll wait or a
+        status-activity budget that still believes the base window is the end.
+        It agrees with :func:`evaluate_execution_budget` by construction: that
+        function returns a non-``continue`` verdict exactly when ``elapsed_seconds``
+        has reached the deadline this returns.
+        """
+
+        if idle_progress_seconds is None:
+            return float(budget.base_seconds)
+        goes_stale_at = (
+            elapsed_seconds - idle_progress_seconds + budget.progress_stall_seconds
+        )
+        return float(
+            min(budget.max_seconds, max(budget.base_seconds, goes_stale_at))
+        )
+
+    @staticmethod
+    def _publish_execution_budget(
+        *,
+        request: AgentExecutionRequest,
+        budget: ExecutionBudget,
+        progress_aware: bool,
+    ) -> None:
+        """Republish the resolved budget into the request the launcher receives.
+
+        The supervisor must extend and terminate on the same numbers the workflow
+        enforces, so the whole budget travels — not just the base window.
+        Publishing only the base window would let the process be killed at the
+        base budget even though the workflow had granted an extension.
+
+        Adding keys keeps the launch payload backward-compatible: a worker that
+        does not read them resolves the same defaults from the base window.
+        """
+
+        published: dict[str, Any] = {
+            **(request.timeout_policy or {}),
+            "timeout_seconds": budget.base_seconds,
+        }
+        if progress_aware:
+            published.update(budget.as_timeout_policy())
+        request.timeout_policy = published
+
+    @staticmethod
+    def _budget_idle_progress_seconds(
+        *,
+        progress_aware: bool,
+        last_progress_at: datetime | None,
+        now: datetime,
+    ) -> float | None:
+        """How long ago progress was last observed, or ``None`` if never.
+
+        ``None`` is not evidence of health — it makes the budget behave exactly
+        as the old flat deadline did. Only positively observed progress buys an
+        extension, and a run replaying from before the progress-aware patch never
+        observes any.
+        """
+
+        if not progress_aware or last_progress_at is None:
+            return None
+        return max(0.0, (now - last_progress_at).total_seconds())
+
+    @classmethod
+    def _budget_deadline_for(
+        cls,
+        *,
+        budget: ExecutionBudget,
+        progress_aware: bool,
+        elapsed_seconds: float,
+        idle_progress_seconds: float | None,
+    ) -> float:
+        """Seconds-from-start the run may currently reach.
+
+        Every remaining-time computation in the poll loop derives from this, so a
+        run that earned an extension is not cut short by a poll wait or a status
+        budget that still believes the base window is the end.
+        """
+
+        if not progress_aware:
+            return float(budget.base_seconds)
+        return cls._effective_deadline_seconds(
+            budget=budget,
+            elapsed_seconds=elapsed_seconds,
+            idle_progress_seconds=idle_progress_seconds,
+        )
+
+    @staticmethod
+    def _budget_verdict_for(
+        *,
+        budget: ExecutionBudget,
+        progress_aware: bool,
+        elapsed_seconds: float,
+        idle_progress_seconds: float | None,
+    ) -> ExecutionBudgetVerdict:
+        """Whether the execution budget still permits the run to continue."""
+
+        if not progress_aware:
+            return (
+                "continue"
+                if elapsed_seconds < budget.base_seconds
+                else "expired_no_progress"
+            )
+        return evaluate_execution_budget(
+            budget=budget,
+            elapsed_seconds=elapsed_seconds,
+            idle_progress_seconds=idle_progress_seconds,
+        )
+
+    @staticmethod
+    def _budget_expiry_detail_for(
+        *,
+        budget: ExecutionBudget,
+        progress_aware: bool,
+        verdict: ExecutionBudgetVerdict,
+    ) -> str:
+        """Operator-facing reason the budget ended the run.
+
+        A run that was extended for observed progress and then hit the ceiling is
+        never described as having made no progress: the two outcomes call for
+        different operator responses (raise the ceiling versus investigate a
+        wedged runtime).
+        """
+
+        if verdict == "expired_max_budget":
+            return (
+                "was still making progress but reached its maximum execution "
+                f"budget of {budget.max_seconds}s"
+            )
+        if progress_aware:
+            return (
+                "made no observable progress for "
+                f"{budget.progress_stall_seconds}s and exceeded its "
+                "execution budget"
+            )
+        return "made no observable progress and exceeded its execution budget"
+
+    @staticmethod
     def _result_requires_provider_cooldown(result: AgentRunResult | None) -> bool:
         if result is None:
             return False
@@ -1295,6 +1459,8 @@ class MoonMindAgentRun:
         timeout_seconds: float,
         detail: str,
         elapsed_seconds: float | None = None,
+        budget: ExecutionBudget | None = None,
+        verdict: ExecutionBudgetVerdict | None = None,
     ) -> AgentRunResult:
         """Build a failed result for an agent-run timeout with an actionable summary.
 
@@ -1322,6 +1488,22 @@ class MoonMindAgentRun:
         }
         if elapsed_seconds is not None:
             metadata["elapsedSeconds"] = int(elapsed_seconds)
+        if budget is not None:
+            # Record the budget the decision was made against so an operator can
+            # tell "raise the ceiling" from "the runtime went quiet" without
+            # reconstructing it from logs.
+            metadata["executionBudget"] = {
+                "baseSeconds": budget.base_seconds,
+                "maxSeconds": budget.max_seconds,
+                "progressStallSeconds": budget.progress_stall_seconds,
+            }
+            metadata["budgetExtendedForProgress"] = (
+                elapsed_seconds is not None
+                and elapsed_seconds >= budget.base_seconds
+                and verdict == "expired_max_budget"
+            )
+        if verdict is not None:
+            metadata["budgetVerdict"] = verdict
         return AgentRunResult(
             summary=summary,
             failure_class="execution_error",
@@ -4352,18 +4534,63 @@ class MoonMindAgentRun:
         # and the managed process supervisor's kill deadline resolve from the
         # same value, so an explicitly requested larger budget is honored at both
         # boundaries instead of the process being killed at the launch default.
-        timeout_seconds = resolve_execution_timeout_seconds(
+        execution_budget = resolve_execution_budget(
             agent_kind=request.agent_kind,
             timeout_policy=request.timeout_policy,
         )
+        timeout_seconds = execution_budget.base_seconds
+        # Progress-awareness is a decision change, so it is versioned. Runs
+        # started before this patch keep the flat deadline they recorded.
+        progress_aware_budget = workflow.patched(
+            AGENT_RUN_PROGRESS_AWARE_EXECUTION_BUDGET_PATCH_ID
+        )
         if workflow.patched(AGENT_RUN_SHARED_EXECUTION_BUDGET_PATCH_ID):
-            request.timeout_policy = {
-                **(request.timeout_policy or {}),
-                "timeout_seconds": timeout_seconds,
-            }
+            self._publish_execution_budget(
+                request=request,
+                budget=execution_budget,
+                progress_aware=progress_aware_budget,
+            )
 
         # Loop for handling 429 cooldown & profile swaps safely within the timeout boundary
         overall_start = workflow.now()
+        # Progress evidence for the progress-aware execution budget. ``None``
+        # means no progress has been observed for this run yet, which the budget
+        # treats exactly as the old flat deadline: only positively observed
+        # progress buys an extension. Progress is defined by the same status
+        # signature the no-progress watchdog uses, so there is one notion of
+        # progress in the workflow rather than two that can disagree.
+        last_progress_at: datetime | None = None
+
+        def _budget_idle_seconds() -> float | None:
+            return self._budget_idle_progress_seconds(
+                progress_aware=progress_aware_budget,
+                last_progress_at=last_progress_at,
+                now=workflow.now(),
+            )
+
+        def _budget_deadline_seconds() -> float:
+            return self._budget_deadline_for(
+                budget=execution_budget,
+                progress_aware=progress_aware_budget,
+                elapsed_seconds=(workflow.now() - overall_start).total_seconds(),
+                idle_progress_seconds=_budget_idle_seconds(),
+            )
+
+        def _budget_verdict() -> ExecutionBudgetVerdict:
+            return self._budget_verdict_for(
+                budget=execution_budget,
+                progress_aware=progress_aware_budget,
+                elapsed_seconds=(workflow.now() - overall_start).total_seconds(),
+                idle_progress_seconds=_budget_idle_seconds(),
+            )
+
+        def _budget_expiry_detail(verdict: ExecutionBudgetVerdict) -> str:
+            return self._budget_expiry_detail_for(
+                budget=execution_budget,
+                progress_aware=progress_aware_budget,
+                verdict=verdict,
+            )
+
         use_managed_status_activity = workflow.patched(
             MANAGED_STATUS_ACTIVITY_PATCH_ID
         )
@@ -4406,18 +4633,23 @@ class MoonMindAgentRun:
                 uses_codex_session_adapter = self._uses_codex_session_adapter(request)
                 parent_info = workflow.info().parent
                 elapsed = (workflow.now() - overall_start).total_seconds()
-                if elapsed >= timeout_seconds:
+                pre_dispatch_verdict = _budget_verdict()
+                if pre_dispatch_verdict != "continue":
                     self.run_status = RunStatus.timed_out
                     return await self._publish_terminal_result_with_compacted_replay_cleanup(
                         request=request,
                         result=self._timed_out_result(
                             request=request,
-                            timeout_seconds=timeout_seconds,
+                            timeout_seconds=_budget_deadline_seconds(),
                             elapsed_seconds=elapsed,
                             detail=(
                                 "exceeded its execution budget before dispatching "
                                 "a turn"
                             ),
+                            budget=(
+                                execution_budget if progress_aware_budget else None
+                            ),
+                            verdict=pre_dispatch_verdict,
                         ),
                     )
 
@@ -4973,9 +5205,13 @@ class MoonMindAgentRun:
                             )
 
                         async def _send_turn(request_payload: Any) -> Any:
+                            # Evaluated at dispatch time so a turn that starts
+                            # after the base window — because the run earned an
+                            # extension for observed progress — gets the extended
+                            # deadline rather than a negative budget.
                             return await self._send_turn_within_budget(
                                 request_payload,
-                                timeout_seconds=timeout_seconds,
+                                timeout_seconds=_budget_deadline_seconds(),
                                 overall_start=overall_start,
                             )
 
@@ -5336,8 +5572,17 @@ class MoonMindAgentRun:
                             # activity dispatcher because that boundary invokes
                             # the exact recorded realizer from the persisted
                             # plan instead of the generic supervisor.
+                            # ScheduleToClose must cover the longest the run can
+                            # legally take, otherwise Temporal cancels the
+                            # activity at the base window and an extension the
+                            # budget granted cannot actually be used.
+                            stc_budget_seconds = (
+                                execution_budget.max_seconds
+                                if progress_aware_budget
+                                else int(timeout_seconds)
+                            )
                             stc_seconds = min(
-                                max(int(timeout_seconds), 60),
+                                max(int(stc_budget_seconds), 60),
                                 86400,
                             )
                             act_name = f"integration.{validated_id}.execute"
@@ -5445,7 +5690,10 @@ class MoonMindAgentRun:
                                 )
                             self.run_status = RunStatus.running
 
-                        remaining_timeout = timeout_seconds - (workflow.now() - overall_start).total_seconds()
+                        remaining_timeout = (
+                            _budget_deadline_seconds()
+                            - (workflow.now() - overall_start).total_seconds()
+                        )
                         if remaining_timeout <= 0:
                             break
 
@@ -5475,9 +5723,10 @@ class MoonMindAgentRun:
                                 fallback_agent_id=request.agent_id,
                             )
                         else:
-                            remaining_status_budget = timeout_seconds - (
-                                workflow.now() - overall_start
-                            ).total_seconds()
+                            remaining_status_budget = (
+                                _budget_deadline_seconds()
+                                - (workflow.now() - overall_start).total_seconds()
+                            )
                             if (
                                 use_managed_status_activity
                                 and not uses_codex_session_adapter
@@ -5496,15 +5745,23 @@ class MoonMindAgentRun:
                             )
 
                         self.run_status = status_obj.status
+                        # One progress observation feeds both the no-progress
+                        # watchdog and the execution budget, so the two can never
+                        # disagree about whether this run is making progress.
+                        progress_signature = self._status_progress_signature(
+                            status_obj
+                        )
+                        progress_observed = (
+                            progress_signature != last_progress_signature
+                        )
+                        last_progress_signature = progress_signature
+                        if progress_observed:
+                            last_progress_at = workflow.now()
                         if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
-                            progress_signature = self._status_progress_signature(
-                                status_obj
-                            )
-                            if progress_signature == last_progress_signature:
-                                stagnant_poll_count += 1
-                            else:
-                                last_progress_signature = progress_signature
+                            if progress_observed:
                                 stagnant_poll_count = 0
+                            else:
+                                stagnant_poll_count += 1
                             max_stagnant_polls = self._max_no_progress_polls(
                                 policy=resiliency_policy,
                                 poll_interval=poll_interval,
@@ -5699,7 +5956,8 @@ class MoonMindAgentRun:
 
                 elapsed = (workflow.now() - overall_start).total_seconds()
 
-                if elapsed >= timeout_seconds and not self.completion_event.is_set():
+                terminal_verdict = _budget_verdict()
+                if terminal_verdict != "continue" and not self.completion_event.is_set():
                     self.run_status = RunStatus.timed_out
                     if manager_handle and request.execution_profile_ref:
                         await manager_handle.signal(
@@ -5713,12 +5971,13 @@ class MoonMindAgentRun:
                         request=request,
                         result=self._timed_out_result(
                             request=request,
-                            timeout_seconds=timeout_seconds,
+                            timeout_seconds=_budget_deadline_seconds(),
                             elapsed_seconds=elapsed,
-                            detail=(
-                                "made no observable progress and exceeded its "
-                                "execution budget"
+                            detail=_budget_expiry_detail(terminal_verdict),
+                            budget=(
+                                execution_budget if progress_aware_budget else None
                             ),
+                            verdict=terminal_verdict,
                         ),
                     )
 
