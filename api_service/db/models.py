@@ -4678,11 +4678,10 @@ class MergeAutomationReviewRequestRecord(Base):
     """
 
     __tablename__ = "merge_automation_review_requests"
+    # ``request_key`` is the primary key: the deterministic identity of one
+    # automated review request. A separate unique constraint on it would only
+    # add a duplicate index.
     __table_args__ = (
-        UniqueConstraint(
-            "request_key",
-            name="uq_merge_automation_review_requests_request_key",
-        ),
         Index(
             "ix_merge_automation_review_requests_pr",
             "repository",

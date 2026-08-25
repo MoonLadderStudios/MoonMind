@@ -19,7 +19,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "363_merge_automation_review_requests"
+revision: str = "363_merge_automation_reviews"
 down_revision: Union[str, None] = "362_omnigent_catalog_reobserve"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -69,10 +69,6 @@ def upgrade() -> None:
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.func.now(),
-        ),
-        sa.UniqueConstraint(
-            "request_key",
-            name="uq_merge_automation_review_requests_request_key",
         ),
     )
     op.create_index(
