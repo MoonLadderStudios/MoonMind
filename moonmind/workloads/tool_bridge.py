@@ -104,6 +104,21 @@ def build_container_job_tool_definition_payload(*, name: str) -> dict[str, Any]:
                     "cpuMillis": {"type": "integer", "minimum": 1},
                     "memoryMiB": {"type": "integer", "minimum": 16},
                     "pids": {"type": "integer", "minimum": 16},
+                    # Caller-supplied device request. The deployment bounds the
+                    # device count; the caller never selects host devices.
+                    "gpu": {
+                        "type": "object",
+                        "properties": {
+                            "vendor": {"type": "string", "enum": ["nvidia"]},
+                            "count": {
+                                "oneOf": [
+                                    {"type": "integer", "minimum": 1},
+                                    {"type": "string", "const": "all"},
+                                ]
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
                 },
                 "additionalProperties": False,
             },

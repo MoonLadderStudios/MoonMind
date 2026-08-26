@@ -34,6 +34,7 @@ from moonmind.security.egress_conformance_evidence import (
     serialize_conformance_evidence,
 )
 from moonmind.utils.logging import redact_sensitive_payload, redact_sensitive_text
+from moonmind.workloads.gpu import gpu_device_request_args, gpu_launch_observations
 
 _MAX_CAPTURED_STREAM_CHARS = 64_000
 _MAX_CAPTURED_STREAM_BYTES = 64_000
@@ -341,6 +342,7 @@ def _workload_metadata(
     completed_at: datetime,
     duration_seconds: float,
     timeout_reason: str | None,
+    stderr: str = "",
 ) -> dict[str, object]:
     image_ref = request.profile.image if request.profile is not None else getattr(request.request, "image", None)
     profile_id = request.profile.id if request.profile is not None else None
@@ -367,6 +369,14 @@ def _workload_metadata(
         "labels": dict(request.ownership.labels),
         "artifactsDir": request.request.artifacts_dir,
         "sessionContext": _session_context(request),
+        # Generic GPU observations for a caller-supplied device request. Absent
+        # (``None``) for every CPU-only request, which keeps existing CPU-only
+        # behavior unchanged.
+        "gpu": gpu_launch_observations(
+            gpu=request.request.resources.gpu,
+            exit_code=exit_code,
+            stderr=stderr,
+        ),
     }
 
 def _helper_metadata(
@@ -888,6 +898,35 @@ def _request_kill_grace_seconds(request: ValidatedWorkloadRequest) -> int:
         else _DEFAULT_KILL_GRACE_SECONDS
     )
 
+def _removes_container_on_exit(request: ValidatedWorkloadRequest) -> bool:
+    """Return whether job cleanup owns and removes the launched container.
+
+    Cleanup is scoped to the container MoonMind named and launched. Profile
+    workloads follow their profile cleanup policy. On the unrestricted path,
+    only a device-bearing container is run-owned for cleanup: a CPU-only
+    unrestricted request keeps the retained-container semantics its already
+    recorded ``workload.run`` history was launched with, so a replayed or
+    retried in-flight attempt cannot start deleting a container it previously
+    kept. A raw docker-CLI request owns no MoonMind-named container, so it
+    removes nothing. Images and named cache volumes are never job-owned and are
+    never removed here.
+    """
+
+    if request.profile is not None:
+        return request.profile.cleanup.remove_container_on_exit
+    return (
+        isinstance(request.request, UnrestrictedContainerRequest)
+        and request.request.resources.gpu is not None
+    )
+
+def _request_cleanup_policy(request: ValidatedWorkloadRequest) -> dict[str, object]:
+    if request.profile is not None:
+        return request.profile.cleanup.model_dump(mode="json", by_alias=True)
+    return {
+        "removeContainerOnExit": _removes_container_on_exit(request),
+        "killGraceSeconds": _DEFAULT_KILL_GRACE_SECONDS,
+    }
+
 def _build_unrestricted_run_args(
     *,
     docker_binary: str,
@@ -924,6 +963,11 @@ def _build_unrestricted_run_args(
         overrides=workload.resources,
     ).items():
         args.extend([flag, value])
+    if workload.resources.gpu is not None:
+        # The caller owns the GPU resource request; MoonMind only realizes it as
+        # the vendor device request. No profile device policy is consulted on
+        # the unrestricted container path.
+        args.extend(gpu_device_request_args(workload.resources.gpu))
     if workload.entrypoint:
         args.extend(["--entrypoint", workload.entrypoint[0]])
     args.append(workload.image)
@@ -1398,10 +1442,7 @@ class DockerWorkloadLauncher:
                             )
                         )
                 finally:
-                    if (
-                        request.profile is not None
-                        and request.profile.cleanup.remove_container_on_exit
-                    ):
+                    if _removes_container_on_exit(request):
                         await self._janitor.remove(request.container_name)
                     if egress_workload_evidence is not None:
                         cleanup_evidence = await self._verify_container_cleanup(
@@ -1426,6 +1467,7 @@ class DockerWorkloadLauncher:
             completed_at=completed_at,
             duration_seconds=duration_seconds,
             timeout_reason=timeout_reason,
+            stderr=stderr,
         )
         diagnostics = {
             **workload_metadata,
@@ -1438,7 +1480,7 @@ class DockerWorkloadLauncher:
                 by_alias=True,
                 exclude_none=True,
             ),
-            "cleanup": (request.profile.cleanup.model_dump(mode="json", by_alias=True) if request.profile is not None else {"removeContainerOnExit": False, "killGraceSeconds": _DEFAULT_KILL_GRACE_SECONDS}),
+            "cleanup": _request_cleanup_policy(request),
         }
         declared_refs, missing_declared_outputs = _declared_output_refs(request)
         collected_refs, collected_outputs = _collect_workspace_artifacts(request)

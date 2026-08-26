@@ -12559,6 +12559,7 @@ export interface components {
              * @default 256
              */
             pids: number;
+            gpu?: components["schemas"]["WorkloadGpuRequest"] | null;
         };
         /**
          * ResourceListResponse
@@ -14470,6 +14471,28 @@ export interface components {
          * @enum {string}
          */
         WorkflowRunStatus: "pending" | "running" | "succeeded" | "failed" | "no_work" | "cancelled" | "retrying";
+        /**
+         * WorkloadGpuRequest
+         * @description Caller-supplied generic GPU resource request for one container.
+         *
+         *     This is ordinary request data: the caller names a supported GPU vendor and
+         *     how many devices the container needs. MoonMind realizes it as the vendor's
+         *     Docker device request and never infers it from the image, the command, or
+         *     any repository-specific condition.
+         */
+        WorkloadGpuRequest: {
+            /**
+             * Vendor
+             * @default nvidia
+             * @constant
+             */
+            vendor: "nvidia";
+            /**
+             * Count
+             * @default all
+             */
+            count: number | "all";
+        };
         /** WorkspaceDefaults */
         WorkspaceDefaults: {
             /**

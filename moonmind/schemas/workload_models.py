@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import posixpath
 import re
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -61,6 +62,8 @@ WorkflowDockerMode = Literal["disabled", "profiles", "unrestricted"]
 WorkloadAccessKind = Literal["profile", "unrestricted_container", "unrestricted_docker_cli"]
 WorkloadDeviceMode = Literal["none"]
 WorkloadReadinessProbeType = Literal["exec"]
+WorkloadGpuVendor = Literal["nvidia"]
+WORKLOAD_GPU_VENDORS: tuple[WorkloadGpuVendor, ...] = ("nvidia",)
 
 def parse_cpu_units(value: str) -> float:
     """Parse a Docker CPU quota-style value for numeric comparison."""
@@ -255,6 +258,61 @@ class UnrestrictedCacheMount(BaseModel):
             raise ValueError("cacheMounts target must be an absolute safe path")
         return self
 
+def _validate_gpu_count(value: Any) -> None:
+    """Reject a device count that only becomes an integer through coercion.
+
+    Pydantic's integer coercion runs before field and model validation, so
+    ``true``, ``"2"``, and ``2.0`` would otherwise be realized as device counts
+    the caller never declared. The raw value must already be ``all`` or a
+    positive Python integer.
+    """
+
+    accepted = (
+        value == "all"
+        if isinstance(value, str)
+        else isinstance(value, int) and not isinstance(value, bool) and value >= 1
+    )
+    if not accepted:
+        raise ValueError("gpu.count must be a positive integer or 'all'")
+
+class WorkloadGpuRequest(BaseModel):
+    """Caller-supplied generic GPU resource request for one container.
+
+    This is ordinary request data: the caller names a supported GPU vendor and
+    how many devices the container needs. MoonMind realizes it as the vendor's
+    Docker device request and never infers it from the image, the command, or
+    any repository-specific condition.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    vendor: WorkloadGpuVendor = Field("nvidia", alias="vendor")
+    count: int | Literal["all"] = Field("all", alias="count")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _validate_raw_request(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        raw_vendor = value.get("vendor", value.get("Vendor"))
+        if raw_vendor is not None:
+            vendor = str(raw_vendor).strip().lower()
+            if vendor not in WORKLOAD_GPU_VENDORS:
+                allowed = ", ".join(WORKLOAD_GPU_VENDORS)
+                raise ValueError(
+                    f"gpu.vendor {raw_vendor!r} is not supported; "
+                    f"supported vendors: {allowed}"
+                )
+        if "count" in value:
+            _validate_gpu_count(value["count"])
+        return value
+
+    @property
+    def device_request_value(self) -> str:
+        """Return the Docker device-request value (``all`` or the count)."""
+
+        return "all" if self.count == "all" else str(self.count)
+
 class WorkloadResourceOverrides(BaseModel):
     """Per-request resource overrides capped by the selected runner profile."""
 
@@ -263,6 +321,7 @@ class WorkloadResourceOverrides(BaseModel):
     cpu: str | None = Field(None, alias="cpu")
     memory: str | None = Field(None, alias="memory")
     shm_size: str | None = Field(None, alias="shmSize")
+    gpu: WorkloadGpuRequest | None = Field(None, alias="gpu")
 
     @model_validator(mode="after")
     def _validate_values(self) -> "WorkloadResourceOverrides":
@@ -679,6 +738,13 @@ class UnrestrictedDockerRequest(BaseModel):
         self.command = tuple(require_non_blank(item, field_name="command[]") for item in self.command)
         if not self.command or self.command[0] != "docker":
             raise ValueError("container.run_docker command[0] must be docker")
+        if self.resources.gpu is not None:
+            # A raw docker-CLI request builds its own container arguments, so a
+            # MoonMind-realized device request would be silently ignored.
+            raise ValueError(
+                "container.run_docker does not realize resources.gpu; declare the "
+                "device request in the caller-supplied docker command"
+            )
         normalized_env: dict[str, str] = {}
         for raw_key, raw_value in self.env_overrides.items():
             key = _normalize_env_name(str(raw_key), field_name="envOverrides key")
