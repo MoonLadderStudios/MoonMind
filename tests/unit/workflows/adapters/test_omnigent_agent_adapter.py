@@ -131,6 +131,30 @@ def test_managed_repository_task_normalizes_repo_url_and_branch() -> None:
     )
 
 
+def test_managed_repository_task_normalizes_github_slug() -> None:
+    req = _request(
+        workspaceSpec={
+            "repository": "MoonLadderStudios/Tactics",
+            "workspaceLocator": {
+                "kind": "sandbox",
+                "workspaceId": "710b70b2b7957c3094f196ce",
+                "relativePath": "repo",
+            },
+        },
+        parameters={
+            "repository": "MoonLadderStudios/Tactics",
+            "omnigent": {"session": {"hostType": "managed"}},
+        },
+    )
+
+    selection = build_omnigent_selection(req)
+
+    assert (
+        selection.session.workspace
+        == "https://github.com/MoonLadderStudios/Tactics.git"
+    )
+
+
 def test_managed_repository_task_uses_starting_branch_not_target_branch() -> None:
     req = _request(
         workspaceSpec={

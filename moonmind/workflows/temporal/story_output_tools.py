@@ -3232,7 +3232,6 @@ def _github_labels(
     *,
     story: Mapping[str, Any],
     github_payload: Mapping[str, Any],
-    marker_label: str,
 ) -> list[str]:
     labels: list[str] = []
     for source in (github_payload, story):
@@ -3240,8 +3239,6 @@ def _github_labels(
             label = _string(item.get("name") if isinstance(item, Mapping) else item)
             if label:
                 labels.append(label)
-    if marker_label:
-        labels.append(marker_label)
     return list(dict.fromkeys(labels))
 
 
@@ -3511,7 +3508,6 @@ async def create_github_issues_from_stories(
         )
 
     service = github_service_factory()
-    marker_label = _workflow_marker_label(inputs=inputs, context=_context)
     created: list[dict[str, Any]] = []
     issue_mappings: list[dict[str, Any]] = []
     for index, story in enumerate(stories, start=1):
@@ -3526,7 +3522,6 @@ async def create_github_issues_from_stories(
             labels=_github_labels(
                 story=story,
                 github_payload=github_payload,
-                marker_label=marker_label,
             ),
             github_token=None,
         )

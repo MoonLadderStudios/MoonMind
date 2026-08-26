@@ -21,6 +21,10 @@ from moonmind.omnigent.failure_classification import (
     OmnigentFailureReason,
     classify_omnigent_failure,
 )
+from moonmind.omnigent.repository_sources import (
+    RepositorySourceError,
+    normalize_repository_source,
+)
 from moonmind.schemas.agent_runtime_models import (
     AgentExecutionRequest,
     AgentRunHandle,
@@ -456,8 +460,16 @@ def _find_repository_url(payload: Mapping[str, Any] | None) -> str | None:
         return None
     for key in ("repository", "repositoryUrl", "repoUrl", "gitUrl"):
         value = payload.get(key)
-        if isinstance(value, str) and _is_git_url_with_optional_branch(value):
-            return value
+        if isinstance(value, str):
+            if _is_git_url_with_optional_branch(value):
+                return value
+            try:
+                normalized, source_kind = normalize_repository_source(value)
+            except RepositorySourceError:
+                normalized = ""
+                source_kind = ""
+            if source_kind in {"github_https", "remote"} and normalized:
+                return normalized
         if isinstance(value, Mapping):
             nested = _find_repository_url(value)
             if nested:
