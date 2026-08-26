@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from moonmind.schemas.workload_models import WorkloadGpuRequest
 from moonmind.schemas.workspace_locator_models import (
     ExternalStateLocator,
     ManagedWorkspaceLocator,
@@ -181,6 +182,10 @@ class ResourceLimits(ContractModel):
     cpu_millis: int = Field(alias="cpuMillis", ge=1, le=128000)
     memory_mib: int = Field(alias="memoryMiB", ge=16, le=1048576)
     pids: int = Field(256, ge=16, le=32768)
+    # A caller-supplied device request. Absent for every CPU-only job. The
+    # request contract is shared with the container launch boundary so a GPU
+    # resource has exactly one canonical shape.
+    gpu: WorkloadGpuRequest | None = None
 
 
 class OutputDeclaration(ContractModel):

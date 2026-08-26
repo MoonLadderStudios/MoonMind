@@ -902,15 +902,22 @@ def _removes_container_on_exit(request: ValidatedWorkloadRequest) -> bool:
     """Return whether job cleanup owns and removes the launched container.
 
     Cleanup is scoped to the container MoonMind named and launched. Profile
-    workloads follow their profile cleanup policy; an unrestricted container
-    request always owns exactly one run-owned container. A raw docker-CLI
-    request owns no MoonMind-named container, so it removes nothing. Images and
-    named cache volumes are never job-owned and are never removed here.
+    workloads follow their profile cleanup policy. On the unrestricted path,
+    only a device-bearing container is run-owned for cleanup: a CPU-only
+    unrestricted request keeps the retained-container semantics its already
+    recorded ``workload.run`` history was launched with, so a replayed or
+    retried in-flight attempt cannot start deleting a container it previously
+    kept. A raw docker-CLI request owns no MoonMind-named container, so it
+    removes nothing. Images and named cache volumes are never job-owned and are
+    never removed here.
     """
 
     if request.profile is not None:
         return request.profile.cleanup.remove_container_on_exit
-    return isinstance(request.request, UnrestrictedContainerRequest)
+    return (
+        isinstance(request.request, UnrestrictedContainerRequest)
+        and request.request.resources.gpu is not None
+    )
 
 def _request_cleanup_policy(request: ValidatedWorkloadRequest) -> dict[str, object]:
     if request.profile is not None:

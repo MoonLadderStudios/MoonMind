@@ -14,9 +14,10 @@ command, and the GPU resource are ordinary request data supplied by the caller.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -24,6 +25,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from moonmind.schemas._validation import NonBlankStr
+from moonmind.schemas.container_job_models import normalize_image_reference
 from moonmind.schemas.workload_models import (
     UnrestrictedContainerRequest,
     WorkloadGpuRequest,
@@ -38,6 +40,12 @@ GPU_DEVICE_REQUEST_FLAG = "--gpus"
 #: itself. It is deliberately distinct from a container that started and then
 #: exited nonzero, which carries no GPU failure class at all.
 GPU_DEVICE_REQUEST_REJECTED = "gpu_device_request_rejected"
+
+#: ``docker run`` reports its own client/daemon errors with this exit status.
+#: A container that started reports its application's exit status instead, so
+#: this code is the objective boundary between a refused device request and an
+#: ordinary container process exit.
+DOCKER_LAUNCH_FAILURE_EXIT_CODE = 125
 
 GpuLaunchFailureReason = Literal[
     "nvidia_runtime_unavailable",
@@ -134,15 +142,17 @@ def classify_gpu_launch_failure(
 ) -> GpuLaunchFailure | None:
     """Classify a failed run as a GPU device-request refusal, or not.
 
-    A refusal is recognized only by a specific vendor/runtime diagnostic on
-    stderr. Returns ``None`` when no GPU was requested, when the run succeeded
-    or was cancelled, when the diagnostic names a non-GPU launch failure such as
-    an unreachable Docker daemon, and — by construction — when the container
-    started and exited nonzero on its own, which stays an ordinary process exit
-    failure.
+    A refusal is recognized only when Docker itself refused to run the
+    container — ``exit_code`` equals :data:`DOCKER_LAUNCH_FAILURE_EXIT_CODE` —
+    *and* stderr carries a specific vendor/runtime diagnostic. Returns ``None``
+    when no GPU was requested, when the run succeeded or was cancelled, when the
+    diagnostic names a non-GPU launch failure such as an unreachable Docker
+    daemon, and when the container started and exited nonzero on its own, which
+    stays an ordinary process exit failure even if the workload wrote
+    GPU-shaped text to stderr.
     """
 
-    if gpu is None or not exit_code:
+    if gpu is None or exit_code != DOCKER_LAUNCH_FAILURE_EXIT_CODE:
         return None
     haystack = str(stderr or "").lower()
     if not haystack:
@@ -204,22 +214,150 @@ class GpuQualificationRecord(BaseModel):
     recorded_at: datetime = Field(..., alias="recordedAt")
 
 
-def moonmind_revision(env: Mapping[str, str] | None = None) -> str:
-    """Return the deployment's immutable release identity, or ``unknown``."""
+#: Environment keys carrying an immutable build identity, in precedence order.
+MOONMIND_REVISION_ENV_KEYS: tuple[str, ...] = (
+    "MOONMIND_BUILD_SHA",
+    "MOONMIND_IMAGE_DIGEST",
+)
+
+
+def moonmind_revision(env: Mapping[str, str] | None = None) -> str | None:
+    """Return the immutable revision identity, or ``None`` when unavailable.
+
+    Published evidence must name the MoonMind implementation it qualified, so
+    there is no placeholder value: a caller that cannot resolve an immutable
+    identity has to fail before publishing rather than record an unattributable
+    revision.
+    """
 
     source = os.environ if env is None else env
-    for key in ("MOONMIND_BUILD_SHA", "MOONMIND_IMAGE_DIGEST"):
+    for key in MOONMIND_REVISION_ENV_KEYS:
         value = str(source.get(key) or "").strip()
         if value:
             return value
-    return "unknown"
+    return None
 
 
-def parse_image_digest(value: str | None) -> str | None:
-    """Return the ``sha256:`` digest embedded in a Docker inspect line."""
+def parse_image_digest(
+    value: str | Sequence[str] | None, *, image: str
+) -> str | None:
+    """Return the digest whose repository matches ``image``.
 
-    match = _DIGEST_PATTERN.search(str(value or ""))
-    return match.group(0) if match else None
+    ``docker image inspect --format '{{json .RepoDigests}}'`` reports one entry
+    per repository the local image is tagged in, so the repository names decide
+    which digest belongs to the requested reference. A digest from an alias
+    repository is never attributed to ``image``.
+    """
+
+    target = normalize_image_reference(image)
+    for entry in _repo_digest_entries(value):
+        repository, separator, digest = entry.rpartition("@")
+        if not separator or not _DIGEST_PATTERN.fullmatch(digest):
+            continue
+        try:
+            candidate = normalize_image_reference(repository)
+        except ValueError:
+            continue
+        if (candidate.registry, candidate.repository) == (
+            target.registry,
+            target.repository,
+        ):
+            return digest
+    return None
+
+
+def _repo_digest_entries(value: str | Sequence[str] | None) -> tuple[str, ...]:
+    """Return the ``repository@digest`` entries reported by Docker inspect."""
+
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ()
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            return ()
+    else:
+        decoded = list(value)
+    if decoded is None:
+        return ()
+    if not isinstance(decoded, list):
+        return ()
+    return tuple(str(entry).strip() for entry in decoded if str(entry).strip())
+
+
+def verified_gpu_observations(
+    *,
+    request: UnrestrictedContainerRequest,
+    result: WorkloadResult,
+) -> Mapping[str, Any]:
+    """Return the executed GPU observations proven to belong to ``request``.
+
+    Terminal evidence, not the submitted request, is the authority for what a
+    host actually realized. This rejects a result produced for a different
+    container, image, or GPU request, and a result that carries no realized
+    device-request evidence at all, so a record can never combine one request's
+    identity with another run's outcome.
+    """
+
+    gpu = request.resources.gpu
+    if gpu is None:
+        raise ValueError("qualification records require a GPU resource request")
+    if result.request_id != request.container_name:
+        raise ValueError(
+            "qualification result belongs to a different container: "
+            f"{result.request_id!r} is not {request.container_name!r}"
+        )
+    workload = result.metadata.get("workload")
+    workload = workload if isinstance(workload, Mapping) else None
+    if workload is None:
+        raise ValueError(
+            "qualification records require executed workload evidence on the result"
+        )
+    recorded_container = workload.get("containerName")
+    if recorded_container != request.container_name:
+        raise ValueError(
+            "qualification evidence names a different container: "
+            f"{recorded_container!r} is not {request.container_name!r}"
+        )
+    recorded_image = workload.get("imageRef")
+    if recorded_image != request.image:
+        raise ValueError(
+            "qualification evidence names a different image: "
+            f"{recorded_image!r} is not {request.image!r}"
+        )
+    observations = workload.get("gpu")
+    observations = observations if isinstance(observations, Mapping) else None
+    if observations is None:
+        raise ValueError(
+            "qualification records require realized GPU device-request evidence"
+        )
+    realized_request = observations.get("request")
+    expected_request = gpu.model_dump(mode="json", by_alias=True)
+    if realized_request != expected_request:
+        raise ValueError(
+            "qualification evidence realized a different GPU request than the "
+            "one submitted"
+        )
+    realized_args = observations.get("deviceRequestArgs")
+    realized_args = (
+        realized_args
+        if isinstance(realized_args, Sequence) and not isinstance(realized_args, str)
+        else None
+    )
+    if realized_args is None:
+        raise ValueError(
+            "qualification records require realized GPU device-request evidence"
+        )
+    device_request_args = tuple(str(part) for part in realized_args)
+    if not device_request_args or device_request_args[0] != GPU_DEVICE_REQUEST_FLAG:
+        raise ValueError(
+            "qualification evidence carries no realized device request: "
+            f"{device_request_args!r}"
+        )
+    return observations
 
 
 def build_gpu_qualification_record(
@@ -235,10 +373,17 @@ def build_gpu_qualification_record(
     gpu = request.resources.gpu
     if gpu is None:
         raise ValueError("qualification records require a GPU resource request")
-    workload = result.metadata.get("workload")
-    observations = workload.get("gpu") if isinstance(workload, Mapping) else None
-    raw_failure = (
-        observations.get("launchFailure") if isinstance(observations, Mapping) else None
+    revision = moonmind_revision(env)
+    if revision is None:
+        keys = " or ".join(MOONMIND_REVISION_ENV_KEYS)
+        raise ValueError(
+            "qualification records require an immutable MoonMind revision; set "
+            f"{keys} before publishing"
+        )
+    observations = verified_gpu_observations(request=request, result=result)
+    raw_failure = observations.get("launchFailure")
+    device_request_args = tuple(
+        str(part) for part in observations["deviceRequestArgs"]
     )
     checksums = {
         artifact_class: _sha256_file(Path(ref))
@@ -246,12 +391,12 @@ def build_gpu_qualification_record(
         if artifact_class in request.declared_outputs
     }
     return GpuQualificationRecord(
-        moonmindRevision=moonmind_revision(env),
+        moonmindRevision=revision,
         requestSchemaVersion=GPU_CONTAINER_REQUEST_SCHEMA_VERSION,
         imageRef=request.image,
         imageDigest=image_digest,
         gpuRequest=gpu,
-        deviceRequestArgs=tuple(gpu_device_request_args(gpu)),
+        deviceRequestArgs=device_request_args,
         containerName=request.container_name,
         status=result.status,
         exitCode=result.exit_code,
@@ -285,9 +430,11 @@ def _sha256_file(path: Path) -> str | None:
 
 
 __all__ = [
+    "DOCKER_LAUNCH_FAILURE_EXIT_CODE",
     "GPU_CONTAINER_REQUEST_SCHEMA_VERSION",
     "GPU_DEVICE_REQUEST_FLAG",
     "GPU_DEVICE_REQUEST_REJECTED",
+    "MOONMIND_REVISION_ENV_KEYS",
     "GpuLaunchFailure",
     "GpuLaunchFailureReason",
     "GpuQualificationRecord",
@@ -297,4 +444,5 @@ __all__ = [
     "gpu_launch_observations",
     "moonmind_revision",
     "parse_image_digest",
+    "verified_gpu_observations",
 ]

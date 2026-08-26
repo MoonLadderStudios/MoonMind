@@ -28,8 +28,12 @@ GPU_MODULE = Path("moonmind/workloads/gpu.py")
 #: independent of this qualification.
 GPU_BEARING_MODULES: tuple[Path, ...] = (
     Path("moonmind/schemas/workload_models.py"),
+    Path("moonmind/schemas/container_job_models.py"),
+    Path("moonmind/config/container_backend_settings.py"),
+    Path("moonmind/workflows/temporal/container_job_backend.py"),
     Path("moonmind/workloads/docker_launcher.py"),
     Path("moonmind/workloads/registry.py"),
+    Path("moonmind/workloads/tool_bridge.py"),
     Path("moonmind/workloads/__init__.py"),
 )
 

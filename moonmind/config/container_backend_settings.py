@@ -153,6 +153,10 @@ class ContainerBackendSettings:
     max_memory_mib: int
     max_active_memory_mib: int | None
     max_pids: int
+    #: Highest device count a caller may request. ``None`` imposes no MoonMind
+    #: ceiling, so host capability remains the only gate; ``0`` refuses every
+    #: device request on this deployment.
+    max_gpu_count: int | None
     shm_size_mib: int
     max_timeout_seconds: int
     max_output_bytes: int
@@ -350,6 +354,10 @@ def resolve_container_backend_settings(
             source.get("MOONMIND_CONTAINER_BACKEND_MAX_PIDS"),
             default=2048,
             minimum=16,
+        ),
+        max_gpu_count=_coerce_optional_int(
+            source.get("MOONMIND_CONTAINER_BACKEND_MAX_GPU_COUNT"),
+            minimum=0,
         ),
         shm_size_mib=_coerce_int(
             source.get("MOONMIND_CONTAINER_BACKEND_SHM_SIZE_MIB"),

@@ -258,6 +258,23 @@ class UnrestrictedCacheMount(BaseModel):
             raise ValueError("cacheMounts target must be an absolute safe path")
         return self
 
+def _validate_gpu_count(value: Any) -> None:
+    """Reject a device count that only becomes an integer through coercion.
+
+    Pydantic's integer coercion runs before field and model validation, so
+    ``true``, ``"2"``, and ``2.0`` would otherwise be realized as device counts
+    the caller never declared. The raw value must already be ``all`` or a
+    positive Python integer.
+    """
+
+    accepted = (
+        value == "all"
+        if isinstance(value, str)
+        else isinstance(value, int) and not isinstance(value, bool) and value >= 1
+    )
+    if not accepted:
+        raise ValueError("gpu.count must be a positive integer or 'all'")
+
 class WorkloadGpuRequest(BaseModel):
     """Caller-supplied generic GPU resource request for one container.
 
@@ -274,26 +291,21 @@ class WorkloadGpuRequest(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _reject_unsupported_vendor(cls, value: Any) -> Any:
-        if isinstance(value, Mapping):
-            raw_vendor = value.get("vendor", value.get("Vendor"))
-            if raw_vendor is not None:
-                vendor = str(raw_vendor).strip().lower()
-                if vendor not in WORKLOAD_GPU_VENDORS:
-                    allowed = ", ".join(WORKLOAD_GPU_VENDORS)
-                    raise ValueError(
-                        f"gpu.vendor {raw_vendor!r} is not supported; "
-                        f"supported vendors: {allowed}"
-                    )
+    def _validate_raw_request(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        raw_vendor = value.get("vendor", value.get("Vendor"))
+        if raw_vendor is not None:
+            vendor = str(raw_vendor).strip().lower()
+            if vendor not in WORKLOAD_GPU_VENDORS:
+                allowed = ", ".join(WORKLOAD_GPU_VENDORS)
+                raise ValueError(
+                    f"gpu.vendor {raw_vendor!r} is not supported; "
+                    f"supported vendors: {allowed}"
+                )
+        if "count" in value:
+            _validate_gpu_count(value["count"])
         return value
-
-    @model_validator(mode="after")
-    def _validate_count(self) -> "WorkloadGpuRequest":
-        if isinstance(self.count, bool) or (
-            isinstance(self.count, int) and self.count < 1
-        ):
-            raise ValueError("gpu.count must be a positive integer or 'all'")
-        return self
 
     @property
     def device_request_value(self) -> str:

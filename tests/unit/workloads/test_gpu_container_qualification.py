@@ -343,6 +343,56 @@ async def test_gpu_container_cleanup_removes_only_the_run_owned_container(
 
 
 @pytest.mark.asyncio
+async def test_cpu_only_unrestricted_cleanup_semantics_are_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A CPU-only unrestricted run keeps the cleanup semantics it was launched with.
+
+    The ``workload.run`` binding is retained so already recorded Temporal
+    commands can replay. An in-flight CPU-only attempt that retries or resumes on
+    this version must not start deleting a container the earlier version retained,
+    and must not report different cleanup metadata.
+    """
+
+    paths = _workspace(tmp_path, "task-cpu")
+    recorded: list[list[str]] = []
+    _install_fake_docker(monkeypatch, recorded)
+
+    result = await DockerWorkloadLauncher().run(
+        _validated(paths, agent_run_id="task-cpu")
+    )
+
+    container = "mm-workload-task-cpu-gpu-step-1"
+    assert result.metadata["workload"]["containerName"] == container
+    assert result.metadata["workload"]["gpu"] is None
+    assert ["docker", "rm", "-f", container] not in recorded
+    diagnostics = json.loads(
+        Path(result.output_refs["runtime.diagnostics"]).read_text(encoding="utf-8")
+    )
+    assert diagnostics["cleanup"]["removeContainerOnExit"] is False
+
+
+@pytest.mark.asyncio
+async def test_device_bearing_unrestricted_run_owns_its_container_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _workspace(tmp_path, "task-gpu")
+    recorded: list[list[str]] = []
+    _install_fake_docker(monkeypatch, recorded)
+
+    result = await DockerWorkloadLauncher().run(_validated(paths, gpu={"count": "all"}))
+
+    container = "mm-workload-task-gpu-gpu-step-1"
+    assert ["docker", "rm", "-f", container] in recorded
+    diagnostics = json.loads(
+        Path(result.output_refs["runtime.diagnostics"]).read_text(encoding="utf-8")
+    )
+    assert diagnostics["cleanup"]["removeContainerOnExit"] is True
+
+
+@pytest.mark.asyncio
 async def test_gpu_container_evidence_excludes_docker_endpoint_and_host_environment(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -504,6 +554,15 @@ def test_unsupported_gpu_vendor_is_rejected(tmp_path: Path, gpu: dict[str, Any])
         {"count": "many"},
         {"count": "all", "devices": ["0"]},
         {"count": 1.5},
+        # Values that Pydantic's integer coercion would otherwise realize as a
+        # device count the caller never declared.
+        {"count": True},
+        {"count": False},
+        {"count": "2"},
+        {"count": " 2 "},
+        {"count": 2.0},
+        {"count": None},
+        {"count": []},
     ],
 )
 def test_malformed_gpu_request_is_rejected(tmp_path: Path, gpu: dict[str, Any]) -> None:
@@ -669,6 +728,43 @@ async def test_nonzero_process_exit_is_not_reported_as_a_gpu_failure(
 
 
 @pytest.mark.parametrize(
+    "stderr",
+    [
+        "Failed to initialize NVML: driver/library version mismatch",
+        "nvidia-container-cli mode is unsupported by this workload",
+        'could not select device driver "" with capabilities: [[gpu]]',
+        "detected 0 devices",
+    ],
+)
+@pytest.mark.asyncio
+async def test_started_container_writing_gpu_text_is_not_a_device_refusal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stderr: str,
+) -> None:
+    """A started container's own diagnostic never becomes a launch refusal.
+
+    Docker forwards the application's stderr and its own exit status. Only
+    Docker's launch-failure status is objective evidence that the device request
+    itself was refused.
+    """
+
+    paths = _workspace(tmp_path, "task-gpu")
+    recorded: list[list[str]] = []
+    _install_fake_docker(
+        monkeypatch,
+        recorded,
+        run_process=lambda: _Process(returncode=1, stderr=stderr.encode() + b"\n"),
+    )
+
+    result = await DockerWorkloadLauncher().run(_validated(paths, gpu={"count": "all"}))
+
+    assert result.status == "failed"
+    assert result.exit_code == 1
+    assert result.metadata["workload"]["gpu"]["launchFailure"] is None
+
+
+@pytest.mark.parametrize(
     ("stderr", "reason"),
     [
         (
@@ -745,6 +841,20 @@ def test_non_gpu_launch_failures_are_not_classified_as_gpu_rejections(
     assert (
         classify_gpu_launch_failure(
             gpu=WorkloadGpuRequest(count="all"), exit_code=125, stderr=stderr
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("exit_code", [1, 2, 3, 126, 127, 137, None])
+def test_device_refusal_requires_dockers_own_launch_failure_status(
+    exit_code: int | None,
+) -> None:
+    assert (
+        classify_gpu_launch_failure(
+            gpu=WorkloadGpuRequest(count="all"),
+            exit_code=exit_code,
+            stderr='could not select device driver "" with capabilities: [[gpu]]',
         )
         is None
     )
@@ -1038,22 +1148,48 @@ def test_qualification_record_requires_a_gpu_request(tmp_path: Path) -> None:
         )
 
 
-def test_qualification_record_is_host_independent(tmp_path: Path) -> None:
-    """The record depends only on the generic request and result contracts.
+def _executed_workload_metadata(
+    request: UnrestrictedContainerRequest,
+    *,
+    device_request_args: list[str] | None = None,
+    image_ref: str | None = None,
+    container_name: str | None = None,
+    gpu_request: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return the generic executed-workload evidence any trusted host reports."""
 
-    Nothing in it names the launcher, the Activity, or the dispatch path, so the
-    same qualification can be rerun against a future canonical container host
-    without changing workload semantics.
-    """
+    gpu = request.resources.gpu
+    assert gpu is not None
+    return {
+        "workload": {
+            "containerName": container_name or request.container_name,
+            "imageRef": image_ref or request.image,
+            "gpu": {
+                "request": (
+                    gpu_request
+                    if gpu_request is not None
+                    else gpu.model_dump(mode="json", by_alias=True)
+                ),
+                "deviceRequestArgs": (
+                    device_request_args
+                    if device_request_args is not None
+                    else list(gpu_device_request_args(gpu))
+                ),
+                "launchFailure": None,
+            },
+        }
+    }
+
+
+def _foreign_result(
+    request: UnrestrictedContainerRequest,
+    **metadata_kwargs: Any,
+) -> Any:
+    """Return a result produced by some other trusted host, not this launcher."""
 
     from moonmind.schemas.workload_models import WorkloadResult
 
-    paths = _workspace(tmp_path, "task-gpu")
-    request = UnrestrictedContainerRequest.model_validate(
-        _container_request_payload(paths, gpu={"count": "all"})
-    )
-    # A result produced by some other trusted container host, not this launcher.
-    foreign_result = WorkloadResult(
+    return WorkloadResult(
         requestId=request.container_name,
         profileId="container.run_container",
         status="succeeded",
@@ -1061,11 +1197,26 @@ def test_qualification_record_is_host_independent(tmp_path: Path) -> None:
         startedAt=datetime(2026, 8, 26, 11, 59, tzinfo=UTC),
         completedAt=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
         durationSeconds=60.0,
+        metadata=_executed_workload_metadata(request, **metadata_kwargs),
+    )
+
+
+def test_qualification_record_is_host_independent(tmp_path: Path) -> None:
+    """The record depends only on the generic request and result contracts.
+
+    Nothing in it names the launcher, the Activity, or the dispatch path, so the
+    same qualification can be rerun against a future canonical container host
+    that reports the same generic executed-workload evidence.
+    """
+
+    paths = _workspace(tmp_path, "task-gpu")
+    request = UnrestrictedContainerRequest.model_validate(
+        _container_request_payload(paths, gpu={"count": "all"})
     )
 
     record = build_gpu_qualification_record(
         request=request,
-        result=foreign_result,
+        result=_foreign_result(request),
         recorded_at=datetime(2026, 8, 26, 12, 1, tzinfo=UTC),
         env={"MOONMIND_BUILD_SHA": "abc1234"},
     )
@@ -1079,14 +1230,152 @@ def test_qualification_record_is_host_independent(tmp_path: Path) -> None:
         assert host_detail not in serialized
 
 
+def test_qualification_record_requires_realized_device_request_evidence(
+    tmp_path: Path,
+) -> None:
+    """A host that reported no device request cannot be recorded as realizing one."""
+
+    from moonmind.schemas.workload_models import WorkloadResult
+
+    paths = _workspace(tmp_path, "task-gpu")
+    request = UnrestrictedContainerRequest.model_validate(
+        _container_request_payload(paths, gpu={"count": "all"})
+    )
+
+    for metadata in (
+        {},
+        {"workload": {"containerName": request.container_name, "imageRef": request.image}},
+        {
+            "workload": {
+                "containerName": request.container_name,
+                "imageRef": request.image,
+                "gpu": None,
+            }
+        },
+    ):
+        with pytest.raises(ValueError, match="evidence"):
+            build_gpu_qualification_record(
+                request=request,
+                result=WorkloadResult(
+                    requestId=request.container_name,
+                    profileId="container.run_container",
+                    status="succeeded",
+                    exitCode=0,
+                    metadata=metadata,
+                ),
+                recorded_at=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+                env={"MOONMIND_BUILD_SHA": "abc1234"},
+            )
+
+
+def test_qualification_record_rejects_a_substrate_that_omitted_the_device_request(
+    tmp_path: Path,
+) -> None:
+    paths = _workspace(tmp_path, "task-gpu")
+    request = UnrestrictedContainerRequest.model_validate(
+        _container_request_payload(paths, gpu={"count": "all"})
+    )
+
+    for realized in ([], ["--device", "/dev/nvidia0"]):
+        with pytest.raises(ValueError, match="realized device request"):
+            build_gpu_qualification_record(
+                request=request,
+                result=_foreign_result(request, device_request_args=realized),
+                recorded_at=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+                env={"MOONMIND_BUILD_SHA": "abc1234"},
+            )
+
+
+def test_qualification_record_binds_the_result_to_the_requested_container(
+    tmp_path: Path,
+) -> None:
+    """A result from a concurrent or retried run cannot be recorded as this one."""
+
+    paths = _workspace(tmp_path, "task-gpu")
+    request = UnrestrictedContainerRequest.model_validate(
+        _container_request_payload(paths, gpu={"count": "all"})
+    )
+    other = UnrestrictedContainerRequest.model_validate(
+        _container_request_payload(paths, agent_run_id="task-gpu-other", gpu={"count": 2})
+    )
+
+    with pytest.raises(ValueError, match="different container"):
+        build_gpu_qualification_record(
+            request=request,
+            result=_foreign_result(other),
+            recorded_at=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+            env={"MOONMIND_BUILD_SHA": "abc1234"},
+        )
+
+    with pytest.raises(ValueError, match="different container"):
+        build_gpu_qualification_record(
+            request=request,
+            result=_foreign_result(request, container_name=other.container_name),
+            recorded_at=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+            env={"MOONMIND_BUILD_SHA": "abc1234"},
+        )
+
+    with pytest.raises(ValueError, match="different image"):
+        build_gpu_qualification_record(
+            request=request,
+            result=_foreign_result(request, image_ref="docker.io/library/other:2.0.0"),
+            recorded_at=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+            env={"MOONMIND_BUILD_SHA": "abc1234"},
+        )
+
+    with pytest.raises(ValueError, match="different GPU request"):
+        build_gpu_qualification_record(
+            request=request,
+            result=_foreign_result(
+                request,
+                gpu_request={"vendor": "nvidia", "count": 2},
+                device_request_args=["--gpus", "2"],
+            ),
+            recorded_at=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+            env={"MOONMIND_BUILD_SHA": "abc1234"},
+        )
+
+
+def test_qualification_record_requires_an_immutable_moonmind_revision(
+    tmp_path: Path,
+) -> None:
+    paths = _workspace(tmp_path, "task-gpu")
+    request = UnrestrictedContainerRequest.model_validate(
+        _container_request_payload(paths, gpu={"count": "all"})
+    )
+
+    with pytest.raises(ValueError, match="immutable MoonMind revision"):
+        build_gpu_qualification_record(
+            request=request,
+            result=_foreign_result(request),
+            recorded_at=datetime(2026, 8, 26, 12, 0, tzinfo=UTC),
+            env={},
+        )
+
+
 def test_moonmind_revision_prefers_build_sha_then_image_digest() -> None:
     assert moonmind_revision({"MOONMIND_BUILD_SHA": "sha-1"}) == "sha-1"
     assert moonmind_revision({"MOONMIND_IMAGE_DIGEST": "sha256:beef"}) == "sha256:beef"
-    assert moonmind_revision({}) == "unknown"
+    assert moonmind_revision({"MOONMIND_BUILD_SHA": "  "}) is None
+    assert moonmind_revision({}) is None
 
 
-def test_image_digest_is_parsed_from_a_docker_inspect_line() -> None:
+def test_image_digest_is_selected_by_repository_not_by_position() -> None:
     digest = "sha256:" + "b" * 64
-    assert parse_image_digest(f"[{QUALIFICATION_IMAGE}@{digest}]") == digest
-    assert parse_image_digest("[]") is None
-    assert parse_image_digest(None) is None
+    alias_digest = "sha256:" + "c" * 64
+    inspected = json.dumps(
+        [f"other/alias@{alias_digest}", f"{QUALIFICATION_IMAGE.split(':')[0]}@{digest}"]
+    )
+
+    assert parse_image_digest(inspected, image=QUALIFICATION_IMAGE) == digest
+    # An alias repository's digest is never attributed to the requested image.
+    assert (
+        parse_image_digest(
+            json.dumps([f"other/alias@{alias_digest}"]), image=QUALIFICATION_IMAGE
+        )
+        is None
+    )
+    assert parse_image_digest("[]", image=QUALIFICATION_IMAGE) is None
+    assert parse_image_digest("null", image=QUALIFICATION_IMAGE) is None
+    assert parse_image_digest(None, image=QUALIFICATION_IMAGE) is None
+    assert parse_image_digest("not json", image=QUALIFICATION_IMAGE) is None
