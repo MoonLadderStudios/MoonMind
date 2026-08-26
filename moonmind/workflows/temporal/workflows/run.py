@@ -40,6 +40,11 @@ with workflow.unsafe.imports_passed_through():
         OwnerIdentity,
     )
     from moonmind.workloads.tool_bridge import CONTAINER_RUN_JOB_TOOL
+    from moonmind.workloads.unrestricted_container_tool import (
+        CONTAINER_EXECUTION_CONTEXT_KEY,
+        CONTAINER_RUN_CONTAINER_TOOL,
+        build_container_execution_context,
+    )
     from moonmind.schemas.managed_session_models import (
         CodexManagedSessionBinding,
         CodexManagedSessionClearRequest,
@@ -12231,6 +12236,12 @@ class MoonMindRunWorkflow:
                                 "run_id": workflow.info().run_id,
                                 "node_id": node_id,
                                 **self._skill_remediation_context(),
+                                **self._container_execution_context(
+                                    tool_name=tool_name,
+                                    workflow_id=workflow.info().workflow_id,
+                                    node_id=node_id,
+                                    execution_ordinal=current_step_execution,
+                                ),
                             },
                             "idempotency_key": step_execution_operation_idempotency_key(
                                 workflow_id=workflow.info().workflow_id,
@@ -20824,6 +20835,51 @@ class MoonMindRunWorkflow:
             selector["providerId"] = "minimax"
 
         return selector
+
+    def _container_execution_context(
+        self,
+        *,
+        tool_name: str,
+        workflow_id: str,
+        node_id: str,
+        execution_ordinal: int,
+    ) -> dict[str, Any]:
+        """Return the workflow-injected run authority for a container step.
+
+        ``container.run_container`` carries the caller's own container request
+        only; the run correlation and the current authorized workspace are
+        MoonMind's to supply. Injecting them through the execution context
+        rather than the plan step's ``inputs`` keeps the caller schema closed
+        against authority injection, and reuses the same managed-runtime
+        workspace locator ``container.run_job`` resolves.
+
+        This stays total: when no managed runtime is selected the locator is
+        omitted and the trusted Activity refuses the step with a stable error,
+        so an unresolvable workspace fails the step through the normal
+        step-failure path instead of failing the workflow task.
+        """
+
+        if tool_name != CONTAINER_RUN_CONTAINER_TOOL:
+            return {}
+        runtime_id = self._managed_runtime_id(self._target_runtime or "")
+        workspace_ref = (
+            {
+                "kind": "managed_runtime",
+                "runtimeId": runtime_id,
+                "agentRunId": workflow_id,
+                "relativePath": "repo",
+            }
+            if runtime_id
+            else None
+        )
+        return {
+            CONTAINER_EXECUTION_CONTEXT_KEY: build_container_execution_context(
+                agent_run_id=workflow_id,
+                step_id=node_id,
+                attempt=execution_ordinal,
+                workspace_ref=workspace_ref,
+            )
+        }
 
     async def _execute_container_job_tool(
         self,

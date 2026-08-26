@@ -7,7 +7,7 @@
 **Authority:** Target semantics for generic GPU resources on unrestricted container execution. Which container tool names are discoverable and dispatchable is owned by [Skill and Plan Contracts](SkillAndPlanContracts.md) §4.1; this document restates no part of that authority differently.
 **Owning Surface:** moonmind/schemas/workload_models.py, moonmind/workloads/
 **Related Docs:** [Skill and Plan Contracts](SkillAndPlanContracts.md), [Docker Backend Service](../ManagedAgents/DockerBackendService.md)
-**Related Implementation:** `UnrestrictedContainerRequest.resources.gpu`, `DockerWorkloadLauncher` (MoonLadderStudios/MoonMind#3775, epic #3774)
+**Related Implementation:** `UnrestrictedContainerRequest.resources.gpu`, `moonmind/workloads/unrestricted_container_tool.py`, `DockerWorkloadLauncher` (MoonLadderStudios/MoonMind#3775, epic #3774)
 
 ## 1. Purpose
 
@@ -26,9 +26,10 @@ MOONMIND_WORKFLOW_DOCKER_MODE=unrestricted
 No runner profile, trust level, approval, Host Class, device policy, project
 adapter, image registry, or project-specific MoonMind setting is required.
 
-The request model and its Docker realization are complete. The caller-facing
-route that carries them is not open yet: §3.1 states the authoritative dispatch
-status of every container surface and names the enabling change.
+A repository-owned workflow or skill submits the request by naming the
+`container.run_container` tool in a plan step. That surface is discoverable and
+dispatchable exactly while the mode is `unrestricted`; §3.1 states the
+authoritative dispatch status of every container surface.
 
 ## 2. Ownership boundary
 
@@ -52,21 +53,36 @@ diagnostic command inside its own image.
 ## 3. Request contract
 
 `resources.gpu` on the structured unrestricted container request
-(`container.run_container`) carries the versioned generic GPU resource model:
+(`container.run_container`) carries the versioned generic GPU resource model.
+A plan step names the tool and supplies its own container request:
 
 ```json
 {
-  "image": "caller-owned-image:tag-or-digest",
-  "command": ["caller-owned-command", "arg"],
-  "resources": {
-    "gpu": {
-      "contractVersion": "v1",
-      "vendor": "nvidia",
-      "count": "all"
-    }
+  "tool": { "type": "skill", "name": "container.run_container" },
+  "inputs": {
+    "image": "caller-owned-image:tag-or-digest",
+    "command": ["caller-owned-command", "arg"],
+    "workdir": "workspace/relative/path",
+    "resources": {
+      "gpu": {
+        "contractVersion": "v1",
+        "vendor": "nvidia",
+        "count": "all"
+      }
+    },
+    "declaredOutputs": { "output.report": "gpu.json" },
+    "timeoutSeconds": 14400
   }
 }
 ```
+
+The caller-facing schema is closed against everything MoonMind owns. Run
+correlation (`agentRunId`, `stepId`, `attempt`) and the authorized workspace
+(`repoDir`, `artifactsDir`, `scratchDir`) are injected by the parent workflow
+and the trusted Activity, never accepted from the plan step; `workdir` is
+workspace-relative and is resolved against the run's repository directory. A
+plan step that names one of those fields fails plan validation, and the
+dispatch boundary refuses it again if a plan ever reaches it unvalidated.
 
 | Field | Values | Meaning |
 |---|---|---|
@@ -91,26 +107,28 @@ authority for container tool discovery and dispatch. Measured against it:
 
 | Surface | Carries `resources.gpu` | Dispatch status |
 |---|---|---|
-| `container.run_job` — canonical container-job contract | No. `spec.resources` is closed to `cpuMillis`, `memoryMiB`, and `pids`. | The only container tool in executable tool discovery and new dispatch. |
-| `container.run_container` — structured unrestricted container request | Yes. | Absent from executable tool discovery and new dispatch. Reachable only through the retained `workload.run` Activity, which exists so already-recorded Temporal commands replay, and only while the mode is `unrestricted`. |
-| `container.run_docker` — raw Docker CLI | No. `resources.gpu` is not part of its request shape and is a validation error there. | Refused by the retained `workload.run` Activity in every mode. |
+| `container.run_job` — canonical container-job contract | No. `spec.resources` is closed to `cpuMillis`, `memoryMiB`, and `pids`. | Always in executable tool discovery and new dispatch, in every Docker mode. |
+| `container.run_container` — structured unrestricted container request | Yes. | In executable tool discovery and new dispatch exactly while `MOONMIND_WORKFLOW_DOCKER_MODE=unrestricted`. In `profiles` and `disabled` the name is not published and the dispatch boundary refuses it. |
+| `container.run_docker` — raw Docker CLI | No. `resources.gpu` is not part of its request shape and is a validation error there. | Absent from executable tool discovery, and refused by the retained `workload.run` Activity in every mode. |
 
-Two consequences follow, and neither is softened elsewhere in this document:
+Three consequences follow, and none is softened elsewhere in this document:
 
-- No repository-owned workflow or skill can submit `resources.gpu` today. A
-  plan step naming `container.run_container` receives the generic runtime CLI
-  handler, not a container launch, so the GPU request model has no live caller
-  route.
-- `container.run_docker` is not an available interim route. MoonMind neither
+- One predicate gates the unrestricted surface. Discovery and dispatch read the
+  same deployment-owned mode, so the surface can never be advertised in a mode
+  that would refuse to run it.
+- The retained `workload.run` Activity is not the caller route. It exists so
+  already-recorded Temporal commands replay; new plan steps dispatch through
+  `mm.tool.execute` on the Docker-capable fleet.
+- `container.run_docker` is not an available route at all. MoonMind neither
   accepts `resources.gpu` there nor appends `--gpus` to a caller-composed
-  command, and the retained Activity rejects the name outright.
+  command.
 
-Opening a caller route means adding the same versioned generic GPU resource
-model to `container.run_job` and to the trusted container-job backend. That is
-MoonLadderStudios/MoonMind#3779 (§7), the canonical-convergence slice of epic
-#3774. Until it lands, the deferral is enforced by test, not assumed:
-`container.run_job` must expose no GPU field and the canonical submission model
-must reject one.
+Carrying the same versioned generic GPU resource model into the canonical
+asynchronous Container Jobs contract and its trusted backend is a separate,
+later slice: MoonLadderStudios/MoonMind#3779 (§7), the canonical-convergence
+slice of epic #3774. Until it lands, that split is enforced by test, not
+assumed: `container.run_job` must expose no GPU field and the canonical
+submission model must reject one.
 
 `resources.gpu` also stays out of profile mode. Profile-backed requests keep
 `WorkloadResourceOverrides` and its own `devicePolicy`; a profile-backed request
@@ -164,15 +182,23 @@ signals Docker itself exposes:
 Cancellation is distinguishable at the same boundary: it propagates as a
 cancellation rather than a terminal result.
 
-## 6. Lifecycle
+## 6. Workspace and lifecycle
 
-GPU containers use the same unrestricted lifecycle as CPU-only containers:
-bounded logs, timeout and cancellation support, run-owned container identity
-that stays stable across a retry of the same attempt, and declared-output plus
-glob-based collection that is preserved after failure, timeout, or
-cancellation. Cleanup removes only the run-owned container and run-owned
-temporary data; the image and any caller-requested shared cache volumes
-survive job completion.
+MoonMind resolves the current authorized workspace from the workflow-injected
+managed-runtime locator, through the same locator authority `container.run_job`
+uses. It yields the run's repository directory, a per-step artifacts directory,
+and a per-step run-owned scratch directory, all bounded by the deployment's
+workspace root. A step whose workspace cannot be resolved is refused before
+launch with a stable generic error; the refusal fails the step, not the
+workflow task.
+
+GPU containers otherwise use the same unrestricted lifecycle as CPU-only
+containers: bounded logs, timeout and cancellation support, run-owned container
+identity that stays stable across a retry of the same attempt, and
+declared-output plus glob-based collection that is preserved after failure,
+timeout, or cancellation. Cleanup removes only the run-owned container and
+run-owned temporary data; the image and any caller-requested shared cache
+volumes survive job completion.
 
 ## 7. Out of scope
 
@@ -183,7 +209,7 @@ GPU scheduling, quotas, tenancy, trust levels, and approvals are not part of
 this contract.
 
 Extending the same generic GPU resource request to the canonical asynchronous
-container-job contract and backend — and with it the caller-facing route
-described in §3.1 — is tracked by MoonLadderStudios/MoonMind#3779. The
-`contractVersion` field exists so that convergence carries the caller's
-request unchanged.
+container-job contract and its trusted backend is tracked by
+MoonLadderStudios/MoonMind#3779. The `contractVersion` field exists so that
+convergence carries the caller's request unchanged. Qualifying the lifecycle
+against real NVIDIA hardware is MoonLadderStudios/MoonMind#3777.

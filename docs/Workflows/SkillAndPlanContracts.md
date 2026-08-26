@@ -1,5 +1,6 @@
 # Execution Tool and Plan Contracts
 
+**Document Class:** Canonical declarative
 **Implementation tracking:** Rollout and backlog notes live under `docs/tmp/` or in gitignored local-only handoffs (for example `artifacts/`), not as migration checklists in canonical `docs/`.
 
 MoonMind system design (Temporal-first)
@@ -178,24 +179,38 @@ The plan contract defines these tool subtypes:
 
 | `tool.type` | Dispatch mechanism | Contract |
 |---|---|---|
-| `skill` | Typed executable tool contract. Ordinary tools dispatch through their declared Activity; `container.run_job` is durably coordinated by the parent workflow through the canonical container-job service. | `ToolDefinition` from registry snapshot |
+| `skill` | Typed executable tool contract. Ordinary tools dispatch through their declared Activity; `container.run_job` is durably coordinated by the parent workflow through the canonical container-job service, and `container.run_container` dispatches through `mm.tool.execute` on the Docker-capable fleet in unrestricted mode. | `ToolDefinition` from registry snapshot |
 
-Containerized plan work uses the single `container.run_job` contract. The
+Containerized plan work uses the canonical `container.run_job` contract. The
 parent workflow injects owner plus workflow/run/step correlation, submits the
 canonical `ContainerJobSubmitRequest` through a trusted Activity, and polls the
 separately addressable job through bounded status Activities and durable
 workflow timers. Cancellation sends the job's idempotent cancellation request.
 The result returned to the plan contains only `jobId`, terminal state, exit and
-failure classification, and log/artifact references.
+failure classification, and log/artifact references. `container.run_job` is
+discoverable in every workflow Docker mode.
 
-Legacy `container.run_workload`, `container.run_container`, helper lifecycle,
-raw Docker, integration-CI, and Unreal wrapper names are absent from executable
-tool discovery and new dispatch. Their old `workload.run` Activity binding is
-retained only to let already-recorded Temporal commands replay; it has no
-registry entry or dispatcher registration and is removed after those histories
-drain. A payload translation adapter is intentionally unnecessary: recorded
-legacy commands keep their original Activity implementation, while new plans
-use a new canonical tool name and schema.
+`container.run_container` is the second and only other container tool name in
+executable tool discovery and new dispatch. It is the synchronous unrestricted
+container surface, and one deployment-owned predicate gates it: it is published
+to discovery and accepted by dispatch exactly while
+`MOONMIND_WORKFLOW_DOCKER_MODE=unrestricted`, and in `profiles` or `disabled` it
+is neither published nor dispatchable. Its caller-facing schema carries only
+caller-owned container fields; the parent workflow injects run correlation and
+the same managed-runtime workspace locator `container.run_job` uses, and the
+trusted Activity resolves the authorized workspace from it, so no caller
+supplies a host path, a Docker endpoint, ownership labels, privileged mode, or
+a device path. Its generic GPU resource model is defined by
+[Generic GPU Container Resources Contract](GpuContainerResourcesContract.md).
+
+Legacy `container.run_workload`, helper lifecycle, raw Docker, integration-CI,
+and Unreal wrapper names are absent from executable tool discovery and new
+dispatch. Their old `workload.run` Activity binding is retained only to let
+already-recorded Temporal commands replay; it has no registry entry or
+dispatcher registration and is removed after those histories drain. A payload
+translation adapter is intentionally unnecessary: recorded legacy commands keep
+their original Activity implementation, while new plans use a canonical tool
+name and schema.
 | `agent_runtime` | Child `MoonMind.AgentRun` workflow | `AgentExecutionRequest` |
 
 ---

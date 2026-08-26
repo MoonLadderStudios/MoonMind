@@ -151,6 +151,11 @@ from moonmind.workloads.tool_bridge import (
     build_container_job_tool_definition_payload,
     is_container_job_tool,
 )
+from moonmind.workloads.unrestricted_container_tool import (
+    build_unrestricted_container_tool_definition_payload,
+    is_unrestricted_container_tool,
+    unrestricted_container_tool_enabled,
+)
 from moonmind.workflow_docker_mode import normalize_workflow_docker_mode
 
 # Replay-only vocabulary for the retained ``workload.run`` Activity. These
@@ -1432,6 +1437,15 @@ def _tail_text(payload: bytes, *, max_chars: int = 512) -> str:
 def _default_registry_skill_payload(*, name: str) -> dict[str, Any]:
     if is_container_job_tool(name):
         return build_container_job_tool_definition_payload(name=name)
+
+    # The unrestricted container surface is discoverable only while the
+    # deployment-owned Docker mode opens it. In every other mode the name falls
+    # through to the generic runtime CLI handler exactly as an unknown tool
+    # does, so discovery can never advertise a surface dispatch would refuse.
+    if is_unrestricted_container_tool(name) and unrestricted_container_tool_enabled(
+        settings.workflow.workflow_docker_mode
+    ):
+        return build_unrestricted_container_tool_definition_payload(name=name)
 
     if name == DEPLOYMENT_UPDATE_TOOL_NAME:
         return build_deployment_update_tool_definition_payload()

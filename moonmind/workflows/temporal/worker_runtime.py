@@ -1,4 +1,5 @@
 import contextlib
+import functools
 import re
 import uuid
 
@@ -120,6 +121,9 @@ from moonmind.workflows.temporal.runtime.managed_session_supervisor import (
 from moonmind.workflows.temporal.runtime.paths import managed_runtime_artifact_root
 from moonmind.workflows.temporal.runtime.store import ManagedRunStore
 from moonmind.workflows.temporal.runtime.supervisor import ManagedRunSupervisor
+from moonmind.workflows.temporal.runtime.workspace_locators import (
+    resolve_unrestricted_container_workspace,
+)
 from moonmind.workflows.temporal.service import TemporalExecutionService
 from moonmind.workflows.temporal.story_output_tools import (
     DOCUMENT_UPDATE_TASKS_TOOL_NAME,
@@ -157,6 +161,9 @@ from moonmind.workflows.temporal.workflows.manifest_ingest import (  # noqa: F40
 )
 from moonmind.workflows.temporal.workflows.merge_gate import (
     DEFAULT_RESOLVER_TIMEOUT_SECONDS,
+)
+from moonmind.workloads.unrestricted_container_tool import (
+    register_unrestricted_container_tool_handler,
 )
 
 logger = logging.getLogger(__name__)
@@ -2953,6 +2960,20 @@ async def _build_runtime_activities(topology) -> tuple[AsyncExitStack, list[obje
                 workflow_docker_mode=settings.workflow.workflow_docker_mode,
                 raw_docker_cli_enabled=container_backend_settings.raw_cli_enabled,
                 container_job_backend=container_job_backend,
+            )
+            # The unrestricted container surface is the caller route for the
+            # generic GPU resource request (MoonLadderStudios/MoonMind#3775). It
+            # is bound on the only fleet that owns trusted Docker launches, and
+            # the handler itself refuses any mode other than ``unrestricted``.
+            register_unrestricted_container_tool_handler(
+                dispatcher,
+                registry=workload_registry,
+                launcher=workload_launcher,
+                workspace_resolver=functools.partial(
+                    resolve_unrestricted_container_workspace,
+                    store=run_store,
+                ),
+                workflow_docker_mode=settings.workflow.workflow_docker_mode,
             )
         if topology.fleet == DEPLOYMENT_FLEET:
             register_deployment_update_tool_handler(

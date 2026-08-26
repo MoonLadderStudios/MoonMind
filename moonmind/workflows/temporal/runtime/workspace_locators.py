@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Mapping, Protocol, TYPE_CHECKING
 
 from moonmind.schemas.workspace_locator_models import (
     ManagedWorkspaceLocator,
     SandboxWorkspaceLocator,
     WORKSPACE_AUTHORITY_MISMATCH,
     WORKSPACE_IDENTITY_MISMATCH,
+    WORKSPACE_LOCATOR_UNSUPPORTED,
     WorkspaceLocatorResolutionError,
 )
+
+if TYPE_CHECKING:
+    from moonmind.workloads.unrestricted_container_tool import (
+        UnrestrictedContainerWorkspace,
+    )
 
 
 @dataclass(frozen=True)
@@ -279,3 +286,65 @@ def resolve_managed_workspace_locator(
             WORKSPACE_AUTHORITY_MISMATCH, "managed relative path escapes its workspace"
         )
     return workspace
+
+
+def resolve_unrestricted_container_workspace(
+    execution: Mapping[str, object],
+    *,
+    store: ManagedRunRecordStore,
+) -> "UnrestrictedContainerWorkspace":
+    """Resolve the current authorized workspace for one unrestricted container.
+
+    The workflow injects the same managed-runtime locator ``container.run_job``
+    uses, so both container surfaces resolve a workspace through one authority.
+    MoonMind derives the repo, artifacts, and run-owned scratch directories from
+    it; the caller never supplies a host path.
+    """
+
+    from moonmind.workloads.unrestricted_container_tool import (
+        UnrestrictedContainerWorkspace,
+    )
+
+    raw_locator = execution.get("workspaceRef")
+    if not isinstance(raw_locator, Mapping):
+        raise WorkspaceLocatorResolutionError(
+            WORKSPACE_LOCATOR_UNSUPPORTED,
+            "unrestricted container execution requires a workspace locator",
+        )
+    kind = str(raw_locator.get("kind") or "").strip()
+    if kind != "managed_runtime":
+        raise WorkspaceLocatorResolutionError(
+            WORKSPACE_LOCATOR_UNSUPPORTED,
+            f"unsupported unrestricted container workspace locator: {kind!r}",
+        )
+    locator = ManagedWorkspaceLocator.model_validate(dict(raw_locator))
+    repo_dir = resolve_managed_workspace_locator(
+        locator,
+        store=store,
+        current_agent_run_id=locator.agent_run_id,
+        current_runtime_id=locator.runtime_id,
+    )
+    run_root = repo_dir.parent if repo_dir.name == "repo" else repo_dir
+    step_segment = _workspace_path_segment(execution.get("stepId"))
+    artifacts_dir = (run_root / "artifacts" / step_segment).resolve()
+    scratch_dir = (run_root / "scratch" / step_segment).resolve()
+    for path in (artifacts_dir, scratch_dir):
+        if not path.is_relative_to(run_root):
+            raise WorkspaceLocatorResolutionError(
+                WORKSPACE_AUTHORITY_MISMATCH,
+                "unrestricted container workspace escapes its authority",
+            )
+        path.mkdir(parents=True, exist_ok=True)
+    return UnrestrictedContainerWorkspace(
+        repo_dir=str(repo_dir),
+        artifacts_dir=str(artifacts_dir),
+        scratch_dir=str(scratch_dir),
+    )
+
+
+def _workspace_path_segment(value: object) -> str:
+    """Return a traversal-free single path segment for a logical step id."""
+
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "")).strip("-.")
+    safe = safe.replace("..", "-")
+    return safe[:120] or "step"

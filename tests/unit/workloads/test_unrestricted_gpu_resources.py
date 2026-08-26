@@ -45,6 +45,7 @@ GENERIC_GPU_IMPLEMENTATION_FILES = (
     REPO_ROOT / "moonmind" / "schemas" / "workload_models.py",
     REPO_ROOT / "moonmind" / "workloads" / "docker_launcher.py",
     REPO_ROOT / "moonmind" / "workloads" / "registry.py",
+    REPO_ROOT / "moonmind" / "workloads" / "unrestricted_container_tool.py",
 )
 
 

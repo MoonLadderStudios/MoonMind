@@ -10,6 +10,7 @@ from moonmind.schemas.workload_models import RunnerProfile, WorkloadResult
 from moonmind.security.egress_conformance_evidence import (
     parse_and_verify_conformance_evidence,
 )
+from moonmind.workflows.temporal import activity_runtime
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
@@ -625,18 +626,27 @@ async def test_workload_run_activity_denies_gpu_container_when_mode_is_profiles(
     assert exc_info.value.type == "docker_workflow_mode_forbidden"
 
 
-def test_unrestricted_gpu_container_has_no_new_plan_dispatch_route() -> None:
-    """A plan step cannot reach the GPU-capable unrestricted container request.
+@pytest.mark.parametrize("mode", ["unrestricted", "profiles", "disabled"])
+def test_plan_dispatch_route_for_the_gpu_container_follows_the_docker_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+) -> None:
+    """Discovery publishes the GPU-capable container surface only when it runs.
 
-    docs/Workflows/GpuContainerResourcesContract.md section 3.1 states that
-    ``container.run_container`` is absent from executable tool discovery and
-    new dispatch, and that ``resources.gpu`` therefore has no live caller route
-    until MoonLadderStudios/MoonMind#3779. Pin that at the production
-    registry-snapshot builder: naming the legacy tool must yield the generic
-    runtime CLI handler rather than a ``workload.run`` container launch, and the
-    one discoverable container tool must expose no GPU field.
+    MoonLadderStudios/MoonMind#3775 (epic #3774, "Immediate unrestricted path")
+    makes ``container.run_container`` the caller route for ``resources.gpu``.
+    Pin it at the production registry-snapshot builder: in unrestricted mode a
+    plan step naming it receives the Docker-capable container definition, in
+    every other mode it falls through to the generic runtime CLI handler, and
+    the canonical container-job contract is unchanged either way.
     """
 
+    monkeypatch.setattr(
+        activity_runtime.settings.workflow,
+        "workflow_docker_mode",
+        mode,
+        raising=False,
+    )
     payload = _default_skill_registry_payload(
         parameters={
             "workflow": {
@@ -652,12 +662,23 @@ def test_unrestricted_gpu_container_has_no_new_plan_dispatch_route() -> None:
 
     unrestricted = definitions["container.run_container"]
     assert unrestricted["executor"]["activity_type"] == "mm.tool.execute"
-    assert unrestricted["requirements"]["capabilities"] == ["sandbox"]
+    # The retained replay-only ``workload.run`` Activity is never a new route.
     assert "workload.run" not in str(unrestricted)
-    assert set(unrestricted["inputs"]["schema"]["properties"]) == {
-        "instructions",
-        "runtime",
-    }
+    if mode == "unrestricted":
+        assert unrestricted["requirements"]["capabilities"] == ["docker_workload"]
+        resources = unrestricted["inputs"]["schema"]["properties"]["resources"]
+        assert resources["properties"]["gpu"]["properties"]["vendor"] == {
+            "enum": ["nvidia"]
+        }
+        # MoonMind owns the workspace; the caller schema carries no host path.
+        for forbidden in ("repoDir", "artifactsDir", "scratchDir"):
+            assert forbidden not in str(unrestricted["inputs"]["schema"])
+    else:
+        assert unrestricted["requirements"]["capabilities"] == ["sandbox"]
+        assert set(unrestricted["inputs"]["schema"]["properties"]) == {
+            "instructions",
+            "runtime",
+        }
 
     canonical_spec = definitions["container.run_job"]["inputs"]["schema"][
         "properties"
