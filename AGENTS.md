@@ -111,13 +111,14 @@ When writing code that interacts with skills:
 
 ### Test Taxonomy
 
-MoonMind uses a four-tier test model that separates hermetic CI from credentialed provider checks:
+MoonMind uses a five-tier test model that separates hermetic CI from credentialed provider checks and host-hardware qualification:
 
 | Tier | Marker(s) | Required on PR? | Runner |
 |------|-----------|-----------------|--------|
 | **Unit** | `asyncio` (as needed) | Targeted suite required when selected by impact | `./tools/test_unit.sh` |
 | **Hermetic Integration CI** | `integration` + `integration_ci` | Targeted suite required only when selected by impact | `./tools/test_integration.sh` |
 | **Provider Verification** | `provider_verification` + `jules` + `requires_credentials` | No (manual/nightly) | `./tools/test_jules_provider.sh` |
+| **GPU Qualification** | `integration` + `requires_gpu` | No (deployment-owned GPU host) | `./tools/test_gpu_qualification.sh` |
 | **Local-only Integration** | `integration` without `integration_ci` | No | local dev only |
 
 - **Hermetic Integration Tests** — compose-backed, local-dependencies-only, no external credentials required.
@@ -129,6 +130,10 @@ MoonMind uses a four-tier test model that separates hermetic CI from credentiale
   - **Live logs**: SSE publisher/subscriber, performance at volume, managed runtime streaming
   - **Compose foundation**: service topology, namespace bootstrapping, visibility schema rehearsal
   - **Startup seeding**: profiles, managed secrets, task templates
+
+- **GPU Qualification Tests** — the generic NVIDIA container qualification journey on a deployment-owned GPU host.
+  These are marked with `@pytest.mark.requires_gpu`, are excluded from required CI, and skip on CPU-only runners with an explicit environment reason.
+  The equivalent contract, dispatch, lifecycle, and negative-matrix coverage runs on ordinary CPU runners in the unit suite; see `docs/Workflows/GpuContainerContract.md`.
 
 - **Provider Verification Tests** — real third-party provider checks using real credentials.
   These are **not** required for merge and are excluded from the required CI pipeline.
@@ -148,6 +153,7 @@ Note: Jules **unit** tests (`tests/unit/jules/`, `tests/unit/workflows/temporal/
 - **Hermetic Integration Tests**: Run the `integration_ci` suite only when the change affects an integration boundary listed in the taxonomy above or the selector/fail-open policy requires it. Use `./tools/test_integration.sh` (Bash) or `tools/test-integration.ps1` (PowerShell). Under the hood: `docker compose --project-name moonmind-test -f docker-compose.test.yaml run --rm pytest bash -lc "pytest tests/integration -m 'integration_ci' -q --tb=short"`.
 - **Compose Test Isolation**: Every Compose-backed test command must use an explicit test-only project name of `moonmind-test` or `moonmind-test-*`. Never run test setup or `down --remove-orphans` under the deployment project name (`moonmind`). Keep automatic test teardown enabled; isolate the project instead of skipping cleanup.
 - **Provider Verification**: Run live external-provider tests that require real credentials. Use `./tools/test_jules_provider.sh` (Bash) or `tools/test-provider.ps1`. These scripts fail fast if `JULES_API_KEY` is not set.
+- **GPU Qualification**: Run the real NVIDIA container journey on a deployment-owned GPU host with `./tools/test_gpu_qualification.sh`. It fails fast when `MOONMIND_GPU_QUALIFICATION_IMAGE` is unset, the Docker daemon exposes no NVIDIA runtime, or no immutable MoonMind revision is available, and it skips with an explicit reason when a bounded device probe finds no usable device. Records are published to a durable root outside the ephemeral run workspace (`MOONMIND_GPU_QUALIFICATION_RECORD_DIR`, default `var/gpu_qualification`). Never make the qualification image, command, or GPU count a MoonMind product setting.
 - **Workflow Boundary Coverage**: Any change to Temporal workflows, activity signatures, signal/update names, serialized payload shapes, status normalization, or adapter-to-workflow contracts MUST add or update tests at the workflow boundary, not just isolated unit tests. At minimum:
   - cover the real invocation shape used by the worker binding or Temporal activity wrapper,
   - cover one compatibility case for the previous payload/history shape when runs may already be in flight,

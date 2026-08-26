@@ -100,6 +100,7 @@ markers = [
     "codex: marks tests specific to the Codex provider.",
     "jules: marks tests specific to the Jules provider.",
     "requires_credentials: marks tests that require real provider credentials.",
+    "requires_gpu: marks tests that require a deployment-owned NVIDIA GPU host.",
 ]
 
 [tool.pre-commit]

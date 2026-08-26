@@ -79,6 +79,7 @@ from moonmind.workflows.temporal.runtime.registry_auth_resolve import (
     resolve_registry_pull_credentials,
 )
 from moonmind.workloads.docker_launcher import structured_container_security_args
+from moonmind.workloads.gpu import gpu_device_request_args
 from moonmind.security.egress import (
     DEFAULT_EGRESS_PROFILE,
     attest_docker_workload_egress,
@@ -642,6 +643,18 @@ class DockerContainerJobBackend:
                     ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
                     f"{name}={requested} exceeds the deployment ceiling {ceiling} "
                     "and cannot be raised by a caller",
+                )
+        gpu = spec.resources.gpu
+        if gpu is not None and ceilings.max_gpu_count is not None:
+            # ``all`` is unbounded by definition, so a deployment that publishes
+            # a finite device ceiling rejects it rather than silently clamping a
+            # billing-relevant resource value.
+            requested_devices = gpu.count
+            if requested_devices == "all" or requested_devices > ceilings.max_gpu_count:
+                raise ContainerJobBackendError(
+                    ContainerJobFailureClass.RESOURCE_LIMIT_EXCEEDED,
+                    f"gpu.count={requested_devices} exceeds the deployment ceiling "
+                    f"{ceilings.max_gpu_count} and cannot be raised by a caller",
                 )
 
     def _capacity_lock_key(self) -> str:
@@ -1907,6 +1920,11 @@ class DockerContainerJobBackend:
             "--mount",
             workspace_mount,
         ]
+        if spec.resources.gpu is not None:
+            # The caller owns the device request; the backend only realizes it as
+            # the vendor's Docker device request after the deployment ceiling has
+            # already admitted the count.
+            args.extend(gpu_device_request_args(spec.resources.gpu))
         resolved_cache_refs: list[str] = []
         for requested_cache in spec.caches:
             try:

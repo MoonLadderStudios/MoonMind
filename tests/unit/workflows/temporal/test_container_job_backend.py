@@ -761,6 +761,131 @@ async def test_stop_refuses_replacement_with_mismatched_ownership(tmp_path) -> N
 
 
 @pytest.mark.asyncio
+async def test_create_realizes_a_caller_supplied_device_request(tmp_path) -> None:
+    """The canonical container-job path realizes ``resources.gpu`` itself."""
+
+    (tmp_path / "art_workspace").mkdir()
+    commands: list[tuple[str, ...]] = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner(commands)
+    )
+
+    await backend.create_container(
+        _request(
+            tmp_path,
+            resources={
+                "cpuMillis": 1000,
+                "memoryMiB": 512,
+                "gpu": {"vendor": "nvidia", "count": 2},
+            },
+        )
+    )
+
+    create = next(c for c in commands if c[0] == "create")
+    assert create[create.index("--gpus") + 1] == "2"
+
+
+@pytest.mark.asyncio
+async def test_create_omits_a_device_request_for_a_cpu_only_job(tmp_path) -> None:
+    (tmp_path / "art_workspace").mkdir()
+    commands: list[tuple[str, ...]] = []
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path, command_runner=_recording_runner(commands)
+    )
+
+    await backend.create_container(_request(tmp_path))
+
+    create = next(c for c in commands if c[0] == "create")
+    assert "--gpus" not in create
+
+
+@pytest.mark.asyncio
+async def test_create_rejects_a_device_count_above_the_deployment_ceiling(
+    tmp_path,
+) -> None:
+    (tmp_path / "art_workspace").mkdir()
+    bounded = resolve_container_backend_settings(
+        {"MOONMIND_CONTAINER_BACKEND_MAX_GPU_COUNT": "1"}
+    )
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        settings=bounded,
+        command_runner=_recording_runner([]),
+    )
+
+    for requested in (2, "all"):
+        with pytest.raises(RuntimeError, match="ceiling"):
+            await backend.create_container(
+                _request(
+                    tmp_path,
+                    resources={
+                        "cpuMillis": 1000,
+                        "memoryMiB": 512,
+                        "gpu": {"vendor": "nvidia", "count": requested},
+                    },
+                )
+            )
+
+
+@pytest.mark.asyncio
+async def test_create_refuses_every_device_request_when_the_ceiling_is_zero(
+    tmp_path,
+) -> None:
+    (tmp_path / "art_workspace").mkdir()
+    refused = resolve_container_backend_settings(
+        {"MOONMIND_CONTAINER_BACKEND_MAX_GPU_COUNT": "0"}
+    )
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        settings=refused,
+        command_runner=_recording_runner([]),
+    )
+
+    with pytest.raises(RuntimeError, match="ceiling"):
+        await backend.create_container(
+            _request(
+                tmp_path,
+                resources={
+                    "cpuMillis": 1000,
+                    "memoryMiB": 512,
+                    "gpu": {"vendor": "nvidia", "count": 1},
+                },
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_admits_a_device_request_when_no_ceiling_is_configured(
+    tmp_path,
+) -> None:
+    """The omitted ceiling and its documented default exercise the same path."""
+
+    (tmp_path / "art_workspace").mkdir()
+    commands: list[tuple[str, ...]] = []
+    default = resolve_container_backend_settings({})
+    assert default.max_gpu_count is None
+    backend = DockerContainerJobBackend(
+        workspace_root=tmp_path,
+        settings=default,
+        command_runner=_recording_runner(commands),
+    )
+
+    await backend.create_container(
+        _request(
+            tmp_path,
+            resources={
+                "cpuMillis": 1000,
+                "memoryMiB": 512,
+                "gpu": {"vendor": "nvidia", "count": "all"},
+            },
+        )
+    )
+
+    create = next(c for c in commands if c[0] == "create")
+    assert create[create.index("--gpus") + 1] == "all"
+
+
+@pytest.mark.asyncio
 async def test_create_rejects_resources_above_deployment_ceiling(tmp_path) -> None:
     (tmp_path / "art_workspace").mkdir()
     tiny = resolve_container_backend_settings(

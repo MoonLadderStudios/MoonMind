@@ -1,32 +1,72 @@
 [
   {
-    "id": 5419358589,
-    "disposition": "not-applicable",
-    "rationale": "Informational Codex task summary describing work already committed on this branch; it requests no change."
-  },
-  {
-    "id": 3858944974,
-    "disposition": "not-applicable",
-    "rationale": "False positive: 'revision' is a required Alembic migration-script attribute read by Alembic's ScriptDirectory loader, not dead code. All 60 migrations in api_service/migrations/versions declare it."
-  },
-  {
-    "id": 3858944983,
-    "disposition": "not-applicable",
-    "rationale": "False positive: 'down_revision' is a required Alembic migration-script attribute that defines the revision graph edge; removing it would break the migration chain."
-  },
-  {
-    "id": 3858944987,
-    "disposition": "not-applicable",
-    "rationale": "False positive: 'branch_labels' is part of the standard Alembic revision module contract and is consumed by Alembic, matching all 60 existing migrations."
-  },
-  {
-    "id": 3858944995,
-    "disposition": "not-applicable",
-    "rationale": "False positive: 'depends_on' is part of the standard Alembic revision module contract and is consumed by Alembic, matching all 60 existing migrations."
-  },
-  {
-    "id": 3858945003,
+    "id": 3862243216,
     "disposition": "addressed",
-    "rationale": "Removed the genuinely unused 'import os' from tests/unit/test_pr_resolver_review_loop.py; the 20 tests in that file still pass."
+    "rationale": "Added the GPU resource to the canonical container-job contract: ResourceLimits.gpu (sharing the one WorkloadGpuRequest contract), the container.run_job tool schema, a non-overridable MOONMIND_CONTAINER_BACKEND_MAX_GPU_COUNT deployment ceiling, and device-request realization in DockerContainerJobBackend.create_container, with tool-schema, model, serialization, ceiling, and create-arg tests."
+  },
+  {
+    "id": 3862243232,
+    "disposition": "addressed",
+    "rationale": "Qualification records are now published to a durable root outside the ephemeral workspace (MOONMIND_GPU_QUALIFICATION_RECORD_DIR, default var/gpu_qualification); tools/test_gpu_qualification.sh creates and announces it and runs pytest with -s so each published record path is visible."
+  },
+  {
+    "id": 3862243240,
+    "disposition": "addressed",
+    "rationale": "classify_gpu_launch_failure now requires objective launch-refusal evidence: Docker's own launch-failure exit status (125) in addition to the vendor diagnostic. A started container that exits nonzero while writing NVML/nvidia-container-cli/device-driver text is no longer classified as a device-request refusal; covered by new parametrized tests."
+  },
+  {
+    "id": 3862243248,
+    "disposition": "addressed",
+    "rationale": "gpu.count is validated in the before validator against the raw value, so true, \"2\", \" 2 \", 2.0, None, and [] are rejected instead of being coerced into device counts; the redundant after validator was removed."
+  },
+  {
+    "id": 3862243260,
+    "disposition": "addressed",
+    "rationale": "Added a bounded device-availability probe to collection-time preflight: one throwaway container carrying the journey's device request, classified with the production classify_gpu_launch_failure, so a runtime-registered but device-unavailable host skips with an explicit reason."
+  },
+  {
+    "id": 3862243269,
+    "disposition": "addressed",
+    "rationale": "_removes_container_on_exit now returns True on the unrestricted path only for a device-bearing request, so a replayed or retried in-flight CPU-only workload.run keeps its retained-container semantics and its removeContainerOnExit: false metadata. Covered by CPU-only and GPU cleanup tests."
+  },
+  {
+    "id": 3862243276,
+    "disposition": "addressed",
+    "rationale": "_run_docker passes --host MOONMIND_GPU_QUALIFICATION_DOCKER_HOST when configured, so preflight, the device probe, image/volume/container inspection, and teardown all target the same daemon that ran the workload; tools/test_gpu_qualification.sh does the same for its preflight."
+  },
+  {
+    "id": 3862243285,
+    "disposition": "addressed",
+    "rationale": "The dynamically generated declared-output path is exported to the container as MOONMIND_GPU_QUALIFICATION_OUTPUT, and declaredOutputs plus its assertions are declared only when the command agreed to write it (default command, or an override opting in via MOONMIND_GPU_QUALIFICATION_COMMAND_WRITES_OUTPUT)."
+  },
+  {
+    "id": 3862243296,
+    "disposition": "addressed",
+    "rationale": "deviceRequestArgs is now populated from the executed result's metadata.workload.gpu observations through verified_gpu_observations, and record construction is rejected when that terminal evidence is absent, empty, or realized through a different substrate. The host-independence test now supplies the generic executed-workload evidence."
+  },
+  {
+    "id": 3862243307,
+    "disposition": "addressed",
+    "rationale": "moonmind_revision returns None instead of \"unknown\" and build_gpu_qualification_record fails before publishing without an immutable identity; tools/test_gpu_qualification.sh resolves the checkout revision into MOONMIND_BUILD_SHA and fails fast when neither identity is available."
+  },
+  {
+    "id": 5029810043,
+    "disposition": "not-applicable",
+    "rationale": "Informational Codex review header, no actionable request."
+  },
+  {
+    "id": 3862243315,
+    "disposition": "addressed",
+    "rationale": "verified_gpu_observations validates the request/result authority binding before the record is built: result.requestId, metadata containerName, imageRef, and the realized GPU request must all match the submitted request, so a concurrent or retried run's outcome cannot be recorded under this request's identity."
+  },
+  {
+    "id": 3862243323,
+    "disposition": "addressed",
+    "rationale": "parse_image_digest now parses the RepoDigests JSON array structurally and selects the digest whose normalized registry/repository matches the requested image, so an alias repository's digest is never attributed to the requested reference."
+  },
+  {
+    "id": 3862243331,
+    "disposition": "addressed",
+    "rationale": "The warm-reuse journey writes a unique marker into /work/cache during the first GPU request and requires the second GPU request to read it back, and the cache listing asserts the marker is present, so cache reuse is proven rather than inferred from volume existence."
   }
 ]
