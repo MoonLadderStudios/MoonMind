@@ -12,6 +12,7 @@
 - [`../ExternalAgents/ModelContextProtocol.md`](../ExternalAgents/ModelContextProtocol.md)
 - [`../Omnigent/CombinedStackValidationAndRollback.md`](../Omnigent/CombinedStackValidationAndRollback.md)
 - [`../Workflows/SkillAndPlanContracts.md`](../Workflows/SkillAndPlanContracts.md)
+- [`../Workflows/GpuContainerResourcesContract.md`](../Workflows/GpuContainerResourcesContract.md)
 
 ---
 

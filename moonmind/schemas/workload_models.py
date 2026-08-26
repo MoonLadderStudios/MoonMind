@@ -60,6 +60,8 @@ RunnerNetworkPolicy = Literal[
 WorkflowDockerMode = Literal["disabled", "profiles", "unrestricted"]
 WorkloadAccessKind = Literal["profile", "unrestricted_container", "unrestricted_docker_cli"]
 WorkloadDeviceMode = Literal["none"]
+WorkloadGpuVendor = Literal["nvidia"]
+WorkloadGpuCapability = Literal["compute", "utility", "graphics", "video"]
 WorkloadReadinessProbeType = Literal["exec"]
 
 def parse_cpu_units(value: str) -> float:
@@ -276,6 +278,75 @@ class WorkloadResourceOverrides(BaseModel):
             self.shm_size = require_non_blank(self.shm_size, field_name="shmSize")
             parse_size_bytes(self.shm_size)
         return self
+
+class WorkloadGpuRequest(BaseModel):
+    """Generic GPU resource request on an unrestricted container request (#3775).
+
+    The caller owns the vendor, the requested count, and any driver
+    capabilities. MoonMind validates the shape and realizes it as the Docker
+    device request; it never selects an image, appends application arguments,
+    or inspects application-level GPU readiness. ``contractVersion`` versions
+    the wire shape so the same generic request can be carried unchanged into the
+    canonical container-job contract.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
+    vendor: WorkloadGpuVendor = Field(..., alias="vendor")
+    count: int | Literal["all"] = Field("all", alias="count")
+    capabilities: tuple[WorkloadGpuCapability, ...] = Field(
+        default_factory=tuple,
+        alias="capabilities",
+    )
+
+    @model_validator(mode="after")
+    def _validate_gpu_request(self) -> "WorkloadGpuRequest":
+        if isinstance(self.count, int) and self.count < 1:
+            raise ValueError("gpu.count must be a positive integer or 'all'")
+        self.capabilities = tuple(dict.fromkeys(self.capabilities))
+        return self
+
+    @property
+    def device_count(self) -> int:
+        """Return the Docker Engine ``DeviceRequest.Count`` for this request."""
+
+        return -1 if self.count == "all" else int(self.count)
+
+    def device_request(self) -> dict[str, Any]:
+        """Return the Engine API ``DeviceRequest`` equivalent of this request."""
+
+        return {
+            "Driver": self.vendor,
+            "Count": self.device_count,
+            "Capabilities": [list(self.capabilities) or ["gpu"]],
+        }
+
+    def docker_gpus_value(self) -> str:
+        """Return the ``docker run --gpus`` value equivalent of this request.
+
+        ``count: all`` without capabilities is the plain ``all`` shorthand, so
+        the launch receives exactly ``--gpus all``. An explicit capability set
+        needs the long form; its ``capabilities=`` field is quoted because the
+        Docker CLI parses the ``--gpus`` value as comma-separated fields.
+        """
+
+        count = "all" if self.count == "all" else str(self.count)
+        if not self.capabilities:
+            return count
+        capabilities = ",".join(self.capabilities)
+        return f'driver={self.vendor},count={count},"capabilities={capabilities}"'
+
+class UnrestrictedContainerResources(WorkloadResourceOverrides):
+    """Unrestricted-container resources: the shared limits plus generic GPU.
+
+    Profile-mode requests keep using ``WorkloadResourceOverrides``, so a GPU
+    request can neither reach the profile ``devicePolicy`` path nor require a
+    GPU-capable runner profile. Shared memory stays on the existing ``shmSize``
+    field rather than gaining a GPU-specific spelling.
+    """
+
+    gpu: WorkloadGpuRequest | None = Field(None, alias="gpu")
 
 class RunnerResourceProfile(BaseModel):
     """Default and maximum resources for one runner profile."""
@@ -601,7 +672,7 @@ class UnrestrictedContainerRequest(BaseModel):
     cache_mounts: tuple[UnrestrictedCacheMount, ...] = Field(default_factory=tuple, alias="cacheMounts")
     network_mode: WorkloadNetworkPolicy = Field("none", alias="networkMode")
     timeout_seconds: int | None = Field(None, alias="timeoutSeconds", ge=1)
-    resources: WorkloadResourceOverrides = Field(default_factory=WorkloadResourceOverrides, alias="resources")
+    resources: UnrestrictedContainerResources = Field(default_factory=UnrestrictedContainerResources, alias="resources")
     declared_outputs: dict[str, str] = Field(default_factory=dict, alias="declaredOutputs")
     collect_globs: tuple[str, ...] = Field(default_factory=tuple, alias="collectGlobs")
     session_id: NonBlankStr | None = Field(None, alias="sessionId")

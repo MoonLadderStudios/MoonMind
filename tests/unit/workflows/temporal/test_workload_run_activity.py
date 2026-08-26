@@ -503,3 +503,122 @@ async def test_workload_run_activity_passes_active_workflow_mode_to_registry() -
     assert capturing_registry.calls == [(validated.request, "unrestricted")]
     assert launcher.validated is validated
     assert result["labels"]["moonmind.workflow_docker_mode"] == "unrestricted"
+
+
+def _unrestricted_gpu_request_payload(**overrides: object) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "agentRunId": "task-gpu",
+        "stepId": "step-render",
+        "attempt": 1,
+        "toolName": "container.run_container",
+        "repoDir": "/work/agent_jobs/task-gpu/repo",
+        "artifactsDir": "/work/agent_jobs/task-gpu/artifacts/step-render",
+        "scratchDir": "/work/agent_jobs/task-gpu/scratch/step-render",
+        "image": "ghcr.io/example/caller-owned:1.4.2",
+        "command": ["caller-owned-doctor", "--json"],
+        "resources": {"gpu": {"vendor": "nvidia", "count": "all"}},
+    }
+    payload.update(overrides)
+    return payload
+
+
+class _ArgCapturingLauncher:
+    """Trusted-worker double that runs the real Docker argument construction."""
+
+    def __init__(self) -> None:
+        self._launcher = DockerWorkloadLauncher()
+        self.validated: Any | None = None
+        self.run_args: list[str] | None = None
+
+    async def run(self, validated: Any) -> WorkloadResult:
+        self.validated = validated
+        self.run_args = self._launcher.build_run_args(validated)
+        return WorkloadResult(
+            requestId=validated.container_name,
+            profileId=validated.request.tool_name,
+            status="succeeded",
+            labels=validated.ownership.labels,
+            exitCode=0,
+            metadata={"containerName": validated.container_name},
+        )
+
+
+@pytest.mark.asyncio
+async def test_workload_run_activity_carries_generic_gpu_resources_to_docker() -> None:
+    """GPU fields survive the activity payload, validation, and trusted launch."""
+
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _ArgCapturingLauncher()
+    activities = TemporalAgentRuntimeActivities(
+        workload_registry=registry,
+        workload_launcher=launcher,
+        workflow_docker_mode="unrestricted",
+    )
+
+    result = await activities.workload_run(
+        {"request": _unrestricted_gpu_request_payload()}
+    )
+
+    assert launcher.validated is not None
+    # No runner profile and therefore no profile device policy is involved.
+    assert launcher.validated.profile is None
+    gpu = launcher.validated.request.resources.gpu
+    assert (gpu.vendor, gpu.count, gpu.contract_version) == ("nvidia", "all", "v1")
+    assert launcher.run_args is not None
+    assert "--gpus" in launcher.run_args
+    assert launcher.run_args[launcher.run_args.index("--gpus") + 1] == "all"
+    # The caller owns the image and command through the whole dispatch.
+    assert launcher.run_args[-3:] == [
+        "ghcr.io/example/caller-owned:1.4.2",
+        "caller-owned-doctor",
+        "--json",
+    ]
+    assert result["status"] == "succeeded"
+    assert result["labels"]["moonmind.workload_access"] == "unrestricted_container"
+    assert result["labels"]["moonmind.workflow_docker_mode"] == "unrestricted"
+
+
+@pytest.mark.asyncio
+async def test_workload_run_activity_retry_reuses_the_run_owned_gpu_container() -> None:
+    """A retry attempt keeps the deterministic run-owned container identity."""
+
+    registry = RunnerProfileRegistry(
+        [RunnerProfile.model_validate(_profile_payload())],
+        workspace_root=WORKSPACE_ROOT,
+    )
+    launcher = _ArgCapturingLauncher()
+    activities = TemporalAgentRuntimeActivities(
+        workload_registry=registry,
+        workload_launcher=launcher,
+        workflow_docker_mode="unrestricted",
+    )
+    payload = {"request": _unrestricted_gpu_request_payload(attempt=2)}
+
+    first = await activities.workload_run(payload)
+    second = await activities.workload_run(payload)
+
+    assert first["requestId"] == second["requestId"]
+    assert first["requestId"] == "mm-workload-task-gpu-step-render-2"
+    assert launcher.run_args is not None
+    assert launcher.run_args[launcher.run_args.index("--name") + 1] == first["requestId"]
+
+
+@pytest.mark.asyncio
+async def test_workload_run_activity_denies_gpu_container_when_mode_is_profiles() -> None:
+    """A GPU request does not bypass the deployment-owned Docker mode switch."""
+
+    activities = TemporalAgentRuntimeActivities(
+        workload_registry=_FailingRegistry(),
+        workload_launcher=_FailingLauncher(),
+        workflow_docker_mode="profiles",
+    )
+
+    with pytest.raises(temporal_exceptions.ApplicationError) as exc_info:
+        await activities.workload_run(
+            {"request": _unrestricted_gpu_request_payload()}
+        )
+
+    assert exc_info.value.type == "docker_workflow_mode_forbidden"

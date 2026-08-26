@@ -332,6 +332,65 @@ def _operational_labels(request: ValidatedWorkloadRequest) -> dict[str, str]:
         "moonmind.expires_at": _isoformat(expires_at) or "",
     }
 
+# ``docker run`` reserves these exit codes for its own refusals, so a launch can
+# be classified without reading driver or application output.
+_DOCKER_LAUNCH_REJECTED_EXIT_CODE = 125
+_CONTAINER_COMMAND_NOT_INVOCABLE_EXIT_CODE = 126
+_CONTAINER_COMMAND_NOT_FOUND_EXIT_CODE = 127
+
+def _launch_outcome(*, status: str, exit_code: int | None) -> str:
+    """Classify one launch using only the signals Docker itself exposes.
+
+    125 is a daemon/CLI refusal to create the container, which is where an
+    unsupported device request, an unavailable NVIDIA runtime, or an absent GPU
+    surfaces. 126 and 127 are container startup failures for the caller's own
+    command. Any other non-zero code is the container process's exit status.
+    The classification is deliberately generic: MoonMind never inspects driver
+    details or application-level readiness to produce it.
+    """
+
+    if status == "timed_out":
+        return "timed_out"
+    if exit_code is None:
+        return "unknown"
+    if exit_code == 0:
+        return "succeeded"
+    if exit_code == _DOCKER_LAUNCH_REJECTED_EXIT_CODE:
+        return "docker_request_rejected"
+    if exit_code == _CONTAINER_COMMAND_NOT_INVOCABLE_EXIT_CODE:
+        return "container_start_failed"
+    if exit_code == _CONTAINER_COMMAND_NOT_FOUND_EXIT_CODE:
+        return "container_command_not_found"
+    return "process_failed"
+
+def _gpu_observation(
+    request: ValidatedWorkloadRequest,
+    *,
+    launch_outcome: str,
+) -> dict[str, object]:
+    """Return the bounded generic GPU observation for one workload run (#3775).
+
+    Only the caller's own generic request fields and whether Docker accepted it
+    are recorded. Host driver details and daemon configuration stay out of the
+    public result.
+    """
+
+    gpu = getattr(request.request.resources, "gpu", None)
+    if gpu is None:
+        return {"requested": False}
+    return {
+        "requested": True,
+        "contractVersion": gpu.contract_version,
+        "vendor": gpu.vendor,
+        "count": gpu.count,
+        "capabilities": list(gpu.capabilities),
+        "dockerAccepted": (
+            None
+            if launch_outcome == "unknown"
+            else launch_outcome != "docker_request_rejected"
+        ),
+    }
+
 def _workload_metadata(
     request: ValidatedWorkloadRequest,
     *,
@@ -345,6 +404,7 @@ def _workload_metadata(
     image_ref = request.profile.image if request.profile is not None else getattr(request.request, "image", None)
     profile_id = request.profile.id if request.profile is not None else None
     workload_access = request.ownership.workload_access
+    launch_outcome = _launch_outcome(status=status, exit_code=exit_code)
     return {
         "agentRunId": request.request.agent_run_id,
         "stepId": request.request.step_id,
@@ -364,6 +424,8 @@ def _workload_metadata(
         "completedAt": _isoformat(completed_at),
         "durationSeconds": duration_seconds,
         "timeoutReason": timeout_reason,
+        "launchOutcome": launch_outcome,
+        "gpu": _gpu_observation(request, launch_outcome=launch_outcome),
         "labels": dict(request.ownership.labels),
         "artifactsDir": request.request.artifacts_dir,
         "sessionContext": _session_context(request),
@@ -924,6 +986,8 @@ def _build_unrestricted_run_args(
         overrides=workload.resources,
     ).items():
         args.extend([flag, value])
+    if workload.resources.gpu is not None:
+        args.extend(["--gpus", workload.resources.gpu.docker_gpus_value()])
     if workload.entrypoint:
         args.extend(["--entrypoint", workload.entrypoint[0]])
     args.append(workload.image)
