@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import shutil
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from temporalio import activity
@@ -92,6 +93,12 @@ class ManagedRunSupervisor:
         )
         self._store.update_status(run_id, "running")
         start_time = datetime.now(tz=UTC)
+        # Wall-clock ``start_time`` is the run's evidence; the budget's intervals
+        # are measured from this monotonic anchor instead. A host clock step
+        # forward would otherwise terminate a healthy run as over-budget, and a
+        # step backward would let it run past the ceiling the AgentRun workflow
+        # is enforcing — the two deadlines must stay the same boundary.
+        start_monotonic = time.monotonic()
 
         try:
             # Resolve strategy output parser for this runtime
@@ -117,6 +124,13 @@ class ManagedRunSupervisor:
             # actively-working run is falsely escalated to intervention.
             output_offset = 0
             latest_observed_progress_at: datetime | None = None
+            # Monotonic counterpart of ``latest_observed_progress_at``. Progress
+            # evidence is persisted as wall-clock because it must line up with
+            # file mtimes and operator timelines, but staleness is judged from a
+            # monotonic anchor so a clock adjustment cannot manufacture or erase
+            # an idle window. The anchor only ever moves forward: nothing but
+            # observed progress may reduce measured idle time.
+            latest_progress_monotonic: float | None = None
             # Runtime-neutral activity evidence. Output and workspace mutation
             # both go quiet during legitimate work (a buffered one-shot CLI, or a
             # test run that only writes ignored directories), while a wedged
@@ -294,7 +308,8 @@ class ManagedRunSupervisor:
 
             async def _emit_no_output_annotation(now: datetime) -> None:
                 nonlocal last_no_output_annotation_at, stalled_no_progress, stalled_progress_reason
-                nonlocal latest_observed_progress_at
+                nonlocal latest_observed_progress_at, latest_progress_monotonic
+                sampled_at_monotonic = time.monotonic()
                 latest_progress_at = await _latest_progress_at()
                 # Cache the supervisor's authoritative progress signal so the
                 # heartbeat loop can persist it to the run store. This runs on
@@ -305,6 +320,17 @@ class ManagedRunSupervisor:
                     0.0,
                     (now - latest_progress_at).total_seconds(),
                 )
+                # Anchor this observation on the monotonic clock at the age it
+                # had when sampled, so the budget measures staleness by elapsed
+                # monotonic time rather than by comparing two wall-clock reads.
+                observed_progress_monotonic = (
+                    sampled_at_monotonic - idle_progress_seconds
+                )
+                if (
+                    latest_progress_monotonic is None
+                    or observed_progress_monotonic > latest_progress_monotonic
+                ):
+                    latest_progress_monotonic = observed_progress_monotonic
                 if (
                     progress_timeout_seconds is not None
                     and not stalled_progress_detected.is_set()
@@ -350,19 +376,16 @@ class ManagedRunSupervisor:
 
             def budget_elapsed_seconds() -> float:
                 """Real elapsed run time, for messages that must not understate it."""
-                return (datetime.now(tz=UTC) - start_time).total_seconds()
+                return time.monotonic() - start_monotonic
 
-            def _idle_progress_seconds(now: datetime) -> float | None:
+            def _idle_progress_seconds(now_monotonic: float) -> float | None:
                 # ``None`` means no progress has ever been observed for this run.
                 # That is not evidence of health, so the budget treats it exactly
                 # as it did before progress-awareness: terminate at the base
                 # window. Only positively observed progress buys an extension.
-                if latest_observed_progress_at is None:
+                if latest_progress_monotonic is None:
                     return None
-                return max(
-                    0.0,
-                    (now - latest_observed_progress_at).total_seconds(),
-                )
+                return max(0.0, now_monotonic - latest_progress_monotonic)
 
             def _on_budget_extended(
                 elapsed_seconds: float,
@@ -418,7 +441,7 @@ class ManagedRunSupervisor:
                     run_id,
                     process,
                     budget,
-                    started_at=start_time,
+                    monotonic_started_at=start_monotonic,
                     idle_progress_seconds=_idle_progress_seconds,
                     no_output_callback=_emit_no_output_annotation,
                     progress_snapshot=_progress_snapshot,
@@ -725,8 +748,8 @@ class ManagedRunSupervisor:
         process: asyncio.subprocess.Process,
         budget: ExecutionBudget,
         *,
-        started_at: datetime,
-        idle_progress_seconds: Callable[[datetime], float | None],
+        monotonic_started_at: float,
+        idle_progress_seconds: Callable[[float], float | None],
         no_output_callback: Callable[[datetime], Awaitable[None]] | None = None,
         progress_snapshot: Callable[[], tuple[datetime | None, int | None]]
         | None = None,
@@ -742,9 +765,19 @@ class ManagedRunSupervisor:
         could not see progress, so it killed runs that were actively working —
         the whole point of the budget is that elapsed wall-clock alone is not
         evidence of a stuck run. The budget is re-evaluated on the fast tick
-        rather than only per heartbeat so the ceiling is still enforced promptly;
-        the progress timestamp it reads is refreshed by ``no_output_callback``
-        once per heartbeat, which is far finer than the stall window it feeds.
+        rather than only per heartbeat so the ceiling is still enforced promptly.
+
+        Elapsed and idle intervals are measured monotonically. A host clock step
+        must not be able to terminate a healthy run as over-budget, nor let a
+        wedged one outlive the AgentRun workflow's deadline for the same run.
+
+        The cached progress timestamp is only refreshed once per heartbeat, so a
+        stall verdict computed from it can be a whole heartbeat interval stale.
+        Before ending a run for lack of progress this samples current CPU and
+        workspace activity and re-decides: a process that resumed work seconds
+        before its stall boundary must not be killed for activity the supervisor
+        simply had not looked for yet. The ceiling is exempt — no amount of
+        observed progress extends a run past ``max_seconds``.
 
         On expiry the process is terminated immediately so the concurrent
         streaming task observes EOF and completes, allowing the caller's gather
@@ -757,19 +790,32 @@ class ManagedRunSupervisor:
                 return process.returncode, "continue"
             await asyncio.sleep(0.1)
 
-            now = datetime.now(tz=UTC)
-            elapsed = (now - started_at).total_seconds()
-            idle_seconds = idle_progress_seconds(now)
+            now_monotonic = time.monotonic()
+            elapsed = now_monotonic - monotonic_started_at
+            idle_seconds = idle_progress_seconds(now_monotonic)
             verdict = evaluate_execution_budget(
                 budget=budget,
                 elapsed_seconds=elapsed,
                 idle_progress_seconds=idle_seconds,
             )
             if verdict != "continue":
-                await self._terminate_process(process)
-                if no_output_callback is not None:
+                refreshed_for_expiry = False
+                if verdict == "expired_no_progress" and no_output_callback is not None:
                     await no_output_callback(datetime.now(tz=UTC))
-                return None, verdict
+                    refreshed_for_expiry = True
+                    now_monotonic = time.monotonic()
+                    elapsed = now_monotonic - monotonic_started_at
+                    idle_seconds = idle_progress_seconds(now_monotonic)
+                    verdict = evaluate_execution_budget(
+                        budget=budget,
+                        elapsed_seconds=elapsed,
+                        idle_progress_seconds=idle_seconds,
+                    )
+                if verdict != "continue":
+                    await self._terminate_process(process)
+                    if no_output_callback is not None and not refreshed_for_expiry:
+                        await no_output_callback(datetime.now(tz=UTC))
+                    return None, verdict
             if elapsed >= budget.base_seconds and on_budget_extended is not None:
                 on_budget_extended(elapsed, idle_seconds)
 

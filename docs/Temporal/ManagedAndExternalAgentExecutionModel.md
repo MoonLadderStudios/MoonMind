@@ -596,19 +596,35 @@ supervisor. The two deadlines cannot diverge, because the workflow publishes the
 resolved budget back into the launch request and the supervisor resolves the
 same values from it.
 
-The budget has three fields:
+The budget has four fields:
 
 | Field | Meaning |
 |---|---|
 | `timeout_seconds` | Base window. A run that cannot demonstrate progress ends here. |
 | `max_timeout_seconds` | Hard ceiling. No observed progress extends a run past this. |
 | `progress_stall_seconds` | How long observed progress may go stale before an over-base run is treated as stuck. |
+| `execution_budget_mode` | Which decision the budget encodes: `progress_aware` or `flat`. |
 
 Omitted fields resolve to kind-specific defaults. The ceiling defaults to a
 multiple of the base window rather than an absolute constant, so an explicitly
-requested tight budget keeps a tight ceiling, and the stall window never exceeds
-the base window — a run is not given more time to prove it is alive than it was
-given to finish.
+requested tight budget keeps a tight ceiling.
+
+A resolved budget is never internally contradictory. The stall window never
+exceeds the base window, explicit or defaulted — a run is not given more time to
+prove it is alive than it was given to finish, and a wider stall window would
+otherwise erase the base window as a boundary, because a run's own start counts
+as an observation. The base window is bound by the same absolute cap as the
+ceiling, so a run can never be terminated for "reaching the maximum" before the
+base window it declared has elapsed.
+
+**Mode travels with the numbers.** A workflow history that predates
+progress-awareness enforces a flat deadline, and it publishes that decision, not
+just its base window. A callee that re-resolves the budget — the launch activity
+does so on every launch and retry, including retries dispatched after the
+progress-aware deployment — must reach the same decision. Publishing only the
+base window let the supervisor derive a progress-aware ceiling the workflow never
+granted: the workflow timed out at the base window and released the provider
+slot while the supervisor carried the process on to that ceiling.
 
 **Elapsed wall-clock alone is not evidence that a run is stuck.** A run is
 terminated for exceeding its budget only when one of two things is true:
@@ -623,6 +639,23 @@ are reported distinctly: a run stopped at the ceiling is never described as
 having made no progress, because the operator responses differ — raise the
 ceiling versus investigate a wedged runtime. The terminal result records the
 budget the decision was made against and which of the two conditions ended it.
+
+**Budget intervals are measured monotonically.** Elapsed and idle durations come
+from a monotonic clock; wall-clock timestamps remain the run's persisted
+evidence, because they must line up with file mtimes and operator timelines. A
+host clock step must not be able to terminate a healthy run as over-budget, nor
+let a wedged one outlive the deadline the other boundary is enforcing.
+
+**A stall verdict is decided against fresh evidence, never cached evidence.**
+Progress observations are sampled on a heartbeat cadence, so a verdict computed
+from the cached observation can be a whole heartbeat interval stale, and the last
+bounded poll wait can consume the entire known remaining budget. Before ending a
+run for lack of progress, each boundary reconciles once against current evidence
+— the supervisor samples CPU and workspace activity, the workflow performs one
+final bounded status poll — and re-decides. A process that resumed work seconds
+before its boundary is not killed for activity the boundary had simply not looked
+for yet. The hard ceiling is exempt: it is enforced without reconciliation,
+because no observed progress extends a run past it.
 
 ### Progress evidence
 
@@ -650,10 +683,28 @@ is contained by the hard ceiling, which no amount of observed progress extends.
 The same observation drives the no-progress watchdog, so the watchdog and the
 budget cannot disagree about whether a run is progressing.
 
+CPU accounting is cumulative across the session's lifetime, not across its
+currently live processes. A descendant that exits keeps its consumed CPU in the
+session total, so the total never falls. Without this, an agent running a
+sequence of short-lived compilers or test processes reads as stalled while
+working continuously, because each replacement has to re-earn the CPU its
+predecessor took with it.
+
 Callers that provision resources which must outlive the whole run — credential
-lifetimes, broker sockets, activity `ScheduleToClose` timeouts — size them from
-the ceiling, never from the base window. Sizing them from the base window would
-strand an extended run without the authority it was granted.
+lifetimes, broker sockets — size them from the ceiling, never from the base
+window, plus a bounded allowance for launch preparation that precedes the
+supervisor starting its clock. Sizing them from the base window would strand an
+extended run without the authority it was granted; sizing them at exactly the
+ceiling would expire them while the run is still legally executing.
+
+**Only a boundary that can observe progress may spend the extension.** An
+activity `ScheduleToClose` is sized from the ceiling when the workflow can
+re-evaluate the budget while the activity runs. Where the workflow is blocked
+awaiting a single long-running activity and therefore cannot observe progress or
+re-decide, `ScheduleToClose` is the only deadline that exists, and it is sized
+from the base window. Sizing it from the ceiling there would let a run that never
+makes progress hold its provider slot for the full ceiling with no boundary able
+to stop it.
 
 ---
 

@@ -62,6 +62,11 @@ class ProcessActivityProbe:
 
     ``sample`` is cheap enough to call on every heartbeat: it reads one small
     file per running process and does no allocation-heavy parsing.
+
+    The total is cumulative across the session's whole lifetime, not just its
+    currently live processes: CPU consumed by a descendant that has since exited
+    is retained, so the total never falls and a delta of zero always means the
+    session really did no work between samples.
     """
 
     def __init__(self, *, session_pid: int) -> None:
@@ -71,6 +76,14 @@ class ProcessActivityProbe:
         self._last_activity_at: datetime | None = None
         self._unavailable = not _PROC_ROOT.is_dir()
         self._warned = False
+        # Per-process CPU carried across samples so the session total is
+        # genuinely cumulative. ``/proc`` only shows live processes, so summing
+        # it alone makes the total *fall* when a descendant exits — a managed
+        # agent running a sequence of short-lived compilers or test processes
+        # would then read as stalled while working continuously, because each
+        # replacement has to re-earn the CPU its predecessor took with it.
+        self._live_ticks: dict[int, int] = {}
+        self._retired_ticks = 0
 
     @property
     def available(self) -> bool:
@@ -104,10 +117,11 @@ class ProcessActivityProbe:
         return self._last_activity_at
 
     def _total_cpu_seconds(self) -> float | None:
-        """Sum utime+stime across the supervised session, or ``None`` if gone."""
+        """Cumulative session CPU including exited descendants, or ``None``.
 
-        total_ticks = 0
-        found = False
+        ``None`` means the session is gone; the exit path owns that outcome.
+        """
+
         try:
             entries = os.listdir(_PROC_ROOT)
         except OSError:
@@ -117,6 +131,7 @@ class ProcessActivityProbe:
             self._unavailable = True
             return None
 
+        live: dict[int, int] = {}
         for entry in entries:
             if not entry.isdigit():
                 continue
@@ -126,12 +141,24 @@ class ProcessActivityProbe:
             session, ticks = sample
             if session != self._session_pid:
                 continue
-            found = True
-            total_ticks += ticks
+            live[int(entry)] = ticks
 
-        if not found:
+        if not live:
             return None
-        return total_ticks / self._ticks_per_second
+
+        for pid, ticks in self._live_ticks.items():
+            current = live.get(pid)
+            if current is None:
+                # Exited between samples: its CPU stays in the session total.
+                self._retired_ticks += ticks
+            elif current < ticks:
+                # The pid was recycled into this session. Retire the predecessor
+                # so the recycled process starts from its own zero rather than
+                # dragging the total backwards.
+                self._retired_ticks += ticks
+
+        self._live_ticks = live
+        return (self._retired_ticks + sum(live.values())) / self._ticks_per_second
 
     @staticmethod
     def _read_stat(stat_path: Path) -> tuple[int, int] | None:

@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -11,6 +12,7 @@ import pytest
 from moonmind.auth.github_credentials import ResolvedGitHubCredential
 from moonmind.config.settings import settings
 from moonmind.schemas.agent_runtime_models import AgentExecutionRequest
+from moonmind.schemas.agent_runtime_models import resolve_execution_budget
 from moonmind.schemas.agent_runtime_models import ManagedRuntimeProfile
 from moonmind.schemas.agent_runtime_models import RuntimeCommandRenderResult
 from moonmind.security.execution_fanout_capabilities import (
@@ -4586,6 +4588,14 @@ async def test_direct_managed_launch_materializes_scoped_execution_fanout(
     assert captured_env["MOONMIND_AGENT_RUN_ID"] == "agent-run-1"
     assert captured_env["MOONMIND_RUNTIME_ID"] == "claude_code"
     assert captured_env["MOONMIND_STEP_ID"] == "batch-workflows"
+    # The capability must still be valid at the execution ceiling. It is minted
+    # before the broker, workspace ownership changes, and process creation that
+    # precede the supervisor starting its clock, so a lifetime of exactly the
+    # ceiling can expire while the run is still legally executing.
+    budget = resolve_execution_budget(
+        agent_kind=request.agent_kind, timeout_policy=request.timeout_policy
+    )
+    assert capability.expires_at > int(time.time()) + budget.max_seconds
 
 
 def test_direct_managed_launch_removes_unrequested_ambient_fanout_authority() -> None:

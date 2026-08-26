@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 import pytest
 
@@ -82,7 +83,7 @@ def _save_record(
 # Test 1 — heartbeat_and_wait_within_budget returns (exit_code, "continue")
 # ---------------------------------------------------------------------------
 
-def _never_idle(_now: datetime) -> float | None:
+def _never_idle(_now_monotonic: float) -> float | None:
     """Progress evidence for a run that has never shown progress."""
     return None
 
@@ -101,7 +102,7 @@ async def test_heartbeat_and_wait_within_budget_normal_exit(tmp_path: Path):
         "run-t1",
         process,
         resolve_execution_budget(timeout_policy={"timeout_seconds": 10}),
-        started_at=datetime.now(tz=UTC),
+        monotonic_started_at=time.monotonic(),
         idle_progress_seconds=_never_idle,
     )
     assert exit_code == 0
@@ -129,7 +130,7 @@ async def test_heartbeat_and_wait_within_budget_expires_without_progress(
             "run-t2",
             process,
             resolve_execution_budget(timeout_policy={"timeout_seconds": 1}),
-            started_at=datetime.now(tz=UTC),
+            monotonic_started_at=time.monotonic(),
             idle_progress_seconds=_never_idle,
         )
         assert exit_code is None
@@ -171,9 +172,9 @@ async def test_heartbeat_and_wait_within_budget_extends_while_progressing(
             process,
             # base 1s, ceiling 6s, stall window 1s.
             resolve_execution_budget(timeout_policy={"timeout_seconds": 1}),
-            started_at=datetime.now(tz=UTC),
+            monotonic_started_at=time.monotonic(),
             # Progress observed continuously: never stale.
-            idle_progress_seconds=lambda _now: 0.0,
+            idle_progress_seconds=lambda _now_monotonic: 0.0,
             on_budget_extended=lambda elapsed, idle: extensions.append(
                 (elapsed, idle)
             ),
@@ -184,10 +185,160 @@ async def test_heartbeat_and_wait_within_budget_extends_while_progressing(
         assert verdict == "expired_max_budget"
         assert extensions, "an extension past the base budget was not reported"
     finally:
+        # Process may already be terminated by the budget enforcement above.
         try:
             process.kill()
             await process.wait()
         except ProcessLookupError:
+            # Process already terminated; nothing to clean up.
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Test 2c — progress is sampled before a stall verdict ends the run
+#
+# The cached progress timestamp is only refreshed once per heartbeat (30s), so a
+# stall verdict computed from it can be a whole heartbeat interval stale. A run
+# that resumed CPU work or wrote a file seconds before its boundary must not be
+# killed for activity the supervisor simply had not looked for yet.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_due_progress_is_sampled_before_the_stall_verdict_terminates(
+    tmp_path: Path,
+):
+    """A refresh that finds fresh progress rescues the run from a stale verdict."""
+    supervisor, store, _ = _make_supervisor(tmp_path)
+
+    process = await asyncio.create_subprocess_exec(
+        "sleep", "30",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    # Cached evidence says the run went stale long ago. The refresh callback is
+    # what discovers that it is in fact working right now.
+    idle_view = {"seconds": 10_000.0}
+    refreshes: list[datetime] = []
+
+    async def _refresh(now: datetime) -> None:
+        refreshes.append(now)
+        # First look at live activity: the process is working after all.
+        idle_view["seconds"] = 0.0
+
+    try:
+        exit_code, verdict = await supervisor._heartbeat_and_wait_within_budget(
+            "run-t2c",
+            process,
+            # base 1s, ceiling 6s, stall window 1s.
+            resolve_execution_budget(timeout_policy={"timeout_seconds": 1}),
+            monotonic_started_at=time.monotonic(),
+            idle_progress_seconds=lambda _now_monotonic: idle_view["seconds"],
+            no_output_callback=_refresh,
+        )
+        # The stale verdict was not accepted: the run survived to the ceiling.
+        assert refreshes, "progress was never sampled before the terminal decision"
+        assert exit_code is None
+        assert verdict == "expired_max_budget"
+    finally:
+        # Process may already be terminated by the budget enforcement above.
+        try:
+            process.kill()
+            await process.wait()
+        except ProcessLookupError:
+            # Process already terminated; nothing to clean up.
+            pass
+
+
+@pytest.mark.asyncio
+async def test_refresh_cannot_extend_a_run_past_the_ceiling(tmp_path: Path):
+    """The hard ceiling is exempt: no observed progress extends past it."""
+    supervisor, store, _ = _make_supervisor(tmp_path)
+
+    process = await asyncio.create_subprocess_exec(
+        "sleep", "30",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    refreshes: list[datetime] = []
+
+    async def _refresh(now: datetime) -> None:
+        refreshes.append(now)
+
+    try:
+        exit_code, verdict = await supervisor._heartbeat_and_wait_within_budget(
+            "run-t2c-ceiling",
+            process,
+            # base 1s, ceiling 1s: the ceiling is reached with the base window.
+            resolve_execution_budget(
+                timeout_policy={"timeout_seconds": 1, "max_timeout_seconds": 1}
+            ),
+            monotonic_started_at=time.monotonic(),
+            # Continuously fresh progress still cannot buy an extension here.
+            idle_progress_seconds=lambda _now_monotonic: 0.0,
+            no_output_callback=_refresh,
+        )
+        assert exit_code is None
+        assert verdict == "expired_max_budget"
+    finally:
+        # Process may already be terminated by the budget enforcement above.
+        try:
+            process.kill()
+            await process.wait()
+        except ProcessLookupError:
+            # Process already terminated; nothing to clean up.
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Test 2d — budget intervals are monotonic, not wall-clock
+#
+# A host clock step forward must not terminate a healthy run as over-budget, and
+# a step backward must not let it outlive the AgentRun workflow's deadline for
+# the same run.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_budget_intervals_ignore_wall_clock_jumps(tmp_path: Path, monkeypatch):
+    """A wall-clock jump forward does not end a run that is inside its budget."""
+    supervisor, store, _ = _make_supervisor(tmp_path)
+
+    real_now = datetime.now
+
+    class _JumpedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: D102 - test double
+            return real_now(tz) + timedelta(hours=48)
+
+    monkeypatch.setattr(
+        "moonmind.workflows.temporal.runtime.supervisor.datetime",
+        _JumpedDatetime,
+    )
+
+    process = await asyncio.create_subprocess_exec(
+        "sleep", "1",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        exit_code, verdict = await supervisor._heartbeat_and_wait_within_budget(
+            "run-t2d",
+            process,
+            # 48 hours of wall-clock jump against a 30s budget: a wall-clock
+            # deadline would kill this instantly.
+            resolve_execution_budget(timeout_policy={"timeout_seconds": 30}),
+            monotonic_started_at=time.monotonic(),
+            idle_progress_seconds=lambda _now_monotonic: 0.0,
+        )
+        # The process was allowed to exit on its own.
+        assert exit_code == 0
+        assert verdict == "continue"
+    finally:
+        # Process may already be terminated by the budget enforcement above.
+        try:
+            process.kill()
+            await process.wait()
+        except ProcessLookupError:
+            # Process already terminated; nothing to clean up.
             pass
 
 

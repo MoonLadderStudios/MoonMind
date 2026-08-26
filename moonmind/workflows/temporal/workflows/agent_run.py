@@ -1309,6 +1309,17 @@ class MoonMindAgentRun:
         Publishing only the base window would let the process be killed at the
         base budget even though the workflow had granted an extension.
 
+        The *mode* travels too. A history that predates the progress-aware patch
+        keeps its flat deadline, and the launch activity re-resolves the budget
+        from this policy on every launch and retry — including retries that run
+        after the progress-aware deployment. Publishing only the base window
+        there would let the activity derive a progress-aware ceiling the workflow
+        never granted: the workflow would time out at the base window and release
+        the provider slot while the supervisor carried the process on to that
+        derived ceiling, leaving untracked work running against a profile already
+        handed to another run. Publishing the flat budget explicitly keeps the
+        two deadlines the same boundary.
+
         Adding keys keeps the launch payload backward-compatible: a worker that
         does not read them resolves the same defaults from the base window.
         """
@@ -1317,8 +1328,9 @@ class MoonMindAgentRun:
             **(request.timeout_policy or {}),
             "timeout_seconds": budget.base_seconds,
         }
-        if progress_aware:
-            published.update(budget.as_timeout_policy())
+        published.update(
+            (budget if progress_aware else budget.as_flat()).as_timeout_policy()
+        )
         request.timeout_policy = published
 
     @staticmethod
@@ -5592,17 +5604,21 @@ class MoonMindAgentRun:
                             # activity dispatcher because that boundary invokes
                             # the exact recorded realizer from the persisted
                             # plan instead of the generic supervisor.
-                            # ScheduleToClose must cover the longest the run can
-                            # legally take, otherwise Temporal cancels the
-                            # activity at the base window and an extension the
-                            # budget granted cannot actually be used.
-                            stc_budget_seconds = (
-                                execution_budget.max_seconds
-                                if progress_aware_budget
-                                else int(timeout_seconds)
-                            )
+                            # ScheduleToClose is the only deadline this lane
+                            # has. The workflow is blocked awaiting the activity
+                            # for its whole duration, so it cannot observe
+                            # provider progress or re-evaluate the budget, and
+                            # the activity's heartbeat is emitted independently
+                            # of semantic progress. Sizing this to the
+                            # progress-aware ceiling would therefore let a run
+                            # that never makes progress hold its provider slot
+                            # for the full ceiling with no boundary able to stop
+                            # it — four times its base window for the managed
+                            # default. Only a lane that can actually observe
+                            # progress may spend the extension, so this one stops
+                            # at the base window the workflow enforces.
                             stc_seconds = min(
-                                max(int(stc_budget_seconds), 60),
+                                max(int(timeout_seconds), 60),
                                 86400,
                             )
                             act_name = f"integration.{validated_id}.execute"
@@ -5691,6 +5707,14 @@ class MoonMindAgentRun:
                 if not skip_poll_and_fetch:
                     last_progress_signature: tuple[Any, ...] | None = None
                     stagnant_poll_count = 0
+                    # A budget verdict reached without polling status once more
+                    # is a verdict about stale evidence. The bounded wait below
+                    # can consume the entire known remaining budget, and the
+                    # supervisor progress that landed during that wait would then
+                    # never be read. Reconcile once against fresh status before
+                    # the verdict is accepted; a reconciliation that observes
+                    # progress rearms for the next boundary.
+                    budget_reconciled = False
                     while True:
                         if (
                             request.agent_kind == "external"
@@ -5749,7 +5773,16 @@ class MoonMindAgentRun:
                                 )
                                 and remaining_status_budget <= 0
                             ):
-                                break
+                                if not progress_aware_budget or budget_reconciled:
+                                    break
+                                # Final bounded reconciliation: the budget looks
+                                # spent, but the last wait may have hidden a
+                                # supervisor progress advance that extends it.
+                                # ``None`` gives this one poll the activity's
+                                # configured window instead of the exhausted
+                                # budget, so it can actually return.
+                                budget_reconciled = True
+                                remaining_status_budget = None
                             status_obj = await self._poll_managed_status(
                                 request=request,
                                 adapter=adapter,
@@ -5771,6 +5804,9 @@ class MoonMindAgentRun:
                         last_progress_signature = progress_signature
                         if progress_observed:
                             last_progress_at = workflow.now()
+                            # Fresh progress rearms the final reconciliation for
+                            # the next budget boundary this run reaches.
+                            budget_reconciled = False
                         if workflow.patched(AGENT_RUN_RESILIENCY_POLICY_PATCH_ID):
                             if progress_observed:
                                 stagnant_poll_count = 0

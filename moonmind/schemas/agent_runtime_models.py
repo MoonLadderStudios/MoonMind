@@ -80,6 +80,19 @@ ExecutionBudgetVerdict = Literal[
     "expired_max_budget",
 ]
 
+# Which budget decision a run is executing under. This travels in the launch
+# request's timeout policy so the supervisor enforces the *same* decision the
+# workflow enforces, rather than independently re-deriving a progress-aware
+# ceiling. An AgentRun history that predates the progress-aware patch keeps its
+# flat deadline; without this the workflow would time out at the base window and
+# release the provider slot while the supervisor kept the process alive to a
+# derived ceiling it was never granted.
+#   ``progress_aware`` -- observed progress extends the run past the base window
+#   ``flat``           -- the base window is the only deadline
+ExecutionBudgetMode = Literal["progress_aware", "flat"]
+# Timeout-policy key carrying :data:`ExecutionBudgetMode` across the boundary.
+EXECUTION_BUDGET_MODE_KEY = "execution_budget_mode"
+
 
 class ExecutionBudget(BaseModel):
     """The resolved, progress-aware execution budget for one agent run.
@@ -95,20 +108,39 @@ class ExecutionBudget(BaseModel):
     base_seconds: int = Field(alias="baseSeconds")
     max_seconds: int = Field(alias="maxSeconds")
     progress_stall_seconds: int = Field(alias="progressStallSeconds")
+    mode: ExecutionBudgetMode = Field(default="progress_aware", alias="mode")
 
-    def as_timeout_policy(self) -> dict[str, int]:
+    def as_timeout_policy(self) -> dict[str, Any]:
         """Return the policy mapping that republishes this budget to callees.
 
         The workflow publishes this into the launch request so the supervisor
         enforces the identical budget. Keys match the snake_case names read by
-        :func:`resolve_execution_budget`.
+        :func:`resolve_execution_budget`. The mode travels with the numbers: a
+        callee that re-resolves the budget must reach the same decision, not a
+        progress-aware one derived from a flat run's base window.
         """
 
         return {
             "timeout_seconds": self.base_seconds,
             "max_timeout_seconds": self.max_seconds,
             "progress_stall_seconds": self.progress_stall_seconds,
+            EXECUTION_BUDGET_MODE_KEY: self.mode,
         }
+
+    def as_flat(self) -> "ExecutionBudget":
+        """This budget with the base window as its only deadline.
+
+        Used to publish the deadline a pre-progress-aware AgentRun history is
+        actually enforcing, so the supervisor cannot outlive the workflow that
+        owns the run's provider slot.
+        """
+
+        return ExecutionBudget(
+            base_seconds=self.base_seconds,
+            max_seconds=self.base_seconds,
+            progress_stall_seconds=self.base_seconds,
+            mode="flat",
+        )
 
 
 def _read_timeout_policy_value(
@@ -132,6 +164,25 @@ def _read_timeout_policy_value(
     return seconds if seconds > 0 else None
 
 
+def _read_execution_budget_mode(
+    timeout_policy: Mapping[str, Any] | Any | None,
+) -> ExecutionBudgetMode:
+    """Read the published budget mode, defaulting to progress-aware.
+
+    A policy with no mode is either a direct launch or a caller that predates the
+    key; both get the current decision, which is what they would have resolved
+    before the key existed.
+    """
+
+    if timeout_policy is None:
+        return "progress_aware"
+    if isinstance(timeout_policy, Mapping):
+        requested = timeout_policy.get(EXECUTION_BUDGET_MODE_KEY)
+    else:
+        requested = getattr(timeout_policy, EXECUTION_BUDGET_MODE_KEY, None)
+    return "flat" if str(requested or "").strip() == "flat" else "progress_aware"
+
+
 def resolve_execution_budget(
     *,
     agent_kind: str = "managed",
@@ -148,6 +199,11 @@ def resolve_execution_budget(
     The ceiling is never below the base budget: an explicit ``timeout_seconds``
     larger than the default ceiling raises the ceiling with it, so asking for a
     bigger budget never silently shortens the run.
+
+    ``execution_budget_mode`` selects the decision this budget encodes. A policy
+    published by an AgentRun history that predates progress-awareness carries
+    ``flat``, and the resolved budget then has the base window as its only
+    deadline, so the supervisor cannot outlive the workflow enforcing it.
     """
 
     is_external = agent_kind == "external"
@@ -156,12 +212,24 @@ def resolve_execution_budget(
         if is_external
         else DEFAULT_MANAGED_TIMEOUT_SECONDS
     )
+    # The absolute cap binds the base window too. Accepting a larger base while
+    # capping the ceiling below it produces a self-contradictory budget that
+    # terminates at the cap for "reaching the maximum" before the base window it
+    # claims to honor has even elapsed.
+    base_seconds = min(base_seconds, MAX_EXECUTION_BUDGET_SECONDS)
+    if _read_execution_budget_mode(timeout_policy) == "flat":
+        return ExecutionBudget(
+            base_seconds=base_seconds,
+            max_seconds=base_seconds,
+            progress_stall_seconds=base_seconds,
+            mode="flat",
+        )
     max_seconds = _read_timeout_policy_value(
         timeout_policy, "max_timeout_seconds"
     ) or (base_seconds * DEFAULT_PROGRESS_EXTENSION_FACTOR)
     progress_stall_seconds = _read_timeout_policy_value(
         timeout_policy, "progress_stall_seconds"
-    ) or min(DEFAULT_PROGRESS_STALL_SECONDS, base_seconds)
+    ) or DEFAULT_PROGRESS_STALL_SECONDS
     return ExecutionBudget(
         base_seconds=base_seconds,
         # The ceiling is never below the base (asking for a bigger budget must
@@ -170,7 +238,13 @@ def resolve_execution_budget(
             MAX_EXECUTION_BUDGET_SECONDS,
             max(max_seconds, base_seconds),
         ),
-        progress_stall_seconds=progress_stall_seconds,
+        # The stall window is never longer than the base budget, explicit or
+        # defaulted: a run is not given more time to prove it is alive than it
+        # was originally given to finish. Without this clamp an explicit stall
+        # window larger than the base silently extends every quiet run past the
+        # base deadline it asked for, because the run's own start counts as an
+        # observation and idle progress is therefore never ``None``.
+        progress_stall_seconds=min(progress_stall_seconds, base_seconds),
     )
 
 

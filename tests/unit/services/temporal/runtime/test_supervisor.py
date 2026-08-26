@@ -492,7 +492,7 @@ async def test_supervise_debounces_no_output_interval(supervisor_env):
         process: asyncio.subprocess.Process,
         budget,
         *,
-        started_at,
+        monotonic_started_at,
         idle_progress_seconds,
         no_output_callback=None,
         progress_snapshot=None,

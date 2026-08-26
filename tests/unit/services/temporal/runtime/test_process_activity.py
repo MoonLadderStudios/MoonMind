@@ -109,6 +109,64 @@ async def test_work_done_only_by_a_descendant_counts_as_progress():
         await _terminate(process)
 
 
+def _session_pid_count(session_pid: int) -> int:
+    """How many live processes currently carry this session id."""
+
+    probe = ProcessActivityProbe(session_pid=session_pid)
+    probe._total_cpu_seconds()
+    return len(probe._live_ticks)
+
+
+@pytest.mark.asyncio
+async def test_cpu_of_exited_descendants_stays_in_the_session_total():
+    """A short-lived worker must not take its CPU with it when it exits.
+
+    ``/proc`` only lists live processes, so summing it alone makes the session
+    total *fall* when a descendant exits. A managed agent running a sequence of
+    short-lived compilers or test processes would then read as stalled while
+    working continuously: each replacement has to re-earn all the CPU its
+    predecessor took with it before the delta turns positive again.
+    """
+
+    process = await _spawn(
+        "sh",
+        "-c",
+        # A burst of work, then the worker exits while the session lives on.
+        f"{sys.executable} -c 'x = 0\nfor _ in range(8_000_000): x += 1'; sleep 30",
+    )
+    try:
+        probe = ProcessActivityProbe(session_pid=process.pid)
+        probe.sample(datetime.now(tz=UTC))  # baseline, before the burst lands
+
+        # Observe the descendant working. sh + python + (later) sleep all carry
+        # the session id, so the worker is present while this is true.
+        for _ in range(120):
+            await asyncio.sleep(0.25)
+            if probe.sample(datetime.now(tz=UTC)) is not None:
+                break
+        assert (
+            probe.sample(datetime.now(tz=UTC)) is not None
+        ), "the descendant's work was never observed"
+        total_with_worker = probe._last_total_seconds
+        assert total_with_worker is not None
+
+        # Wait for the worker to actually exit: the session drops back to
+        # sh + sleep.
+        for _ in range(120):
+            await asyncio.sleep(0.25)
+            if _session_pid_count(process.pid) <= 2:
+                break
+        assert _session_pid_count(process.pid) <= 2, "worker never exited"
+
+        # The exited worker's CPU stays in the session total, so the next worker
+        # starts from here rather than having to climb back over it.
+        probe.sample(datetime.now(tz=UTC))
+        assert probe._last_total_seconds is not None
+        assert probe._last_total_seconds >= total_with_worker
+    finally:
+        await _terminate(process)
+
+
 @pytest.mark.asyncio
 async def test_exited_session_retains_last_observed_activity():
     """After the tree exits the probe stops advancing but does not erase what it
