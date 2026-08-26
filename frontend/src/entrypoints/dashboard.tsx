@@ -1,4 +1,3 @@
-import "@vitejs/plugin-react/preamble";
 import { mountPage } from "../boot/mountPage";
 import DashboardApp from "./dashboard-app";
 

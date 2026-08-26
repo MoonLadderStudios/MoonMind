@@ -1,25 +1,17 @@
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-  type MockInstance,
-} from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 
-import { renderWithClient } from "../utils/test-utils";
-import { WorkflowRowActionsMenu } from "./WorkflowRowActionsMenu";
+import { renderWithClient } from '../utils/test-utils';
+import { WorkflowRowActionsMenu } from './WorkflowRowActionsMenu';
 
-describe("WorkflowRowActionsMenu", () => {
+describe('WorkflowRowActionsMenu', () => {
   let fetchSpy: MockInstance;
 
   const detailResponse = {
-    workflowId: "wf-123",
-    runId: "run-1",
-    title: "Example workflow",
-    state: "executing",
+    workflowId: 'wf-123',
+    runId: 'run-1',
+    title: 'Example workflow',
+    state: 'executing',
     actions: {
       canPause: true,
       canCancel: true,
@@ -29,26 +21,25 @@ describe("WorkflowRowActionsMenu", () => {
 
   beforeEach(() => {
     vi.useRealTimers();
-    window.history.pushState({}, "Workflows", "/workflows?source=temporal");
-    fetchSpy = vi
-      .spyOn(window, "fetch")
-      .mockImplementation((input: RequestInfo | URL) => {
-        const url = String(input);
-        if (url === "/api/executions/wf-123?source=temporal") {
-          return Promise.resolve({
-            ok: true,
-            json: async () => detailResponse,
-          } as Response);
-        }
+    window.history.pushState({}, 'Workflows', '/workflows?source=temporal');
+    fetchSpy = vi.spyOn(window, 'fetch').mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/executions/wf-123?source=temporal') {
         return Promise.resolve({
           ok: true,
-          json: async () => ({}),
+          json: async () => detailResponse,
         } as Response);
-      });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
+    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    // The fetch spy is re-created per test but vi.spyOn reuses the existing
+    // spy, so without a restore every test inherits the previous test's
+    // recorded calls and per-test request-count assertions go order-dependent.
+    vi.restoreAllMocks();
   });
 
   const renderMenu = () =>
@@ -61,82 +52,107 @@ describe("WorkflowRowActionsMenu", () => {
       />,
     );
 
-  const waitForActionAvailability = async (expectedActionName = "Pause") => {
+  const rowButton = (name: string) =>
+    screen.getByRole('button', { name }) as HTMLButtonElement;
+
+  const waitForActionAvailability = async (expectedActionName = 'Pause') => {
     await waitFor(() => {
       expect(
         fetchSpy.mock.calls.filter(
-          ([url]) => String(url) === "/api/executions/wf-123?source=temporal",
+          ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
         ),
       ).not.toHaveLength(0);
-      expect(
-        screen.getByRole("menuitem", { name: expectedActionName }),
-      ).toBeTruthy();
-      expect(screen.queryByRole("menuitem", { name: "Remediate" })).toBeNull();
-      expect(screen.queryByText("Checking availability…")).toBeNull();
+      expect(screen.getByRole('menuitem', { name: expectedActionName })).toBeTruthy();
+      expect(rowButton('Remediate').disabled).toBe(true);
+      expect(screen.queryByText('Checking availability…')).toBeNull();
     });
   };
 
-  it('renders an icon trigger labeled "Actions" and does not fetch until opened', () => {
+  it('renders an icon trigger labeled "More actions" and does not fetch on mount', () => {
     renderMenu();
-    expect(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'More actions' })).toBeTruthy();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
-  it("lists actions immediately while lazily loading capabilities the first time the menu opens", async () => {
+  // Regression guard: the row detail endpoint runs a Temporal sync, so a
+  // Workflows page of 50-100 rows must not fan out one request per row just by
+  // rendering. Promoting Cancel/Rerun/Remediate onto the row must not turn the
+  // lazy detail fetch into an eager one.
+  it('does not fetch row capabilities until the operator reaches for the row', async () => {
+    const { container } = renderMenu();
+    const row = container.querySelector('.workflow-row-actions');
+    expect(row).not.toBeNull();
+    expect(
+      fetchSpy.mock.calls.filter(
+        ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
+      ),
+    ).toHaveLength(0);
+
+    // The promoted buttons are visible immediately, but inert until resolved.
+    // (Rerun is additionally gated behind the task-editing flag, which this
+    // render leaves off, so only Cancel and Remediate are promoted here.)
+    expect(rowButton('Cancel').disabled).toBe(true);
+    expect(rowButton('Remediate').disabled).toBe(true);
+
+    fireEvent.mouseOver(row as Element);
+
+    await waitFor(() => {
+      expect(
+        fetchSpy.mock.calls.filter(
+          ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
+        ),
+      ).toHaveLength(1);
+    });
+    await waitFor(() => {
+      expect(rowButton('Cancel').disabled).toBe(false);
+    });
+  });
+
+  it('lists actions immediately while lazily loading capabilities the first time the row is engaged', async () => {
     let resolveDetail: (response: Response) => void = () => {};
     const detailPromise = new Promise<Response>((resolve) => {
       resolveDetail = resolve;
     });
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === "/api/executions/wf-123?source=temporal") {
+      if (url === '/api/executions/wf-123?source=temporal') {
         return detailPromise;
       }
       return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
     });
 
     renderMenu();
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
 
     // While the detail request is in flight, the menu already shows the stable
     // action names and uses a disabled placeholder for workflow-specific state.
-    expect(screen.getByRole("menuitem", { name: "Pause" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "Force cancel" })).toBeTruthy();
-    expect(
-      screen.getAllByText("Checking availability…").length,
-    ).toBeGreaterThan(0);
-    expect(screen.queryByText("Loading actions…")).toBeNull();
+    expect(screen.getByRole('menuitem', { name: 'Pause' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Force cancel' })).toBeTruthy();
+    expect(screen.getAllByText('Checking availability…').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Loading actions…')).toBeNull();
 
     resolveDetail({
       ok: true,
       json: async () => detailResponse,
     } as Response);
 
-    expect(await screen.findByRole("menuitem", { name: "Pause" })).toBeTruthy();
+    expect(await screen.findByRole('menuitem', { name: 'Pause' })).toBeTruthy();
     await waitForActionAvailability();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "Force cancel" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Remediate" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Remediate" })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    expect(screen.getByRole('menuitem', { name: 'Force cancel' })).toBeTruthy();
     expect(
       fetchSpy.mock.calls.filter(
-        ([url]) => String(url) === "/api/executions/wf-123?source=temporal",
+        ([url]) => String(url) === '/api/executions/wf-123?source=temporal',
       ),
     ).toHaveLength(1);
   });
 
-  it("requests the lazy detail with the Temporal source so projection reads sync", async () => {
+  it('requests the lazy detail with the Temporal source so projection reads sync', async () => {
     renderMenu();
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
 
-    await screen.findByRole("menuitem", { name: "Pause" });
+    await screen.findByRole('menuitem', { name: 'Pause' });
     await waitForActionAvailability();
     // Match only the detail request (path ends at wf-123, optionally followed by
     // a query string) and not nested action endpoints like /signal or /cancel.
@@ -146,46 +162,38 @@ describe("WorkflowRowActionsMenu", () => {
     expect(detailUrls.length).toBeGreaterThan(0);
     // The Workflows table reads `source=temporal`; the lazy detail request must
     // carry it too so orphaned/Temporal-only projections still resolve actions.
-    expect(
-      detailUrls.every(
-        (url) => url === "/api/executions/wf-123?source=temporal",
-      ),
-    ).toBe(true);
+    expect(detailUrls.every((url) => url === '/api/executions/wf-123?source=temporal')).toBe(true);
   });
 
-  it("invokes the signal endpoint when a lifecycle action is selected", async () => {
+  it('invokes the signal endpoint when a lifecycle action is selected', async () => {
     renderMenu();
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Pause" }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Pause' }));
 
     await waitFor(() => {
       const signalCall = fetchSpy.mock.calls.find(
-        ([url]) => String(url) === "/api/executions/wf-123/signal",
+        ([url]) => String(url) === '/api/executions/wf-123/signal',
       );
       expect(signalCall).toBeTruthy();
-      expect(
-        JSON.parse(String((signalCall?.[1] as RequestInit).body)),
-      ).toMatchObject({
-        signalName: "Pause",
+      expect(JSON.parse(String((signalCall?.[1] as RequestInit).body))).toMatchObject({
+        signalName: 'Pause',
       });
     });
   });
 
-  it("opens Create with a remediation draft instead of posting to direct remediation", async () => {
+  it('opens Create with a remediation draft instead of posting to direct remediation', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === "/api/executions/wf-123?source=temporal") {
+      if (url === '/api/executions/wf-123?source=temporal') {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             ...detailResponse,
-            workflowId: "wf-123",
-            runId: "run-1",
-            state: "failed",
-            repository: "MoonLadderStudios/MoonMind",
+            workflowId: 'wf-123',
+            runId: 'run-1',
+            state: 'failed',
+            repository: 'MoonLadderStudios/MoonMind',
             actions: { canCancel: true },
           }),
         } as Response);
@@ -194,32 +202,26 @@ describe("WorkflowRowActionsMenu", () => {
     });
 
     renderMenu();
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
-    const remediateItem = await screen.findByRole("button", {
-      name: "Remediate",
-    });
-    await waitFor(() =>
-      expect(remediateItem.getAttribute("aria-disabled")).toBeNull(),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    const remediateItem = await screen.findByRole('button', { name: 'Remediate' });
+    await waitFor(() => expect(remediateItem.getAttribute('aria-disabled')).toBeNull());
     fireEvent.mouseDown(remediateItem);
     fireEvent.click(remediateItem);
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/workflows/new");
-      expect(window.location.search).toContain("intent=remediate");
-      expect(window.location.search).toContain("draftId=");
+      expect(window.location.pathname).toBe('/workflows/new');
+      expect(window.location.search).toContain('intent=remediate');
+      expect(window.location.search).toContain('draftId=');
     });
     expect(
-      fetchSpy.mock.calls.some(([url]) => String(url).endsWith("/remediation")),
+      fetchSpy.mock.calls.some(([url]) => String(url).endsWith('/remediation')),
     ).toBe(false);
   });
 
-  it("bypasses dependencies directly without opening a dialog", async () => {
+  it('bypasses dependencies directly without opening a dialog', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === "/api/executions/wf-123?source=temporal") {
+      if (url === '/api/executions/wf-123?source=temporal') {
         return Promise.resolve({
           ok: true,
           json: async () => ({
@@ -232,42 +234,32 @@ describe("WorkflowRowActionsMenu", () => {
     });
 
     renderMenu();
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
-    await waitForActionAvailability("Bypass Dependencies");
-    fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Bypass Dependencies" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
+    await waitForActionAvailability('Bypass Dependencies');
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Bypass Dependencies' }));
 
-    expect(
-      screen.queryByRole("dialog", { name: "Bypass dependencies" }),
-    ).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'Bypass dependencies' })).toBeNull();
     await waitFor(() => {
       const signalCall = fetchSpy.mock.calls.find(([url, init]) => {
-        if (String(url) !== "/api/executions/wf-123/signal") return false;
+        if (String(url) !== '/api/executions/wf-123/signal') return false;
         const body = (init as RequestInit | undefined)?.body;
         if (!body) return false;
         try {
-          return JSON.parse(String(body)).signalName === "BypassDependencies";
+          return JSON.parse(String(body)).signalName === 'BypassDependencies';
         } catch {
           return false;
         }
       });
       expect(signalCall).toBeTruthy();
       const signalInit = signalCall?.[1] as RequestInit | undefined;
-      expect(
-        signalInit?.body ? JSON.parse(String(signalInit.body)) : null,
-      ).toMatchObject({
-        signalName: "BypassDependencies",
-        payload: {
-          reason: "Dependency wait bypassed by operator from the dashboard.",
-        },
+      expect(signalInit?.body ? JSON.parse(String(signalInit.body)) : null).toMatchObject({
+        signalName: 'BypassDependencies',
+        payload: { reason: 'Dependency wait bypassed by operator from the dashboard.' },
       });
     });
   });
 
-  it("requests a rerun from the row menu without navigating away from the workflow list", async () => {
+  it('requests a rerun from the row menu without navigating away from the workflow list', async () => {
     const { container } = renderWithClient(
       <WorkflowRowActionsMenu
         workflowId="wf-123"
@@ -276,57 +268,49 @@ describe("WorkflowRowActionsMenu", () => {
         taskEditingEnabled
       />,
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole("button", { name: "Rerun" }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rerun' }));
 
     await waitFor(() => {
       const rerunCall = fetchSpy.mock.calls.find(
-        ([url]) => String(url) === "/api/executions/wf-123/update",
+        ([url]) => String(url) === '/api/executions/wf-123/update',
       );
       expect(rerunCall).toBeTruthy();
       const requestBody = (rerunCall?.[1] as RequestInit | undefined)?.body;
       expect(requestBody).toBeDefined();
       expect(JSON.parse(requestBody as string)).toMatchObject({
-        updateName: "RequestRerun",
+        updateName: 'RequestRerun',
       });
     });
-    expect(window.location.pathname).toBe("/workflows");
-    expect(window.location.search).toBe("?source=temporal");
+    expect(window.location.pathname).toBe('/workflows');
+    expect(window.location.search).toBe('?source=temporal');
     expect(
-      within(container).queryByText(
-        "Rerun was requested and the latest execution view is ready.",
-      ),
+      within(container).queryByText('Rerun was requested and the latest execution view is ready.'),
     ).toBeNull();
-    const toast = await screen.findByRole("status");
-    expect(within(toast).getByText("Rerun requested")).toBeTruthy();
-    expect(
-      within(toast).getByText("Example workflow has been queued."),
-    ).toBeTruthy();
-    const action = within(toast).getByRole("link", { name: "View workflow" });
-    expect(action.getAttribute("href")).toBe(
-      "/workflows/wf-123?source=temporal",
-    );
+    const toast = await screen.findByRole('status');
+    expect(within(toast).getByText('Rerun requested')).toBeTruthy();
+    expect(within(toast).getByText('Example workflow has been queued.')).toBeTruthy();
+    const action = within(toast).getByRole('link', { name: 'View workflow' });
+    expect(action.getAttribute('href')).toBe('/workflows/wf-123?source=temporal');
   });
 
-  it("links rerun success to the returned execution when a separate workflow is created", async () => {
+  it('links rerun success to the returned execution when a separate workflow is created', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === "/api/executions/wf-123?source=temporal") {
+      if (url === '/api/executions/wf-123?source=temporal') {
         return Promise.resolve({
           ok: true,
           json: async () => detailResponse,
         } as Response);
       }
-      if (url === "/api/executions/wf-123/update") {
+      if (url === '/api/executions/wf-123/update') {
         return Promise.resolve({
           ok: true,
           json: async () => ({
             execution: {
-              workflowId: "mm:rerun-created",
-              redirectPath: "/workflows/mm:rerun-created?source=temporal",
+              workflowId: 'mm:rerun-created',
+              redirectPath: '/workflows/mm:rerun-created?source=temporal',
             },
           }),
         } as Response);
@@ -342,20 +326,16 @@ describe("WorkflowRowActionsMenu", () => {
         taskEditingEnabled
       />,
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole("button", { name: "Rerun" }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rerun' }));
 
-    const toast = await screen.findByRole("status");
-    const action = within(toast).getByRole("link", { name: "View workflow" });
-    expect(action.getAttribute("href")).toBe(
-      "/workflows/mm:rerun-created?source=temporal",
-    );
+    const toast = await screen.findByRole('status');
+    const action = within(toast).getByRole('link', { name: 'View workflow' });
+    expect(action.getAttribute('href')).toBe('/workflows/mm:rerun-created?source=temporal');
   });
 
-  it("dismisses rerun success toasts manually", async () => {
+  it('dismisses rerun success toasts manually', async () => {
     renderWithClient(
       <WorkflowRowActionsMenu
         workflowId="wf-123"
@@ -364,38 +344,31 @@ describe("WorkflowRowActionsMenu", () => {
         taskEditingEnabled
       />,
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole("button", { name: "Rerun" }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rerun' }));
 
-    const toast = await screen.findByRole("status");
-    fireEvent.click(
-      within(toast).getByRole("button", { name: "Dismiss Rerun requested" }),
-    );
+    const toast = await screen.findByRole('status');
+    fireEvent.click(within(toast).getByRole('button', { name: 'Dismiss Rerun requested' }));
     await waitFor(() => {
-      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByRole('status')).toBeNull();
     });
   });
 
-  it("shows rerun request failures in an accessible toast", async () => {
+  it('shows rerun request failures in an accessible toast', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === "/api/executions/wf-123?source=temporal") {
+      if (url === '/api/executions/wf-123?source=temporal') {
         return Promise.resolve({
           ok: true,
           json: async () => detailResponse,
         } as Response);
       }
-      if (url === "/api/executions/wf-123/update") {
+      if (url === '/api/executions/wf-123/update') {
         return Promise.resolve({
           ok: false,
-          statusText: "Conflict",
-          text: async () =>
-            JSON.stringify({
-              detail: "Workflow no longer accepts rerun requests.",
-            }),
+          statusText: 'Conflict',
+          text: async () => JSON.stringify({ detail: 'Workflow no longer accepts rerun requests.' }),
         } as Response);
       }
       return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
@@ -409,31 +382,27 @@ describe("WorkflowRowActionsMenu", () => {
         taskEditingEnabled
       />,
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole("button", { name: "Rerun" }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rerun' }));
 
-    const viewport = await screen.findByLabelText("Dashboard notifications");
-    const toast = within(viewport).getByRole("alert");
-    expect(within(toast).getByText("Workflow action failed")).toBeTruthy();
-    expect(
-      within(toast).getByText("Workflow no longer accepts rerun requests."),
-    ).toBeTruthy();
+    const viewport = await screen.findByLabelText('Dashboard notifications');
+    const toast = within(viewport).getByRole('alert');
+    expect(within(toast).getByText('Workflow action failed')).toBeTruthy();
+    expect(within(toast).getByText('Workflow no longer accepts rerun requests.')).toBeTruthy();
   });
 
-  it("shows non-Error mutation failures without crashing the error toast", async () => {
+  it('shows non-Error mutation failures without crashing the error toast', async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url === "/api/executions/wf-123?source=temporal") {
+      if (url === '/api/executions/wf-123?source=temporal') {
         return Promise.resolve({
           ok: true,
           json: async () => detailResponse,
         } as Response);
       }
-      if (url === "/api/executions/wf-123/update") {
-        return Promise.reject({ message: "  Custom action failure.  " });
+      if (url === '/api/executions/wf-123/update') {
+        return Promise.reject({ message: '  Custom action failure.  ' });
       }
       return Promise.resolve({ ok: true, json: async () => ({}) } as Response);
     });
@@ -446,65 +415,57 @@ describe("WorkflowRowActionsMenu", () => {
         taskEditingEnabled
       />,
     );
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole("button", { name: "Rerun" }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Rerun' }));
 
-    const viewport = await screen.findByLabelText("Dashboard notifications");
-    const toast = within(viewport).getByRole("alert");
-    expect(within(toast).getByText("Workflow action failed")).toBeTruthy();
-    expect(within(toast).getByText("Custom action failure.")).toBeTruthy();
+    const viewport = await screen.findByLabelText('Dashboard notifications');
+    const toast = within(viewport).getByRole('alert');
+    expect(within(toast).getByText('Workflow action failed')).toBeTruthy();
+    expect(within(toast).getByText('Custom action failure.')).toBeTruthy();
   });
 
-  it("posts a graceful cancel request directly from the row menu", async () => {
+  it('posts a graceful cancel request directly from the row menu', async () => {
     renderMenu();
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Cancel" }));
-    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
 
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(
-        ([url]) => String(url) === "/api/executions/wf-123/cancel",
+        ([url]) => String(url) === '/api/executions/wf-123/cancel',
       );
       expect(cancelCall).toBeTruthy();
       const body = JSON.parse(String((cancelCall?.[1] as RequestInit).body));
       expect(body).toMatchObject({
-        action: "cancel",
+        action: 'cancel',
         graceful: true,
       });
-      expect(body).not.toHaveProperty("reason");
+      expect(body).not.toHaveProperty('reason');
     });
   });
 
-  it("posts a forced cancel request directly from the row menu", async () => {
+  it('posts a forced cancel request directly from the row menu', async () => {
     renderMenu();
-    fireEvent.click(
-      screen.getByRole("button", { name: "More workflow actions" }),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'More actions' }));
     await waitForActionAvailability();
-    fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Force cancel" }),
-    );
-    expect(screen.queryByRole("dialog")).toBeNull();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Force cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
 
     await waitFor(() => {
       const cancelCall = fetchSpy.mock.calls.find(([url, init]) => {
-        if (String(url) !== "/api/executions/wf-123/cancel") return false;
+        if (String(url) !== '/api/executions/wf-123/cancel') return false;
         const body = JSON.parse(String((init as RequestInit).body));
         return body.graceful === false;
       });
       expect(cancelCall).toBeTruthy();
       const body = JSON.parse(String((cancelCall?.[1] as RequestInit).body));
       expect(body).toMatchObject({
-        action: "cancel",
+        action: 'cancel',
         graceful: false,
       });
-      expect(body).not.toHaveProperty("reason");
+      expect(body).not.toHaveProperty('reason');
     });
   });
 });
