@@ -32,6 +32,8 @@ with workflow.unsafe.imports_passed_through():
     from moonmind.workflows.temporal.typed_execution import execute_typed_activity
     from moonmind.workflows.temporal.workflows.merge_gate import (
         DEFAULT_ACTIVITY_RETRY_POLICY,
+        FINISH_MODE_FIX_ONLY,
+        FINISH_MODE_MERGE,
         TERMINAL_BLOCKER_KINDS,
         _effective_expire_at,
         build_resolver_run_request,
@@ -46,6 +48,7 @@ STATE_EXECUTING = "executing"
 STATE_BLOCKED = "blocked"
 STATE_MERGED = "merged"
 STATE_ALREADY_MERGED = "already_merged"
+STATE_REVIEW_CLEAN = "review_clean"
 STATE_EXPIRED = "expired"
 STATE_FAILED = "failed"
 STATE_CANCELED = "canceled"
@@ -53,9 +56,12 @@ DISPOSITION_REENTER_GATE = "reenter_gate"
 DISPOSITION_REQUEST_REVIEW = "request_review"
 DISPOSITION_MERGED = "merged"
 DISPOSITION_ALREADY_MERGED = "already_merged"
+DISPOSITION_REVIEW_CLEAN = "review_clean"
 DISPOSITION_MANUAL_REVIEW = "manual_review"
 DISPOSITION_FAILED = "failed"
-SUCCESS_DISPOSITIONS = frozenset({DISPOSITION_MERGED, DISPOSITION_ALREADY_MERGED})
+SUCCESS_DISPOSITIONS = frozenset(
+    {DISPOSITION_MERGED, DISPOSITION_ALREADY_MERGED, DISPOSITION_REVIEW_CLEAN}
+)
 NON_SUCCESS_DISPOSITIONS = frozenset({DISPOSITION_MANUAL_REVIEW, DISPOSITION_FAILED})
 ALLOWED_DISPOSITIONS = SUCCESS_DISPOSITIONS | NON_SUCCESS_DISPOSITIONS | {
     DISPOSITION_REENTER_GATE,
@@ -752,6 +758,11 @@ class MoonMindMergeAutomationWorkflow:
             resolver_disposition=resolver_disposition
         )
 
+    def _finish_mode(self) -> str:
+        if self._input is None:
+            return FINISH_MODE_MERGE
+        return self._input.config.finish_mode
+
     def _review_loop_config(self) -> Any:
         return self._input.config.review_loop
 
@@ -1213,6 +1224,7 @@ class MoonMindMergeAutomationWorkflow:
                         if self._review_loop_active()
                         else None
                     ),
+                    finish_mode=self._finish_mode(),
                 )
                 resolver_workflow_id_factory = (
                     deterministic_resolver_idempotency_key
@@ -1403,6 +1415,29 @@ class MoonMindMergeAutomationWorkflow:
                         return await self._finish()
                     self._summary = None
                     self._status = STATE_ALREADY_MERGED
+                    self._publish_visibility()
+                    return await self._finish()
+                if resolver_disposition == DISPOSITION_REVIEW_CLEAN:
+                    if self._finish_mode() != FINISH_MODE_FIX_ONLY:
+                        # This run was granted merge authority. A resolver that
+                        # reports "clean but unmerged" has not done the job it
+                        # was asked to do, and must never close the gate as
+                        # success.
+                        return await self._failed_resolver_summary(
+                            summary=(
+                                "pr-resolver reported review_clean for a run "
+                                "that was granted merge authority."
+                            ),
+                            blocker_kind="resolver_disposition_invalid",
+                        )
+                    # fix_only finish mode: the gate opened with nothing left to
+                    # address. No merge happened, so no post-merge integration
+                    # is owed; the loop is terminally complete.
+                    self._summary = (
+                        "Review loop complete: no actionable comments remain and "
+                        "this run was not configured to merge."
+                    )
+                    self._status = STATE_REVIEW_CLEAN
                     self._publish_visibility()
                     return await self._finish()
                 if resolver_disposition == DISPOSITION_MERGED:

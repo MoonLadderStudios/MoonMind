@@ -37,6 +37,7 @@
       "type": "string",
       "enum": [
         "merged",
+        "review_clean",
         "blocked",
         "attempts_exhausted",
         "failed",
@@ -61,6 +62,7 @@
       "enum": [
         "merged",
         "already_merged",
+        "review_clean",
         "reenter_gate",
         "request_review",
         "manual_review",

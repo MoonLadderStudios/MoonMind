@@ -43,13 +43,35 @@ EXIT_CODE_MERGED = 0
 EXIT_CODE_BLOCKED = 2
 EXIT_CODE_ATTEMPTS_EXHAUSTED = 3
 EXIT_CODE_FAILED = 4
+EXIT_CODE_REVIEW_CLEAN = 5
+
+# Finish modes. "merge" is the full resolver contract: the run is not complete
+# until the PR is merged. "fix_only" stops at the merge gate: the resolver keeps
+# remediating comments, CI, and conflicts, but reports `review_clean` instead of
+# merging once nothing is left to address.
+FINISH_MODE_MERGE = "merge"
+FINISH_MODE_FIX_ONLY = "fix_only"
+FINISH_MODES = (FINISH_MODE_MERGE, FINISH_MODE_FIX_ONLY)
 
 MERGE_AUTOMATION_DISPOSITION_MERGED = "merged"
 MERGE_AUTOMATION_DISPOSITION_ALREADY_MERGED = "already_merged"
+MERGE_AUTOMATION_DISPOSITION_REVIEW_CLEAN = "review_clean"
 MERGE_AUTOMATION_DISPOSITION_REENTER_GATE = "reenter_gate"
 MERGE_AUTOMATION_DISPOSITION_REQUEST_REVIEW = "request_review"
 MERGE_AUTOMATION_DISPOSITION_MANUAL_REVIEW = "manual_review"
 MERGE_AUTOMATION_DISPOSITION_FAILED = "failed"
+
+def normalize_finish_mode(value: Any) -> str:
+    """Return a supported finish mode, defaulting to the full merge contract."""
+
+    candidate = normalize_text(value).lower()
+    if candidate == FINISH_MODE_FIX_ONLY:
+        return FINISH_MODE_FIX_ONLY
+    if candidate in {"", FINISH_MODE_MERGE}:
+        return FINISH_MODE_MERGE
+    raise ValueError(
+        f"unsupported finish mode '{candidate}'; expected one of {list(FINISH_MODES)}"
+    )
 
 def now_utc_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -262,6 +284,8 @@ def merge_automation_disposition_for_result(
         "wait_for_automated_review_and_retry_finalize",
     }:
         return MERGE_AUTOMATION_DISPOSITION_REENTER_GATE
+    if normalized_status == MERGE_AUTOMATION_DISPOSITION_REVIEW_CLEAN:
+        return MERGE_AUTOMATION_DISPOSITION_REVIEW_CLEAN
     if normalized_status == "merged" and normalized_outcome == "merged":
         if normalized_reason == "already_merged":
             return MERGE_AUTOMATION_DISPOSITION_ALREADY_MERGED

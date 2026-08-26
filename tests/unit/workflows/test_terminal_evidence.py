@@ -545,3 +545,88 @@ def test_pr_resolver_terminal_rejects_stale_execution(tmp_path: Path) -> None:
 
     assert result.satisfied is False
     assert result.failure_code == "STALE_TERMINAL_EVIDENCE"
+
+
+def test_pr_resolver_review_clean_requires_publish_evidence(tmp_path: Path) -> None:
+    """fix_only success still has to prove its verified branch head."""
+
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "review_clean",
+                "executionRef": "step-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    missing_publish = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+    assert missing_publish.failure_code == "INCOMPLETE_TERMINAL_CONTRACT"
+
+    publish_path = tmp_path / "artifacts/publish_result.json"
+    publish_path.parent.mkdir(parents=True, exist_ok=True)
+    publish_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.publish.auto.v1",
+                "mode": "auto",
+                "owner": "agent",
+                "skillId": "pr-resolver",
+                "executionRef": "step-1",
+                "status": "no_op_verified",
+                "action": "none",
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "feature",
+                "localHead": "abc123",
+                "remoteBranchHead": "abc123",
+                "remoteVerified": True,
+                "pushed": False,
+                "merged": False,
+                "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/350",
+                "blockedReason": None,
+                "verificationCommands": [
+                    "git ls-remote origin refs/heads/feature",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evaluation = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+    assert evaluation.satisfied
+    assert evaluation.metadata["mergeAutomationDisposition"] == "review_clean"
+
+
+def test_pr_resolver_rejects_an_unknown_terminal_disposition(tmp_path: Path) -> None:
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "review_kinda_clean",
+                "executionRef": "step-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        evaluate_terminal_evidence(
+            contract, workspace_path=str(tmp_path)
+        ).failure_code
+        == "MALFORMED_TERMINAL_EVIDENCE"
+    )

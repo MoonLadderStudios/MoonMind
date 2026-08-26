@@ -23,7 +23,9 @@ from pr_resolve_contract import (  # noqa: E402
     EXIT_CODE_BLOCKED,
     EXIT_CODE_FAILED,
     EXIT_CODE_MERGED,
+    EXIT_CODE_REVIEW_CLEAN,
     FINALIZE_ONLY_RETRY_REASONS,
+    FINISH_MODES,
     FULL_REMEDIATION_REASONS,
     RESULT_SCHEMA_VERSION,
     classify_retry_action,
@@ -55,7 +57,13 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 def _normalize_status(payload: dict[str, Any]) -> str:
     status = normalize_text(payload.get("status")).lower()
-    if status in {"merged", "blocked", "failed", "attempts_exhausted"}:
+    if status in {
+        "merged",
+        "review_clean",
+        "blocked",
+        "failed",
+        "attempts_exhausted",
+    }:
         return status
     merge_outcome = normalize_text(payload.get("merge_outcome")).lower()
     if merge_outcome == "merged":
@@ -238,6 +246,26 @@ def run_orchestration(
                 finished_at=now_utc_iso(),
             )
             return result, EXIT_CODE_MERGED
+
+        if finalize_status == "review_clean":
+            # fix_only finish mode: the merge gate opened with nothing left to
+            # address, so the loop is complete without a merge side effect.
+            result = _build_result(
+                status="review_clean",
+                decision="review clean; merge gate passed without merging",
+                merge_outcome="skipped",
+                final_reason=reason or "finish_mode_fix_only",
+                next_step="done",
+                max_attempts=max_attempts,
+                finalize_max_retries=finalize_max_retries,
+                fix_max_iterations=fix_max_iterations,
+                min_attempts_before_exhausted=min_attempts_before_exhausted,
+                history=history,
+                escalations=escalations,
+                started_at=started_at,
+                finished_at=now_utc_iso(),
+            )
+            return result, EXIT_CODE_REVIEW_CLEAN
 
         if finalize_status == "failed":
             result = _build_result(
@@ -669,6 +697,16 @@ def main() -> None:
         action="store_false",
         help="Do not require a fresh automated review for the current head SHA.",
     )
+    parser.add_argument(
+        "--finish-mode",
+        default=os.environ.get("PR_RESOLVER_FINISH_MODE", "") or "merge",
+        choices=list(FINISH_MODES),
+        help=(
+            "'merge' finishes by merging the PR once the gate passes. "
+            "'fix_only' stops at a passing gate and reports review_clean "
+            "without merging."
+        ),
+    )
     args = parser.parse_args()
 
     finalize_script = Path(__file__).with_name("pr_resolve_finalize.py")
@@ -689,6 +727,8 @@ def main() -> None:
             str(snapshot_path),
             "--result-path",
             str(finalize_result_path),
+            "--finish-mode",
+            args.finish_mode,
             "--strict-exit-codes",
         ]
         if args.pr:

@@ -303,12 +303,13 @@ def evaluate_terminal_evidence(
         if disposition not in {
             "merged",
             "already_merged",
+            "review_clean",
             "reenter_gate",
             "manual_review",
             "failed",
         }:
             return _failure("MALFORMED_TERMINAL_EVIDENCE", metadata=metadata)
-        if disposition in {"merged", "already_merged"}:
+        if disposition in {"merged", "already_merged", "review_clean"}:
             publish_path = (workspace / "artifacts/publish_result.json").resolve()
             if artifact_spool_path and not publish_path.is_file():
                 publish_path = (

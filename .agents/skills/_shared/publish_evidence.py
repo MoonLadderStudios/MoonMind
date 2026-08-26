@@ -540,6 +540,18 @@ def _resolver_head(result: Mapping[str, Any], snapshot: Mapping[str, Any]) -> st
     return head or _local_head_optional()
 
 
+def _pr_resolver_remediated(result: Mapping[str, Any]) -> bool:
+    """Return True when this resolver run ran a remediation (and so pushed)."""
+
+    history = result.get("attempt_history")
+    if not isinstance(history, list):
+        return False
+    return any(
+        isinstance(entry, Mapping) and _text(entry.get("stage")) == "full"
+        for entry in history
+    )
+
+
 def _is_no_work_result(result: Mapping[str, Any]) -> bool:
     disposition = _resolver_disposition(result)
     status = _resolver_status(result)
@@ -600,6 +612,39 @@ def from_pr_resolver_result(
                 reason="remote_merge_verification_unavailable",
                 artifacts_dir=artifacts_dir,
             )
+
+    if disposition == "review_clean" or status == "review_clean":
+        # fix_only finish mode: the merge gate opened with nothing left to
+        # address. The branch head is the authoritative evidence; no merge was
+        # attempted and none is claimed.
+        try:
+            local_head, remote_head, commands = _verify_exact_remote_head(branch)
+        except PublishEvidenceError:
+            return write_blocked(
+                skill_id="pr-resolver",
+                repo=repo,
+                branch=branch,
+                reason="remote_verification_unavailable",
+                artifacts_dir=artifacts_dir,
+            )
+        pushed = _pr_resolver_remediated(result)
+        return _write_payload(
+            _evidence_payload(
+                skill_id="pr-resolver",
+                status="verified" if pushed else "no_op_verified",
+                action="push" if pushed else "none",
+                repository=repo,
+                branch=branch,
+                local_head=local_head,
+                remote_branch_head=remote_head,
+                remote_verified=True,
+                pushed=pushed,
+                merged=False,
+                pr_url=pr_url or None,
+                verification_commands=commands,
+            ),
+            artifacts_dir=artifacts_dir,
+        )
 
     if disposition == "reenter_gate" and status in {
         "blocked",

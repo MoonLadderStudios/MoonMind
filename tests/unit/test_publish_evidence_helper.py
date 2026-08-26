@@ -565,3 +565,117 @@ def test_from_pr_resolver_result_fails_closed_for_missing_result(
         == 2
     )
     assert not (tmp_path / "artifacts" / "publish_result.json").exists()
+
+
+def _review_clean_workspace(tmp_path: Path, *, attempt_history: list[dict[str, Any]]):
+    result_path = tmp_path / "var" / "pr_resolver" / "result.json"
+    snapshot_path = tmp_path / "var" / "pr_resolver" / "snapshot.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "status": "review_clean",
+                "merge_outcome": "skipped",
+                "final_reason": "finish_mode_fix_only",
+                "mergeAutomationDisposition": "review_clean",
+                "attempt_history": attempt_history,
+            }
+        ),
+        encoding="utf-8",
+    )
+    snapshot_path.write_text(
+        json.dumps(
+            {
+                "repository": "MoonLadderStudios/MoonMind",
+                "pr": {
+                    "url": "https://github.com/o/r/pull/1",
+                    "headRefName": "feature",
+                    "headRefOid": "abc123",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return result_path, snapshot_path
+
+
+def _fake_head_verification(helper_module: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(cmd: list[str], **_: object) -> SimpleNamespace:
+        if cmd == ["git", "rev-parse", "HEAD"]:
+            return _completed("abc123\n")
+        if cmd == ["git", "ls-remote", "origin", "refs/heads/feature"]:
+            return _completed("abc123\trefs/heads/feature\n")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr(helper_module.subprocess, "run", fake_run)
+
+
+def test_from_pr_resolver_result_review_clean_is_a_verified_no_op(
+    helper_module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """fix_only with nothing to fix: verified branch head, no merge claimed."""
+
+    monkeypatch.chdir(tmp_path)
+    result_path, snapshot_path = _review_clean_workspace(tmp_path, attempt_history=[])
+    _fake_head_verification(helper_module, monkeypatch)
+
+    assert (
+        helper_module.main(
+            [
+                "from-pr-resolver-result",
+                "--result",
+                str(result_path),
+                "--snapshot",
+                str(snapshot_path),
+            ]
+        )
+        == 0
+    )
+
+    evidence = parse_auto_publish_evidence(
+        _payload(tmp_path / "artifacts" / "publish_result.json")
+    )
+    assert evidence.status == "no_op_verified"
+    assert evidence.action == "none"
+    assert evidence.pushed is False
+    assert evidence.merged is False
+    assert evidence.remote_verified is True
+
+
+def test_from_pr_resolver_result_review_clean_after_remediation_reports_a_push(
+    helper_module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    result_path, snapshot_path = _review_clean_workspace(
+        tmp_path,
+        attempt_history=[
+            {"stage": "finalize", "status": "blocked", "timestamp": "2026-08-25T00:00:00Z"},
+            {"stage": "full", "status": "ready_for_finalize", "timestamp": "2026-08-25T00:01:00Z"},
+        ],
+    )
+    _fake_head_verification(helper_module, monkeypatch)
+
+    assert (
+        helper_module.main(
+            [
+                "from-pr-resolver-result",
+                "--result",
+                str(result_path),
+                "--snapshot",
+                str(snapshot_path),
+            ]
+        )
+        == 0
+    )
+
+    evidence = parse_auto_publish_evidence(
+        _payload(tmp_path / "artifacts" / "publish_result.json")
+    )
+    assert evidence.status == "verified"
+    assert evidence.action == "push"
+    assert evidence.pushed is True
+    assert evidence.merged is False

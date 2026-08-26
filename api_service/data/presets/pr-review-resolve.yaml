@@ -1,8 +1,8 @@
 slug: pr-review-resolve
-title: Review, Fix, and Merge PR
-description: Run an automated review, fix every actionable comment, request a fresh
-  review for each new head, and merge the pull request when the latest review is
-  clean.
+title: Fix and Review Loop
+description: Request an automated review for every new head, fix every actionable
+  comment, and repeat until the pull request is clean. Optionally finish with a
+  final pr-resolver pass that merges the pull request.
 scope: global
 tags:
 - github
@@ -14,7 +14,7 @@ requiredCapabilities:
 - gh
 annotations:
   sourceSkill: pr-resolver
-  output: merged-pull-request
+  output: reviewed-pull-request
   # The workflow itself publishes nothing: `pr-resolver` owns every commit, push,
   # and merge, and the parent-owned MoonMind.MergeAutomation child owns the
   # review request side effect and the durable wait for its result.
@@ -24,7 +24,12 @@ annotations:
       enabled: true
       checks: required
       automatedReview: required
-      mergeMethod: '{{ inputs.merge_method }}'
+      # The merge method is a fixed implementation detail of the optional finish
+      # pass, not an operator control.
+      mergeMethod: squash
+      # `merge` runs a final pr-resolver pass with merge authority once nothing
+      # is left to address. `fix_only` stops the loop at that same open gate.
+      finishMode: '{{ "merge" if inputs.finish_with_pr_resolver else "fix_only" }}'
       reviewLoop:
         enabled: true
         provider: '{{ inputs.review_provider }}'
@@ -53,18 +58,18 @@ annotations:
       review_provider:
         type: string
         title: Automated review provider
-        description: Automated reviewer that must review every head SHA before merge.
+        description: Automated reviewer that must review every head SHA before the
+          loop can finish.
         enum:
         - codex
         default: codex
-      merge_method:
-        type: string
-        title: Merge method
-        enum:
-        - squash
-        - merge
-        - rebase
-        default: squash
+      finish_with_pr_resolver:
+        type: boolean
+        title: Finish with pr-resolver
+        description: Run a final pr-resolver pass that merges the pull request once
+          there are no more comments to address. Leave this off to stop the loop at
+          the first clean review without merging.
+        default: false
       advanced_options:
         type: boolean
         title: Advanced options
@@ -81,7 +86,7 @@ annotations:
       expire_after_seconds:
         type: integer
         title: Expire after (seconds)
-        description: Hard deadline for the whole review-and-merge loop.
+        description: Hard deadline for the whole fix-and-review loop.
         default: 86400
         minimum: 600
         maximum: 2592000
@@ -90,8 +95,8 @@ annotations:
       placeholder: '123, a pull request URL, or a head branch'
     review_provider:
       widget: select
-    merge_method:
-      widget: select
+    finish_with_pr_resolver:
+      widget: checkbox
     advanced_options:
       widget: checkbox
     max_review_cycles:
@@ -106,7 +111,7 @@ annotations:
         equals: true
   defaults:
     review_provider: codex
-    merge_method: squash
+    finish_with_pr_resolver: false
     advanced_options: false
     max_review_cycles: 5
     expire_after_seconds: 86400
@@ -125,11 +130,11 @@ inputs:
   type: text
   required: false
   default: codex
-- name: merge_method
-  label: Merge Method
-  type: text
+- name: finish_with_pr_resolver
+  label: Finish With pr-resolver
+  type: boolean
   required: false
-  default: squash
+  default: false
 - name: advanced_options
   label: Advanced Options
   type: boolean
@@ -155,8 +160,8 @@ steps:
 
 
     Record the pull request URL, the exact current head SHA, the head branch, and
-    the base branch so merge automation is bound to that exact revision from its
-    first gate evaluation. If the pull request is closed, merged, or cannot be
+    the base branch so the fix-and-review loop is bound to that exact revision from
+    its first gate evaluation. If the pull request is closed, merged, or cannot be
     resolved to exactly one open pull request, stop and report the blocker instead
     of guessing a target.'
   tool:

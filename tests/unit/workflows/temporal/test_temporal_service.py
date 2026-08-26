@@ -679,7 +679,7 @@ async def test_create_execution_routes_review_loop_runs_that_publish_nothing(
         await service.create_execution(
             workflow_type="MoonMind.UserWorkflow",
             owner_id=uuid4(),
-            title="Review, fix, and merge PR",
+            title="Fix and review loop",
             input_artifact_ref=None,
             plan_artifact_ref=None,
             manifest_artifact_ref=None,

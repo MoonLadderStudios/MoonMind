@@ -512,8 +512,19 @@ DEPENDENCY_RESOLUTION_FAILED = "dependency_failed"
 DEPENDENCY_RESOLUTION_BYPASSED = "bypassed"
 DEPENDENCY_RESOLUTION_MANUAL_OVERRIDE = "manual_override"
 DEPENDENCY_RESOLUTION_WAITING_FOR_RERUN = "waiting_for_successful_rerun"
-MERGE_AUTOMATION_SUCCESS_STATUSES = frozenset({"merged", "already_merged"})
+MERGE_AUTOMATION_MERGED_STATUSES = frozenset({"merged", "already_merged"})
+# fix_only finish mode: merge automation completed its review/fix loop with
+# nothing left to address and no merge authority. Successful, but not a merge.
+MERGE_AUTOMATION_REVIEW_CLEAN_STATUS = "review_clean"
+MERGE_AUTOMATION_SUCCESS_STATUSES = MERGE_AUTOMATION_MERGED_STATUSES | frozenset(
+    {MERGE_AUTOMATION_REVIEW_CLEAN_STATUS}
+)
 MERGE_AUTOMATION_FAILURE_STATUSES = frozenset({"blocked", "failed", "expired"})
+# Terminal pr-resolver dispositions that mean the resolver child finished its
+# job. "review_clean" is the fix_only terminal: complete, but not a merge.
+MERGE_AUTOMATION_RESOLVER_SUCCESS_DISPOSITIONS = frozenset(
+    {"merged", "already_merged", MERGE_AUTOMATION_REVIEW_CLEAN_STATUS}
+)
 MERGE_AUTOMATION_CANCELED_STATUS = "canceled"
 MERGE_AUTOMATION_TERMINAL_STATUSES = (
     MERGE_AUTOMATION_SUCCESS_STATUSES
@@ -10570,7 +10581,7 @@ class MoonMindRunWorkflow:
                         and self._gated_continuation_failure_message(parameters) is None
                     )
                     or self._merge_automation_disposition
-                    in {"merged", "already_merged"}
+                    in MERGE_AUTOMATION_RESOLVER_SUCCESS_DISPOSITIONS
                 )
             ):
                 output_status = "success"
@@ -17660,7 +17671,7 @@ class MoonMindRunWorkflow:
             return "publishMode 'pr' requested but no PR was created"
         if publish_mode == "branch" and self._publish_status is None:
             return "branch publish outcome unknown"
-        if self._merge_automation_requested(parameters) and not self._merge_happened():
+        if self._merge_required(parameters) and not self._merge_happened():
             return "merge automation requested but PR was not merged"
         if self._report_requested(parameters) and not self._report_created:
             return "reportOutput requested but no final report was created"
@@ -17686,16 +17697,26 @@ class MoonMindRunWorkflow:
             self._publish_context.get("mergeAutomationStatus"),
             max_chars=40,
         )
-        if status in MERGE_AUTOMATION_SUCCESS_STATUSES:
+        if status in MERGE_AUTOMATION_MERGED_STATUSES:
             return True
         result = self._publish_context.get("mergeAutomationResult")
         if isinstance(result, Mapping):
             result_status = self._coerce_text(result.get("status"), max_chars=40)
-            return result_status in MERGE_AUTOMATION_SUCCESS_STATUSES
+            return result_status in MERGE_AUTOMATION_MERGED_STATUSES
         return False
 
     def _merge_automation_requested(self, parameters: Mapping[str, Any]) -> bool:
         return self._merge_automation_request(parameters) is not None
+
+    def _merge_required(self, parameters: Mapping[str, Any]) -> bool:
+        """True when merge automation was asked to finish by merging the PR."""
+
+        request = self._merge_automation_request(parameters)
+        if request is None:
+            return False
+        return (
+            self._coerce_text(request.get("finishMode"), max_chars=20) or "merge"
+        ) == "merge"
 
     def _report_requested(self, parameters: Mapping[str, Any]) -> bool:
         candidates = []
@@ -17823,6 +17844,15 @@ class MoonMindRunWorkflow:
                     max_chars=20,
                 )
                 or "squash",
+                "finishMode": (
+                    "fix_only"
+                    if self._coerce_text(
+                        candidate.get("finishMode") or candidate.get("finish_mode"),
+                        max_chars=20,
+                    )
+                    == "fix_only"
+                    else "merge"
+                ),
                 "jiraIssueKey": effective_jira_issue_key,
                 "postMergeJira": post_merge_jira,
                 "postMergeGithub": post_merge_github,
@@ -18143,6 +18173,7 @@ class MoonMindRunWorkflow:
                     "skill": "pr-resolver",
                     "mergeMethod": request.get("mergeMethod") or "squash",
                 },
+                "finishMode": request.get("finishMode") or "merge",
                 "timeouts": timeouts,
                 "postMergeJira": request.get("postMergeJira") or {},
                 "postMergeGithub": request.get("postMergeGithub") or {},

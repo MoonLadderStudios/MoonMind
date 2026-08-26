@@ -179,3 +179,108 @@ def test_parent_run_summary_projects_merge_automation_visibility() -> None:
             "resolverAttempts": ["resolver-artifact"],
         },
     }
+
+def _fix_only_parameters() -> dict[str, object]:
+    return {
+        "publishMode": "none",
+        "task": {
+            "publish": {
+                "mergeAutomation": {
+                    "enabled": True,
+                    "mergeMethod": "squash",
+                    "finishMode": "fix_only",
+                }
+            }
+        },
+    }
+
+def test_merge_automation_request_defaults_to_the_merge_finish_mode() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    request = workflow._merge_automation_request(_enabled_parameters())
+
+    assert request is not None
+    assert request["finishMode"] == "merge"
+
+def test_merge_automation_request_carries_the_fix_only_finish_mode() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    request = workflow._merge_automation_request(_fix_only_parameters())
+
+    assert request is not None
+    assert request["finishMode"] == "fix_only"
+
+def test_merge_gate_start_payload_carries_the_finish_mode() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+    workflow._publish_context["branch"] = "feature"
+    workflow._publish_context["baseRef"] = "main"
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters=_fix_only_parameters(),
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+        head_sha="abc123",
+        parent_workflow_id="mm:parent",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    config = payload["mergeAutomationConfig"]
+    assert config["finishMode"] == "fix_only"
+    # The merge method still travels so an enabled finish pass is unambiguous.
+    assert config["resolver"]["mergeMethod"] == "squash"
+
+def test_merge_gate_start_payload_defaults_the_finish_mode_to_merge() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._repo = "MoonLadderStudios/MoonMind"
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters=_enabled_parameters(),
+        pull_request_url="https://github.com/MoonLadderStudios/MoonMind/pull/350",
+        head_sha="abc123",
+        parent_workflow_id="mm:parent",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    assert payload["mergeAutomationConfig"]["finishMode"] == "merge"
+
+def test_review_clean_is_a_merge_automation_child_success() -> None:
+    workflow = MoonMindRunWorkflow()
+
+    assert workflow._merge_automation_child_succeeded({"status": "review_clean"}) is True
+    assert workflow._merge_automation_child_status_valid({"status": "review_clean"}) is True
+
+def test_review_clean_is_not_reported_as_a_merge() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._publish_context["mergeAutomationStatus"] = "review_clean"
+
+    assert workflow._merge_happened() is False
+
+def test_fix_only_run_is_not_failed_for_an_unmerged_pull_request() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._publish_context["mergeAutomationStatus"] = "review_clean"
+    parameters = _fix_only_parameters()
+
+    assert workflow._merge_required(parameters) is False
+    assert (
+        workflow._missing_required_outcome_reason(
+            parameters=parameters,
+            publish_mode="none",
+        )
+        is None
+    )
+
+def test_merge_finish_mode_still_requires_a_merged_pull_request() -> None:
+    workflow = MoonMindRunWorkflow()
+    workflow._publish_context["mergeAutomationStatus"] = "review_clean"
+    parameters = _enabled_parameters()
+
+    assert workflow._merge_required(parameters) is True
+    assert (
+        workflow._missing_required_outcome_reason(
+            parameters=parameters,
+            publish_mode="none",
+        )
+        == "merge automation requested but PR was not merged"
+    )
