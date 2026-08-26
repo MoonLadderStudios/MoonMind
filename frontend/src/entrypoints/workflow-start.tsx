@@ -1025,6 +1025,7 @@ interface ExpandedStepPayload {
 
 interface PresetExpandResponse {
   steps?: ExpandedStepPayload[];
+  publish?: Record<string, unknown>;
   appliedTemplate?: {
     slug?: string;
     presetDigest?: string;
@@ -1226,6 +1227,7 @@ interface PresetExpansionState {
   assumptions: string[];
   capabilities: string[];
   warnings: string[];
+  workflowPublish?: Record<string, unknown>;
   appliedTemplate?: PresetExpandResponse["appliedTemplate"];
 }
 
@@ -1238,6 +1240,8 @@ interface AppliedTemplateState {
   capabilities: string[];
   composition?: Record<string, unknown>;
   authoredPresets?: Array<Record<string, unknown>>;
+  /** Create-page-only copy of the preset's expanded workflow publish policy. */
+  workflowPublish?: Record<string, unknown>;
 }
 
 function readDashboardConfig(payload: BootPayload): DashboardConfig {
@@ -2496,6 +2500,26 @@ function activeAppliedTemplatesForSteps(
   });
 }
 
+function workflowPublishForAppliedTemplates(
+  appliedTemplates: AppliedTemplateState[],
+): Record<string, unknown> | null {
+  for (let index = appliedTemplates.length - 1; index >= 0; index -= 1) {
+    const publish = appliedTemplates[index]?.workflowPublish;
+    if (publish && Object.keys(publish).length > 0) {
+      return cloneJsonRecord(publish);
+    }
+  }
+  return null;
+}
+
+function appliedTemplatePayloadsForSubmit(
+  appliedTemplates: AppliedTemplateState[],
+): Array<Omit<AppliedTemplateState, "workflowPublish">> {
+  return appliedTemplates.map(({ workflowPublish: _workflowPublish, ...template }) =>
+    template,
+  );
+}
+
 function templateCapabilitiesForStep(
   appliedTemplates: AppliedTemplateState[],
   step: StepState,
@@ -3396,6 +3420,16 @@ function normalizePublishModeForSubmit(value: string | null | undefined): string
 
 function isMergeAutomationPublishMode(value: string | null | undefined): boolean {
   return normalizePublishModeSelection(value) === PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE;
+}
+
+function publishModeSelectionForWorkflowPublish(
+  publish: Record<string, unknown> | null | undefined,
+): string {
+  const mode = normalizePublishModeForSubmit(String(publish?.mode || ""));
+  const mergeAutomation = recordValue(publish?.mergeAutomation);
+  return mode === "pr" && mergeAutomation.enabled === true
+    ? PR_WITH_MERGE_AUTOMATION_PUBLISH_MODE
+    : mode;
 }
 
 function templateEnumOptionLabel(
@@ -9122,6 +9156,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             .map((warning) => String(warning).trim())
             .filter(Boolean)
         : [],
+      ...(expanded.publish && typeof expanded.publish === "object"
+        ? { workflowPublish: cloneJsonRecord(expanded.publish) }
+        : {}),
       appliedTemplate: expanded.appliedTemplate,
     };
   }
@@ -9162,6 +9199,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         : {}),
       ...(Array.isArray(appliedTemplate.authoredPresets)
         ? { authoredPresets: appliedTemplate.authoredPresets }
+        : {}),
+      ...(expansion.workflowPublish
+        ? { workflowPublish: cloneJsonRecord(expansion.workflowPublish) }
         : {}),
     };
   }
@@ -9230,6 +9270,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       attachmentSignature(selectedObjectiveAttachmentFiles),
     );
     recordAppliedPreset(preset, detail, expansion, expandedSteps);
+    const expandedPublishSelection = publishModeSelectionForWorkflowPublish(
+      expansion.workflowPublish,
+    );
+    if (pageMode.mode === "create" && expandedPublishSelection) {
+      setPublishMode(expandedPublishSelection);
+    }
     const autoFillSuffix =
       expansion.assumptions.length > 0
         ? ` Auto-filled ${expansion.assumptions.length} input(s): ${expansion.assumptions.join(", ")}.`
@@ -10076,8 +10122,8 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       return;
     }
 
-    const normalizedPublishMode = normalizePublishModeForSubmit(publishMode);
-    if (!["auto", "none", "branch", "pr"].includes(normalizedPublishMode)) {
+    const formPublishMode = normalizePublishModeForSubmit(publishMode);
+    if (!["auto", "none", "branch", "pr"].includes(formPublishMode)) {
       setSubmitMessage("Publish mode must be one of: auto, none, branch, pr.");
       clearSubmitBusy();
       return;
@@ -10162,6 +10208,23 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       submissionSteps,
     );
     submissionAppliedTemplates = activeSubmissionAppliedTemplates;
+    const presetWorkflowPublish = workflowPublishForAppliedTemplates(
+      activeSubmissionAppliedTemplates,
+    );
+    const presetPublishMode = normalizePublishModeForSubmit(
+      String(presetWorkflowPublish?.mode || ""),
+    );
+    const presetPublishSelection = publishModeSelectionForWorkflowPublish(
+      presetWorkflowPublish,
+    );
+    // A preset expanded during this submit has not yet had a chance to update
+    // the visible form control. Use its workflow-level policy for this request.
+    // For an already-applied preset, a different visible mode is an explicit
+    // operator override and therefore wins over the annotation.
+    const requestedPublishMode =
+      unresolvedPresetSteps.length > 0 && presetPublishMode
+        ? presetPublishMode
+        : formPublishMode;
     const effectiveSubmissionSkillId = primarySkillId;
     const effectivePublishSkillId = resolveEffectivePublishSkillId(
       primarySkillId,
@@ -10170,7 +10233,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const effectivePublishSkillDetailForSubmit =
       skillsQuery.data?.detailsById[effectivePublishSkillId.trim()] || null;
     if (
-      normalizedPublishMode === "auto" &&
+      requestedPublishMode === "auto" &&
       !isSelfManagedPublishSkill(
         effectivePublishSkillId,
         effectivePublishSkillDetailForSubmit,
@@ -10193,7 +10256,17 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
             effectivePublishSkillDetailForSubmit,
           )
           ? "none"
-          : normalizedPublishMode;
+          : requestedPublishMode;
+    const effectiveWorkflowPublish =
+      presetWorkflowPublish &&
+      presetPublishMode === effectivePublishMode &&
+      (unresolvedPresetSteps.length > 0 ||
+        normalizePublishModeSelection(publishMode) === presetPublishSelection)
+        ? {
+            ...presetWorkflowPublish,
+            mode: effectivePublishMode,
+          }
+        : { mode: effectivePublishMode };
     if (effectivePublishMode === "branch" && !effectiveBranch) {
       setSubmitMessage(
         "Choose a branch before saving or rerunning this publish-mode workflow.",
@@ -11094,7 +11167,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           : {}),
       },
       publish: {
-        mode: effectivePublishMode,
+        ...effectiveWorkflowPublish,
       },
       ...(produceReport || pageMode.mode !== "create"
         ? {
@@ -11111,7 +11184,11 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         : {}),
       ...(normalizedSteps.length > 0 ? { steps: normalizedSteps } : {}),
       ...(submissionAppliedTemplates.length > 0
-        ? { appliedStepTemplates: submissionAppliedTemplates }
+        ? {
+            appliedStepTemplates: appliedTemplatePayloadsForSubmit(
+              submissionAppliedTemplates,
+            ),
+          }
         : {}),
       ...(submissionAuthoredPresets.length > 0
         ? { authoredPresets: submissionAuthoredPresets }
