@@ -13,6 +13,7 @@ from moonmind.security.egress_conformance_evidence import (
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalActivityRuntimeError,
     TemporalAgentRuntimeActivities,
+    _default_skill_registry_payload,
 )
 from moonmind.workloads.docker_launcher import DockerWorkloadLauncher
 from moonmind.workloads.registry import RunnerProfileRegistry
@@ -622,3 +623,43 @@ async def test_workload_run_activity_denies_gpu_container_when_mode_is_profiles(
         )
 
     assert exc_info.value.type == "docker_workflow_mode_forbidden"
+
+
+def test_unrestricted_gpu_container_has_no_new_plan_dispatch_route() -> None:
+    """A plan step cannot reach the GPU-capable unrestricted container request.
+
+    docs/Workflows/GpuContainerResourcesContract.md section 3.1 states that
+    ``container.run_container`` is absent from executable tool discovery and
+    new dispatch, and that ``resources.gpu`` therefore has no live caller route
+    until MoonLadderStudios/MoonMind#3779. Pin that at the production
+    registry-snapshot builder: naming the legacy tool must yield the generic
+    runtime CLI handler rather than a ``workload.run`` container launch, and the
+    one discoverable container tool must expose no GPU field.
+    """
+
+    payload = _default_skill_registry_payload(
+        parameters={
+            "workflow": {
+                "steps": [
+                    {"tool": {"name": "container.run_container"}},
+                    {"tool": {"name": "container.run_job"}},
+                ]
+            }
+        }
+    )
+    definitions = {entry["name"]: entry for entry in payload["skills"]}
+    assert set(definitions) == {"container.run_container", "container.run_job"}
+
+    unrestricted = definitions["container.run_container"]
+    assert unrestricted["executor"]["activity_type"] == "mm.tool.execute"
+    assert unrestricted["requirements"]["capabilities"] == ["sandbox"]
+    assert "workload.run" not in str(unrestricted)
+    assert set(unrestricted["inputs"]["schema"]["properties"]) == {
+        "instructions",
+        "runtime",
+    }
+
+    canonical_spec = definitions["container.run_job"]["inputs"]["schema"][
+        "properties"
+    ]["spec"]
+    assert "gpu" not in canonical_spec["properties"]["resources"]["properties"]

@@ -7,7 +7,7 @@ import re
 from datetime import UTC, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from moonmind.schemas._validation import NonBlankStr, require_non_blank
 
@@ -294,7 +294,9 @@ class WorkloadGpuRequest(BaseModel):
 
     contract_version: Literal["v1"] = Field("v1", alias="contractVersion")
     vendor: WorkloadGpuVendor = Field(..., alias="vendor")
-    count: int | Literal["all"] = Field("all", alias="count")
+    # ``StrictInt`` keeps the count deterministic: ``true`` and ``"2"`` are
+    # malformed GPU counts, not values to coerce.
+    count: StrictInt | Literal["all"] = Field("all", alias="count")
     capabilities: tuple[WorkloadGpuCapability, ...] = Field(
         default_factory=tuple,
         alias="capabilities",
@@ -306,21 +308,6 @@ class WorkloadGpuRequest(BaseModel):
             raise ValueError("gpu.count must be a positive integer or 'all'")
         self.capabilities = tuple(dict.fromkeys(self.capabilities))
         return self
-
-    @property
-    def device_count(self) -> int:
-        """Return the Docker Engine ``DeviceRequest.Count`` for this request."""
-
-        return -1 if self.count == "all" else int(self.count)
-
-    def device_request(self) -> dict[str, Any]:
-        """Return the Engine API ``DeviceRequest`` equivalent of this request."""
-
-        return {
-            "Driver": self.vendor,
-            "Count": self.device_count,
-            "Capabilities": [list(self.capabilities) or ["gpu"]],
-        }
 
     def docker_gpus_value(self) -> str:
         """Return the ``docker run --gpus`` value equivalent of this request.

@@ -274,6 +274,11 @@ def test_generic_gpu_request_deduplicates_capabilities_in_order() -> None:
         ({"vendor": "amd", "count": "all"}, "vendor"),
         ({"vendor": "nvidia", "count": 0}, "positive integer"),
         ({"vendor": "nvidia", "count": -2}, "positive integer"),
+        # The count is a JSON integer or "all"; a boolean (``bool`` subclasses
+        # ``int``), a numeric string, and a float are all malformed counts.
+        ({"vendor": "nvidia", "count": True}, "valid integer"),
+        ({"vendor": "nvidia", "count": "2"}, "valid integer"),
+        ({"vendor": "nvidia", "count": 2.0}, "valid integer"),
         ({"vendor": "nvidia", "count": "most"}, "count"),
         ({"vendor": "nvidia", "capabilities": ["render"]}, "capabilities"),
         ({"count": "all"}, "vendor"),
@@ -332,7 +337,16 @@ def test_profile_and_raw_docker_requests_reject_structured_gpu_resources() -> No
         )
 
 
-def test_raw_docker_interim_route_preserves_caller_gpus_flag(tmp_path: Path) -> None:
+def test_raw_docker_argv_is_never_rewritten_for_gpu_resources(tmp_path: Path) -> None:
+    """A caller-composed Docker command keeps its own ``--gpus``, untouched.
+
+    ``container.run_docker`` is not an available caller route: the retained
+    ``workload.run`` Activity refuses the name in every mode (see
+    docs/Workflows/GpuContainerResourcesContract.md section 3.1). This pins the
+    launcher behavior below that gate — MoonMind never appends, rewrites, or
+    strips GPU arguments in a caller-composed command.
+    """
+
     validated = _registry(tmp_path).validate_request(
         {
             "agentRunId": "task-gpu",
@@ -357,43 +371,28 @@ def test_raw_docker_interim_route_preserves_caller_gpus_flag(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
-    ("gpu_payload", "expected_flag_value", "expected_device_request"),
+    ("gpu_payload", "expected_flag_value"),
     [
-        (
-            {"vendor": "nvidia", "count": "all"},
-            "all",
-            {"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]},
-        ),
-        (
-            {"vendor": "nvidia"},
-            "all",
-            {"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]},
-        ),
-        (
-            {"vendor": "nvidia", "count": 2},
-            "2",
-            {"Driver": "nvidia", "Count": 2, "Capabilities": [["gpu"]]},
-        ),
+        # ``--gpus all`` is what makes Docker build the NVIDIA DeviceRequest
+        # {"Driver": "nvidia", "Count": -1, "Capabilities": [["gpu"]]}; the
+        # equivalences are tabulated in
+        # docs/Workflows/GpuContainerResourcesContract.md section 4.
+        ({"vendor": "nvidia", "count": "all"}, "all"),
+        ({"vendor": "nvidia"}, "all"),
+        ({"vendor": "nvidia", "count": 2}, "2"),
         (
             {"vendor": "nvidia", "count": "all", "capabilities": ["compute", "utility"]},
             'driver=nvidia,count=all,"capabilities=compute,utility"',
-            {
-                "Driver": "nvidia",
-                "Count": -1,
-                "Capabilities": [["compute", "utility"]],
-            },
         ),
     ],
 )
-def test_gpu_request_maps_to_nvidia_device_request_and_gpus_flag(
+def test_gpu_request_maps_to_the_nvidia_gpus_launch_value(
     gpu_payload: dict[str, Any],
     expected_flag_value: str,
-    expected_device_request: dict[str, Any],
 ) -> None:
     gpu = WorkloadGpuRequest.model_validate(gpu_payload)
 
     assert gpu.docker_gpus_value() == expected_flag_value
-    assert gpu.device_request() == expected_device_request
 
 
 def test_unrestricted_gpu_launch_receives_gpus_all_and_caller_owned_argv(

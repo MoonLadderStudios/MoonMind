@@ -60,3 +60,46 @@ def test_canonical_model_rejects_authority_injection_from_workflow_tool() -> Non
     payload["spec"]["privileged"] = True
     with pytest.raises(ValueError):
         ContainerJobSubmitRequest.model_validate(payload)
+
+
+def test_canonical_container_tool_defers_generic_gpu_resources_to_3779() -> None:
+    """``container.run_job`` exposes no GPU field until the convergence slice.
+
+    docs/Workflows/GpuContainerResourcesContract.md section 3.1 states that the
+    generic GPU resource model rides the unrestricted container request only,
+    and that MoonLadderStudios/MoonMind#3779 owns adding it to the canonical
+    container-job contract and backend. Pin the deferral at the production
+    tool-definition builder and the production submission model so a partial
+    migration cannot appear without also updating that contract doc.
+    """
+
+    definition = build_container_job_tool_definition_payload(
+        name=CONTAINER_RUN_JOB_TOOL
+    )
+    resources = definition["inputs"]["schema"]["properties"]["spec"]["properties"][
+        "resources"
+    ]
+    assert set(resources["properties"]) == {"cpuMillis", "memoryMiB", "pids"}
+    assert resources["additionalProperties"] is False
+
+    payload = {
+        "idempotencyKey": "workflow:w:r:s",
+        "source": {
+            "source": "workflow",
+            "workflowId": "w",
+            "runId": "r",
+            "stepId": "s",
+        },
+        "spec": {
+            "image": "alpine:3.20",
+            "workspaceRef": {"kind": "sandbox", "workspaceId": "workspace-1"},
+            "command": ["true"],
+            "resources": {
+                "cpuMillis": 100,
+                "memoryMiB": 64,
+                "gpu": {"vendor": "nvidia", "count": "all"},
+            },
+        },
+    }
+    with pytest.raises(ValueError):
+        ContainerJobSubmitRequest.model_validate(payload)
