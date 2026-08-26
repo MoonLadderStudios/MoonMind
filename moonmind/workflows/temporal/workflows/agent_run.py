@@ -4561,28 +4561,44 @@ class MoonMindAgentRun:
         # progress in the workflow rather than two that can disagree.
         last_progress_at: datetime | None = None
 
-        def _budget_idle_seconds() -> float | None:
-            return self._budget_idle_progress_seconds(
+        def _budget_state() -> tuple[float, ExecutionBudgetVerdict, float]:
+            """Read the clock once and derive ``(elapsed, verdict, deadline)``.
+
+            One read per evaluation keeps elapsed and idle-progress measured from
+            the same instant — deriving them from two separate ``workflow.now()``
+            calls would let the verdict and the deadline disagree about where the
+            run currently is. It also keeps the loop's clock-read count where it
+            was before the budget became progress-aware.
+            """
+
+            now = workflow.now()
+            elapsed_now = (now - overall_start).total_seconds()
+            idle_now = self._budget_idle_progress_seconds(
                 progress_aware=progress_aware_budget,
                 last_progress_at=last_progress_at,
-                now=workflow.now(),
+                now=now,
+            )
+            return (
+                elapsed_now,
+                self._budget_verdict_for(
+                    budget=execution_budget,
+                    progress_aware=progress_aware_budget,
+                    elapsed_seconds=elapsed_now,
+                    idle_progress_seconds=idle_now,
+                ),
+                self._budget_deadline_for(
+                    budget=execution_budget,
+                    progress_aware=progress_aware_budget,
+                    elapsed_seconds=elapsed_now,
+                    idle_progress_seconds=idle_now,
+                ),
             )
 
-        def _budget_deadline_seconds() -> float:
-            return self._budget_deadline_for(
-                budget=execution_budget,
-                progress_aware=progress_aware_budget,
-                elapsed_seconds=(workflow.now() - overall_start).total_seconds(),
-                idle_progress_seconds=_budget_idle_seconds(),
-            )
+        def _budget_remaining_seconds() -> float:
+            """Seconds the run may still execute under its current budget."""
 
-        def _budget_verdict() -> ExecutionBudgetVerdict:
-            return self._budget_verdict_for(
-                budget=execution_budget,
-                progress_aware=progress_aware_budget,
-                elapsed_seconds=(workflow.now() - overall_start).total_seconds(),
-                idle_progress_seconds=_budget_idle_seconds(),
-            )
+            elapsed_now, _, deadline_now = _budget_state()
+            return deadline_now - elapsed_now
 
         def _budget_expiry_detail(verdict: ExecutionBudgetVerdict) -> str:
             return self._budget_expiry_detail_for(
@@ -4632,15 +4648,18 @@ class MoonMindAgentRun:
                 )
                 uses_codex_session_adapter = self._uses_codex_session_adapter(request)
                 parent_info = workflow.info().parent
-                elapsed = (workflow.now() - overall_start).total_seconds()
-                pre_dispatch_verdict = _budget_verdict()
+                (
+                    elapsed,
+                    pre_dispatch_verdict,
+                    pre_dispatch_deadline,
+                ) = _budget_state()
                 if pre_dispatch_verdict != "continue":
                     self.run_status = RunStatus.timed_out
                     return await self._publish_terminal_result_with_compacted_replay_cleanup(
                         request=request,
                         result=self._timed_out_result(
                             request=request,
-                            timeout_seconds=_budget_deadline_seconds(),
+                            timeout_seconds=pre_dispatch_deadline,
                             elapsed_seconds=elapsed,
                             detail=(
                                 "exceeded its execution budget before dispatching "
@@ -5209,9 +5228,10 @@ class MoonMindAgentRun:
                             # after the base window — because the run earned an
                             # extension for observed progress — gets the extended
                             # deadline rather than a negative budget.
+                            _, _, turn_deadline = _budget_state()
                             return await self._send_turn_within_budget(
                                 request_payload,
-                                timeout_seconds=_budget_deadline_seconds(),
+                                timeout_seconds=turn_deadline,
                                 overall_start=overall_start,
                             )
 
@@ -5690,10 +5710,7 @@ class MoonMindAgentRun:
                                 )
                             self.run_status = RunStatus.running
 
-                        remaining_timeout = (
-                            _budget_deadline_seconds()
-                            - (workflow.now() - overall_start).total_seconds()
-                        )
+                        remaining_timeout = _budget_remaining_seconds()
                         if remaining_timeout <= 0:
                             break
 
@@ -5723,10 +5740,7 @@ class MoonMindAgentRun:
                                 fallback_agent_id=request.agent_id,
                             )
                         else:
-                            remaining_status_budget = (
-                                _budget_deadline_seconds()
-                                - (workflow.now() - overall_start).total_seconds()
-                            )
+                            remaining_status_budget = _budget_remaining_seconds()
                             if (
                                 use_managed_status_activity
                                 and not uses_codex_session_adapter
@@ -5954,9 +5968,7 @@ class MoonMindAgentRun:
                         if status_obj.status in _TERMINAL_RUN_STATUSES:
                             break
 
-                elapsed = (workflow.now() - overall_start).total_seconds()
-
-                terminal_verdict = _budget_verdict()
+                elapsed, terminal_verdict, terminal_deadline = _budget_state()
                 if terminal_verdict != "continue" and not self.completion_event.is_set():
                     self.run_status = RunStatus.timed_out
                     if manager_handle and request.execution_profile_ref:
@@ -5971,7 +5983,7 @@ class MoonMindAgentRun:
                         request=request,
                         result=self._timed_out_result(
                             request=request,
-                            timeout_seconds=_budget_deadline_seconds(),
+                            timeout_seconds=terminal_deadline,
                             elapsed_seconds=elapsed,
                             detail=_budget_expiry_detail(terminal_verdict),
                             budget=(
