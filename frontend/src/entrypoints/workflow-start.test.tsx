@@ -16737,6 +16737,251 @@ describe("Task Create MM-578 Preset expansion", () => {
     fetchSpy.mockRestore();
   });
 
+  it("carries submit-time preset workflow publish policy into execution creation", async () => {
+    const workflowPublish = {
+      mode: "none",
+      mergeAutomation: {
+        enabled: true,
+        checks: "required",
+        automatedReview: "required",
+        mergeMethod: "squash",
+        finishMode: "fix_only",
+        reviewLoop: {
+          enabled: true,
+          provider: "codex",
+          requestMode: "pr_comment",
+          requireFreshReviewForEveryHead: true,
+          requestAfterRemediation: true,
+          maxCycles: 5,
+          maxConsecutiveNoProgressCycles: 2,
+        },
+        timeouts: {
+          fallbackPollSeconds: 60,
+          expireAfterSeconds: 86400,
+        },
+      },
+    };
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("/api/presets?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            items: [
+              {
+                slug: "pr-review-resolve",
+                scope: "global",
+                title: "Fix and Review Loop",
+                description: "Resolve and review an existing pull request.",
+                presetDigest: "digest-pr-review-resolve",
+                inputs: [
+                  {
+                    name: "pull_request",
+                    label: "Pull Request",
+                    type: "text",
+                    required: true,
+                  },
+                ],
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (url.startsWith("/api/presets/pr-review-resolve?scope=global")) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            slug: "pr-review-resolve",
+            scope: "global",
+            title: "Fix and Review Loop",
+            description: "Resolve and review an existing pull request.",
+            presetDigest: "digest-pr-review-resolve",
+            inputs: [
+              {
+                name: "pull_request",
+                label: "Pull Request",
+                type: "text",
+                required: true,
+              },
+            ],
+          }),
+        } as Response);
+      }
+      if (
+        url.startsWith(
+          "/api/presets/pr-review-resolve:expand?scope=global",
+        )
+      ) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: "tpl:pr-review-resolve:01:replay",
+                title: "Resolve target pull request",
+                type: "tool",
+                repositoryOperation: "read",
+                instructions: "Resolve pull request 242.",
+                tool: {
+                  type: "tool",
+                  id: "github.resolve_pull_request_target",
+                  inputs: {
+                    repository: "MoonLadderStudios/MoonMind",
+                    pullRequest: "242",
+                  },
+                },
+              },
+            ],
+            publish: workflowPublish,
+            appliedTemplate: {
+              slug: "pr-review-resolve",
+              presetDigest: "digest-pr-review-resolve",
+              inputs: { pull_request: "242" },
+              stepIds: ["tpl:pr-review-resolve:01:replay"],
+            },
+            capabilities: ["git", "gh"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const step = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    selectStepType(step, "Preset");
+    const presetSelect = within(step).getByLabelText(
+      "Preset Template",
+    ) as HTMLSelectElement;
+    await waitFor(() => {
+      expect(
+        Array.from(presetSelect.options).some(
+          (option) => option.value === "global::::pr-review-resolve",
+        ),
+      ).toBe(true);
+    });
+    fireEvent.change(presetSelect, {
+      target: { value: "global::::pr-review-resolve" },
+    });
+    fireEvent.change(await within(step).findByLabelText("Pull Request"), {
+      target: { value: "242" },
+    });
+
+    // Reproduce the escaped failure path: submit without manually expanding.
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: {
+        publishMode?: string;
+        mergeAutomation?: Record<string, unknown>;
+        task: {
+          publish?: Record<string, unknown>;
+          appliedStepTemplates?: Array<Record<string, unknown>>;
+        };
+      };
+    };
+    expect(request.payload.publishMode).toBe("none");
+    expect(request.payload).not.toHaveProperty("mergeAutomation");
+    expect(request.payload.task.publish).toEqual(workflowPublish);
+    expect(request.payload.task.appliedStepTemplates?.[0]).not.toHaveProperty(
+      "workflowPublish",
+    );
+  });
+
+  it("preserves a publish override when a later submit-time preset has no policy", async () => {
+    const workflowPublish = {
+      mode: "pr",
+      mergeAutomation: { enabled: true },
+    };
+    let expansionCount = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/presets/mm-578-preset:expand?scope=global",
+        )
+      ) {
+        expansionCount += 1;
+        const stepId = `tpl:mm-578-preset:override:${expansionCount}`;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: stepId,
+                title: `Expanded preset ${expansionCount}`,
+                type: "tool",
+                repositoryOperation: "read",
+                instructions: `Resolve preset ${expansionCount}.`,
+                tool: {
+                  type: "tool",
+                  id: "github.resolve_pull_request_target",
+                  inputs: { pullRequest: "3783" },
+                },
+              },
+            ],
+            ...(expansionCount === 1 ? { publish: workflowPublish } : {}),
+            appliedTemplate: {
+              slug: "mm-578-preset",
+              presetDigest: "digest-1",
+              stepIds: [stepId],
+            },
+            capabilities: ["gh"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const firstStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(firstStep);
+    fireEvent.click(within(firstStep).getByRole("button", { name: "Expand" }));
+    expect(await screen.findByDisplayValue("Resolve preset 1.")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "branch" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const secondStep = (await screen.findByText("Step 2")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(secondStep);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: {
+        publishMode?: string;
+        mergeAutomation?: Record<string, unknown>;
+        task: { publish?: Record<string, unknown> };
+      };
+    };
+    expect(expansionCount).toBe(2);
+    expect(request.payload.publishMode).toBe("branch");
+    expect(request.payload).not.toHaveProperty("mergeAutomation");
+    expect(request.payload.task.publish).toEqual({ mode: "branch" });
+  });
+
   it("submits Jira Orchestrate preset runs with the executable first-step skill", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
