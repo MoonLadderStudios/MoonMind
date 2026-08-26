@@ -168,8 +168,22 @@ The format is a JSON array of objects:
     "id": 87654321,
     "disposition": "not-applicable",
     "rationale": "Informational summary from bot, no action needed."
+  },
+  {
+    "id": 24681357,
+    "disposition": "deferred",
+    "rationale": "Needs a product decision on the retry budget; out of scope here."
   }
 ]
 ```
 
-Accepted `disposition` values: `addressed`, `not-applicable`. The `id` field must match the comment's numeric `id` from the comments JSON. Alternatively, `comment_id` and `status` field names are also accepted for backwards compatibility.
+Accepted `disposition` values: `addressed`, `not-applicable`, `deferred`. The `id`
+field must match the comment's numeric `id` from the comments JSON. Alternatively,
+`comment_id` and `status` field names are also accepted for backwards compatibility.
+
+Record every comment you decided not to fix in this pass as `deferred`. A
+`deferred` comment is **not** treated as handled: `pr-resolver` reads the ledger,
+sees that the comment is still present, and stops the merge loop for manual
+review instead of repeating a remediation pass that cannot make progress. Never
+downgrade a still-applicable comment to `not-applicable` to keep the loop
+running.

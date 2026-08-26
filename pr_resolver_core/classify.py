@@ -81,12 +81,34 @@ def classify_snapshot(
         return _decision(
             "manual_review", "snapshot_malformed", ResolverAction.STOP_MANUAL_REVIEW
         )
+    if snapshot.deferred_comments:
+        # A deferred comment is an explicit "not fixed in this pass" disposition.
+        # Re-running the same remediation cannot clear it, so the resolver stops
+        # instead of burning the review-cycle budget on a no-progress loop.
+        return _decision(
+            "manual_review", "deferred_comments", ResolverAction.STOP_MANUAL_REVIEW
+        )
     if snapshot.actionable_comments:
         return _decision(
             "actionable_comments", "actionable_comments", ResolverAction.RUN_REMEDIATION
         )
     if snapshot.checks_failed:
         return _decision("ci_failures", "ci_failures", ResolverAction.RUN_REMEDIATION)
+    if snapshot.review_loop_enabled and not snapshot.fresh_automated_review:
+        # Every head SHA needs its own automated review. The Skill decides that a
+        # fresh review is required; the owning workflow performs and supervises
+        # the external request and the wait for its result.
+        if snapshot.automated_review_requested:
+            return _decision(
+                "automated_review_wait",
+                "automated_review_wait",
+                ResolverAction.WAIT,
+            )
+        return _decision(
+            "review_request_required",
+            "fresh_review_required_after_remediation",
+            ResolverAction.REQUEST_REVIEW,
+        )
     if snapshot.automated_review_pending:
         return _decision("review_grace", "review_grace", ResolverAction.WAIT)
     if snapshot.checks_signal_available and not snapshot.checks_complete:

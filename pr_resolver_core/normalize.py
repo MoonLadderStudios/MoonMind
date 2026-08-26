@@ -82,6 +82,9 @@ def normalize_temporal_snapshot(
         ),
         checks_degraded=bool(degraded_kinds & set(kinds)),
         checks_signal_available=isinstance(checks_complete, bool),
+        review_loop_enabled="automated_review_request_required" in kinds
+        or "automated_review_wait" in kinds,
+        automated_review_requested="automated_review_wait" in kinds,
         actionable_comments=(
             "actionable_comments" in kinds
             or any(
@@ -113,6 +116,8 @@ def normalize_temporal_snapshot(
                 "comments_unavailable",
                 "authentication_unavailable",
                 "publish_unavailable",
+                "automated_review_request_required",
+                "automated_review_wait",
                 "draft",
             }
         )
@@ -147,6 +152,11 @@ def normalize_portable_snapshot(
     )
     grace = comments_summary.get("codexReviewGrace")
     grace_active = isinstance(grace, Mapping) and grace.get("active") is True
+    automated_review = (
+        raw.get("automatedReview")
+        if isinstance(raw.get("automatedReview"), Mapping)
+        else {}
+    )
     required_shapes_present = bool(pr) and bool(ci) and bool(comments_fetch)
     return CanonicalPullRequestSnapshot(
         repository=_text(raw.get("repository")),
@@ -181,6 +191,12 @@ def normalize_portable_snapshot(
             comments_summary.get("includeBotReviewComments") is True
         ),
         automated_review_pending=grace_active,
+        review_loop_enabled=automated_review.get("enabled") is True,
+        automated_review_provider=_text(automated_review.get("provider")),
+        fresh_automated_review=automated_review.get("freshReviewForHead") is True,
+        automated_review_requested=automated_review.get("requestPending") is True,
+        deferred_comments=_bool(comments_summary.get("hasDeferredComments")),
+        progress_signature=_text(raw.get("progressSignature")),
         publish_available=raw.get("publishAvailable") is not False,
         malformed=not required_shapes_present,
     )

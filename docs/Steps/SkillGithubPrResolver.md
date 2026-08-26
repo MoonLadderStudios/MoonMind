@@ -109,6 +109,8 @@ free-form instructions.
 | `pr`                  | string|null |     null | PR selector: number, URL, or branch (passed to `gh pr view`).                                                        |
 | `branch`              | string|null |     null | Explicit head branch to resolve; if set and `pr` unset, resolve associated PR.                                       |
 | `mergeMethod`         | enum        | `squash` | `merge`|`squash`|`rebase`                                                                                            |
+| `reviewProvider`      | string      |     `""` | Provider-neutral automated reviewer that must review every head SHA (for example `codex`). Empty or `none` disables the loop. |
+| `requireFreshReview`  | bool        |  `false` | Refuse to merge a head SHA that has no fresh review from `reviewProvider`.                                             |
 | `maxIterations`             | int         |        5 | Guardrail to avoid loops (re-evaluate after each fix).                                                                            |
 | `finalizeMaxRetries`        | int         |       60 | Total retries allowed for the orchestration process, including both finalize-only waits and full remediation cycles.              |
 | `finalizeBackoffSeconds`    | int         |       30 | Base sleep for finalize-only retries. The orchestrator uses exponential backoff and caps each sleep at `finalizeMaxSleepSeconds`. |
@@ -136,7 +138,8 @@ Result should include:
 * Decision summary (actions taken)
 * Merge outcome (merged / skipped / blocked + reason)
 * `mergeAutomationDisposition` for merge automation consumers:
-  `merged`, `already_merged`, `reenter_gate`, `manual_review`, or `failed`
+  `merged`, `already_merged`, `reenter_gate`, `request_review`, `manual_review`,
+  or `failed`
 
 `reenter_gate` is terminal for the current resolver process but nonterminal for
 its enclosing merge automation. The Skill authors a `gated-continuation/v1`
@@ -152,9 +155,39 @@ existing Codex review-grace `expiresAt` into `notBefore`; it does not restart th
 grace period. Legacy untimed evidence is accepted only through the recorded
 fallback path and is reported as `legacy_continuation_fallback_used`.
 
+`request_review` is the second continuation disposition. It means "this head SHA
+needs one fresh review from the configured provider before merge is allowed."
+The Skill authors a `gated-continuation/v2` payload that names only the provider,
+the exact head SHA, the step execution reference, and a progress signature. It
+never supplies request text and never posts the request itself: an agent process
+must not own a multi-hour external wait. The validated
+`MoonMind.MergeAutomation` parent translates the provider into its configured
+exact command, performs the request through one idempotent Activity, and owns
+the durable wait for the result.
+
 The canonical workflow terminal dispositions are `merged`, `already_merged`,
 `manual_review`, and `failed`. Intermediate waits and remediation dispatches stay
 inside workflow state and are not terminal agent dispositions.
+
+### 4.3 Automated review evidence
+
+When `reviewProvider` is set and `requireFreshReview` is true, the snapshot adds
+an `automatedReview` block for the current head SHA. It is collected portably
+through `gh` and is the Skill's own authority — MoonMind does not classify review
+freshness on the Skill's behalf:
+
+* `freshReviewForHead` — a provider review whose `commit_id` is the current head,
+  a provider review submitted after a request that covers the current head, or a
+  clean-review reaction from the provider on that request comment.
+* `requestPending` — a request comment matching the provider command exists and
+  was created at or after the head commit, but no result has arrived.
+* `requestCommentId`, `requestedAt`, `completionKind`, `completionId`,
+  `completedAt` — the compact evidence trail.
+
+A review bound to an older commit is never fresh evidence for a newer head. The
+snapshot also emits `progressSignature` (head SHA plus the sorted outstanding
+actionable and deferred comment IDs) so the owning gate can detect a remediation
+loop that is not making progress.
 
 ---
 
@@ -188,9 +221,11 @@ The Skill always re-reads authoritative GitHub state after each applied fix.
 2. **Merge conflicts:** If `mergeable` indicates conflict (`false`, `CONFLICTING`, or `DIRTY`) or `mergeStateStatus` is exactly `DIRTY` → Delegate to `fix-merge-conflicts` skill before any CI-fix or CI-wait decision.
 3. **CI failures:** If `ci.hasFailures == true` → Delegate to `fix-ci` skill (or fallback to manual diagnosis if skill missing).
 4. **Review comments:** If `reviewDecision` requests changes or comments are actionable → Delegate to `fix-comments` skill.
-5. **Merge:** If gates pass, run the portable finalize helper with the selected merge method and independently verify the remote merge result through that helper.
-6. **Transient wait:** apply the Skill's bounded backoff, then read a new portable snapshot.
-7. **Blocked:** stop on budget exhaustion, non-retryable input, or an identical actionable blocker that repeats without a remote head change.
+5. **Deferred comments:** If the `fix-comments` ledger deferred or could not fix a comment that is still present → stop as `manual_review`. Repeating the same remediation cannot clear a deferred disposition.
+6. **Fresh automated review:** If the review loop is enabled and no fresh provider review covers the current head → return `request_review` when no request covers this head, or `reenter_gate` while a request for this head is still outstanding.
+7. **Merge:** If gates pass, run the portable finalize helper with the selected merge method and independently verify the remote merge result through that helper.
+8. **Transient wait:** apply the Skill's bounded backoff, then read a new portable snapshot.
+9. **Blocked:** stop on budget exhaustion, non-retryable input, or an identical actionable blocker that repeats without a remote head change.
 
 ---
 

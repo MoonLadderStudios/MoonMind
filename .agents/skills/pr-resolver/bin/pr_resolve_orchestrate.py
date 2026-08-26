@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -34,6 +35,7 @@ from pr_resolve_contract import (  # noqa: E402
     parse_reason,
     remediation_next_step,
 )
+from pr_resolve_finalize import _env_flag  # noqa: E402
 
 DEFAULT_MIN_ATTEMPTS_BEFORE_EXHAUSTED = 5
 
@@ -139,7 +141,7 @@ def _build_result(
             for entry in history
         ],
     }
-    if payload["mergeAutomationDisposition"] == "reenter_gate":
+    if payload["mergeAutomationDisposition"] in {"reenter_gate", "request_review"}:
         continuation = next(
             (
                 item["gatedContinuation"]
@@ -646,6 +648,27 @@ def main() -> None:
         action="store_true",
         help="Do not execute merge in finalize stage.",
     )
+    parser.add_argument(
+        "--review-provider",
+        default=os.environ.get("PR_RESOLVER_REVIEW_PROVIDER", ""),
+        help=(
+            "Automated review provider that must review every head SHA "
+            "(for example 'codex'). Empty or 'none' disables the review loop."
+        ),
+    )
+    parser.add_argument(
+        "--require-fresh-review",
+        dest="require_fresh_review",
+        action="store_true",
+        default=_env_flag("PR_RESOLVER_REQUIRE_FRESH_REVIEW"),
+        help="Require a fresh automated review for the current head SHA.",
+    )
+    parser.add_argument(
+        "--no-require-fresh-review",
+        dest="require_fresh_review",
+        action="store_false",
+        help="Do not require a fresh automated review for the current head SHA.",
+    )
     args = parser.parse_args()
 
     finalize_script = Path(__file__).with_name("pr_resolve_finalize.py")
@@ -672,6 +695,13 @@ def main() -> None:
             cmd.extend(["--pr", args.pr])
         if args.dry_run:
             cmd.append("--dry-run")
+        if args.review_provider:
+            cmd.extend(["--review-provider", args.review_provider])
+        cmd.append(
+            "--require-fresh-review"
+            if args.require_fresh_review
+            else "--no-require-fresh-review"
+        )
         return _run_command_and_read_result(cmd, result_path=finalize_result_path)
 
     def full_runner(attempt: int, escalation: int, reason: str) -> dict[str, Any]:

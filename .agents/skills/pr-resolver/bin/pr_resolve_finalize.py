@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +36,7 @@ from pr_resolve_contract import (  # noqa: E402
     FINALIZE_ONLY_RETRY_REASONS,
     FULL_REMEDIATION_REASONS,
     RESULT_SCHEMA_VERSION,
+    REVIEW_REQUEST_REASONS,
     build_gated_continuation,
     current_execution_ref,
     merge_automation_disposition_for_result,
@@ -95,6 +97,15 @@ def _snapshot_failed_reason(exc: subprocess.CalledProcessError) -> str:
         return "publish_unavailable"
     return "pr_not_found"
 
+def _env_flag(name: str) -> bool:
+    return str(os.environ.get(name, "")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _is_conflicting(pr: dict[str, Any]) -> bool:
     mergeable = pr.get("mergeable")
     merge_state = normalize_text(pr.get("mergeStateStatus")).upper()
@@ -115,11 +126,23 @@ def evaluate_finalize_action(snapshot: dict[str, Any]) -> dict[str, str]:
         return {"action": "merge_now", "reason": "ci_complete"}
     return {"action": "blocked", "reason": decision.reason_code}
 
-def _run_snapshot(snapshot_script: Path, pr: str | None, snapshot_path: Path) -> None:
+def _run_snapshot(
+    snapshot_script: Path,
+    pr: str | None,
+    snapshot_path: Path,
+    *,
+    review_provider: str = "",
+    require_fresh_review: bool = False,
+) -> None:
     cmd = [sys.executable, str(snapshot_script)]
     cmd.extend(["--snapshot-path", str(snapshot_path)])
     if pr:
         cmd.extend(["--pr", pr])
+    if review_provider:
+        cmd.extend(["--review-provider", review_provider])
+    cmd.append(
+        "--require-fresh-review" if require_fresh_review else "--no-require-fresh-review"
+    )
     # Capture output so auth-failure markers in stdout/stderr reach
     # CalledProcessError attributes; _snapshot_failed_reason inspects them
     # to distinguish publish_unavailable (auth) from pr_not_found.
@@ -157,6 +180,8 @@ def _write_result(
             next_step = "retry_finalize_after_backoff"
         if reason in FULL_REMEDIATION_REASONS:
             next_step = "run_full_remediation"
+        if reason in REVIEW_REQUEST_REASONS:
+            next_step = "request_automated_review"
 
     payload: dict[str, Any] = {
         "schema_version": RESULT_SCHEMA_VERSION,
@@ -182,7 +207,7 @@ def _write_result(
     if reason:
         payload["reason"] = reason
         payload["final_reason"] = reason
-    if payload["mergeAutomationDisposition"] == "reenter_gate":
+    if payload["mergeAutomationDisposition"] in {"reenter_gate", "request_review"}:
         try:
             payload["gatedContinuation"] = build_gated_continuation(
                 snapshot,
@@ -233,6 +258,27 @@ def main() -> None:
         action="store_true",
         help="Return exit code 2 when blocked (default keeps blocked as exit code 0).",
     )
+    parser.add_argument(
+        "--review-provider",
+        default=os.environ.get("PR_RESOLVER_REVIEW_PROVIDER", ""),
+        help=(
+            "Automated review provider that must review every head SHA "
+            "(for example 'codex'). Empty or 'none' disables the review loop."
+        ),
+    )
+    parser.add_argument(
+        "--require-fresh-review",
+        dest="require_fresh_review",
+        action="store_true",
+        default=_env_flag("PR_RESOLVER_REQUIRE_FRESH_REVIEW"),
+        help="Require a fresh automated review for the current head SHA.",
+    )
+    parser.add_argument(
+        "--no-require-fresh-review",
+        dest="require_fresh_review",
+        action="store_false",
+        help="Do not require a fresh automated review for the current head SHA.",
+    )
     args = parser.parse_args()
 
     snapshot_script = Path(__file__).with_name("pr_resolve_snapshot.py")
@@ -242,7 +288,13 @@ def main() -> None:
     try:
         if not args.skip_refresh:
             try:
-                _run_snapshot(snapshot_script, args.pr, snapshot_path)
+                _run_snapshot(
+                    snapshot_script,
+                    args.pr,
+                    snapshot_path,
+                    review_provider=args.review_provider,
+                    require_fresh_review=bool(args.require_fresh_review),
+                )
             except subprocess.CalledProcessError as exc:
                 if exc.returncode == EXIT_CODE_FAILED:
                     # The snapshot failed — but the PR may simply have been

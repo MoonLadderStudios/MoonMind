@@ -1,57 +1,32 @@
 [
   {
-    "id": 3858943188,
-    "disposition": "addressed",
-    "rationale": "Documented the ProcessLookupError pass in test_supervisor_live_output.py:190 with the same explanatory comment already used by the identical cleanup block at line 142."
-  },
-  {
-    "id": 5025987203,
+    "id": 5419358589,
     "disposition": "not-applicable",
-    "rationale": "Codex review header comment; informational summary with no requested change. Its individual line findings are dispositioned separately below."
+    "rationale": "Informational Codex task summary describing work already committed on this branch; it requests no change."
   },
   {
-    "id": 3858968872,
-    "disposition": "addressed",
-    "rationale": "The budget now carries an execution_budget_mode across the launch boundary. A history that is not progress-aware publishes budget.as_flat(), so agent_runtime.launch re-resolves max_seconds == base_seconds and the supervisor cannot outlive the replayed workflow's flat deadline. Covered by test_unpatched_publish_pins_the_supervisor_to_the_flat_deadline and test_in_flight_history_publishes_its_flat_deadline."
+    "id": 3858944974,
+    "disposition": "not-applicable",
+    "rationale": "False positive: 'revision' is a required Alembic migration-script attribute read by Alembic's ScriptDirectory loader, not dead code. All 60 migrations in api_service/migrations/versions declare it."
   },
   {
-    "id": 3858968875,
-    "disposition": "addressed",
-    "rationale": "The one-activity streaming lane no longer sizes ScheduleToClose from the progress-aware ceiling. The workflow is blocked awaiting that activity and cannot observe progress or re-evaluate the budget, so its only enforceable deadline is the base window. Covered by test_streaming_lane_is_bounded_by_the_deadline_it_can_enforce."
+    "id": 3858944983,
+    "disposition": "not-applicable",
+    "rationale": "False positive: 'down_revision' is a required Alembic migration-script attribute that defines the revision graph edge; removing it would break the migration chain."
   },
   {
-    "id": 3858968879,
-    "disposition": "addressed",
-    "rationale": "resolve_execution_budget now clamps the resolved stall window to base_seconds for explicit values, not only defaults, restoring the documented contract that the stall window never exceeds the base. Covered by test_resolver_clamps_an_explicit_stall_window_to_the_base_budget."
+    "id": 3858944987,
+    "disposition": "not-applicable",
+    "rationale": "False positive: 'branch_labels' is part of the standard Alembic revision module contract and is consumed by Alembic, matching all 60 existing migrations."
   },
   {
-    "id": 3858968887,
-    "disposition": "addressed",
-    "rationale": "The supervisor now samples no_output_callback and re-evaluates before terminating on expired_no_progress, so progress observed since the last heartbeat is counted. The hard ceiling stays exempt. Covered by test_due_progress_is_sampled_before_the_stall_verdict_terminates and test_refresh_cannot_extend_a_run_past_the_ceiling."
+    "id": 3858944995,
+    "disposition": "not-applicable",
+    "rationale": "False positive: 'depends_on' is part of the standard Alembic revision module contract and is consumed by Alembic, matching all 60 existing migrations."
   },
   {
-    "id": 3858968893,
+    "id": 3858945003,
     "disposition": "addressed",
-    "rationale": "The managed poll loop performs one final bounded status reconciliation when the remaining status budget reaches zero, instead of breaking on stale evidence; observed progress rearms it for the next boundary. Covered by test_final_status_reconciliation_before_the_budget_verdict."
-  },
-  {
-    "id": 3858968902,
-    "disposition": "addressed",
-    "rationale": "base_seconds is now clamped to MAX_EXECUTION_BUDGET_SECONDS before the ceiling is derived, so a budget can never terminate for reaching the maximum before its declared base window elapses. Covered by test_resolver_never_returns_a_base_above_its_own_ceiling."
-  },
-  {
-    "id": 3858968909,
-    "disposition": "addressed",
-    "rationale": "ProcessActivityProbe now tracks per-process CPU and retains the CPU of descendants that exit (and of recycled pids), so the session total is genuinely cumulative and never falls. Covered by test_cpu_of_exited_descendants_stays_in_the_session_total."
-  },
-  {
-    "id": 3858968914,
-    "disposition": "addressed",
-    "rationale": "The execution fan-out capability lifetime is now the ceiling plus a bounded launch grace covering broker setup, workspace ownership changes, and process creation that precede the supervisor starting its clock. Asserted in test_direct_managed_launch_materializes_scoped_execution_fanout."
-  },
-  {
-    "id": 3858968921,
-    "disposition": "addressed",
-    "rationale": "Supervisor elapsed and idle intervals are now measured from time.monotonic(); wall-clock timestamps remain the persisted evidence. Covered by test_budget_intervals_ignore_wall_clock_jumps."
+    "rationale": "Removed the genuinely unused 'import os' from tests/unit/test_pr_resolver_review_loop.py; the 20 tests in that file still pass."
   }
 ]

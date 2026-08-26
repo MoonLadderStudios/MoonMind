@@ -17,6 +17,12 @@ from pydantic import (
 )
 from pydantic.json_schema import SkipJsonSchema
 
+from pr_resolver_core.review_providers import (
+    DEFAULT_AUTOMATED_REVIEW_PROVIDER,
+    automated_review_provider_or_raise,
+    resolve_automated_review_provider,
+)
+
 from moonmind.omnigent.checkpoints import OmnigentCheckpointIdentity
 from moonmind.schemas.checkpoint_branch_models import StepExecutionBranchMetadataModel
 from moonmind.schemas.temporal_artifact_models import CompactArtifactRefModel
@@ -1833,6 +1839,97 @@ class MergeAutomationResolverModel(BaseModel):
     skill: str = Field("pr-resolver", alias="skill")
     merge_method: MergeMethod = Field("squash", alias="mergeMethod")
 
+
+AutomatedReviewRequestMode = Literal["pr_comment"]
+
+
+class MergeAutomationReviewLoopModel(BaseModel):
+    """Request/remediate/request policy for one automated review provider.
+
+    The provider name is provider-neutral on purpose: the exact request command
+    and the reviewer identities that satisfy it come from the trusted
+    ``pr_resolver_core.review_providers`` registry, never from a child run.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    enabled: bool = Field(False, alias="enabled")
+    provider: str = Field(
+        DEFAULT_AUTOMATED_REVIEW_PROVIDER,
+        alias="provider",
+    )
+    request_mode: AutomatedReviewRequestMode = Field(
+        "pr_comment", alias="requestMode"
+    )
+    command: str | None = Field(None, alias="command")
+    require_fresh_review_for_every_head: bool = Field(
+        True, alias="requireFreshReviewForEveryHead"
+    )
+    request_after_remediation: bool = Field(True, alias="requestAfterRemediation")
+    max_cycles: int = Field(5, alias="maxCycles")
+    max_consecutive_no_progress_cycles: int = Field(
+        2, alias="maxConsecutiveNoProgressCycles"
+    )
+
+    @field_validator("provider", mode="before")
+    @classmethod
+    def _normalize_provider(cls, value: Any) -> str:
+        candidate = str(value or "").strip().lower()
+        return candidate or DEFAULT_AUTOMATED_REVIEW_PROVIDER
+
+    @field_validator("command", mode="before")
+    @classmethod
+    def _normalize_command(cls, value: Any) -> str | None:
+        if value is None:
+            return None
+        candidate = str(value).strip()
+        return candidate or None
+
+    @field_validator("max_cycles", mode="before")
+    @classmethod
+    def _normalize_max_cycles(cls, value: Any) -> int:
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return 5
+        if candidate <= 0:
+            return 5
+        return min(candidate, 50)
+
+    @field_validator("max_consecutive_no_progress_cycles", mode="before")
+    @classmethod
+    def _normalize_no_progress_cycles(cls, value: Any) -> int:
+        try:
+            candidate = int(value)
+        except (TypeError, ValueError):
+            return 2
+        if candidate <= 0:
+            return 2
+        return min(candidate, 10)
+
+    @model_validator(mode="after")
+    def _validate_provider_contract(self) -> "MergeAutomationReviewLoopModel":
+        if not self.enabled:
+            return self
+        record = resolve_automated_review_provider(self.provider)
+        if record is None:
+            raise ValueError(
+                "Enabled reviewLoop requires a supported provider; "
+                f"got '{self.provider}'."
+            )
+        if self.command is not None and self.command != record.command:
+            # A child run must never widen the request text. An explicit command
+            # is allowed only as an exact, operator-visible restatement of the
+            # trusted provider command.
+            raise ValueError(
+                "reviewLoop.command must match the configured provider command "
+                f"'{record.command}'."
+            )
+        return self
+
+    def resolved_command(self) -> str:
+        return automated_review_provider_or_raise(self.provider).command
+
 class MergeAutomationTimeoutsModel(BaseModel):
     """Bounded wait settings for merge automation."""
 
@@ -1955,6 +2052,10 @@ class MergeAutomationConfigModel(BaseModel):
         default_factory=MergeAutomationPostMergeGithubModel,
         alias="postMergeGithub",
     )
+    review_loop: MergeAutomationReviewLoopModel = Field(
+        default_factory=MergeAutomationReviewLoopModel,
+        alias="reviewLoop",
+    )
 
 ReadinessBlockerKind = Literal[
     "checks_running",
@@ -1970,6 +2071,9 @@ ReadinessBlockerKind = Literal[
     "failed",
     "resolver_disposition_invalid",
     "resolver_continuation_invalid",
+    "automated_review_request_failed",
+    "review_cycle_budget_exhausted",
+    "review_loop_no_progress",
 ]
 
 class ReadinessBlockerModel(BaseModel):
@@ -2004,6 +2108,18 @@ class ReadinessEvidenceModel(BaseModel):
     automated_review_complete: bool | None = Field(
         None, alias="automatedReviewComplete"
     )
+    automated_review_completion_kind: str | None = Field(
+        None, alias="automatedReviewCompletionKind"
+    )
+    automated_review_completion_id: int | None = Field(
+        None, alias="automatedReviewCompletionId"
+    )
+    automated_review_completed_at: str | None = Field(
+        None, alias="automatedReviewCompletedAt"
+    )
+    automated_review_request_stale: bool | None = Field(
+        None, alias="automatedReviewRequestStale"
+    )
     jira_status_allowed: bool | None = Field(None, alias="jiraStatusAllowed")
     policy_allowed: bool | None = Field(None, alias="policyAllowed")
     blockers: list[ReadinessBlockerModel] = Field(default_factory=list, alias="blockers")
@@ -2021,6 +2137,47 @@ class ReadinessEvidenceModel(BaseModel):
         if self.ready and self.blockers:
             raise ValueError("ready evidence cannot include blockers")
         return self
+
+class AutomatedReviewRequestModel(BaseModel):
+    """One durable automated-review request bound to one exact head SHA."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    provider: str = Field(..., alias="provider")
+    head_sha: str = Field(..., alias="headSha")
+    request_key: str = Field(..., alias="requestKey")
+    request_comment_id: int | None = Field(None, alias="requestCommentId")
+    request_comment_url: str | None = Field(None, alias="requestCommentUrl")
+    requested_at: str | None = Field(None, alias="requestedAt")
+    actor: str | None = Field(None, alias="actor")
+    reconciled: bool = Field(False, alias="reconciled")
+
+    @field_validator("provider", "head_sha", "request_key")
+    @classmethod
+    def _required_text(cls, value: str) -> str:
+        candidate = str(value or "").strip()
+        if not candidate:
+            raise ValueError("field must be a non-empty string")
+        return candidate
+
+
+class AutomatedReviewCycleModel(BaseModel):
+    """Compact per-head record of one request/remediate/request cycle."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    cycle: int = Field(..., alias="cycle")
+    provider: str = Field(..., alias="provider")
+    head_sha: str = Field(..., alias="headSha")
+    request_key: str = Field(..., alias="requestKey")
+    request_comment_id: int | None = Field(None, alias="requestCommentId")
+    requested_at: str | None = Field(None, alias="requestedAt")
+    completion_kind: str | None = Field(None, alias="completionKind")
+    completion_id: int | None = Field(None, alias="completionId")
+    completed_at: str | None = Field(None, alias="completedAt")
+    status: str = Field("requested", alias="status")
+    progress_signature: str | None = Field(None, alias="progressSignature")
+
 
 class ResolverRunRefModel(BaseModel):
     """Reference to the resolver follow-up run launched by merge automation."""
@@ -2056,6 +2213,14 @@ class MergeAutomationStartInput(BaseModel):
     resolver_history: list[ResolverRunRefModel] = Field(
         default_factory=list,
         alias="resolverHistory",
+    )
+    review_cycles: list[AutomatedReviewCycleModel] = Field(
+        default_factory=list,
+        alias="reviewCycles",
+    )
+    active_review_request: AutomatedReviewRequestModel | None = Field(
+        None,
+        alias="activeReviewRequest",
     )
     expire_at: str | None = Field(None, alias="expireAt")
     idempotency_key: str | None = Field(None, alias="idempotencyKey")
@@ -3189,6 +3354,38 @@ class ExecutionMergeAutomationResolverChildModel(BaseModel):
     status: str | None = Field(None, alias="status")
     detail_href: str | None = Field(None, alias="detailHref")
 
+class ExecutionMergeAutomationReviewCycleModel(BaseModel):
+    """One operator-visible automated review cycle."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    cycle: int | None = Field(None, alias="cycle")
+    provider: str | None = Field(None, alias="provider")
+    head_sha: str | None = Field(None, alias="headSha")
+    request_comment_id: int | None = Field(None, alias="requestCommentId")
+    requested_at: str | None = Field(None, alias="requestedAt")
+    completion_kind: str | None = Field(None, alias="completionKind")
+    completed_at: str | None = Field(None, alias="completedAt")
+    status: str | None = Field(None, alias="status")
+
+
+class ExecutionMergeAutomationReviewLoopModel(BaseModel):
+    """Automated review loop progress for an execution."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    enabled: bool = Field(False, alias="enabled")
+    provider: str | None = Field(None, alias="provider")
+    cycles: int | None = Field(None, alias="cycles")
+    max_cycles: int | None = Field(None, alias="maxCycles")
+    no_progress_cycles: int | None = Field(None, alias="noProgressCycles")
+    active_request: dict[str, Any] | None = Field(None, alias="activeRequest")
+    cycle_records: list[ExecutionMergeAutomationReviewCycleModel] = Field(
+        default_factory=list,
+        alias="cycleRecords",
+    )
+
+
 class ExecutionMergeAutomationModel(BaseModel):
     """Live or terminal merge automation visibility for an execution."""
 
@@ -3217,6 +3414,10 @@ class ExecutionMergeAutomationModel(BaseModel):
     resolver_children: list[ExecutionMergeAutomationResolverChildModel] = Field(
         default_factory=list,
         alias="resolverChildren",
+    )
+    review_loop: ExecutionMergeAutomationReviewLoopModel | None = Field(
+        None,
+        alias="reviewLoop",
     )
 
     @model_validator(mode="after")

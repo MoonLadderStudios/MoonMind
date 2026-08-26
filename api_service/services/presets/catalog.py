@@ -2581,6 +2581,15 @@ class PresetCatalogService:
             raise PresetValidationError(
                 "Template workflowPublish annotation must be an object."
             )
+        if isinstance(workflow_publish, Mapping):
+            # Workflow-level publish policy may reference validated inputs the
+            # same way steps do, so operator-facing controls such as merge
+            # method or a review-cycle budget stay in one declarative place.
+            workflow_publish = _render_value(
+                self._template_env,
+                dict(workflow_publish),
+                variables=variables,
+            )
         annotations = template.annotations or {}
         checkpoint_branching = annotations.get("checkpointBranching") or annotations.get(
             "checkpoint_branching"

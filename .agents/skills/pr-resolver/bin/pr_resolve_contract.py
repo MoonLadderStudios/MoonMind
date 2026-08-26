@@ -16,6 +16,7 @@ FULL_REMEDIATION_REASONS = {
 }
 
 FINALIZE_ONLY_RETRY_REASONS = {
+    "automated_review_wait",
     "ci_running",
     "codex_review_grace_wait",
     "comments_unavailable",
@@ -25,8 +26,13 @@ FINALIZE_ONLY_RETRY_REASONS = {
     "snapshot_refresh_failed",
 }
 
+REVIEW_REQUEST_REASONS = {
+    "fresh_review_required_after_remediation",
+}
+
 NON_RETRYABLE_REASONS = {
     "comment_policy_not_enforced",
+    "deferred_comments",
     "merge_not_ready",
     "pr_not_found",
     "publish_unavailable",
@@ -41,6 +47,7 @@ EXIT_CODE_FAILED = 4
 MERGE_AUTOMATION_DISPOSITION_MERGED = "merged"
 MERGE_AUTOMATION_DISPOSITION_ALREADY_MERGED = "already_merged"
 MERGE_AUTOMATION_DISPOSITION_REENTER_GATE = "reenter_gate"
+MERGE_AUTOMATION_DISPOSITION_REQUEST_REVIEW = "request_review"
 MERGE_AUTOMATION_DISPOSITION_MANUAL_REVIEW = "manual_review"
 MERGE_AUTOMATION_DISPOSITION_FAILED = "failed"
 
@@ -54,6 +61,54 @@ def current_execution_ref() -> str | None:
     return normalize_text(os.getenv("MOONMIND_STEP_EXECUTION_ID")) or None
 
 
+def _validated_head_sha(snapshot: dict[str, Any]) -> str:
+    pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
+    head_sha = normalize_text(pr.get("headRefOid"))
+    if len(head_sha) < 7 or len(head_sha) > 64 or any(
+        char not in "0123456789abcdefABCDEF" for char in head_sha
+    ):
+        raise ValueError("gated continuation requires a valid head SHA")
+    return head_sha
+
+
+def build_review_request_continuation(
+    snapshot: dict[str, Any],
+    *,
+    reason: str,
+    execution_ref: str,
+) -> dict[str, Any]:
+    """Build the typed request for one fresh automated review of this head.
+
+    The Skill only names the *configured* provider; it never supplies comment
+    text.  The owning workflow translates the provider into the exact request
+    command, performs the side effect, and owns the durable wait.
+    """
+    if not execution_ref:
+        raise ValueError("gated continuation requires an execution reference")
+    head_sha = _validated_head_sha(snapshot)
+    automated_review = (
+        snapshot.get("automatedReview")
+        if isinstance(snapshot.get("automatedReview"), dict)
+        else {}
+    )
+    provider = normalize_text(automated_review.get("provider")).lower()
+    if automated_review.get("enabled") is not True or not provider:
+        raise ValueError("review request requires an enabled review provider")
+    payload: dict[str, Any] = {
+        "schemaVersion": "gated-continuation/v2",
+        "gateType": "merge_automation",
+        "action": "request_review",
+        "provider": provider,
+        "reason": normalize_text(reason) or "fresh_review_required_after_remediation",
+        "executionRef": execution_ref,
+        "headSha": head_sha,
+    }
+    signature = normalize_text(snapshot.get("progressSignature"))
+    if signature:
+        payload["progressSignature"] = signature
+    return payload
+
+
 def build_gated_continuation(
     snapshot: dict[str, Any],
     *,
@@ -61,7 +116,12 @@ def build_gated_continuation(
     execution_ref: str,
 ) -> dict[str, Any]:
     """Build the typed handoff from the Skill's already-recorded gate state."""
-    pr = snapshot.get("pr") if isinstance(snapshot.get("pr"), dict) else {}
+    if normalize_text(reason) in REVIEW_REQUEST_REASONS:
+        return build_review_request_continuation(
+            snapshot,
+            reason=reason,
+            execution_ref=execution_ref,
+        )
     comments = (
         snapshot.get("commentsSummary")
         if isinstance(snapshot.get("commentsSummary"), dict)
@@ -72,13 +132,9 @@ def build_gated_continuation(
         if isinstance(comments.get("codexReviewGrace"), dict)
         else {}
     )
-    head_sha = normalize_text(pr.get("headRefOid"))
     if not execution_ref:
         raise ValueError("gated continuation requires an execution reference")
-    if len(head_sha) < 7 or len(head_sha) > 64 or any(
-        char not in "0123456789abcdefABCDEF" for char in head_sha
-    ):
-        raise ValueError("gated continuation requires a valid head SHA")
+    head_sha = _validated_head_sha(snapshot)
     payload: dict[str, Any] = {
         "schemaVersion": "gated-continuation/v1",
         "gateType": "merge_automation",
@@ -87,6 +143,9 @@ def build_gated_continuation(
         "executionRef": execution_ref,
         "headSha": head_sha,
     }
+    signature = normalize_text(snapshot.get("progressSignature"))
+    if signature:
+        payload["progressSignature"] = signature
     if reason == "codex_review_grace_wait":
         expires_at = normalize_text(grace.get("expiresAt"))
         try:
@@ -165,6 +224,12 @@ def remediation_next_step(reason: str) -> str:
         return "wait_for_ci_and_retry_finalize"
     if normalized == "codex_review_grace_wait":
         return "wait_for_codex_review_and_retry_finalize"
+    if normalized == "fresh_review_required_after_remediation":
+        return "request_automated_review"
+    if normalized == "automated_review_wait":
+        return "wait_for_automated_review_and_retry_finalize"
+    if normalized == "deferred_comments":
+        return "manual_review"
     if normalized == "merge_pending":
         return "retry_finalize_after_backoff"
     if normalized == "comment_policy_not_enforced":
@@ -186,12 +251,15 @@ def merge_automation_disposition_for_result(
     normalized_outcome = normalize_text(merge_outcome).lower()
     normalized_reason = normalize_text(final_reason).lower()
     normalized_next_step = normalize_text(next_step).lower()
+    if normalized_next_step == "request_automated_review":
+        return MERGE_AUTOMATION_DISPOSITION_REQUEST_REVIEW
     if normalized_next_step.startswith("run_fix_"):
         return MERGE_AUTOMATION_DISPOSITION_REENTER_GATE
     if normalized_next_step in {
         "retry_finalize_after_backoff",
         "wait_for_ci_and_retry_finalize",
         "wait_for_codex_review_and_retry_finalize",
+        "wait_for_automated_review_and_retry_finalize",
     }:
         return MERGE_AUTOMATION_DISPOSITION_REENTER_GATE
     if normalized_status == "merged" and normalized_outcome == "merged":

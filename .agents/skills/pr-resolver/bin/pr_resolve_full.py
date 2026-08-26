@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -31,11 +32,23 @@ from pr_resolve_contract import (  # noqa: E402
     now_utc_iso,
     remediation_next_step,
 )
-from pr_resolve_finalize import evaluate_finalize_action  # noqa: E402
+from pr_resolve_finalize import _env_flag, evaluate_finalize_action  # noqa: E402
 
-def _run_snapshot(snapshot_script: Path, pr: str | None, snapshot_path: Path) -> None:
+def _run_snapshot(
+    snapshot_script: Path,
+    pr: str | None,
+    snapshot_path: Path,
+    *,
+    review_provider: str = "",
+    require_fresh_review: bool = False,
+) -> None:
     cmd = [sys.executable, str(snapshot_script)]
     cmd.extend(["--snapshot-path", str(snapshot_path)])
+    if review_provider:
+        cmd.extend(["--review-provider", review_provider])
+    cmd.append(
+        "--require-fresh-review" if require_fresh_review else "--no-require-fresh-review"
+    )
     if pr:
         cmd.extend(["--pr", pr])
     subprocess.run(cmd, check=True)
@@ -96,7 +109,7 @@ def _write_result(
     if reason:
         payload["reason"] = reason
         payload["final_reason"] = reason
-    if payload["mergeAutomationDisposition"] == "reenter_gate":
+    if payload["mergeAutomationDisposition"] in {"reenter_gate", "request_review"}:
         try:
             payload["gatedContinuation"] = build_gated_continuation(
                 snapshot,
@@ -173,6 +186,27 @@ def main() -> None:
         default="var/pr_resolver/full_result.json",
         help="Full remediation result artifact path",
     )
+    parser.add_argument(
+        "--review-provider",
+        default=os.environ.get("PR_RESOLVER_REVIEW_PROVIDER", ""),
+        help=(
+            "Automated review provider that must review every head SHA "
+            "(for example 'codex'). Empty or 'none' disables the review loop."
+        ),
+    )
+    parser.add_argument(
+        "--require-fresh-review",
+        dest="require_fresh_review",
+        action="store_true",
+        default=_env_flag("PR_RESOLVER_REQUIRE_FRESH_REVIEW"),
+        help="Require a fresh automated review for the current head SHA.",
+    )
+    parser.add_argument(
+        "--no-require-fresh-review",
+        dest="require_fresh_review",
+        action="store_false",
+        help="Do not require a fresh automated review for the current head SHA.",
+    )
     args = parser.parse_args()
 
     snapshot_script = Path(__file__).with_name("pr_resolve_snapshot.py")
@@ -181,7 +215,13 @@ def main() -> None:
 
     try:
         if not args.skip_refresh:
-            _run_snapshot(snapshot_script, args.pr, snapshot_path)
+            _run_snapshot(
+                snapshot_script,
+                args.pr,
+                snapshot_path,
+                review_provider=args.review_provider,
+                require_fresh_review=bool(args.require_fresh_review),
+            )
         snapshot = _read_snapshot(snapshot_path)
         evaluation = evaluate_full_state(snapshot)
         _write_result(
