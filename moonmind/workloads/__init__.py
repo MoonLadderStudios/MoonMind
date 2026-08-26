@@ -4,8 +4,10 @@ from typing import TYPE_CHECKING
 
 from moonmind.schemas.workload_models import (
     RunnerProfile,
+    UnrestrictedContainerRequest,
     ValidatedWorkloadRequest,
     WorkloadCredentialMount,
+    WorkloadGpuRequest,
     WorkloadMount,
     WorkloadOwnershipMetadata,
     WorkloadRequest,
@@ -16,6 +18,13 @@ from moonmind.workloads.docker_launcher import (
     DockerWorkloadConcurrencyLimiter,
     DockerWorkloadLauncher,
     DockerWorkloadLauncherError,
+)
+from moonmind.workloads.gpu import (
+    GpuLaunchFailure,
+    GpuQualificationRecord,
+    build_gpu_qualification_record,
+    classify_gpu_launch_failure,
+    gpu_device_request_args,
 )
 from moonmind.workloads.registry import RunnerProfileRegistry, WorkloadPolicyError
 
@@ -52,15 +61,22 @@ __all__ = [
     "DockerWorkloadConcurrencyLimiter",
     "DockerWorkloadLauncher",
     "DockerWorkloadLauncherError",
+    "GpuLaunchFailure",
+    "GpuQualificationRecord",
     "RunnerProfile",
     "RunnerProfileRegistry",
+    "UnrestrictedContainerRequest",
     "ValidatedWorkloadRequest",
     "WorkloadCredentialMount",
+    "WorkloadGpuRequest",
     "WorkloadMount",
     "WorkloadOwnershipMetadata",
     "WorkloadPolicyError",
     "WorkloadRequest",
     "WorkloadResult",
     "build_container_job_tool_definition_payload",
+    "build_gpu_qualification_record",
+    "classify_gpu_launch_failure",
+    "gpu_device_request_args",
     "is_container_job_tool",
 ]
