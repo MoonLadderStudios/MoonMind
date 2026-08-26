@@ -144,7 +144,7 @@ from moonmind.schemas.agent_runtime_models import (
     ManagedRunRecord,
     ManagedRuntimeProfile,
     extract_durable_retrieval_metadata,
-    resolve_execution_timeout_seconds,
+    resolve_execution_budget,
 )
 from moonmind.schemas.workload_models import WorkloadResult, parse_workload_request
 from moonmind.workloads.tool_bridge import (
@@ -8012,7 +8012,9 @@ class TemporalAgentRuntimeActivities:
         # (MoonLadderStudios/MoonMind#3685 review). The workflow publishes its
         # effective budget into ``timeoutPolicy``; a direct launch without one
         # falls back to the same kind-specific default the workflow would use.
-        timeout_seconds = resolve_execution_timeout_seconds(
+        # The budget is progress-aware, so this carries the base window, the hard
+        # ceiling, and the stall window together rather than a lone deadline.
+        budget = resolve_execution_budget(
             agent_kind=str(getattr(request, "agent_kind", "managed") or "managed"),
             timeout_policy=getattr(request, "timeout_policy", None),
         )
@@ -8022,7 +8024,7 @@ class TemporalAgentRuntimeActivities:
                 record = await self._run_supervisor.supervise(
                     run_id=run_id,
                     process=process,
-                    timeout_seconds=timeout_seconds,
+                    budget=budget,
                     cleanup_paths=cleanup_paths or None,
                     deferred_cleanup_paths=deferred_cleanup_paths or None,
                 )

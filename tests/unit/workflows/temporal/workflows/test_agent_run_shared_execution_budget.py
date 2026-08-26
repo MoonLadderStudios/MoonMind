@@ -6,6 +6,12 @@ managed process supervisor to 3600s, so a run that explicitly requested a larger
 budget was still killed at one hour. The two deadlines are the same boundary and
 must derive from the same value.
 
+The budget later became progress-aware (MoonLadderStudios/MoonMind#3771), so what
+travels between the two boundaries is the whole budget — base window, hard
+ceiling, and stall window — not a lone deadline. Publishing only the base window
+would let the supervisor kill a process at the base budget even though the
+workflow had granted it an extension.
+
 These tests lock in:
 
 - the resolver contract (explicit request wins, kind-specific default otherwise,
@@ -13,7 +19,7 @@ These tests lock in:
 - that the managed default is NOT globally widened — a longer budget is
   requested explicitly per run;
 - that the workflow publishes its effective budget into the launch request's
-  ``timeoutPolicy`` so the supervisor enforces the same deadline;
+  ``timeoutPolicy`` so the supervisor enforces the same budget;
 - that in-flight histories started before the patch keep their prior payload;
 - that the ``agent_runtime.launch`` supervisor derivation uses the real
   ``AgentExecutionRequest`` invocation shape.
@@ -26,13 +32,12 @@ import pytest
 from moonmind.schemas.agent_runtime_models import (
     DEFAULT_EXTERNAL_TIMEOUT_SECONDS,
     DEFAULT_MANAGED_TIMEOUT_SECONDS,
+    MAX_EXECUTION_BUDGET_SECONDS,
     AgentExecutionRequest,
-    resolve_execution_timeout_seconds,
+    evaluate_execution_budget,
+    resolve_execution_budget,
 )
-from moonmind.workflows.temporal.workflows.agent_run import (
-    AGENT_RUN_SHARED_EXECUTION_BUDGET_PATCH_ID,
-    workflow as agent_run_workflow,
-)
+from moonmind.workflows.temporal.workflows.agent_run import MoonMindAgentRun
 
 
 def _request(**kwargs) -> AgentExecutionRequest:
@@ -51,27 +56,32 @@ def _request(**kwargs) -> AgentExecutionRequest:
 
 def test_managed_default_is_not_globally_widened() -> None:
     # Raising the global fallback would make every affected managed run hold its
-    # provider slot longer and delay actionable failure. Long runs opt in.
+    # provider slot longer and delay actionable failure. A run that needs longer
+    # either demonstrates progress or opts in explicitly.
     assert DEFAULT_MANAGED_TIMEOUT_SECONDS == 3600
     assert DEFAULT_EXTERNAL_TIMEOUT_SECONDS == 21600
 
 
 def test_resolver_applies_kind_specific_defaults() -> None:
     assert (
-        resolve_execution_timeout_seconds(agent_kind="managed", timeout_policy={})
+        resolve_execution_budget(
+            agent_kind="managed", timeout_policy={}
+        ).base_seconds
         == DEFAULT_MANAGED_TIMEOUT_SECONDS
     )
     assert (
-        resolve_execution_timeout_seconds(agent_kind="external", timeout_policy=None)
+        resolve_execution_budget(
+            agent_kind="external", timeout_policy=None
+        ).base_seconds
         == DEFAULT_EXTERNAL_TIMEOUT_SECONDS
     )
 
 
 def test_resolver_honors_explicit_request() -> None:
     assert (
-        resolve_execution_timeout_seconds(
+        resolve_execution_budget(
             agent_kind="managed", timeout_policy={"timeout_seconds": 7200}
-        )
+        ).base_seconds
         == 7200
     )
 
@@ -81,93 +91,166 @@ def test_resolver_accepts_attribute_style_policy() -> None:
         timeout_seconds = 5400
 
     assert (
-        resolve_execution_timeout_seconds(
+        resolve_execution_budget(
             agent_kind="managed", timeout_policy=_Policy()
-        )
+        ).base_seconds
         == 5400
     )
 
 
 @pytest.mark.parametrize(
-    "degraded", [{"timeout_seconds": None}, {"timeout_seconds": "soon"}, {"timeout_seconds": 0}, {"timeout_seconds": -1}]
+    "degraded",
+    [
+        {"timeout_seconds": None},
+        {"timeout_seconds": "soon"},
+        {"timeout_seconds": 0},
+        {"timeout_seconds": -1},
+    ],
 )
 def test_resolver_falls_back_on_degraded_input(degraded: dict) -> None:
     assert (
-        resolve_execution_timeout_seconds(agent_kind="managed", timeout_policy=degraded)
+        resolve_execution_budget(
+            agent_kind="managed", timeout_policy=degraded
+        ).base_seconds
         == DEFAULT_MANAGED_TIMEOUT_SECONDS
     )
+
+
+def test_resolver_clamps_an_explicit_stall_window_to_the_base_budget() -> None:
+    # A stall window wider than the base window silently extends every quiet run
+    # past the deadline it asked for: the run's own start counts as an
+    # observation, so idle progress is never ``None`` and the base window stops
+    # being a boundary at all.
+    budget = resolve_execution_budget(
+        agent_kind="managed",
+        timeout_policy={"timeout_seconds": 60, "progress_stall_seconds": 300},
+    )
+
+    assert budget.progress_stall_seconds == 60
+    assert (
+        evaluate_execution_budget(
+            budget=budget,
+            elapsed_seconds=60.0,
+            # Nothing but the initial observation: the run has been quiet
+            # throughout, so it expires at its 60s base window.
+            idle_progress_seconds=60.0,
+        )
+        == "expired_no_progress"
+    )
+
+
+def test_resolver_never_returns_a_base_above_its_own_ceiling() -> None:
+    # A base window above the absolute cap used to be accepted while the ceiling
+    # was capped below it, producing a budget that terminated for "reaching the
+    # maximum" before the base window it claimed to honor had elapsed.
+    budget = resolve_execution_budget(
+        agent_kind="managed",
+        timeout_policy={"timeout_seconds": MAX_EXECUTION_BUDGET_SECONDS + 3600},
+    )
+
+    assert budget.base_seconds == MAX_EXECUTION_BUDGET_SECONDS
+    assert budget.max_seconds == MAX_EXECUTION_BUDGET_SECONDS
+    assert budget.base_seconds <= budget.max_seconds
+    assert (
+        evaluate_execution_budget(
+            budget=budget,
+            elapsed_seconds=float(budget.base_seconds) - 1,
+            idle_progress_seconds=None,
+        )
+        == "continue"
+    )
+
+
+def test_resolver_round_trips_its_own_published_policy() -> None:
+    # Whatever a boundary publishes, the boundary that reads it must resolve the
+    # identical budget — the two deadlines are one boundary.
+    for policy in ({}, {"timeout_seconds": 900, "max_timeout_seconds": 4000}):
+        budget = resolve_execution_budget(
+            agent_kind="managed", timeout_policy=policy
+        )
+        assert (
+            resolve_execution_budget(
+                agent_kind="managed", timeout_policy=budget.as_timeout_policy()
+            )
+            == budget
+        )
+        flat = budget.as_flat()
+        assert (
+            resolve_execution_budget(
+                agent_kind="managed", timeout_policy=flat.as_timeout_policy()
+            )
+            == flat
+        )
 
 
 # --- Workflow publishes the effective budget to the launch request -----------
 
 
-def _effective_budget(request: AgentExecutionRequest, *, patched: bool) -> int:
-    """Mirror the AgentRun budget/propagation step under a patch decision."""
-
-    timeout_seconds = resolve_execution_timeout_seconds(
+def test_workflow_publishes_default_budget_into_launch_payload() -> None:
+    request = _request()
+    budget = resolve_execution_budget(
         agent_kind=request.agent_kind, timeout_policy=request.timeout_policy
     )
-    if agent_run_workflow.patched(AGENT_RUN_SHARED_EXECUTION_BUDGET_PATCH_ID):
-        request.timeout_policy = {
-            **(request.timeout_policy or {}),
-            "timeout_seconds": timeout_seconds,
-        }
-    return timeout_seconds
 
-
-def test_workflow_publishes_default_budget_into_launch_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        agent_run_workflow, "patched", lambda _id: True, raising=True
+    MoonMindAgentRun._publish_execution_budget(
+        request=request, budget=budget, progress_aware=True
     )
-    request = _request()
 
-    budget = _effective_budget(request, patched=True)
-
-    assert budget == DEFAULT_MANAGED_TIMEOUT_SECONDS
-    # The launch payload the adapter serializes now carries the same deadline.
+    # The launch payload the adapter serializes now carries the same budget.
     launch_payload = request.model_dump(mode="json", by_alias=True)
-    assert launch_payload["timeoutPolicy"]["timeout_seconds"] == budget
-
-
-def test_workflow_publishes_explicit_budget_into_launch_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        agent_run_workflow, "patched", lambda _id: True, raising=True
-    )
-    request = _request(timeoutPolicy={"timeout_seconds": 7200})
-
-    budget = _effective_budget(request, patched=True)
-
-    assert budget == 7200
-    launch_payload = request.model_dump(mode="json", by_alias=True)
-    assert launch_payload["timeoutPolicy"]["timeout_seconds"] == 7200
-    # Same value both sides: the supervisor no longer kills the process early.
+    published = launch_payload["timeoutPolicy"]
+    assert published["timeout_seconds"] == DEFAULT_MANAGED_TIMEOUT_SECONDS
     assert (
-        resolve_execution_timeout_seconds(
-            agent_kind="managed",
-            timeout_policy=launch_payload["timeoutPolicy"],
-        )
+        resolve_execution_budget(agent_kind="managed", timeout_policy=published)
         == budget
     )
 
 
-def test_in_flight_history_keeps_prior_launch_payload(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Replay safety: a run started before the patch must not gain a new field in
-    # the launch payload it already dispatched.
-    monkeypatch.setattr(
-        agent_run_workflow, "patched", lambda _id: False, raising=True
+def test_workflow_publishes_explicit_budget_into_launch_payload() -> None:
+    request = _request(timeoutPolicy={"timeout_seconds": 7200})
+    budget = resolve_execution_budget(
+        agent_kind=request.agent_kind, timeout_policy=request.timeout_policy
     )
+
+    MoonMindAgentRun._publish_execution_budget(
+        request=request, budget=budget, progress_aware=True
+    )
+
+    launch_payload = request.model_dump(mode="json", by_alias=True)
+    published = launch_payload["timeoutPolicy"]
+    assert published["timeout_seconds"] == 7200
+    # Same budget both sides: the supervisor no longer kills the process early,
+    # and it extends for progress on exactly the numbers the workflow used.
+    assert (
+        resolve_execution_budget(agent_kind="managed", timeout_policy=published)
+        == budget
+    )
+
+
+def test_in_flight_history_publishes_its_flat_deadline() -> None:
+    # A run started before the progress-aware patch keeps its flat deadline, and
+    # says so explicitly: the launch activity re-resolves the budget from this
+    # payload on every retry, so a payload carrying only the base window would
+    # let the supervisor derive a ceiling the replayed workflow never granted.
     request = _request()
+    budget = resolve_execution_budget(
+        agent_kind=request.agent_kind, timeout_policy=request.timeout_policy
+    )
 
-    budget = _effective_budget(request, patched=False)
+    MoonMindAgentRun._publish_execution_budget(
+        request=request, budget=budget, progress_aware=False
+    )
 
-    assert budget == DEFAULT_MANAGED_TIMEOUT_SECONDS
-    assert request.timeout_policy == {}
+    assert request.timeout_policy == {
+        "timeout_seconds": DEFAULT_MANAGED_TIMEOUT_SECONDS,
+        "max_timeout_seconds": DEFAULT_MANAGED_TIMEOUT_SECONDS,
+        "progress_stall_seconds": DEFAULT_MANAGED_TIMEOUT_SECONDS,
+        "execution_budget_mode": "flat",
+    }
+    supervisor_budget = resolve_execution_budget(
+        agent_kind=request.agent_kind, timeout_policy=request.timeout_policy
+    )
+    assert supervisor_budget.max_seconds == DEFAULT_MANAGED_TIMEOUT_SECONDS
 
 
 # --- Activity-side supervisor derivation ------------------------------------
@@ -178,10 +261,10 @@ def test_launch_supervisor_derives_budget_from_request_shape() -> None:
 
     published = _request(timeoutPolicy={"timeout_seconds": 7200})
     assert (
-        resolve_execution_timeout_seconds(
+        resolve_execution_budget(
             agent_kind=str(getattr(published, "agent_kind", "managed") or "managed"),
             timeout_policy=getattr(published, "timeout_policy", None),
-        )
+        ).base_seconds
         == 7200
     )
 
@@ -189,9 +272,9 @@ def test_launch_supervisor_derives_budget_from_request_shape() -> None:
     # workflow would have used, not an independent activity-local literal.
     direct = _request()
     assert (
-        resolve_execution_timeout_seconds(
+        resolve_execution_budget(
             agent_kind=str(getattr(direct, "agent_kind", "managed") or "managed"),
             timeout_policy=getattr(direct, "timeout_policy", None),
-        )
+        ).base_seconds
         == DEFAULT_MANAGED_TIMEOUT_SECONDS
     )

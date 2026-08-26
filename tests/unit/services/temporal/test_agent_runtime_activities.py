@@ -9,7 +9,10 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
-from moonmind.schemas.agent_runtime_models import AgentRunResult
+from moonmind.schemas.agent_runtime_models import (
+    AgentRunResult,
+    resolve_execution_budget,
+)
 from moonmind.workflows.temporal.artifacts import ExecutionRef
 from moonmind.workflows.temporal.activity_runtime import (
     TemporalAgentRuntimeActivities,
@@ -696,10 +699,13 @@ async def test_agent_runtime_launch_defers_support_cleanup_until_fetch_result():
     [task] = list(activities._supervision_tasks)
     await task
 
+    # The supervisor receives the whole progress-aware budget resolved from the
+    # request's timeoutPolicy, not a lone deadline: it must extend for observed
+    # progress and terminate on exactly the numbers the workflow enforces.
     mock_supervisor.supervise.assert_awaited_once_with(
         run_id="run-cleanup-1",
         process=ANY,
-        timeout_seconds=3600,
+        budget=resolve_execution_budget(agent_kind="managed", timeout_policy=None),
         cleanup_paths=None,
         deferred_cleanup_paths=["/tmp/cleanup.file"],
     )
