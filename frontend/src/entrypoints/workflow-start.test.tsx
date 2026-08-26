@@ -16897,6 +16897,91 @@ describe("Task Create MM-578 Preset expansion", () => {
     );
   });
 
+  it("preserves a publish override when a later submit-time preset has no policy", async () => {
+    const workflowPublish = {
+      mode: "pr",
+      mergeAutomation: { enabled: true },
+    };
+    let expansionCount = 0;
+    fetchSpy.mockImplementation((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (
+        url.startsWith(
+          "/api/presets/mm-578-preset:expand?scope=global",
+        )
+      ) {
+        expansionCount += 1;
+        const stepId = `tpl:mm-578-preset:override:${expansionCount}`;
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            steps: [
+              {
+                id: stepId,
+                title: `Expanded preset ${expansionCount}`,
+                type: "tool",
+                repositoryOperation: "read",
+                instructions: `Resolve preset ${expansionCount}.`,
+                tool: {
+                  type: "tool",
+                  id: "github.resolve_pull_request_target",
+                  inputs: { pullRequest: "3783" },
+                },
+              },
+            ],
+            ...(expansionCount === 1 ? { publish: workflowPublish } : {}),
+            appliedTemplate: {
+              slug: "mm-578-preset",
+              presetDigest: "digest-1",
+              stepIds: [stepId],
+            },
+            capabilities: ["gh"],
+            warnings: [],
+          }),
+        } as Response);
+      }
+      return mockMm578PresetFetch(input);
+    });
+
+    renderWithClient(<WorkflowStartPage payload={mockPayload} />);
+
+    const firstStep = (await screen.findByText("Step 1")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(firstStep);
+    fireEvent.click(within(firstStep).getByRole("button", { name: "Expand" }));
+    expect(await screen.findByDisplayValue("Resolve preset 1.")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("Publish Mode"), {
+      target: { value: "branch" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add Step" }));
+    const secondStep = (await screen.findByText("Step 2")).closest(
+      "section",
+    ) as HTMLElement;
+    await chooseMm578Preset(secondStep);
+
+    fireEvent.click(screen.getByRole("button", { name: "Start Workflow" }));
+
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "/api/executions",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    const request = latestCreateRequest() as {
+      payload: {
+        publishMode?: string;
+        mergeAutomation?: Record<string, unknown>;
+        task: { publish?: Record<string, unknown> };
+      };
+    };
+    expect(expansionCount).toBe(2);
+    expect(request.payload.publishMode).toBe("branch");
+    expect(request.payload).not.toHaveProperty("mergeAutomation");
+    expect(request.payload.task.publish).toEqual({ mode: "branch" });
+  });
+
   it("submits Jira Orchestrate preset runs with the executable first-step skill", async () => {
     fetchSpy.mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);

@@ -9746,10 +9746,12 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     steps: StepState[];
     appliedTemplates: AppliedTemplateState[];
     warnings: string[];
+    workflowPublish: Record<string, unknown> | null;
   }> {
     let nextSubmissionSteps = steps.map((step) => ({ ...step }));
     const nextAppliedTemplates = [...appliedTemplates];
     const warnings: string[] = [];
+    let workflowPublish: Record<string, unknown> | null = null;
     let generatedStepIndex = nextStepNumber;
 
     for (let index = 0; index < nextSubmissionSteps.length; index += 1) {
@@ -9865,6 +9867,9 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         if (appliedTemplate) {
           nextAppliedTemplates.push(appliedTemplate);
         }
+        if (expansion.workflowPublish) {
+          workflowPublish = cloneJsonRecord(expansion.workflowPublish);
+        }
         warnings.push(...expansion.warnings);
         nextSubmissionSteps = [
           ...nextSubmissionSteps.slice(0, index),
@@ -9903,6 +9908,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
       steps: nextSubmissionSteps,
       appliedTemplates: nextAppliedTemplates,
       warnings,
+      workflowPublish,
     };
   }
 
@@ -9920,6 +9926,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
 
     let submissionSteps = steps;
     let submissionAppliedTemplates = appliedTemplates;
+    let submitExpandedWorkflowPublish: Record<string, unknown> | null = null;
     const clearSubmitBusy = () => {
       submitExpansionInFlightRef.current = false;
       setIsSubmitting(false);
@@ -10169,6 +10176,7 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
         });
         submissionSteps = expanded.steps;
         submissionAppliedTemplates = expanded.appliedTemplates;
+        submitExpandedWorkflowPublish = expanded.workflowPublish;
         if (expanded.warnings.length > 0) {
           setSubmitMessage(expanded.warnings.join(" "), "pending");
         } else {
@@ -10211,19 +10219,19 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
     const presetWorkflowPublish = workflowPublishForAppliedTemplates(
       activeSubmissionAppliedTemplates,
     );
-    const presetPublishMode = normalizePublishModeForSubmit(
-      String(presetWorkflowPublish?.mode || ""),
-    );
     const presetPublishSelection = publishModeSelectionForWorkflowPublish(
       presetWorkflowPublish,
+    );
+    const submitExpandedPublishMode = normalizePublishModeForSubmit(
+      String(submitExpandedWorkflowPublish?.mode || ""),
     );
     // A preset expanded during this submit has not yet had a chance to update
     // the visible form control. Use its workflow-level policy for this request.
     // For an already-applied preset, a different visible mode is an explicit
     // operator override and therefore wins over the annotation.
     const requestedPublishMode =
-      unresolvedPresetSteps.length > 0 && presetPublishMode
-        ? presetPublishMode
+      submitExpandedWorkflowPublish && submitExpandedPublishMode
+        ? submitExpandedPublishMode
         : formPublishMode;
     const effectiveSubmissionSkillId = primarySkillId;
     const effectivePublishSkillId = resolveEffectivePublishSkillId(
@@ -10257,13 +10265,18 @@ function WorkflowStartPageContent({ payload }: { payload: BootPayload }) {
           )
           ? "none"
           : requestedPublishMode;
+    const selectedWorkflowPublish =
+      submitExpandedWorkflowPublish ||
+      (normalizePublishModeSelection(publishMode) === presetPublishSelection
+        ? presetWorkflowPublish
+        : null);
     const effectiveWorkflowPublish =
-      presetWorkflowPublish &&
-      presetPublishMode === effectivePublishMode &&
-      (unresolvedPresetSteps.length > 0 ||
-        normalizePublishModeSelection(publishMode) === presetPublishSelection)
+      selectedWorkflowPublish &&
+      normalizePublishModeForSubmit(
+        String(selectedWorkflowPublish.mode || ""),
+      ) === effectivePublishMode
         ? {
-            ...presetWorkflowPublish,
+            ...selectedWorkflowPublish,
             mode: effectivePublishMode,
           }
         : { mode: effectivePublishMode };
