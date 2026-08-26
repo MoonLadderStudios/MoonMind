@@ -4679,17 +4679,19 @@ async def resolve_pull_request_target(
                 "summary": "GitHub pull request payload has no head SHA.",
             },
         )
-    state = _string(pr_data.get("state")).lower()
+    # GitHub's pull-request lifecycle value, not a MoonMind workflow state.
+    # It only gates open/closed validation here and is echoed back unchanged.
+    provider_pr_state = _string(pr_data.get("state")).lower()
     merged = bool(pr_data.get("merged"))
     pr_url = _string(pr_data.get("html_url")) or (resolution.pr_url or "")
-    if merged or state != "open":
+    if merged or provider_pr_state != "open":
         return ToolResult(
             status="FAILED",
             outputs={
                 "repository": repository,
                 "prNumber": resolution.pr_number,
                 "pullRequestUrl": pr_url,
-                "prState": "merged" if merged else state,
+                "prState": "merged" if merged else provider_pr_state,
                 "summary": (
                     f"Pull request {repository}#{resolution.pr_number} is not open; "
                     "there is nothing to review and merge."
@@ -4708,7 +4710,7 @@ async def resolve_pull_request_target(
             "headSha": head_sha,
             "branch": _string(head.get("ref")),
             "push_base_ref": _string(base.get("ref")),
-            "prState": state,
+            "prState": provider_pr_state,
             "isDraft": bool(pr_data.get("draft")),
             "operator_summary": (
                 f"Targeting pull request {pr_url} at head {head_sha[:12]}."
