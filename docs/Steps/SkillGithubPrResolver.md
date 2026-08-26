@@ -111,6 +111,7 @@ free-form instructions.
 | `mergeMethod`         | enum        | `squash` | `merge`|`squash`|`rebase`                                                                                            |
 | `reviewProvider`      | string      |     `""` | Provider-neutral automated reviewer that must review every head SHA (for example `codex`). Empty or `none` disables the loop. |
 | `requireFreshReview`  | bool        |  `false` | Refuse to merge a head SHA that has no fresh review from `reviewProvider`.                                             |
+| `finishMode`          | enum        |  `merge` | `merge` merges once the gate opens; `fix_only` stops at the same open gate and reports `review_clean`. Only an omitted value takes the default; any other unsupported value fails validation instead of inheriting merge authority. |
 | `maxIterations`             | int         |        5 | Guardrail to avoid loops (re-evaluate after each fix).                                                                            |
 | `finalizeMaxRetries`        | int         |       60 | Total retries allowed for the orchestration process, including both finalize-only waits and full remediation cycles.              |
 | `finalizeBackoffSeconds`    | int         |       30 | Base sleep for finalize-only retries. The orchestrator uses exponential backoff and caps each sleep at `finalizeMaxSleepSeconds`. |
@@ -138,8 +139,8 @@ Result should include:
 * Decision summary (actions taken)
 * Merge outcome (merged / skipped / blocked + reason)
 * `mergeAutomationDisposition` for merge automation consumers:
-  `merged`, `already_merged`, `reenter_gate`, `request_review`, `manual_review`,
-  or `failed`
+  `merged`, `already_merged`, `review_clean`, `reenter_gate`, `request_review`,
+  `manual_review`, or `failed`
 
 `reenter_gate` is terminal for the current resolver process but nonterminal for
 its enclosing merge automation. The Skill authors a `gated-continuation/v1`
@@ -165,9 +166,21 @@ must not own a multi-hour external wait. The validated
 exact command, performs the request through one idempotent Activity, and owns
 the durable wait for the result.
 
+`review_clean` is the terminal disposition for `finishMode = fix_only`. It means
+the merge gate is fully open and the Skill withheld the merge because this run
+was not granted merge authority. It narrows the side effect only: every gate,
+blocker, remediation, and evidence rule is unchanged, so an unresolved blocker
+still produces `manual_review`, `reenter_gate`, `request_review`, or `failed`. Its
+terminal evidence is the usual `artifacts/publish_result.json` with
+`merged = false` and the branch head verified on the remote, plus a live check
+that the pull request is still unmerged. Evidence that reports a merge — or that
+cannot verify the remote — is rejected as `UNAUTHORIZED_MERGE_EVIDENCE` or
+published as blocked instead of closing the run successfully. Being a terminal
+success, `review_clean` exits `0`; the result JSON carries the distinction.
+
 The canonical workflow terminal dispositions are `merged`, `already_merged`,
-`manual_review`, and `failed`. Intermediate waits and remediation dispatches stay
-inside workflow state and are not terminal agent dispositions.
+`review_clean`, `manual_review`, and `failed`. Intermediate waits and remediation
+dispatches stay inside workflow state and are not terminal agent dispositions.
 
 ### 4.3 Automated review evidence
 

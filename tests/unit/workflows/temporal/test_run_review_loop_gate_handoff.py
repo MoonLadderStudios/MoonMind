@@ -37,6 +37,7 @@ def _review_loop_parameters() -> dict[str, Any]:
                     "checks": "required",
                     "automatedReview": "required",
                     "mergeMethod": "squash",
+                    "finishMode": "fix_only",
                     "reviewLoop": {
                         "enabled": True,
                         "provider": "codex",
@@ -144,6 +145,28 @@ def test_review_loop_policy_survives_the_gate_start_payload() -> None:
     assert payload["idempotencyKey"].endswith(f":3771:{_HEAD_SHA}")
     gate_github = payload["mergeAutomationConfig"]["gate"]["github"]
     assert gate_github["automatedReview"] == "required"
+    # The preset's default withholds merge authority; the gate must carry that
+    # decision instead of quietly re-granting it.
+    assert payload["mergeAutomationConfig"]["finishMode"] == "fix_only"
+
+
+def test_finish_with_pr_resolver_grants_merge_authority_to_the_gate() -> None:
+    """Turning the preset control on must reach the gate as finishMode merge."""
+
+    workflow = MoonMindRunWorkflow()
+    parameters = _review_loop_parameters()
+    parameters["workflow"]["publish"]["mergeAutomation"]["finishMode"] = "merge"
+
+    payload = workflow._build_merge_gate_start_payload(
+        parameters=parameters,
+        pull_request_url=_PR_URL,
+        head_sha=_HEAD_SHA,
+        parent_workflow_id="mm:review-loop",
+        parent_run_id="run-1",
+    )
+
+    assert payload is not None
+    assert payload["mergeAutomationConfig"]["finishMode"] == "merge"
 
 
 def test_gate_payload_is_withheld_without_an_exact_head_sha() -> None:

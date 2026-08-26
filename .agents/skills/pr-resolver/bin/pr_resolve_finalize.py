@@ -33,13 +33,17 @@ from pr_resolve_contract import (  # noqa: E402
     EXIT_CODE_BLOCKED,
     EXIT_CODE_FAILED,
     EXIT_CODE_MERGED,
+    EXIT_CODE_REVIEW_CLEAN,
     FINALIZE_ONLY_RETRY_REASONS,
+    FINISH_MODE_FIX_ONLY,
+    FINISH_MODES,
     FULL_REMEDIATION_REASONS,
     RESULT_SCHEMA_VERSION,
     REVIEW_REQUEST_REASONS,
     build_gated_continuation,
     current_execution_ref,
     merge_automation_disposition_for_result,
+    normalize_finish_mode,
     normalize_text,
     now_utc_iso,
     remediation_next_step,
@@ -279,7 +283,18 @@ def main() -> None:
         action="store_false",
         help="Do not require a fresh automated review for the current head SHA.",
     )
+    parser.add_argument(
+        "--finish-mode",
+        default=os.environ.get("PR_RESOLVER_FINISH_MODE", "") or "merge",
+        choices=list(FINISH_MODES),
+        help=(
+            "'merge' finishes by merging the PR once the gate passes. "
+            "'fix_only' stops at a passing gate and reports review_clean "
+            "without merging."
+        ),
+    )
     args = parser.parse_args()
+    finish_mode = normalize_finish_mode(args.finish_mode)
 
     snapshot_script = Path(__file__).with_name("pr_resolve_snapshot.py")
     snapshot_path = Path(args.snapshot_path)
@@ -378,6 +393,20 @@ def main() -> None:
             sys.exit(EXIT_CODE_MERGED)
 
         if action == "merge_now":
+            if finish_mode == FINISH_MODE_FIX_ONLY:
+                # Nothing is left to address and the gate is open, but this run
+                # was not granted merge authority. Report the clean state as a
+                # terminal success instead of merging.
+                _write_result(
+                    result_path,
+                    snapshot=snapshot,
+                    decision="merge gate passed; finish mode is fix_only",
+                    merge_outcome="skipped",
+                    status="review_clean",
+                    reason="finish_mode_fix_only",
+                )
+                print("Merge gate passed; no comments left to address (not merging).")
+                sys.exit(EXIT_CODE_REVIEW_CLEAN)
             if args.dry_run:
                 _write_result(
                     result_path,

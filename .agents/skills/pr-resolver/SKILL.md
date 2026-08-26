@@ -50,6 +50,17 @@ inputSchema:
       description: >-
         When true, the resolver refuses to merge a head SHA that has no fresh
         review from reviewProvider and asks its owning gate to request one.
+    finishMode:
+      type: string
+      title: Finish mode
+      enum:
+        - merge
+        - fix_only
+      default: merge
+      description: >-
+        "merge" finishes by merging the pull request once the merge gate opens.
+        "fix_only" keeps remediating comments, CI, and conflicts but stops at an
+        open merge gate and reports review_clean instead of merging.
   anyOf:
     - required:
         - pr
@@ -66,6 +77,13 @@ You are the master orchestrator for finishing Pull Requests. Use bounded retries
 
 The task is not complete until the target PR is merged or is proven already merged. A local fix, local commit, passing local test run, unresolved review reply, or unpushed branch is not a successful PR resolution.
 
+`inputs.finishMode = fix_only` is the one exception, and it narrows only the
+final side effect: every remediation, push, verification, and gate check still
+applies, but when the merge gate opens with nothing left to address the resolver
+reports `review_clean` and stops instead of merging. `fix_only` never relaxes a
+blocker, never merges, and never reports success while comments, CI, or
+conflicts remain actionable.
+
 ## Inputs (skill args)
 - inputs.repo (optional)
 - inputs.pr (optional)
@@ -73,6 +91,8 @@ The task is not complete until the target PR is merged or is proven already merg
 - inputs.mergeMethod (merge|squash|rebase)
 - inputs.reviewProvider (default empty; `codex` enables the Codex review loop)
 - inputs.requireFreshReview (default false; true requires a fresh review per head)
+- inputs.finishMode (`merge` default, or `fix_only` to stop at an open merge
+  gate without merging)
 - inputs.maxIterations (default 5, full remediation cap per cycle)
 - inputs.finalizeMaxRetries (default 60)
 - inputs.finalizeBackoffSeconds (default 30)
@@ -136,14 +156,21 @@ metadata flag.
      --merge-method <merge|squash|rebase> \
      --review-provider <inputs.reviewProvider or ""> \
      --require-fresh-review \
+     --finish-mode <merge|fix_only> \
      --strict-exit-codes
    ```
 
    Use `--no-require-fresh-review` when `inputs.requireFreshReview` is false or
-   absent. `PR_RESOLVER_REVIEW_PROVIDER` and `PR_RESOLVER_REQUIRE_FRESH_REVIEW`
-   are equivalent environment defaults for non-agent automation.
+   absent. Pass `--finish-mode` exactly as supplied by `inputs.finishMode`;
+   omitting it defaults to `merge`, which grants merge authority this run may
+   not have. `PR_RESOLVER_REVIEW_PROVIDER`, `PR_RESOLVER_REQUIRE_FRESH_REVIEW`,
+   and `PR_RESOLVER_FINISH_MODE` are equivalent environment defaults for
+   non-agent automation.
 
 3. Read `var/pr_resolver/result.json` and perform exactly the indicated action:
+   - `review_clean`: `finishMode` is `fix_only`, the merge gate opened, and
+     nothing is left to address. Publish terminal evidence for the verified
+     branch head and stop without merging.
    - `merged` or independently verified `already_merged`: publish terminal
      evidence and stop. A successful `gh pr merge` request is not terminal
      evidence until a fresh `gh pr view` reports `state=MERGED`; merge-queue or
@@ -183,11 +210,18 @@ metadata flag.
 Allowed successful terminal states:
 - `var/pr_resolver/result.json` has `status=merged`, `merge_outcome=merged`, and `mergeAutomationDisposition=merged`.
 - The PR is independently confirmed as already merged after a snapshot/finalize race, with `mergeAutomationDisposition=already_merged`.
+- `finishMode=fix_only` reached an open merge gate: `status=review_clean`,
+  `merge_outcome=skipped`, and `mergeAutomationDisposition=review_clean`. This
+  state is allowed only when the same gate that authorizes a merge is fully
+  open; it is never a way to report an unresolved blocker as success.
 
 ## Merge Automation Result Contract
 Every terminal `var/pr_resolver/result.json` MUST include `mergeAutomationDisposition`:
 - `merged`: the resolver merged the PR.
 - `already_merged`: the PR was independently confirmed as already merged.
+- `review_clean`: `finishMode` is `fix_only` and the merge gate opened with no
+  actionable comments, CI failures, or conflicts left. The resolver did not
+  merge and must not claim a merge.
 - `request_review`: the current head SHA needs one fresh automated review from
   the configured provider before merge is allowed. Include a
   `gated-continuation/v2` `gatedContinuation` naming only the provider, the

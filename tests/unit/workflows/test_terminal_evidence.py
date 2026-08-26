@@ -545,3 +545,281 @@ def test_pr_resolver_terminal_rejects_stale_execution(tmp_path: Path) -> None:
 
     assert result.satisfied is False
     assert result.failure_code == "STALE_TERMINAL_EVIDENCE"
+
+
+def test_pr_resolver_review_clean_requires_publish_evidence(tmp_path: Path) -> None:
+    """fix_only success still has to prove its verified branch head."""
+
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "review_clean",
+                "executionRef": "step-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    missing_publish = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+    assert missing_publish.failure_code == "INCOMPLETE_TERMINAL_CONTRACT"
+
+    publish_path = tmp_path / "artifacts/publish_result.json"
+    publish_path.parent.mkdir(parents=True, exist_ok=True)
+    publish_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": "moonmind.publish.auto.v1",
+                "mode": "auto",
+                "owner": "agent",
+                "skillId": "pr-resolver",
+                "executionRef": "step-1",
+                "status": "no_op_verified",
+                "action": "none",
+                "repository": "MoonLadderStudios/MoonMind",
+                "branch": "feature",
+                "localHead": "abc123",
+                "remoteBranchHead": "abc123",
+                "remoteVerified": True,
+                "pushed": False,
+                "merged": False,
+                "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/350",
+                "blockedReason": None,
+                "verificationCommands": [
+                    "git ls-remote origin refs/heads/feature",
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evaluation = evaluate_terminal_evidence(contract, workspace_path=str(tmp_path))
+    assert evaluation.satisfied
+    assert evaluation.metadata["mergeAutomationDisposition"] == "review_clean"
+
+
+def test_pr_resolver_rejects_an_unknown_terminal_disposition(tmp_path: Path) -> None:
+    contract = {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(
+        json.dumps(
+            {
+                "mergeAutomationDisposition": "review_kinda_clean",
+                "executionRef": "step-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        evaluate_terminal_evidence(
+            contract, workspace_path=str(tmp_path)
+        ).failure_code
+        == "MALFORMED_TERMINAL_EVIDENCE"
+    )
+
+
+def _review_clean_contract() -> dict[str, str]:
+    return {
+        "contractId": "pr_resolver_terminal.v1",
+        "relativePath": "var/pr_resolver/result.json",
+        "expectedSchemaVersion": "moonmind.pr-resolver-result.v1",
+        "executionRef": "step-1",
+    }
+
+
+def _write_review_clean_evidence(
+    tmp_path: Path,
+    *,
+    result_overrides: dict[str, object] | None = None,
+    publish_overrides: dict[str, object] | None = None,
+) -> None:
+    result_path = tmp_path / "var/pr_resolver/result.json"
+    result_path.parent.mkdir(parents=True, exist_ok=True)
+    result: dict[str, object] = {
+        "mergeAutomationDisposition": "review_clean",
+        "executionRef": "step-1",
+        "status": "review_clean",
+        "merge_outcome": "skipped",
+    }
+    result.update(result_overrides or {})
+    result_path.write_text(json.dumps(result), encoding="utf-8")
+
+    publish_path = tmp_path / "artifacts/publish_result.json"
+    publish_path.parent.mkdir(parents=True, exist_ok=True)
+    publish: dict[str, object] = {
+        "schemaVersion": "moonmind.publish.auto.v1",
+        "mode": "auto",
+        "owner": "agent",
+        "skillId": "pr-resolver",
+        "executionRef": "step-1",
+        "status": "verified",
+        "action": "push",
+        "repository": "MoonLadderStudios/MoonMind",
+        "branch": "feature",
+        "localHead": "abc123",
+        "remoteBranchHead": "abc123",
+        "remoteVerified": True,
+        "pushed": True,
+        "merged": False,
+        "prUrl": "https://github.com/MoonLadderStudios/MoonMind/pull/350",
+        "blockedReason": None,
+        "verificationCommands": ["git ls-remote origin refs/heads/feature"],
+    }
+    publish.update(publish_overrides or {})
+    publish_path.write_text(json.dumps(publish), encoding="utf-8")
+
+
+def test_review_clean_rejects_publish_evidence_that_merged_the_pr(
+    tmp_path: Path,
+) -> None:
+    """A fix_only run that merged must never close as a no-merge success.
+
+    The generic auto-publish validator accepts `status=verified`, `action=merge`,
+    `merged=true`, so without disposition-specific invariants an unauthorized
+    irreversible merge would be reported as `review_clean`.
+    """
+
+    _write_review_clean_evidence(
+        tmp_path,
+        publish_overrides={
+            "action": "merge",
+            "merged": True,
+            "verificationCommands": ["gh pr view <pr-url> --json state"],
+        },
+    )
+
+    evaluation = evaluate_terminal_evidence(
+        _review_clean_contract(), workspace_path=str(tmp_path)
+    )
+
+    assert evaluation.satisfied is False
+    assert evaluation.failure_code == "UNAUTHORIZED_MERGE_EVIDENCE"
+
+
+@pytest.mark.parametrize(
+    "publish_overrides",
+    [
+        {"merged": True},
+        {"action": "merge"},
+    ],
+)
+def test_review_clean_requires_unmerged_publish_evidence(
+    tmp_path: Path, publish_overrides: dict[str, object]
+) -> None:
+    _write_review_clean_evidence(tmp_path, publish_overrides=publish_overrides)
+
+    evaluation = evaluate_terminal_evidence(
+        _review_clean_contract(), workspace_path=str(tmp_path)
+    )
+
+    assert evaluation.satisfied is False
+    assert evaluation.failure_code == "UNAUTHORIZED_MERGE_EVIDENCE"
+
+
+def test_review_clean_still_requires_a_verified_remote_head(tmp_path: Path) -> None:
+    """The remote-head invariant stays owned by the auto-publish parser."""
+
+    _write_review_clean_evidence(
+        tmp_path, publish_overrides={"remoteVerified": False}
+    )
+
+    evaluation = evaluate_terminal_evidence(
+        _review_clean_contract(), workspace_path=str(tmp_path)
+    )
+
+    assert evaluation.satisfied is False
+    assert evaluation.failure_code == "MALFORMED_TERMINAL_EVIDENCE"
+
+
+@pytest.mark.parametrize(
+    "result_overrides",
+    [
+        {"status": "merged"},
+        {"merge_outcome": "merged"},
+        {"merge_outcome": "auto_merge_enabled"},
+    ],
+)
+def test_review_clean_rejects_a_resolver_result_that_claims_a_merge(
+    tmp_path: Path, result_overrides: dict[str, object]
+) -> None:
+    _write_review_clean_evidence(tmp_path, result_overrides=result_overrides)
+
+    evaluation = evaluate_terminal_evidence(
+        _review_clean_contract(), workspace_path=str(tmp_path)
+    )
+
+    assert evaluation.satisfied is False
+    assert evaluation.failure_code == "UNAUTHORIZED_MERGE_EVIDENCE"
+
+
+def test_review_clean_accepts_a_remediated_push_without_a_merge(
+    tmp_path: Path,
+) -> None:
+    """The ordinary fix_only terminal: remediation pushed, nothing merged."""
+
+    _write_review_clean_evidence(tmp_path)
+
+    evaluation = evaluate_terminal_evidence(
+        _review_clean_contract(), workspace_path=str(tmp_path)
+    )
+
+    assert evaluation.satisfied is True
+    assert evaluation.metadata["mergeAutomationDisposition"] == "review_clean"
+    assert evaluation.metadata["autoPublishMerged"] is False
+
+
+def test_merged_disposition_still_accepts_merge_publish_evidence(
+    tmp_path: Path,
+) -> None:
+    """The no-merge invariants must not leak into the merged disposition."""
+
+    _write_review_clean_evidence(
+        tmp_path,
+        result_overrides={
+            "mergeAutomationDisposition": "merged",
+            "status": "merged",
+            "merge_outcome": "merged",
+        },
+        publish_overrides={"action": "merge", "merged": True},
+    )
+
+    evaluation = evaluate_terminal_evidence(
+        _review_clean_contract(), workspace_path=str(tmp_path)
+    )
+
+    assert evaluation.satisfied is True
+    assert evaluation.metadata["mergeAutomationDisposition"] == "merged"
+
+
+def test_review_clean_success_keeps_the_resolver_contract_identity(
+    tmp_path: Path,
+) -> None:
+    """Publication facts must not overwrite this contract's own identity."""
+
+    _write_review_clean_evidence(tmp_path)
+
+    evaluation = evaluate_terminal_evidence(
+        _review_clean_contract(), workspace_path=str(tmp_path)
+    )
+
+    assert evaluation.satisfied is True
+    assert evaluation.metadata["terminalContractId"] == "pr_resolver_terminal.v1"
+    assert (
+        evaluation.metadata["terminalContractEvidencePath"]
+        == "var/pr_resolver/result.json"
+    )
+    assert evaluation.metadata["autoPublishAction"] == "push"

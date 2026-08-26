@@ -797,3 +797,122 @@ async def test_pre_review_loop_start_input_still_runs(
         harness.readiness_payloads[0]["mergeAutomationConfig"]["reviewLoop"]["enabled"]
         is False
     )
+
+
+@pytest.mark.asyncio
+async def test_fix_only_finish_mode_ends_the_loop_without_merging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The loop terminates successfully once nothing is left to address."""
+
+    payload = _payload()
+    payload["mergeAutomationConfig"]["finishMode"] = "fix_only"
+
+    harness = _Harness(
+        monkeypatch,
+        readiness=[
+            _ready(HEAD_1, automatedReviewComplete=True),
+        ],
+        child_results=[
+            {"status": "success", "mergeAutomationDisposition": "review_clean"}
+        ],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "review_clean"
+    assert result["blockers"] == []
+    assert "no actionable comments remain" in result["summary"]
+    # The resolver child was launched without merge authority.
+    args = harness.child_payloads[0]["initial_parameters"]["task"]["skill"]["args"]
+    assert args["finishMode"] == "fix_only"
+
+
+@pytest.mark.asyncio
+async def test_fix_only_finish_mode_still_runs_the_review_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Withholding merge authority must not weaken the request/fix cycle."""
+
+    payload = _payload()
+    payload["mergeAutomationConfig"]["finishMode"] = "fix_only"
+
+    def child_results(child_workflow_id: str, attempt: int) -> dict[str, Any]:
+        if attempt == 1:
+            return _request_review_result(
+                child_workflow_id=child_workflow_id, head_sha=HEAD_2
+            )
+        return {"status": "success", "mergeAutomationDisposition": "review_clean"}
+
+    harness = _Harness(
+        monkeypatch,
+        readiness=[
+            _ready(HEAD_1),
+            _awaiting_review(HEAD_2),
+            _ready(
+                HEAD_2,
+                automatedReviewComplete=True,
+                automatedReviewCompletionKind="review",
+                automatedReviewCompletionId=45678,
+                automatedReviewCompletedAt="2026-08-24T22:19:00Z",
+            ),
+        ],
+        child_results=child_results,
+        request_results=[_posted(HEAD_2)],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "review_clean"
+    assert len(harness.request_payloads) == 1
+    assert result["reviewLoop"]["cycles"] == 1
+    for child_payload in harness.child_payloads:
+        args = child_payload["initial_parameters"]["task"]["skill"]["args"]
+        assert args["finishMode"] == "fix_only"
+        assert args["reviewProvider"] == "codex"
+
+
+@pytest.mark.asyncio
+async def test_merge_finish_mode_is_the_default_for_existing_payloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An in-flight payload without finishMode keeps its merge authority."""
+
+    payload = _payload()
+    assert "finishMode" not in payload["mergeAutomationConfig"]
+
+    harness = _Harness(
+        monkeypatch,
+        readiness=[_ready(HEAD_1, automatedReviewComplete=True)],
+        child_results=[{"status": "success", "mergeAutomationDisposition": "merged"}],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "merged"
+    args = harness.child_payloads[0]["initial_parameters"]["task"]["skill"]["args"]
+    assert args["finishMode"] == "merge"
+
+
+@pytest.mark.asyncio
+async def test_review_clean_is_rejected_when_merge_authority_was_granted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A run asked to merge must not close the gate as an unmerged success."""
+
+    payload = _payload()
+    payload["mergeAutomationConfig"]["finishMode"] = "merge"
+
+    _Harness(
+        monkeypatch,
+        readiness=[_ready(HEAD_1, automatedReviewComplete=True)],
+        child_results=[
+            {"status": "success", "mergeAutomationDisposition": "review_clean"}
+        ],
+    )
+
+    result = await MoonMindMergeAutomationWorkflow().run(payload)
+
+    assert result["status"] == "failed"
+    assert result["blockers"][0]["kind"] == "resolver_disposition_invalid"
+    assert "granted merge authority" in result["summary"]

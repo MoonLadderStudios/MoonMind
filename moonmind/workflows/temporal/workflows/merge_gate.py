@@ -51,6 +51,8 @@ DEFAULT_ACTIVITY_RETRY_POLICY = RetryPolicy(
     maximum_interval=timedelta(minutes=1),
     maximum_attempts=5,
 )
+FINISH_MODE_MERGE = "merge"
+FINISH_MODE_FIX_ONLY = "fix_only"
 MERGE_AUTOMATION_RESOLVER_PRIORITY = 10
 DEFAULT_RESOLVER_TIMEOUT_SECONDS = 9000
 _TOKEN_ASSIGNMENT_PATTERN = re.compile(
@@ -312,6 +314,7 @@ def build_resolver_run_request(
     merge_method: str,
     resolver_template: Mapping[str, Any] | None = None,
     review_loop: Mapping[str, Any] | MergeAutomationReviewLoopModel | None = None,
+    finish_mode: str = FINISH_MODE_MERGE,
 ) -> dict[str, Any]:
     pr = (
         pull_request
@@ -328,10 +331,16 @@ def build_resolver_run_request(
         for item in (template.get("requiredCapabilities") or [])
         if str(item).strip()
     ]
+    normalized_finish_mode = (
+        FINISH_MODE_FIX_ONLY
+        if str(finish_mode or "").strip() == FINISH_MODE_FIX_ONLY
+        else FINISH_MODE_MERGE
+    )
     args = {
         "repo": pr.repo,
         "pr": str(pr.number),
         "mergeMethod": merge_method,
+        "finishMode": normalized_finish_mode,
     }
     if pr.head_branch:
         args["branch"] = pr.head_branch
@@ -369,14 +378,29 @@ def build_resolver_run_request(
         "targetRuntime": target_runtime,
         "task": {
             "instructions": (
-                f"Resolve and merge pull request {pr.url}. "
-                "Use pr-resolver and do not create another pull request."
+                (
+                    f"Resolve and merge pull request {pr.url}. "
+                    if normalized_finish_mode == FINISH_MODE_MERGE
+                    else (
+                        f"Resolve every actionable item on pull request {pr.url} "
+                        "and stop without merging it: this run has no merge "
+                        "authority, so report review_clean once the merge gate "
+                        "opens with nothing left to address. "
+                    )
+                )
+                + "Use pr-resolver and do not create another pull request."
                 + (
                     " This run is owned by a merge-automation review loop: pass "
                     f"--review-provider {parsed_review_loop.provider} and "
                     "--require-fresh-review to every pr_resolve_finalize.py "
                     "invocation, and never post the review request yourself."
                     if review_loop_enabled
+                    else ""
+                )
+                + (
+                    " Pass --finish-mode fix_only to every pr_resolve_finalize.py "
+                    "and pr_resolve_orchestrate.py invocation."
+                    if normalized_finish_mode == FINISH_MODE_FIX_ONLY
                     else ""
                 )
             ),

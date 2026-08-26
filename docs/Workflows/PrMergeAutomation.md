@@ -175,6 +175,7 @@ Merge automation is configured in the normalized `MoonMind.UserWorkflow` paramet
   "mergeAutomation": {
     "enabled": true,
     "strategy": "child_workflow_resolver_v1",
+    "finishMode": "merge",
     "resolver": {
       "skill": "pr-resolver",
       "mergeMethod": "squash"
@@ -231,6 +232,38 @@ Two consequences follow, and both are load-bearing:
 
 A run that publishes nothing and enables no merge automation is unaffected: it
 keeps the default queue and starts no gate.
+
+### 9.1.2 Finish mode
+
+`mergeAutomation.finishMode` decides what happens at the **one** moment the gate
+is open and the resolver reports that nothing is left to address:
+
+- **`merge`** (default): the resolver child runs with merge authority. That final
+  `pr-resolver` pass merges the pull request and merge automation terminates
+  `merged` or `already_merged`. This is the historical behavior, and it is the
+  default for every payload recorded before this field existed.
+- **`fix_only`**: the resolver child runs without merge authority. Every
+  remediation, push, verification, review request, and gate check is identical;
+  only the merge is withheld. When the same gate that would authorize a merge
+  opens with nothing left to address, the resolver reports `review_clean` and
+  merge automation terminates `review_clean`.
+
+`fix_only` is a narrowing of authority, never a relaxation of a gate. It cannot
+turn an unresolved blocker, a pending review, a failing check, or a deferred
+comment into success — those still produce `blocked`, `failed`, or
+`manual_review`. `mergeAutomation.finishMode` is the only place the mode is
+configured; the resolver child request derives its merge authority from it, and
+the merge method stays a separate fixed detail of the finish pass.
+
+Only an **omitted** `finishMode` takes the `merge` default. Any other value that
+is not exactly `merge` or `fix_only` — a typo such as `fix-only`, a differently
+cased `Merge`, or a non-string — fails validation with
+`UNSUPPORTED_MERGE_AUTOMATION_FINISH_MODE` before a resolver child is started.
+Widening an unrecognized value into `merge` would silently grant authority for an
+irreversible side effect that the caller never requested.
+
+Because `fix_only` performs no merge, no post-merge Jira or GitHub completion is
+owed and none is attempted.
 
 ### 9.2 Parent publish output
 
@@ -443,6 +476,8 @@ Allowed terminal `status` values:
 
 - `merged`
 - `already_merged`
+- `review_clean` - `finishMode = fix_only` reached an open gate with nothing left
+  to address; the pull request was deliberately not merged
 - `blocked`
 - `failed`
 - `expired`
@@ -772,8 +807,33 @@ Allowed values:
 
 - `merged`
 - `already_merged`
+- `review_clean`
 - `reenter_gate`
 - `request_review`
+
+`review_clean` is reachable only under `finishMode = fix_only`. It asserts that
+the merge gate is fully open and that the resolver chose not to merge because it
+was not granted merge authority. Its terminal evidence is the same
+`artifacts/publish_result.json` contract the merge dispositions use, with
+`merged = false` and the branch head verified on the remote. A resolver run with
+merge authority must never return it.
+
+Because `review_clean` is a claim that an irreversible side effect did *not*
+happen, it is validated against disposition-specific invariants rather than the
+generic auto-publish rules alone. Terminal evidence is rejected with
+`UNAUTHORIZED_MERGE_EVIDENCE` unless the publish artifact reports
+`merged = false` and a non-`merge` action, and the resolver result itself claims
+no merge outcome. (An unverified remote head is already rejected upstream as
+`MALFORMED_TERMINAL_EVIDENCE` by the shared auto-publish parser.) The Skill
+supplies the authoritative remote half of that proof: its `review_clean` publish
+path reads the live PR state and writes blocked evidence
+(`unmerged_pr_verification_unavailable`) when the PR turns out to be merged or
+its state cannot be read.
+
+`review_clean` is a terminal **success**, so `pr_resolve_finalize.py` and
+`pr_resolve_orchestrate.py` exit `0` for it, exactly as they do for `merged`. The
+outcome is distinguished through `status` and `mergeAutomationDisposition` in the
+result JSON, never through the process exit code.
 
 For `reenter_gate`, a successful resolver child result means the child satisfied
 its durable handoff contract; it does not mean the pull request merged. The
@@ -936,6 +996,11 @@ The parent `MoonMind.UserWorkflow` succeeds only when `MoonMind.MergeAutomation`
 
 - `merged`
 - `already_merged`
+- `review_clean` (only when `finishMode = fix_only` asked for it)
+
+`review_clean` satisfies the parent, but it is not a merge: the required-outcome
+check for "merge automation requested but PR was not merged" applies only when
+`finishMode = merge`.
 
 ### 17.2 Parent failure
 
@@ -1048,9 +1113,9 @@ This feature should not appear as a separate dependency or scheduling surface.
 ### 21.1 `pr-review-resolve` preset
 
 Operators who start from an **existing** pull request use the provider-neutral
-`pr-review-resolve` preset ("Review, Fix, and Merge PR"). It is deliberately
-named around the protocol, not around Codex, because the same request/result
-protocol can carry another automated reviewer.
+`pr-review-resolve` preset ("Fix and Review Loop"). It is deliberately named
+around the protocol, not around Codex, because the same request/result protocol
+can carry another automated reviewer.
 
 The preset:
 
@@ -1063,12 +1128,21 @@ The preset:
   merge;
 - enables merge automation with `reviewLoop.enabled = true` and
   `reviewLoop.provider = codex` by default;
-- exposes merge method, review-cycle budget, and expiry as progressive-disclosure
-  controls.
+- exposes one merge decision, **Finish with pr-resolver**, which selects
+  `finishMode`. Off (the default) expands to `fix_only`: the loop requests
+  reviews and fixes comments until the pull request is clean, then stops. On
+  expands to `merge`: a final `pr-resolver` pass merges the pull request once
+  there are no more comments to address;
+- exposes the review-cycle budget and expiry as progressive-disclosure controls.
 
-Omitted values use the same production path as their explicit equivalents: the
-defaults expand into a complete `mergeAutomationConfig` and require no hidden
-enablement.
+The merge method is **not** an operator control. It is a fixed implementation
+detail of the optional finish pass, pinned to `squash` by the preset.
+
+Merging is the one opt-in default here, because it is the irreversible boundary
+in this journey. Both settings are complete production paths: omitted values
+expand into a complete `mergeAutomationConfig` and require no hidden enablement,
+and neither setting depends on a parameter whose only purpose is to make the
+default work.
 
 ---
 
@@ -1102,4 +1176,5 @@ This design is complete when:
 8. downstream workflow executions depending on the parent workflow naturally wait for merge automation completion,
 9. non-success merge-automation terminal outcomes fail the parent workflow except `canceled`, which cancels the parent workflow,
 10. root and child artifacts expose enough state for the dashboard to explain why a workflow execution is waiting or failed,
-11. with `reviewLoop` enabled, exactly one automated review request is posted per head SHA, only that request's own result opens the gate, and the loop terminates on a clean review + merge, an exhausted cycle budget, repeated no-progress signatures, deferred comments, an unprovable request, or expiry.
+11. with `reviewLoop` enabled, exactly one automated review request is posted per head SHA, only that request's own result opens the gate, and the loop terminates on a clean review + merge, an exhausted cycle budget, repeated no-progress signatures, deferred comments, an unprovable request, or expiry,
+12. with `finishMode = fix_only`, the same loop runs with the same gates and terminates `review_clean` without a merge side effect and without post-merge issue completion, while `finishMode = merge` (including every payload that omits the field) still merges.

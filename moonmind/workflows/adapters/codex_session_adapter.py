@@ -225,7 +225,7 @@ def _pr_resolver_terminal_contract(
         disposition = _pr_resolver_disposition(
             evidence.payload, merge_gate_owned=False
         )
-        if disposition in {"merged", "already_merged"} and (
+        if disposition in {"merged", "already_merged", "review_clean"} and (
             _load_auto_publish_result_payload(workspace_path) is None
         ):
             missing.append("artifacts/publish_result.json")
